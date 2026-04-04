@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0 (2026-04-04)
+
+- Persist "Viewed" file state in server memory across page refreshes
+
 ## 0.6.0 (2026-04-04)
 
 - Support per-file tab size from `.editorconfig`
