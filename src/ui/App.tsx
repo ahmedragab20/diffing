@@ -4,6 +4,7 @@ import type { FileDiffMetadata } from '@pierre/diffs'
 import { useDiff } from './hooks/useDiff'
 import { useComments } from './hooks/useComments'
 import { useSettings } from './hooks/useSettings'
+import { useViewed } from './hooks/useViewed'
 import { Toolbar } from './components/Toolbar'
 import { DiffViewer } from './components/DiffViewer'
 import { FileTree } from './components/FileTree'
@@ -17,7 +18,7 @@ export function App() {
   const { comments, addComment, removeComment, getAnnotationsForFile, copyAllComments } =
     useComments()
   const [activeFile, setActiveFile] = useState<string | null>(null)
-  const [viewedFiles, setViewedFiles] = useState<Set<string>>(new Set())
+  const { viewedFiles, setViewed } = useViewed()
   const diffViewerRef = useRef<HTMLDivElement>(null)
 
   const files = useMemo(() => {
@@ -86,16 +87,8 @@ export function App() {
   }, [])
 
   const handleViewedChange = useCallback((filePath: string, viewed: boolean) => {
-    setViewedFiles((prev) => {
-      const next = new Set(prev)
-      if (viewed) {
-        next.add(filePath)
-      } else {
-        next.delete(filePath)
-      }
-      return next
-    })
-  }, [])
+    setViewed(filePath, viewed)
+  }, [setViewed])
 
   if (!loaded || loading) {
     return (

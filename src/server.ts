@@ -78,6 +78,7 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
   const app = new Hono()
   const isCustomMode = !!customDiffArgs
   const store = commentStore ?? new InMemoryCommentStore()
+  const viewedFiles = new Set<string>()
 
   app.get('/api/diff', (c) => {
     let patch: string
@@ -121,6 +122,20 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
     const body = await c.req.json()
     const settings = saveSettings(body)
     return c.json(settings)
+  })
+
+  app.get('/api/viewed', (c) => {
+    return c.json([...viewedFiles])
+  })
+
+  app.put('/api/viewed', async (c) => {
+    const { filePath, viewed } = await c.req.json<{ filePath: string; viewed: boolean }>()
+    if (viewed) {
+      viewedFiles.add(filePath)
+    } else {
+      viewedFiles.delete(filePath)
+    }
+    return c.json({ ok: true })
   })
 
   app.get('/api/comments', async (c) => {
