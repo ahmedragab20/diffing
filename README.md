@@ -1,6 +1,6 @@
 # diffx
 
-A local code review tool for git diffs. Review your changes in a GitHub PR-like web UI before committing, then copy all comments for your coding agent to fix.
+A code review tool designed for the coding agent workflow. Review AI-generated changes in a GitHub PR-like web UI, leave inline comments, then hand them back to your coding agent to fix.
 
 ![screenshot](https://raw.githubusercontent.com/wong2/diffx-cli/main/screenshot.png)
 
