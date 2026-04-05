@@ -43,6 +43,7 @@
     "open": "^11.0.0"
   },
   "devDependencies": {
+    "@changesets/changelog-git": "^0.2.1",
     "@changesets/cli": "^2.30.0",
     "@pierre/diffs": "^1.1.11",
     "@types/react": "^19.1.2",
