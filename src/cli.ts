@@ -23,7 +23,7 @@ if (values.help) {
 Usage: diffx [options] [-- <git diff args>]
 
 Options:
-  -p, --port <port>  Port to run the server on (default: 3433)
+  -p, --port <port>  Port to run the server on (default: random available port)
   --no-open          Don't open the browser automatically
   -v, --version      Show version number
   -h, --help         Show this help message
@@ -51,8 +51,7 @@ if (!isGitRepo()) {
   process.exit(1)
 }
 
-const preferredPort = values.port ? parseInt(values.port, 10) : 3433
-const port = await getPort({ port: preferredPort })
+const port = await getPort(values.port ? { port: parseInt(values.port, 10) } : undefined)
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const clientDir = resolve(__dirname, 'client')
