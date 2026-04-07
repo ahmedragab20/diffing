@@ -115,7 +115,7 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
     }
     const ext = extname(path)
     const contentType = MIME_TYPES[ext] || 'application/octet-stream'
-    return new Response(content, {
+    return new Response(new Uint8Array(content), {
       headers: { 'Content-Type': contentType },
     })
   })

@@ -22,37 +22,27 @@ export function App() {
   const { viewedFiles, setViewed } = useViewed()
   const diffViewerRef = useRef<HTMLDivElement>(null)
 
+  const untrackedSet = useMemo(() => new Set(untrackedFiles), [untrackedFiles])
+
   const files = useMemo(() => {
     if (!patch) return []
     try {
       const parsed = parsePatchFiles(patch)
       const parsedFiles = parsed.flatMap((p) => p.files)
-      const untrackedSet = new Set(untrackedFiles)
-
-      // Mark untracked text files
-      for (const file of parsedFiles) {
-        if (untrackedSet.has(file.name)) {
-          ;(file as any).changeType = 'untracked'
-        }
-      }
 
       // Add synthetic entries for binary files not already in parsed output
       const existingNames = new Set(parsedFiles.map((f) => f.name))
       for (const bf of binaryFiles) {
         if (!existingNames.has(bf.path)) {
-          const isUntracked = bf.type === 'untracked'
           const syntheticFile: FileDiffMetadata = {
             name: bf.path,
-            type: isUntracked || bf.type === 'added' ? 'new' : bf.type === 'deleted' ? 'deleted' : 'change',
+            type: bf.type === 'added' || bf.type === 'untracked' ? 'new' : bf.type === 'deleted' ? 'deleted' : 'change',
             hunks: [],
             splitLineCount: 0,
             unifiedLineCount: 0,
             isPartial: true,
             deletionLines: [],
             additionLines: [],
-          }
-          if (isUntracked) {
-            ;(syntheticFile as any).changeType = 'untracked'
           }
           parsedFiles.push(syntheticFile)
         }
@@ -62,7 +52,7 @@ export function App() {
     } catch {
       return []
     }
-  }, [patch, binaryFiles, untrackedFiles])
+  }, [patch, binaryFiles])
 
   const diffStats = useMemo(() => {
     if (!patch) return { additions: 0, deletions: 0 }
@@ -161,6 +151,7 @@ export function App() {
             activeFile={activeFile}
             commentCounts={commentCounts}
             viewedFiles={viewedFiles}
+            untrackedFiles={untrackedSet}
             onFileClick={handleFileClick}
           />
         </aside>
