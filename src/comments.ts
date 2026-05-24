@@ -1,3 +1,6 @@
+import { join } from 'node:path'
+import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { getRepoRoot } from './git.js'
 import type { ReviewComment, CommentReply } from './types.js'
 
 export interface CommentStore {
@@ -42,3 +45,78 @@ export class InMemoryCommentStore implements CommentStore {
     return comment
   }
 }
+
+export class FileCommentStore implements CommentStore {
+  private dirPath: string
+  private filePath: string
+
+  constructor(customRepoRoot?: string) {
+    let root = customRepoRoot
+    if (!root) {
+      try {
+        root = getRepoRoot()
+      } catch {
+        root = process.cwd()
+      }
+    }
+    this.dirPath = join(root, '.diffit')
+    this.filePath = join(this.dirPath, 'comments.json')
+  }
+
+  async getAll(): Promise<ReviewComment[]> {
+    try {
+      const data = await readFile(this.filePath, 'utf-8')
+      return JSON.parse(data)
+    } catch {
+      return []
+    }
+  }
+
+  private async save(comments: ReviewComment[]): Promise<void> {
+    try {
+      await mkdir(this.dirPath, { recursive: true })
+      await writeFile(this.filePath, JSON.stringify(comments, null, 2), 'utf-8')
+    } catch (err) {
+      console.error('Failed to save comments to file:', err)
+    }
+  }
+
+  async add(comment: ReviewComment): Promise<ReviewComment> {
+    const comments = await this.getAll()
+    comments.push(comment)
+    await this.save(comments)
+    return comment
+  }
+
+  async update(id: string, fields: { body?: string; status?: ReviewComment['status'] }): Promise<ReviewComment | null> {
+    const comments = await this.getAll()
+    const index = comments.findIndex((c) => c.id === id)
+    if (index === -1) return null
+    const comment = comments[index]
+    if (fields.body !== undefined) comment.body = fields.body
+    if (fields.status !== undefined) comment.status = fields.status
+    await this.save(comments)
+    return comment
+  }
+
+  async remove(id: string): Promise<boolean> {
+    const comments = await this.getAll()
+    const index = comments.findIndex((c) => c.id === id)
+    if (index === -1) return false
+    comments.splice(index, 1)
+    await this.save(comments)
+    return true
+  }
+
+  async addReply(commentId: string, reply: CommentReply): Promise<ReviewComment | null> {
+    const comments = await this.getAll()
+    const index = comments.findIndex((c) => c.id === commentId)
+    if (index === -1) return null
+    const comment = comments[index]
+    if (!comment.replies) comment.replies = []
+    comment.replies.push(reply)
+    await this.save(comments)
+    return comment
+  }
+}
+

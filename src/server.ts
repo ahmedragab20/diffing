@@ -6,7 +6,7 @@ import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
 import { getFileContent, isImageFile, getTabSizeForFiles, getGitDiffAsync, getCustomGitDiffAsync, getRepoRootAsync, getBranchNameAsync, getUntrackedFilePathsAsync, getRepoRoot } from './git.js'
 import { loadSettings, saveSettings } from './settings.js'
-import { InMemoryCommentStore } from './comments.js'
+import { InMemoryCommentStore, FileCommentStore } from './comments.js'
 import type { CommentStore } from './comments.js'
 import { isSafePath } from './path.js'
 
@@ -83,7 +83,7 @@ function parseBinaryFiles(patch: string, untrackedFiles?: Set<string>): BinaryFi
 export function createApp(clientDir: string, customDiffArgs?: string[], commentStore?: CommentStore) {
   const app = new Hono()
   const isCustomMode = !!customDiffArgs
-  const store = commentStore ?? new InMemoryCommentStore()
+  const store = commentStore ?? new FileCommentStore()
   const viewedFiles = new Set<string>()
 
   const activeClients = new Set<(event: string, data: string) => void>()
