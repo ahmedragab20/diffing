@@ -211,7 +211,7 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
                 >
                   <span style={{ color: 'var(--text-secondary)' }}>Suggested Change Preview</span>
                 </div>
-                <div className="suggestion-diff" style={{ display: 'flex', flexDirection: 'column', fontSize: '12px', fontFamily: 'var(--font-mono)' }}>
+                 <div className="suggestion-diff" style={{ display: 'flex', flexDirection: 'column', fontSize: '12px', fontFamily: 'var(--font-mono)', overflowX: 'auto' }}>
                   {lineContent && (
                     <div 
                       style={{ 
@@ -219,11 +219,12 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
                         padding: '8px 12px', 
                         background: 'rgba(191, 97, 106, 0.08)', 
                         borderBottom: '1px dashed var(--border-color)',
-                        color: 'var(--danger)' 
+                        color: 'var(--danger)',
+                        minWidth: 'max-content'
                       }}
                     >
                       <span style={{ width: '20px', userSelect: 'none', opacity: 0.5 }}>-</span>
-                      <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{lineContent}</span>
+                      <span style={{ whiteSpace: 'pre' }}>{lineContent}</span>
                     </div>
                   )}
                   <div 
@@ -231,11 +232,12 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
                       display: 'flex', 
                       padding: '8px 12px', 
                       background: 'rgba(163, 190, 140, 0.08)',
-                      color: 'var(--success)' 
+                      color: 'var(--success)',
+                      minWidth: 'max-content'
                     }}
                   >
                     <span style={{ width: '20px', userSelect: 'none', opacity: 0.5 }}>+</span>
-                    <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{suggestionCode}</span>
+                    <span style={{ whiteSpace: 'pre' }}>{suggestionCode}</span>
                   </div>
                 </div>
               </div>
