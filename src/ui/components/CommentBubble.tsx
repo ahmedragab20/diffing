@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { UserCircle, CheckCircle2, Bot, Reply } from 'lucide-react'
+import { UserCircle, CheckCircle2, Bot, Reply, Pencil } from 'lucide-react'
 import type { ReviewComment } from '../../types'
 import { timeAgo, parseMarkdown } from '../utils'
 import { useComments } from '../hooks/useComments'
+import { CommentForm } from './CommentForm'
 
 interface CommentBubbleProps {
   comment: ReviewComment
@@ -11,11 +12,12 @@ interface CommentBubbleProps {
 
 export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
   const [, setTick] = useState(0)
-  const { resolveComment, unresolveComment, addReply, applySuggestion } = useComments()
+  const { resolveComment, unresolveComment, addReply, applySuggestion, editComment } = useComments()
   const isResolved = comment.status === 'resolved'
   const [collapsed, setCollapsed] = useState(isResolved)
   const [replyBody, setReplyBody] = useState('')
   const [isReplying, setIsReplying] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
 
   // Keep collapsed state in sync if status is updated externally
   useEffect(() => {
@@ -100,6 +102,47 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
     )
   }
 
+  if (isEditing) {
+    return (
+      <div className={`comment-bubble ${isResolved ? 'comment-resolved' : ''}`} id={`comment-${comment.id}`}>
+        <div className="comment-bubble-header">
+          <UserCircle size={18} className="comment-bubble-avatar" />
+          <span className="comment-bubble-time" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {timeAgo(comment.createdAt)}
+            {comment.startLineNumber && comment.startLineNumber !== comment.lineNumber && (
+              <span 
+                className="comment-bubble-range" 
+                style={{
+                  padding: '1px 5px',
+                  background: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '4px',
+                  fontSize: '10px',
+                  fontWeight: 600,
+                  fontFamily: 'var(--font-mono)',
+                  color: 'var(--text-secondary)',
+                  userSelect: 'none'
+                }}
+              >
+                L{comment.startLineNumber}-{comment.lineNumber}
+              </span>
+            )}
+          </span>
+        </div>
+        <div style={{ marginTop: '8px' }}>
+          <CommentForm
+            initialBody={comment.body}
+            onSubmit={(newBody) => {
+              editComment(comment.id, newBody)
+              setIsEditing(false)
+            }}
+            onCancel={() => setIsEditing(false)}
+          />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className={`comment-bubble ${isResolved ? 'comment-resolved' : ''}`} id={`comment-${comment.id}`}>
       <div className="comment-bubble-header">
@@ -132,13 +175,22 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
           </span>
         )}
         {!isResolved && (
-          <button
-            className="comment-bubble-delete"
-            onClick={() => onDelete(comment.id)}
-            title="Delete comment"
-          >
-            &times;
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <button
+              className="comment-bubble-edit"
+              onClick={() => setIsEditing(true)}
+              title="Edit comment"
+            >
+              <Pencil size={14} />
+            </button>
+            <button
+              className="comment-bubble-delete"
+              onClick={() => onDelete(comment.id)}
+              title="Delete comment"
+            >
+              &times;
+            </button>
+          </div>
         )}
       </div>
       <div className="comment-bubble-body markdown-body" style={{ textDecoration: 'none' }} dangerouslySetInnerHTML={{ __html: parseMarkdown(comment.body) }} />

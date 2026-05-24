@@ -764,13 +764,34 @@ body {
     opacity: 0;
 }
 
-.comment-bubble:hover .comment-bubble-delete {
+.comment-bubble-edit {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 6px;
+    opacity: 0;
+}
+
+.comment-bubble:hover .comment-bubble-delete,
+.comment-bubble:hover .comment-bubble-edit {
     opacity: 1;
 }
 
 .comment-bubble-delete:hover {
     background: rgba(191, 97, 106, 0.1);
     color: var(--danger);
+}
+
+.comment-bubble-edit:hover {
+    background: rgba(129, 161, 193, 0.15);
+    color: var(--primary-hover);
 }
 
 .comment-resolved {

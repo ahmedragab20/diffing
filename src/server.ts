@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join, extname, resolve, basename } from 'node:path'
 import { watch } from 'node:fs'
 import { Hono } from 'hono'
@@ -327,6 +327,53 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
     const removed = await store.remove(id)
     if (!removed) return c.json({ error: 'Comment not found' }, 404)
     return c.json({ ok: true })
+  })
+
+  app.post('/api/attachments', async (c) => {
+    const body = await c.req.parseBody()
+    const file = body['file']
+    if (!file || !(file instanceof File)) {
+      return c.json({ error: 'No file uploaded' }, 400)
+    }
+
+    try {
+      const root = getRepoRoot()
+      const attachmentsDir = join(root, '.diffit', 'attachments')
+      await mkdir(attachmentsDir, { recursive: true })
+
+      const ext = extname(file.name) || '.png'
+      const filename = `pasted_image_${crypto.randomUUID()}${ext}`
+      const absolutePath = join(attachmentsDir, filename)
+
+      const arrayBuffer = await file.arrayBuffer()
+      await writeFile(absolutePath, new Uint8Array(arrayBuffer))
+
+      return c.json({ url: `/api/attachments/${filename}` })
+    } catch (err: any) {
+      return c.json({ error: `Failed to save attachment: ${err.message}` }, 500)
+    }
+  })
+
+  app.get('/api/attachments/:filename', async (c) => {
+    const filename = c.req.param('filename')
+    const root = getRepoRoot()
+    const relativePath = join('.diffit', 'attachments', filename)
+
+    if (!isSafePath(relativePath, root)) {
+      return c.text('Forbidden', 403)
+    }
+
+    const absolutePath = join(root, relativePath)
+    try {
+      const content = await readFile(absolutePath)
+      const ext = extname(absolutePath)
+      const contentType = MIME_TYPES[ext] || 'application/octet-stream'
+      return new Response(content, {
+        headers: { 'Content-Type': contentType },
+      })
+    } catch {
+      return c.text('Attachment not found', 404)
+    }
   })
 
   app.get('/*', async (c) => {
