@@ -20,3 +20,14 @@ export function fileName(filePath: string): string {
   const parts = filePath.split('/')
   return parts[parts.length - 1]
 }
+
+export const SHIKI_THEME_MAP: Record<string, { themeName: string; type: 'dark' | 'light' }> = {
+  nord: { themeName: 'nord', type: 'dark' },
+  'github-dark': { themeName: 'github-dark', type: 'dark' },
+  'github-light': { themeName: 'github-light', type: 'light' },
+  dracula: { themeName: 'dracula', type: 'dark' },
+  'one-dark': { themeName: 'one-dark-pro', type: 'dark' },
+  'synthwave-84': { themeName: 'synthwave-84', type: 'dark' },
+  'tokyo-night': { themeName: 'tokyo-night', type: 'dark' },
+}
+

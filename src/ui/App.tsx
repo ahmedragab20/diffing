@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback, useRef, useEffect, useTransition } from 'react'
 import { parsePatchFiles } from '@pierre/diffs'
 import type { FileDiffMetadata } from '@pierre/diffs'
+import { useWorkerPool } from '@pierre/diffs/react'
+import { SHIKI_THEME_MAP } from './utils'
 import type { ReviewComment } from '../types'
 import { useDiff } from './hooks/useDiff'
 import { useComments } from './hooks/useComments'
@@ -12,6 +14,7 @@ import { FileTree } from './components/FileTree'
 import { CommentTracker } from './components/CommentTracker'
 
 export function App() {
+  const poolManager = useWorkerPool()
   const { settings, loaded, updateSettings } = useSettings()
   const [, startTransition] = useTransition()
   const { patch, repoName, branch, customMode, binaryFiles, tabSizeMap, untrackedFiles, loading, error } = useDiff({
@@ -191,6 +194,24 @@ export function App() {
     const activeTheme = settings.theme || 'nord'
     document.documentElement.setAttribute('data-theme', activeTheme)
   }, [settings.theme])
+
+  const shikiConfig = useMemo(() => {
+    const activeTheme = settings.theme || 'nord'
+    return SHIKI_THEME_MAP[activeTheme] || SHIKI_THEME_MAP.nord
+  }, [settings.theme])
+
+  useEffect(() => {
+    if (!poolManager) return
+    poolManager.setRenderOptions({
+      theme: {
+        dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
+        light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
+      },
+    }).catch((err) => {
+      console.error('Failed to set worker pool render options:', err)
+    })
+  }, [poolManager, shikiConfig])
+
 
   if (!loaded || loading) {
     return (

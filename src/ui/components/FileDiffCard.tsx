@@ -4,6 +4,7 @@ import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide } from '@pier
 import type { ReviewComment } from '../../types'
 import { CommentForm } from './CommentForm'
 import { CommentBubble } from './CommentBubble'
+import { SHIKI_THEME_MAP } from '../utils'
 
 interface PendingComment {
   side: AnnotationSide
@@ -22,16 +23,6 @@ interface FileDiffCardProps {
   onViewedChange: (filePath: string, viewed: boolean) => void
   onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string) => void
   onDeleteComment: (id: string) => void
-}
-
-const SHIKI_THEME_MAP: Record<string, { themeName: string; type: 'dark' | 'light' }> = {
-  nord: { themeName: 'nord', type: 'dark' },
-  'github-dark': { themeName: 'github-dark', type: 'dark' },
-  'github-light': { themeName: 'github-light', type: 'light' },
-  dracula: { themeName: 'dracula', type: 'dark' },
-  'one-dark': { themeName: 'one-dark-pro', type: 'dark' },
-  'synthwave-84': { themeName: 'synthwave-84', type: 'dark' },
-  'tokyo-night': { themeName: 'tokyo-night', type: 'dark' },
 }
 
 export const FileDiffCard = memo(function FileDiffCard({
