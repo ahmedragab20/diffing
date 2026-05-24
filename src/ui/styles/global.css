@@ -1541,4 +1541,87 @@ file-tree,
     background-color: rgba(235, 186, 0, 0.16) !important;
 }
 
+/* Code syntax highlighting inside markdown comments */
+.markdown-body pre {
+    background: var(--bg-primary) !important;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 12px 0;
+    overflow-x: auto;
+}
+
+.markdown-body code {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.5;
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    color: var(--text-primary);
+}
+
+/* Inline code (not wrapped in pre) */
+.markdown-body p > code,
+.markdown-body li > code {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12.5px;
+    color: var(--primary-hover);
+}
+
+.hljs-comment,
+.hljs-quote {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag .hljs-attr {
+    color: var(--warning);
+}
+
+.hljs-string,
+.hljs-doctag,
+.hljs-regexp {
+    color: var(--success);
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-selector-id,
+.hljs-title.class_,
+.hljs-title.function_ {
+    color: var(--border-focus);
+}
+
+.hljs-built_in,
+.hljs-type,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-attribute,
+.hljs-meta {
+    color: var(--primary);
+}
+
+.hljs-emphasis {
+    font-style: italic;
+}
+
+.hljs-strong {
+    font-weight: bold;
+}
+
 

@@ -1,4 +1,27 @@
 import { marked } from 'marked'
+import hljs from 'highlight.js'
+
+// Unescape helper to pass raw code blocks to highlight.js
+function unescapeHtml(html: string): string {
+  return html
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+}
+
+// Configure custom renderer globally for marked
+const renderer = new marked.Renderer()
+renderer.code = function ({ text, lang }: { text: string; lang?: string }): string {
+  const language = lang || ''
+  const validLanguage = hljs.getLanguage(language) ? language : 'plaintext'
+  const rawCode = unescapeHtml(text)
+  const highlighted = hljs.highlight(rawCode, { language: validLanguage }).value
+  return `<pre><code class="hljs language-${validLanguage}">${highlighted}</code></pre>`
+}
+
+marked.use({ renderer })
 
 export function timeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000)
