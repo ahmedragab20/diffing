@@ -65,20 +65,32 @@ export const FileDiffCard = memo(function FileDiffCard({
 
   const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP.nord
 
-  const getLineContent = (side: AnnotationSide, lineNumber: number): string => {
-    const lines = side === 'additions' ? fileDiff.additionLines : fileDiff.deletionLines
-    const startKey = side === 'additions' ? 'additionStart' : 'deletionStart'
-    const countKey = side === 'additions' ? 'additionCount' : 'deletionCount'
-    const indexKey = side === 'additions' ? 'additionLineIndex' : 'deletionLineIndex'
-    for (const hunk of fileDiff.hunks) {
-      const start = hunk[startKey]
-      const count = hunk[countKey]
-      if (lineNumber >= start && lineNumber < start + count) {
-        const index = hunk[indexKey] + (lineNumber - start)
-        return lines[index] ?? ''
+  const getLineContent = (side: AnnotationSide, lineNumber: number, startLineNumber?: number): string => {
+    const startNum = startLineNumber && startLineNumber !== lineNumber ? startLineNumber : lineNumber
+    const endNum = lineNumber
+    const resultLines: string[] = []
+
+    for (let line = startNum; line <= endNum; line++) {
+      const lines = side === 'additions' ? fileDiff.additionLines : fileDiff.deletionLines
+      const startKey = side === 'additions' ? 'additionStart' : 'deletionStart'
+      const countKey = side === 'additions' ? 'additionCount' : 'deletionCount'
+      const indexKey = side === 'additions' ? 'additionLineIndex' : 'deletionLineIndex'
+      let found = false
+      for (const hunk of fileDiff.hunks) {
+        const start = hunk[startKey]
+        const count = hunk[countKey]
+        if (line >= start && line < start + count) {
+          const index = hunk[indexKey] + (line - start)
+          resultLines.push(lines[index] ?? '')
+          found = true
+          break
+        }
+      }
+      if (!found) {
+        resultLines.push('')
       }
     }
-    return ''
+    return resultLines.join('\n')
   }
 
   const allAnnotations: DiffLineAnnotation<ReviewComment | { _pending: true }>[] = [
@@ -202,9 +214,9 @@ export const FileDiffCard = memo(function FileDiffCard({
               if ('_pending' in annotation.metadata) {
                 return (
                   <CommentForm
-                    lineContent={getLineContent(pending!.side, pending!.lineNumber)}
+                    lineContent={getLineContent(pending!.side, pending!.lineNumber, pending!.startLineNumber)}
                     onSubmit={(body) => {
-                      const lineContent = getLineContent(pending!.side, pending!.lineNumber)
+                      const lineContent = getLineContent(pending!.side, pending!.lineNumber, pending!.startLineNumber)
                       onAddComment(filePath, pending!.side, pending!.lineNumber, lineContent, body, pending!.startLineNumber)
                       setPending(null)
                       setSelectedRange(null)
