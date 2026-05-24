@@ -70,6 +70,22 @@ export function useComments() {
     },
   })
 
+  const applySuggestionMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/comments/${id}/apply-suggestion`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || 'Failed to apply suggestion')
+      }
+      return res.json() as Promise<{ ok: boolean }>
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: COMMENTS_KEY })
+    },
+  })
+
   const addComment = useCallback(
     (filePath: string, side: 'deletions' | 'additions', lineNumber: number, lineContent: string, body: string) => {
       addMutation.mutate({ filePath, side, lineNumber, lineContent, body })
@@ -110,6 +126,13 @@ export function useComments() {
       addReplyMutation.mutate({ id, body })
     },
     [addReplyMutation.mutate],
+  )
+
+  const applySuggestion = useCallback(
+    async (id: string) => {
+      await applySuggestionMutation.mutateAsync(id)
+    },
+    [applySuggestionMutation.mutateAsync],
   )
 
   const formatAllComments = useCallback((): string => {
@@ -165,6 +188,7 @@ export function useComments() {
     resolveComment,
     unresolveComment,
     addReply,
+    applySuggestion,
     getAnnotationsForFile,
     formatAllComments,
     copyAllComments,

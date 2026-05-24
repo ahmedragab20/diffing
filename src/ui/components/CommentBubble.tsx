@@ -11,7 +11,7 @@ interface CommentBubbleProps {
 
 export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
   const [, setTick] = useState(0)
-  const { resolveComment, unresolveComment, addReply } = useComments()
+  const { resolveComment, unresolveComment, addReply, applySuggestion } = useComments()
   const isResolved = comment.status === 'resolved'
   const [collapsed, setCollapsed] = useState(isResolved)
   const [replyBody, setReplyBody] = useState('')
@@ -106,6 +106,93 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
         )}
       </div>
       <div className="comment-bubble-body markdown-body" style={{ textDecoration: 'none' }} dangerouslySetInnerHTML={{ __html: parseMarkdown(comment.body) }} />
+      
+      {(() => {
+        const suggestionMatch = comment.body.match(/```suggestion\n([\s\S]*?)```/)
+        const hasSuggestion = !!suggestionMatch && comment.side === 'additions'
+        const suggestionCode = suggestionMatch ? suggestionMatch[1].trimEnd() : ''
+        if (!hasSuggestion) return null
+
+        return (
+          <div 
+            className="suggestion-card" 
+            style={{
+              marginTop: '12px',
+              marginBottom: '12px',
+              border: '1px solid var(--border-color)',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              background: 'var(--bg-primary)'
+            }}
+          >
+            <div 
+              className="suggestion-header" 
+              style={{
+                padding: '8px 12px',
+                background: 'var(--bg-tertiary)',
+                borderBottom: '1px solid var(--border-color)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                fontSize: '12px',
+                fontWeight: 600
+              }}
+            >
+              <span style={{ color: 'var(--text-secondary)' }}>Suggested Change</span>
+              {isResolved ? (
+                <span style={{ color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <CheckCircle2 size={12} /> Applied
+                </span>
+              ) : (
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={async () => {
+                    try {
+                      await applySuggestion(comment.id)
+                    } catch (err: any) {
+                      alert(err.message)
+                    }
+                  }}
+                  style={{
+                    fontSize: '11px',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    height: '24px'
+                  }}
+                >
+                  Apply Suggestion
+                </button>
+              )}
+            </div>
+            <div className="suggestion-diff" style={{ display: 'flex', flexDirection: 'column', fontSize: '12px', fontFamily: 'var(--font-mono)' }}>
+              <div 
+                style={{ 
+                  display: 'flex', 
+                  padding: '8px 12px', 
+                  background: 'rgba(191, 97, 106, 0.08)', 
+                  borderBottom: '1px dashed var(--border-color)',
+                  color: 'var(--danger)' 
+                }}
+              >
+                <span style={{ width: '20px', userSelect: 'none', opacity: 0.5 }}>-</span>
+                <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{comment.lineContent}</span>
+              </div>
+              <div 
+                style={{ 
+                  display: 'flex', 
+                  padding: '8px 12px', 
+                  background: 'rgba(163, 190, 140, 0.08)',
+                  color: 'var(--success)' 
+                }}
+              >
+                <span style={{ width: '20px', userSelect: 'none', opacity: 0.5 }}>+</span>
+                <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{suggestionCode}</span>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       {comment.replies?.length > 0 && (
         <div className="comment-replies">
           {comment.replies.map((reply) => (

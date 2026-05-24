@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join, extname, resolve, basename } from 'node:path'
 import { watch } from 'node:fs'
 import { Hono } from 'hono'
@@ -274,6 +274,51 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
     const updated = await store.addReply(commentId, reply)
     if (!updated) return c.json({ error: 'Comment not found' }, 404)
     return c.json(updated)
+  })
+
+  app.post('/api/comments/:id/apply-suggestion', async (c) => {
+    const id = c.req.param('id')
+    const comment = (await store.getAll()).find((c) => c.id === id)
+    if (!comment) {
+      return c.json({ error: 'Comment not found' }, 404)
+    }
+
+    if (comment.side !== 'additions') {
+      return c.json({ error: 'Suggestions can only be applied to added or modified lines' }, 400)
+    }
+
+    const match = comment.body.match(/```suggestion\n([\s\S]*?)```/)
+    if (!match) {
+      return c.json({ error: 'No suggestion block found in comment body' }, 400)
+    }
+    const suggestion = match[1]
+
+    try {
+      const root = getRepoRoot()
+      if (!isSafePath(comment.filePath, root)) {
+        return c.json({ error: 'Forbidden file path' }, 403)
+      }
+      const absolutePath = resolve(root, comment.filePath)
+      const content = await readFile(absolutePath, 'utf-8')
+      const lines = content.split(/\r?\n/)
+      
+      const lineIdx = comment.lineNumber - 1
+      if (lineIdx < 0 || lineIdx >= lines.length) {
+        return c.json({ error: 'Comment line number out of range' }, 400)
+      }
+
+      // Replace target line with suggestion
+      lines[lineIdx] = suggestion.trimEnd()
+      const newContent = lines.join('\n')
+      await writeFile(absolutePath, newContent, 'utf-8')
+
+      // Mark comment as resolved after applying suggestion
+      await store.update(id, { status: 'resolved' })
+
+      return c.json({ ok: true })
+    } catch (err: any) {
+      return c.json({ error: `Failed to apply suggestion: ${err.message}` }, 500)
+    }
   })
 
   app.delete('/api/comments/:id', async (c) => {
