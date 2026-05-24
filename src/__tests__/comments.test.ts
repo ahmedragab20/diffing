@@ -49,7 +49,7 @@ const suites = [
 
 for (const suite of suites) {
   describe(suite.name, () => {
-    let store: any
+    let store: CommentStore
 
     beforeEach(async () => {
       await suite.cleanup()
