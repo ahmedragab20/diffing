@@ -37,41 +37,48 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
   }
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = e.clipboardData.files
-    if (files && files.length > 0) {
-      const file = files[0]
-      if (file.type.startsWith('image/')) {
-        e.preventDefault()
+    const items = e.clipboardData.items
+    let imageFile: File | null = null
 
-        const textarea = textareaRef.current
-        if (!textarea) return
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        imageFile = item.getAsFile()
+        break
+      }
+    }
 
-        const start = textarea.selectionStart
-        const end = textarea.selectionEnd
-        const placeholder = '![Uploading image...]()'
-        const val = textarea.value
+    if (imageFile) {
+      e.preventDefault()
 
-        const nextValue = val.slice(0, start) + placeholder + val.slice(end)
-        setBody(nextValue)
+      const textarea = textareaRef.current
+      if (!textarea) return
 
-        const formData = new FormData()
-        formData.append('file', file)
+      const start = textarea.selectionStart
+      const end = textarea.selectionEnd
+      const placeholder = '![Uploading image...]()'
+      const val = textarea.value
 
-        try {
-          const res = await fetch('/api/attachments', {
-            method: 'POST',
-            body: formData,
-          })
-          const data = await res.json()
-          if (data.url) {
-            const markdownImage = `![Pasted Image](${data.url})`
-            setBody((prev) => prev.replace(placeholder, markdownImage))
-          } else {
-            setBody(val.slice(0, start) + val.slice(end))
-          }
-        } catch {
+      const nextValue = val.slice(0, start) + placeholder + val.slice(end)
+      setBody(nextValue)
+
+      const formData = new FormData()
+      formData.append('file', imageFile)
+
+      try {
+        const res = await fetch('/api/attachments', {
+          method: 'POST',
+          body: formData,
+        })
+        const data = await res.json()
+        if (data.url) {
+          const markdownImage = `![Pasted Image](${data.url})`
+          setBody((prev) => prev.replace(placeholder, markdownImage))
+        } else {
           setBody(val.slice(0, start) + val.slice(end))
         }
+      } catch {
+        setBody(val.slice(0, start) + val.slice(end))
       }
     }
   }
