@@ -1249,3 +1249,175 @@ file-tree,
     --trees-theme-git-deleted-fg: var(--danger);
     height: 100%;
 }
+
+/* Skeleton Loader Styles */
+.skeleton-app {
+    pointer-events: none;
+    user-select: none;
+}
+
+.skeleton-item {
+    background: var(--bg-tertiary);
+    position: relative;
+    overflow: hidden;
+    border-radius: 4px;
+}
+
+.skeleton-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    height: 60px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.skeleton-logo {
+    width: 120px;
+    height: 24px;
+}
+
+.skeleton-stats {
+    width: 250px;
+    height: 20px;
+    margin-left: 40px;
+}
+
+.skeleton-actions {
+    width: 300px;
+    height: 32px;
+    border-radius: 6px;
+}
+
+.skeleton-sidebar {
+    padding: 16px 0;
+    gap: 16px;
+}
+
+.skeleton-search {
+    margin: 0 16px;
+    height: 32px;
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+    position: relative;
+    overflow: hidden;
+}
+
+.skeleton-tree-nodes {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 0 16px;
+}
+
+.skeleton-tree-node {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 24px;
+}
+
+.skeleton-node-icon {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    position: relative;
+    overflow: hidden;
+}
+
+.skeleton-node-text {
+    height: 14px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+    position: relative;
+    overflow: hidden;
+}
+
+.skeleton-main {
+    padding: 30px;
+}
+
+.skeleton-card {
+    border-color: var(--border-color);
+}
+
+.skeleton-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+    position: relative;
+    overflow: hidden;
+}
+
+.skeleton-card-title {
+    height: 16px;
+    border-radius: 4px;
+    background: var(--border-color);
+    position: relative;
+    overflow: hidden;
+}
+
+.skeleton-card-badge {
+    width: 70px;
+    height: 24px;
+    border-radius: 6px;
+    background: var(--border-color);
+    position: relative;
+    overflow: hidden;
+}
+
+.skeleton-card-body {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--bg-secondary);
+}
+
+.skeleton-code-line {
+    height: 16px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+    position: relative;
+    overflow: hidden;
+}
+
+/* Base Shimmer Effect */
+.skeleton-search::after,
+.skeleton-logo::after,
+.skeleton-stats::after,
+.skeleton-actions::after,
+.skeleton-node-icon::after,
+.skeleton-node-text::after,
+.skeleton-card-header::after,
+.skeleton-card-title::after,
+.skeleton-card-badge::after,
+.skeleton-code-line::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0.04) 30%,
+        rgba(255, 255, 255, 0.08) 50%,
+        rgba(255, 255, 255, 0.04) 70%,
+        rgba(255, 255, 255, 0) 100%
+    );
+    animation: shimmer-swipe 1.6s infinite ease-in-out;
+}
+
+@keyframes shimmer-swipe {
+    100% {
+        transform: translateX(100%);
+    }
+}

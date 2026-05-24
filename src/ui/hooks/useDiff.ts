@@ -27,6 +27,7 @@ export function useDiff(options: DiffOptions, enabled = true) {
   const [data, setData] = useState<DiffData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [refreshCount, setRefreshCount] = useState(0)
 
   useEffect(() => {
     if (!enabled) return
@@ -42,7 +43,21 @@ export function useDiff(options: DiffOptions, enabled = true) {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
-  }, [options.staged, options.untracked, enabled])
+  }, [options.staged, options.untracked, enabled, refreshCount])
+
+  useEffect(() => {
+    if (!enabled || typeof EventSource === 'undefined') return
+
+    const eventSource = new EventSource('/api/live')
+
+    eventSource.addEventListener('change', () => {
+      setRefreshCount((c) => c + 1)
+    })
+
+    return () => {
+      eventSource.close()
+    }
+  }, [enabled])
 
   return {
     patch: data?.patch ?? null,

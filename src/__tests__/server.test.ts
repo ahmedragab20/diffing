@@ -289,6 +289,19 @@ describe('server', () => {
         expect(res.headers.get('Content-Type')).toBe('text/html')
       })
     })
+
+    describe('GET /api/live', () => {
+      it('returns event stream', async () => {
+        const res = await app.fetch(new Request('http://localhost/api/live'))
+        expect(res.status).toBe(200)
+        expect(res.headers.get('Content-Type')).toContain('text/event-stream')
+        expect(res.body).toBeDefined()
+        const reader = res.body?.getReader()
+        if (reader) {
+          await reader.cancel()
+        }
+      })
+    })
   })
 
   describe('parseBinaryFiles', () => {

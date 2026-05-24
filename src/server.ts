@@ -1,8 +1,10 @@
 import { readFile } from 'node:fs/promises'
 import { join, extname, resolve, basename } from 'node:path'
+import { watch } from 'node:fs'
 import { Hono } from 'hono'
+import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { getFileContent, isImageFile, getTabSizeForFiles, getGitDiffAsync, getCustomGitDiffAsync, getRepoRootAsync, getBranchNameAsync, getUntrackedFilePathsAsync } from './git.js'
+import { getFileContent, isImageFile, getTabSizeForFiles, getGitDiffAsync, getCustomGitDiffAsync, getRepoRootAsync, getBranchNameAsync, getUntrackedFilePathsAsync, getRepoRoot } from './git.js'
 import { loadSettings, saveSettings } from './settings.js'
 import { InMemoryCommentStore } from './comments.js'
 import type { CommentStore } from './comments.js'
@@ -83,6 +85,86 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
   const isCustomMode = !!customDiffArgs
   const store = commentStore ?? new InMemoryCommentStore()
   const viewedFiles = new Set<string>()
+
+  const activeClients = new Set<(event: string, data: string) => void>()
+
+  // Watch git repository root for changes to trigger live reloads
+  let repoRoot: string
+  try {
+    repoRoot = getRepoRoot()
+  } catch {
+    repoRoot = process.cwd()
+  }
+
+  let debounceTimeout: NodeJS.Timeout | null = null
+
+  try {
+    const watcher = watch(repoRoot, { recursive: true }, (eventType, filename) => {
+      if (!filename) return
+      const parts = filename.split(/[/\\]/)
+      const isGit = parts.includes('.git')
+      const isNodeModules = parts.includes('node_modules')
+      const isDist = parts.includes('dist')
+      const isChangeset = parts.includes('.changeset')
+
+      let shouldTrigger = false
+      if (isGit) {
+        const isIndex = filename.endsWith('index')
+        const isHead = filename.endsWith('HEAD')
+        const isRefs = filename.includes('refs/') || filename.includes('refs\\')
+        if (isIndex || isHead || isRefs) {
+          shouldTrigger = true
+        }
+      } else if (!isNodeModules && !isDist && !isChangeset) {
+        shouldTrigger = true
+      }
+
+      if (shouldTrigger) {
+        if (debounceTimeout) clearTimeout(debounceTimeout)
+        debounceTimeout = setTimeout(() => {
+          for (const sendUpdate of activeClients) {
+            try {
+              sendUpdate('change', Date.now().toString())
+            } catch {
+              // Client will be cleaned up on next interval or abort
+            }
+          }
+        }, 200)
+      }
+    })
+    watcher.unref()
+  } catch (err) {
+    console.warn('Failed to initialize repository watcher:', err)
+  }
+
+  app.get('/api/live', async (c) => {
+    return streamSSE(c, async (stream) => {
+      const sendUpdate = (event: string, data: string) => {
+        stream.writeSSE({
+          event,
+          data,
+        })
+      }
+      activeClients.add(sendUpdate)
+
+      const heartbeatInterval = setInterval(() => {
+        try {
+          stream.writeSSE({
+            event: 'heartbeat',
+            data: Date.now().toString(),
+          })
+        } catch {
+          clearInterval(heartbeatInterval)
+          activeClients.delete(sendUpdate)
+        }
+      }, 30000)
+
+      stream.onAbort(() => {
+        clearInterval(heartbeatInterval)
+        activeClients.delete(sendUpdate)
+      })
+    })
+  })
 
   app.get('/api/diff', async (c) => {
     const staged = c.req.query('staged') === 'true'

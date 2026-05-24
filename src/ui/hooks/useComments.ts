@@ -58,28 +58,28 @@ export function useComments() {
     (filePath: string, side: 'deletions' | 'additions', lineNumber: number, lineContent: string, body: string) => {
       addMutation.mutate({ filePath, side, lineNumber, lineContent, body })
     },
-    [addMutation],
+    [addMutation.mutate],
   )
 
   const removeComment = useCallback(
     (id: string) => {
       removeMutation.mutate(id)
     },
-    [removeMutation],
+    [removeMutation.mutate],
   )
 
   const editComment = useCallback(
     (id: string, body: string) => {
       editMutation.mutate({ id, body })
     },
-    [editMutation],
+    [editMutation.mutate],
   )
 
   const resolveComment = useCallback(
     (id: string) => {
       editMutation.mutate({ id, status: 'resolved' })
     },
-    [editMutation],
+    [editMutation.mutate],
   )
 
   const formatAllComments = useCallback((): string => {
