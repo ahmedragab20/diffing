@@ -47,7 +47,7 @@
 
 ### Patch Changes
 
-- 2a97d9b: Harden local server exposure by binding DiffX to loopback only and reduce command execution risk by replacing shell-based Git invocation with `execFileSync`.
+- 2a97d9b: Harden local server exposure by binding diffit to loopback only and reduce command execution risk by replacing shell-based Git invocation with `execFileSync`.
 
 ## 0.8.0
 
@@ -81,7 +81,7 @@
 
 ## 0.4.1 (2026-04-04)
 
-- Add diffx-review skill for AI-assisted code review workflow
+- Add diffit-review skill for AI-assisted code review workflow
 
 ## 0.4.0 (2026-04-04)
 

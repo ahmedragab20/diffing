@@ -1,17 +1,17 @@
 {
-  "name": "diffx-cli",
+  "name": "diffit",
   "version": "0.12.1",
   "description": "Local code review tool for git diffs with a GitHub PR-like web UI",
   "type": "module",
   "license": "MIT",
   "packageManager": "pnpm@10.32.1",
-  "homepage": "https://github.com/wong2/diffx",
+  "homepage": "https://github.com/ahmedragab20/diffit",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/wong2/diffx.git"
+    "url": "git+https://github.com/ahmedragab20/diffit.git"
   },
   "bugs": {
-    "url": "https://github.com/wong2/diffx/issues"
+    "url": "https://github.com/ahmedragab20/diffit/issues"
   },
   "keywords": [
     "git",
@@ -20,7 +20,7 @@
     "cli"
   ],
   "bin": {
-    "diffx": "./dist/cli.mjs"
+    "diffit": "./dist/cli.mjs"
   },
   "files": [
     "dist"
@@ -30,6 +30,8 @@
     "changeset": "changeset",
     "dev:client": "vite",
     "dev:server": "tsx src/cli.ts --no-open -p 3433",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prepublishOnly": "pnpm run build",
     "release": "pnpm run build && changeset publish",
     "version-packages": "changeset version"
@@ -46,16 +48,20 @@
     "@changesets/changelog-git": "^0.2.1",
     "@changesets/cli": "^2.30.0",
     "@pierre/diffs": "^1.1.11",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^25.5.2",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
     "@vitejs/plugin-react": "^6.0.1",
+    "jsdom": "^29.1.1",
     "lucide-react": "^1.7.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "tsdown": "^0.21.7",
     "tsx": "^4.19.4",
     "typescript": "^6.0.2",
-    "vite": "^8.0.3"
+    "vite": "^8.0.3",
+    "vitest": "^4.1.7"
   }
 }

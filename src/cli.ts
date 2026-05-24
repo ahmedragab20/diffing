@@ -20,24 +20,24 @@ const { values, positionals } = parseArgs({
 })
 
 if (values.help) {
-  console.log(`diffx - Local code review tool for git diffs
+  console.log(`diffit - Local code review tool for git diffs
 
-Usage: diffx [options] [-- <git diff args>]
+Usage: diffit [options] [-- <git diff args>]
 
 Options:
   -p, --port <port>  Port to run the server on (default: random available port)
   --host <host>      Host address to bind to (default: 127.0.0.1). Pass
-                     0.0.0.0 to expose the server to the local network.
+                      0.0.0.0 to expose the server to the local network.
   --no-open          Don't open the browser automatically
   -v, --version      Show version number
   -h, --help         Show this help message
 
 Examples:
-  diffx                        Review uncommitted changes
-  diffx -- --staged            Review staged changes
-  diffx -- HEAD~3              Review last 3 commits
-  diffx -- main..feature       Compare branches
-  diffx --host 0.0.0.0         Allow other machines on the LAN to review`)
+  diffit                        Review uncommitted changes
+  diffit -- --staged            Review staged changes
+  diffit -- HEAD~3              Review last 3 commits
+  diffit -- main..feature       Compare branches
+  diffit --host 0.0.0.0         Allow other machines on the LAN to review`)
   process.exit(0)
 }
 
@@ -70,7 +70,7 @@ const { port: actualPort } = await startServer({ port, host, clientDir: resolved
 
 const localUrl = `http://${host}:${actualPort}`
 
-console.log(`diffx server running at ${localUrl}`)
+console.log(`diffit server running at ${localUrl}`)
 
 if (!values['no-open']) {
   const settings = loadSettings()
