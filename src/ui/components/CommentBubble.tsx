@@ -19,6 +19,9 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
   const [isReplying, setIsReplying] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
 
+  const remainingBody = comment.body.replace(/```suggestion\n([\s\S]*?)```/g, '').trim()
+  const hasBodyContent = remainingBody.length > 0
+
   // Keep collapsed state in sync if status is updated externally
   useEffect(() => {
     setCollapsed(comment.status === 'resolved')
@@ -194,7 +197,9 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
           </div>
         )}
       </div>
-      <div className="comment-bubble-body markdown-body" style={{ textDecoration: 'none' }} dangerouslySetInnerHTML={{ __html: parseMarkdown(comment.body) }} />
+      {hasBodyContent && (
+        <div className="comment-bubble-body markdown-body" style={{ textDecoration: 'none' }} dangerouslySetInnerHTML={{ __html: parseMarkdown(comment.body) }} />
+      )}
       
       {(() => {
         const suggestionMatch = comment.body.match(/```suggestion\n([\s\S]*?)```/)

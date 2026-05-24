@@ -152,23 +152,34 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
         />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div 
-            className="comment-preview markdown-body" 
-            style={{ 
-              minHeight: '100px',
-              padding: '10px 14px',
-              border: '1px solid var(--border-color)',
-              borderRadius: '8px',
-              background: 'var(--bg-primary)',
-              fontSize: '14px',
-              lineHeight: 1.6,
-              color: 'var(--text-primary)',
-              overflowY: 'auto'
-            }}
-            dangerouslySetInnerHTML={{ 
-              __html: body.trim() ? parseMarkdown(body) : '<span style="color: var(--text-muted); font-style: italic;">Nothing to preview</span>' 
-            }}
-          />
+          {(() => {
+            const suggestionMatch = body.match(/```suggestion\n([\s\S]*?)```/)
+            const hasSuggestion = !!suggestionMatch
+            const remainingText = body.replace(/```suggestion\n([\s\S]*?)```/g, '').trim()
+            const hasOtherContent = remainingText.length > 0 || !hasSuggestion
+
+            if (!hasOtherContent) return null
+
+            return (
+              <div 
+                className="comment-preview markdown-body" 
+                style={{ 
+                  minHeight: '100px',
+                  padding: '10px 14px',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '8px',
+                  background: 'var(--bg-primary)',
+                  fontSize: '14px',
+                  lineHeight: 1.6,
+                  color: 'var(--text-primary)',
+                  overflowY: 'auto'
+                }}
+                dangerouslySetInnerHTML={{ 
+                  __html: body.trim() ? parseMarkdown(body) : '<span style="color: var(--text-muted); font-style: italic;">Nothing to preview</span>' 
+                }}
+              />
+            )
+          })()}
           {(() => {
             const suggestionMatch = body.match(/```suggestion\n([\s\S]*?)```/)
             const hasSuggestion = !!suggestionMatch

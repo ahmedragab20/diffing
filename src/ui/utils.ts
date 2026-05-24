@@ -18,7 +18,8 @@ renderer.code = function ({ text, lang }: { text: string; lang?: string }): stri
   const validLanguage = hljs.getLanguage(language) ? language : 'plaintext'
   const rawCode = unescapeHtml(text)
   const highlighted = hljs.highlight(rawCode, { language: validLanguage }).value
-  return `<pre><code class="hljs language-${validLanguage}">${highlighted}</code></pre>`
+  const classLanguage = lang ? lang : validLanguage
+  return `<pre><code class="hljs language-${classLanguage}">${highlighted}</code></pre>`
 }
 
 marked.use({ renderer })
