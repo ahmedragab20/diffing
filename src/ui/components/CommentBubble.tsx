@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { UserCircle, CheckCircle2, Bot, Reply } from 'lucide-react'
 import type { ReviewComment } from '../../types'
-import { timeAgo } from '../utils'
+import { timeAgo, parseMarkdown } from '../utils'
 import { useComments } from '../hooks/useComments'
 
 interface CommentBubbleProps {
@@ -105,7 +105,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
           </button>
         )}
       </div>
-      <div className="comment-bubble-body" style={{ textDecoration: 'none' }}>{comment.body}</div>
+      <div className="comment-bubble-body markdown-body" style={{ textDecoration: 'none' }} dangerouslySetInnerHTML={{ __html: parseMarkdown(comment.body) }} />
       {comment.replies?.length > 0 && (
         <div className="comment-replies">
           {comment.replies.map((reply) => (
@@ -114,7 +114,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                 <Bot size={16} className="comment-reply-avatar" />
                 <span className="comment-bubble-time">{timeAgo(reply.createdAt)}</span>
               </div>
-              <div className="comment-reply-body">{reply.body}</div>
+              <div className="comment-reply-body markdown-body" dangerouslySetInnerHTML={{ __html: parseMarkdown(reply.body) }} />
             </div>
           ))}
         </div>
