@@ -65,6 +65,22 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-muted)' }}>
           <CheckCircle2 size={16} style={{ color: 'var(--success)' }} />
           <span style={{ fontWeight: 600 }}>Conversation resolved</span>
+          {comment.startLineNumber && comment.startLineNumber !== comment.lineNumber && (
+            <span 
+              style={{
+                padding: '1px 5px',
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '4px',
+                fontSize: '10px',
+                fontWeight: 600,
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text-secondary)'
+              }}
+            >
+              L{comment.startLineNumber}-{comment.lineNumber}
+            </span>
+          )}
           <span>•</span>
           <span>{comment.replies?.length > 0 ? `${comment.replies.length + 1} comments` : '1 comment'}</span>
         </div>
@@ -88,7 +104,27 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
     <div className={`comment-bubble ${isResolved ? 'comment-resolved' : ''}`} id={`comment-${comment.id}`}>
       <div className="comment-bubble-header">
         <UserCircle size={18} className="comment-bubble-avatar" />
-        <span className="comment-bubble-time">{timeAgo(comment.createdAt)}</span>
+        <span className="comment-bubble-time" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {timeAgo(comment.createdAt)}
+          {comment.startLineNumber && comment.startLineNumber !== comment.lineNumber && (
+            <span 
+              className="comment-bubble-range" 
+              style={{
+                padding: '1px 5px',
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '4px',
+                fontSize: '10px',
+                fontWeight: 600,
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text-secondary)',
+                userSelect: 'none'
+              }}
+            >
+              L{comment.startLineNumber}-{comment.lineNumber}
+            </span>
+          )}
+        </span>
         {isResolved && (
           <span className="comment-bubble-resolved">
             <CheckCircle2 size={14} />

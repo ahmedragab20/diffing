@@ -9,6 +9,7 @@ export interface ReviewComment {
   filePath: string
   side: 'deletions' | 'additions'
   lineNumber: number
+  startLineNumber?: number
   lineContent: string
   body: string
   status: 'open' | 'resolved'

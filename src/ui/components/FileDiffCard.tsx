@@ -1,6 +1,6 @@
 import { useState, memo, useRef, useEffect } from 'react'
 import { FileDiff } from '@pierre/diffs/react'
-import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide } from '@pierre/diffs'
+import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide, SelectedLineRange } from '@pierre/diffs'
 import type { ReviewComment } from '../../types'
 import { CommentForm } from './CommentForm'
 import { CommentBubble } from './CommentBubble'
@@ -9,6 +9,7 @@ import { SHIKI_THEME_MAP } from '../utils'
 interface PendingComment {
   side: AnnotationSide
   lineNumber: number
+  startLineNumber?: number
 }
 
 interface FileDiffCardProps {
@@ -21,7 +22,7 @@ interface FileDiffCardProps {
   viewed: boolean
   theme: string
   onViewedChange: (filePath: string, viewed: boolean) => void
-  onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string) => void
+  onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
   onDeleteComment: (id: string) => void
 }
 
@@ -39,6 +40,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   onDeleteComment,
 }: FileDiffCardProps) {
   const [pending, setPending] = useState<PendingComment | null>(null)
+  const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
   const [hasIntersected, setHasIntersected] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
 
@@ -150,6 +152,20 @@ export const FileDiffCard = memo(function FileDiffCard({
             options={{
               diffStyle,
               enableGutterUtility: true,
+              enableLineSelection: true,
+              onLineSelectionStart: () => {
+                setSelectedRange(null)
+              },
+              onLineSelectionEnd: (range) => {
+                if (range) {
+                  setSelectedRange(range)
+                  setPending({
+                    side: range.endSide || 'additions',
+                    lineNumber: range.end,
+                    startLineNumber: range.start,
+                  })
+                }
+              },
               theme: {
                 dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
                 light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
@@ -170,6 +186,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 }
               `,
             }}
+            selectedLines={selectedRange}
             lineAnnotations={allAnnotations}
             renderHeaderMetadata={() => (
               <label className="viewed-label" onClick={(e) => e.stopPropagation()}>
@@ -187,10 +204,14 @@ export const FileDiffCard = memo(function FileDiffCard({
                   <CommentForm
                     onSubmit={(body) => {
                       const lineContent = getLineContent(pending!.side, pending!.lineNumber)
-                      onAddComment(filePath, pending!.side, pending!.lineNumber, lineContent, body)
+                      onAddComment(filePath, pending!.side, pending!.lineNumber, lineContent, body, pending!.startLineNumber)
                       setPending(null)
+                      setSelectedRange(null)
                     }}
-                    onCancel={() => setPending(null)}
+                    onCancel={() => {
+                      setPending(null)
+                      setSelectedRange(null)
+                    }}
                   />
                 )
               }

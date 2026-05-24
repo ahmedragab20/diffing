@@ -15,7 +15,7 @@ export function useComments() {
   const { data: comments = [] } = useQuery({ queryKey: COMMENTS_KEY, queryFn: fetchComments, refetchInterval: 3000 })
 
   const addMutation = useMutation({
-    mutationFn: async (params: { filePath: string; side: 'deletions' | 'additions'; lineNumber: number; lineContent: string; body: string }) => {
+    mutationFn: async (params: { filePath: string; side: 'deletions' | 'additions'; lineNumber: number; startLineNumber?: number; lineContent: string; body: string }) => {
       const res = await fetch('/api/comments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -87,8 +87,8 @@ export function useComments() {
   })
 
   const addComment = useCallback(
-    (filePath: string, side: 'deletions' | 'additions', lineNumber: number, lineContent: string, body: string) => {
-      addMutation.mutate({ filePath, side, lineNumber, lineContent, body })
+    (filePath: string, side: 'deletions' | 'additions', lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => {
+      addMutation.mutate({ filePath, side, lineNumber, startLineNumber, lineContent, body })
     },
     [addMutation.mutate],
   )

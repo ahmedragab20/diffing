@@ -1504,3 +1504,20 @@ file-tree,
     align-items: center;
 }
 
+/* Drag Selection Highlights (GitHub style) */
+[data-selected-line] {
+    background-color: rgba(235, 186, 0, 0.12) !important;
+}
+
+/* Selected Line Gutter numbers */
+[data-column-number][data-selected-line] {
+    background-color: rgba(235, 186, 0, 0.18) !important;
+    border-right: 2px solid rgba(235, 186, 0, 0.5) !important;
+}
+
+/* Hover highlights for selected lines to prevent styling conflicts */
+[data-selected-line][data-hovered] {
+    background-color: rgba(235, 186, 0, 0.16) !important;
+}
+
+

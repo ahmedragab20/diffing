@@ -84,6 +84,16 @@ for (const suite of suites) {
         expect(all[0].id).toBe(comment.id)
       })
 
+      it('stores comments with startLineNumber range correctly', async () => {
+        const comment = makeComment({ id: 'c3', lineNumber: 15, startLineNumber: 12 })
+        const result = await store.add(comment)
+        expect(result.startLineNumber).toBe(12)
+        const all = await store.getAll()
+        const found = all.find((c) => c.id === 'c3')
+        expect(found).toBeDefined()
+        expect(found!.startLineNumber).toBe(12)
+      })
+
       it('stores multiple comments independently', async () => {
         const c1 = makeComment({ id: 'c1', lineNumber: 5 })
         const c2 = makeComment({ id: 'c2', lineNumber: 15 })
