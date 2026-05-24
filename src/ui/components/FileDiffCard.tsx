@@ -202,6 +202,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               if ('_pending' in annotation.metadata) {
                 return (
                   <CommentForm
+                    lineContent={getLineContent(pending!.side, pending!.lineNumber)}
                     onSubmit={(body) => {
                       const lineContent = getLineContent(pending!.side, pending!.lineNumber)
                       onAddComment(filePath, pending!.side, pending!.lineNumber, lineContent, body, pending!.startLineNumber)

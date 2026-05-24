@@ -132,6 +132,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
         <div style={{ marginTop: '8px' }}>
           <CommentForm
             initialBody={comment.body}
+            lineContent={comment.lineContent}
             onSubmit={(newBody) => {
               editComment(comment.id, newBody)
               setIsEditing(false)

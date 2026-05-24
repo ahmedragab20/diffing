@@ -1624,4 +1624,9 @@ file-tree,
     font-weight: bold;
 }
 
+/* Suppress plain text rendering of suggestion codeblocks inside markdown bodies */
+.markdown-body pre:has(code.language-suggestion) {
+    display: none !important;
+}
+
 

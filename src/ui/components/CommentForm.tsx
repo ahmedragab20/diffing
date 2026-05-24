@@ -3,11 +3,12 @@ import { parseMarkdown } from '../utils'
 
 interface CommentFormProps {
   initialBody?: string
+  lineContent?: string
   onSubmit: (body: string) => void
   onCancel: () => void
 }
 
-export function CommentForm({ initialBody, onSubmit, onCancel }: CommentFormProps) {
+export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: CommentFormProps) {
   const [body, setBody] = useState(initialBody || '')
   const [activeTab, setActiveTab] = useState<'write' | 'preview'>('write')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -150,23 +151,86 @@ export function CommentForm({ initialBody, onSubmit, onCancel }: CommentFormProp
           }}
         />
       ) : (
-        <div 
-          className="comment-preview markdown-body" 
-          style={{ 
-            minHeight: '100px',
-            padding: '10px 14px',
-            border: '1px solid var(--border-color)',
-            borderRadius: '8px',
-            background: 'var(--bg-primary)',
-            fontSize: '14px',
-            lineHeight: 1.6,
-            color: 'var(--text-primary)',
-            overflowY: 'auto'
-          }}
-          dangerouslySetInnerHTML={{ 
-            __html: body.trim() ? parseMarkdown(body) : '<span style="color: var(--text-muted); font-style: italic;">Nothing to preview</span>' 
-          }}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div 
+            className="comment-preview markdown-body" 
+            style={{ 
+              minHeight: '100px',
+              padding: '10px 14px',
+              border: '1px solid var(--border-color)',
+              borderRadius: '8px',
+              background: 'var(--bg-primary)',
+              fontSize: '14px',
+              lineHeight: 1.6,
+              color: 'var(--text-primary)',
+              overflowY: 'auto'
+            }}
+            dangerouslySetInnerHTML={{ 
+              __html: body.trim() ? parseMarkdown(body) : '<span style="color: var(--text-muted); font-style: italic;">Nothing to preview</span>' 
+            }}
+          />
+          {(() => {
+            const suggestionMatch = body.match(/```suggestion\n([\s\S]*?)```/)
+            const hasSuggestion = !!suggestionMatch
+            const suggestionCode = suggestionMatch ? suggestionMatch[1].trimEnd() : ''
+            if (!hasSuggestion) return null
+
+            return (
+              <div 
+                className="suggestion-card" 
+                style={{
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  background: 'var(--bg-primary)'
+                }}
+              >
+                <div 
+                  className="suggestion-header" 
+                  style={{
+                    padding: '8px 12px',
+                    background: 'var(--bg-tertiary)',
+                    borderBottom: '1px solid var(--border-color)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '12px',
+                    fontWeight: 600
+                  }}
+                >
+                  <span style={{ color: 'var(--text-secondary)' }}>Suggested Change Preview</span>
+                </div>
+                <div className="suggestion-diff" style={{ display: 'flex', flexDirection: 'column', fontSize: '12px', fontFamily: 'var(--font-mono)' }}>
+                  {lineContent && (
+                    <div 
+                      style={{ 
+                        display: 'flex', 
+                        padding: '8px 12px', 
+                        background: 'rgba(191, 97, 106, 0.08)', 
+                        borderBottom: '1px dashed var(--border-color)',
+                        color: 'var(--danger)' 
+                      }}
+                    >
+                      <span style={{ width: '20px', userSelect: 'none', opacity: 0.5 }}>-</span>
+                      <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{lineContent}</span>
+                    </div>
+                  )}
+                  <div 
+                    style={{ 
+                      display: 'flex', 
+                      padding: '8px 12px', 
+                      background: 'rgba(163, 190, 140, 0.08)',
+                      color: 'var(--success)' 
+                    }}
+                  >
+                    <span style={{ width: '20px', userSelect: 'none', opacity: 0.5 }}>+</span>
+                    <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{suggestionCode}</span>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+        </div>
       )}
 
       <div className="comment-form-actions">
