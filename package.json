@@ -43,6 +43,7 @@
     "editorconfig": "^3.0.2",
     "get-port": "^7.2.0",
     "hono": "^4.7.6",
+    "marked": "^18.0.4",
     "open": "^11.0.0"
   },
   "devDependencies": {
