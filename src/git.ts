@@ -1,8 +1,12 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, execFile } from 'node:child_process'
 import { basename, join, resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { promisify } from 'node:util'
 import { isSafePath } from './path.js'
 import { parseSync as parseEditorConfig, type ProcessedFileConfig } from 'editorconfig'
+
+const execFileAsync = promisify(execFile)
 
 const IMAGE_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif',
@@ -47,6 +51,14 @@ export function getFileContent(filePath: string, version: 'old' | 'new'): Buffer
   }
 }
 
+let cachedRepoRoot: string | null = null
+const editorConfigCache = new Map<string, ProcessedFileConfig>()
+
+export function _resetRepoRootCache(): void {
+  cachedRepoRoot = null
+  editorConfigCache.clear()
+}
+
 export function isGitRepo(): boolean {
   try {
     execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { stdio: 'pipe' })
@@ -57,9 +69,11 @@ export function isGitRepo(): boolean {
 }
 
 export function getRepoRoot(): string {
-  return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+  if (cachedRepoRoot !== null) return cachedRepoRoot
+  cachedRepoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
     encoding: 'utf-8',
   }).trim()
+  return cachedRepoRoot
 }
 
 export function getRepoName(): string {
@@ -106,12 +120,11 @@ export function getGitDiff(options: { staged?: boolean; untracked?: boolean } = 
 
 export function getTabSizeForFiles(filePaths: string[]): Record<string, number> {
   const root = getRepoRoot()
-  const cache = new Map<string, ProcessedFileConfig>()
   const result: Record<string, number> = {}
   for (const filePath of filePaths) {
     try {
       const absPath = join(root, filePath)
-      const config = parseEditorConfig(absPath, { cache })
+      const config = parseEditorConfig(absPath, { cache: editorConfigCache })
       const size = config.tab_width ?? (config.indent_size === 'tab' ? undefined : config.indent_size)
       if (typeof size === 'number') {
         result[filePath] = size
@@ -175,4 +188,117 @@ function getUntrackedFilesDiff(): string {
   }
 
   return patches.length > 0 ? '\n' + patches.join('\n') : ''
+}
+
+export async function getRepoRootAsync(): Promise<string> {
+  if (cachedRepoRoot !== null) return cachedRepoRoot
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf-8' })
+    cachedRepoRoot = stdout.trim()
+    return cachedRepoRoot
+  } catch {
+    return ''
+  }
+}
+
+export async function getBranchNameAsync(): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { stdio: 'pipe', encoding: 'utf-8' })
+    return stdout.trim()
+  } catch {
+    return ''
+  }
+}
+
+export async function getUntrackedFilePathsAsync(): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync('git', ['ls-files', '--others', '--exclude-standard'], { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 })
+    const trimmed = stdout.trim()
+    return trimmed ? trimmed.split('\n') : []
+  } catch {
+    return []
+  }
+}
+
+async function getUntrackedFilesDiffAsync(): Promise<string> {
+  const root = await getRepoRootAsync()
+  const filePaths = await getUntrackedFilePathsAsync()
+
+  if (filePaths.length === 0) return ''
+
+  const patches: string[] = []
+
+  const fileDiffPromises = filePaths.map(async (file) => {
+    const absolutePath = join(root, file)
+    if (isBinaryFile(absolutePath)) {
+      return [
+        `diff --git a/${file} b/${file}`,
+        'new file mode 100644',
+        'index 0000000..0000001',
+        `Binary files /dev/null and b/${file} differ`,
+      ].join('\n')
+    } else {
+      try {
+        const content = await readFile(absolutePath, 'utf-8')
+        const lines = content.split('\n')
+        const diffLines = lines.map((l: string) => `+${l}`)
+        return [
+          `diff --git a/${file} b/${file}`,
+          'new file mode 100644',
+          'index 0000000..0000001',
+          '--- /dev/null',
+          `+++ b/${file}`,
+          `@@ -0,0 +1,${lines.length} @@`,
+          ...diffLines,
+        ].join('\n')
+      } catch {
+        return ''
+      }
+    }
+  })
+
+  const results = await Promise.all(fileDiffPromises)
+  for (const r of results) {
+    if (r) patches.push(r)
+  }
+
+  return patches.length > 0 ? '\n' + patches.join('\n') : ''
+}
+
+export async function getCustomGitDiffAsync(args: string[]): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('git', ['diff', ...DIFF_FLAGS, ...args], { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 })
+    return stdout
+  } catch {
+    return ''
+  }
+}
+
+export async function getGitDiffAsync(options: { staged?: boolean; untracked?: boolean } = {}): Promise<string> {
+  const unstagedPromise = execFileAsync('git', ['diff', ...DIFF_FLAGS], { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 })
+    .then(({ stdout }) => stdout)
+    .catch(() => '')
+
+  const stagedPromise = options.staged
+    ? execFileAsync('git', ['diff', ...DIFF_FLAGS, '--staged'], { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 })
+        .then(({ stdout }) => stdout)
+        .catch(() => '')
+    : Promise.resolve('')
+
+  const untrackedPromise = options.untracked
+    ? getUntrackedFilesDiffAsync()
+    : Promise.resolve('')
+
+  const [unstaged, staged, untrackedPatch] = await Promise.all([
+    unstagedPromise,
+    stagedPromise,
+    untrackedPromise,
+  ])
+
+  const parts: string[] = []
+  if (unstaged) parts.push(unstaged)
+  if (staged) parts.push(staged)
+  if (untrackedPatch) parts.push(untrackedPatch)
+
+  return parts.join('\n')
 }

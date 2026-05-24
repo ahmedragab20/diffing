@@ -21,6 +21,7 @@ const DEFAULTS = {
   untracked: true,
   diffStyle: 'split' as const,
   defaultTabSize: 4,
+  theme: 'nord',
 }
 
 describe('settings', () => {

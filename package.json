@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
+    "@pierre/trees": "1.0.0-beta.4",
     "@tanstack/react-query": "^5.96.2",
     "editorconfig": "^3.0.2",
     "get-port": "^7.2.0",

@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 const VIEWED_KEY = ['viewed']
@@ -12,7 +12,7 @@ export function useViewed() {
   const queryClient = useQueryClient()
   const { data: viewedList = [] } = useQuery({ queryKey: VIEWED_KEY, queryFn: fetchViewed })
 
-  const viewedFiles = new Set(viewedList)
+  const viewedFiles = useMemo(() => new Set(viewedList), [viewedList])
 
   const setViewed = useCallback(async (filePath: string, viewed: boolean) => {
     // Optimistic update

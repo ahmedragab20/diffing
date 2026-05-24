@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises'
-import { join, extname, resolve } from 'node:path'
+import { join, extname, resolve, basename } from 'node:path'
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
-import { getGitDiff, getCustomGitDiff, getRepoName, getBranchName, getFileContent, isImageFile, getTabSizeForFiles, getUntrackedFilePaths } from './git.js'
+import { getFileContent, isImageFile, getTabSizeForFiles, getGitDiffAsync, getCustomGitDiffAsync, getRepoRootAsync, getBranchNameAsync, getUntrackedFilePathsAsync } from './git.js'
 import { loadSettings, saveSettings } from './settings.js'
 import { InMemoryCommentStore } from './comments.js'
 import type { CommentStore } from './comments.js'
@@ -84,18 +84,25 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
   const store = commentStore ?? new InMemoryCommentStore()
   const viewedFiles = new Set<string>()
 
-  app.get('/api/diff', (c) => {
-    let patch: string
+  app.get('/api/diff', async (c) => {
     const staged = c.req.query('staged') === 'true'
     const untracked = c.req.query('untracked') === 'true'
-    if (isCustomMode) {
-      patch = getCustomGitDiff(customDiffArgs)
-    } else {
-      patch = getGitDiff({ staged, untracked })
-    }
-    const repoName = getRepoName()
-    const branch = getBranchName()
-    const untrackedFiles = untracked ? getUntrackedFilePaths() : []
+
+    const patchPromise = isCustomMode
+      ? getCustomGitDiffAsync(customDiffArgs)
+      : getGitDiffAsync({ staged, untracked })
+
+    const repoNamePromise = getRepoRootAsync().then((root) => basename(root))
+    const branchPromise = getBranchNameAsync()
+    const untrackedFilesPromise = untracked ? getUntrackedFilePathsAsync() : Promise.resolve([])
+
+    const [patch, repoName, branch, untrackedFiles] = await Promise.all([
+      patchPromise,
+      repoNamePromise,
+      branchPromise,
+      untrackedFilesPromise,
+    ])
+
     const untrackedSet = new Set(untrackedFiles)
     const binaryFiles = parseBinaryFiles(patch, untrackedSet)
     const filePaths = parseFilePaths(patch)

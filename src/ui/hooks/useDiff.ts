@@ -20,12 +20,17 @@ export interface DiffOptions {
   untracked: boolean
 }
 
-export function useDiff(options: DiffOptions) {
+const EMPTY_ARRAY: any[] = []
+const EMPTY_OBJECT: Record<string, number> = {}
+
+export function useDiff(options: DiffOptions, enabled = true) {
   const [data, setData] = useState<DiffData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (!enabled) return
+
     setLoading(true)
     setError(null)
 
@@ -37,16 +42,16 @@ export function useDiff(options: DiffOptions) {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
-  }, [options.staged, options.untracked])
+  }, [options.staged, options.untracked, enabled])
 
   return {
     patch: data?.patch ?? null,
     repoName: data?.repoName ?? '',
     branch: data?.branch ?? '',
     customMode: data?.customMode ?? false,
-    binaryFiles: data?.binaryFiles ?? [],
-    tabSizeMap: data?.tabSizeMap ?? {},
-    untrackedFiles: data?.untrackedFiles ?? [],
+    binaryFiles: data?.binaryFiles ?? EMPTY_ARRAY,
+    tabSizeMap: data?.tabSizeMap ?? EMPTY_OBJECT,
+    untrackedFiles: data?.untrackedFiles ?? EMPTY_ARRAY,
     loading,
     error,
   }

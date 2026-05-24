@@ -20,8 +20,12 @@ vi.mock('../path.js', () => ({ isSafePath: mockIsSafePath }))
 vi.mock('editorconfig', () => ({ parseSync: mockParseEditorConfig }))
 
 describe('git', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks()
+    try {
+      const { _resetRepoRootCache } = await import('../git.js')
+      _resetRepoRootCache()
+    } catch {}
   })
 
   describe('isImageFile', () => {

@@ -1,4 +1,4 @@
-import { useState, memo } from 'react'
+import { useState, memo, useRef, useEffect } from 'react'
 import { FileDiff } from '@pierre/diffs/react'
 import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide } from '@pierre/diffs'
 import type { ReviewComment } from '../../types'
@@ -18,9 +18,20 @@ interface FileDiffCardProps {
   diffStyle: 'split' | 'unified'
   tabSize: number
   viewed: boolean
+  theme: string
   onViewedChange: (filePath: string, viewed: boolean) => void
   onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string) => void
   onDeleteComment: (id: string) => void
+}
+
+const SHIKI_THEME_MAP: Record<string, { themeName: string; type: 'dark' | 'light' }> = {
+  nord: { themeName: 'nord', type: 'dark' },
+  'github-dark': { themeName: 'github-dark', type: 'dark' },
+  'github-light': { themeName: 'github-light', type: 'light' },
+  dracula: { themeName: 'dracula', type: 'dark' },
+  'one-dark': { themeName: 'one-dark-pro', type: 'dark' },
+  'synthwave-84': { themeName: 'synthwave-84', type: 'dark' },
+  'tokyo-night': { themeName: 'tokyo-night', type: 'dark' },
 }
 
 export const FileDiffCard = memo(function FileDiffCard({
@@ -31,11 +42,35 @@ export const FileDiffCard = memo(function FileDiffCard({
   diffStyle,
   tabSize,
   viewed,
+  theme,
   onViewedChange,
   onAddComment,
   onDeleteComment,
 }: FileDiffCardProps) {
   const [pending, setPending] = useState<PendingComment | null>(null)
+  const [hasIntersected, setHasIntersected] = useState(false)
+  const cardRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (viewed) return
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setHasIntersected(entry.isIntersecting)
+      },
+      { rootMargin: '600px' }
+    )
+
+    if (cardRef.current) {
+      observer.observe(cardRef.current)
+    }
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [viewed])
+
+  const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP.nord
 
   const getLineContent = (side: AnnotationSide, lineNumber: number): string => {
     const lines = side === 'additions' ? fileDiff.additionLines : fileDiff.deletionLines
@@ -67,7 +102,11 @@ export const FileDiffCard = memo(function FileDiffCard({
   ]
 
   return (
-    <div className={`file-diff-card ${viewed ? 'file-diff-viewed' : ''}`} id={id}>
+    <div
+      ref={cardRef}
+      className={`file-diff-card ${viewed ? 'file-diff-viewed' : ''}`}
+      id={id}
+    >
       {viewed ? (
         <div className="file-diff-viewed-header">
           <span className="file-diff-viewed-name">{filePath}</span>
@@ -80,6 +119,39 @@ export const FileDiffCard = memo(function FileDiffCard({
             Viewed
           </label>
         </div>
+      ) : !hasIntersected ? (
+        <div className="file-diff-placeholder">
+          <div className="file-diff-placeholder-header" style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 20px',
+            background: 'var(--bg-secondary)',
+            borderBottom: '1px solid var(--border-color)',
+            minHeight: '45px'
+          }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 600 }}>{filePath}</span>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading diff...</span>
+              <label className="viewed-label" onClick={(e) => e.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={viewed}
+                  onChange={(e) => onViewedChange(filePath, e.target.checked)}
+                />
+                Viewed
+              </label>
+            </div>
+          </div>
+          <div className="file-diff-placeholder-body" style={{
+            height: '100px',
+            background: 'var(--bg-primary)',
+            position: 'relative',
+            overflow: 'hidden'
+          }}>
+            <div className="shimmer" />
+          </div>
+        </div>
       ) : (
         <>
           <FileDiff<ReviewComment | { _pending: true }>
@@ -87,9 +159,25 @@ export const FileDiffCard = memo(function FileDiffCard({
             options={{
               diffStyle,
               enableGutterUtility: true,
-              theme: { dark: 'github-dark', light: 'github-light' },
-              themeType: 'system',
-              unsafeCSS: `:host { --diffs-tab-size: ${tabSize}; }`,
+              theme: {
+                dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
+                light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
+              },
+              themeType: shikiConfig.type,
+              unsafeCSS: `
+                :host {
+                  --diffs-tab-size: ${tabSize} !important;
+                  --diffs-font-family: var(--font-mono) !important;
+                  --diffs-border: var(--border-color) !important;
+                  --diffs-bg: var(--bg-secondary) !important;
+                  --diffs-line-height: 22px !important;
+                }
+                [data-column-number], [data-line] {
+                  font-family: var(--font-mono) !important;
+                  font-variant-ligatures: common-ligatures !important;
+                  font-feature-settings: "liga" on, "calt" on !important;
+                }
+              `,
             }}
             lineAnnotations={allAnnotations}
             renderHeaderMetadata={() => (

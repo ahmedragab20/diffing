@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect, useTransition } from 'react'
 import { parsePatchFiles } from '@pierre/diffs'
 import type { FileDiffMetadata } from '@pierre/diffs'
 import type { ReviewComment } from '../types'
@@ -13,10 +13,11 @@ import { CommentTracker } from './components/CommentTracker'
 
 export function App() {
   const { settings, loaded, updateSettings } = useSettings()
+  const [, startTransition] = useTransition()
   const { patch, repoName, branch, customMode, binaryFiles, tabSizeMap, untrackedFiles, loading, error } = useDiff({
     staged: settings.staged,
     untracked: settings.untracked,
-  })
+  }, loaded)
   const { comments, addComment, removeComment, copyAllComments } =
     useComments()
   const [activeFile, setActiveFile] = useState<string | null>(null)
@@ -72,10 +73,33 @@ export function App() {
     if (!patch) return { additions: 0, deletions: 0 }
     let additions = 0
     let deletions = 0
-    for (const line of patch.split('\n')) {
-      if (line.startsWith('+') && !line.startsWith('+++')) additions++
-      else if (line.startsWith('-') && !line.startsWith('---')) deletions++
+    let index = 0
+    const len = patch.length
+
+    while (index < len) {
+      let nextNewline = patch.indexOf('\n', index)
+      if (nextNewline === -1) {
+        nextNewline = len
+      }
+
+      const firstChar = patch.charCodeAt(index)
+      if (firstChar === 43) { // '+'
+        if (index + 2 < len && patch.charCodeAt(index + 1) === 43 && patch.charCodeAt(index + 2) === 43) {
+          // Skip '+++'
+        } else {
+          additions++
+        }
+      } else if (firstChar === 45) { // '-'
+        if (index + 2 < len && patch.charCodeAt(index + 1) === 45 && patch.charCodeAt(index + 2) === 45) {
+          // Skip '---'
+        } else {
+          deletions++
+        }
+      }
+
+      index = nextNewline + 1
     }
+
     return { additions, deletions }
   }, [patch])
 
@@ -124,6 +148,50 @@ export function App() {
     setViewed(filePath, viewed)
   }, [setViewed])
 
+  const handleDiffStyleChange = useCallback((style: 'split' | 'unified') => {
+    startTransition(() => {
+      updateSettings({ diffStyle: style })
+    })
+  }, [updateSettings])
+
+  const handleDiffOptionsChange = useCallback((options: { staged: boolean; untracked: boolean }) => {
+    startTransition(() => {
+      updateSettings(options)
+    })
+  }, [updateSettings])
+
+  const handleDefaultTabSizeChange = useCallback((size: number) => {
+    startTransition(() => {
+      updateSettings({ defaultTabSize: size })
+    })
+  }, [updateSettings])
+
+  const handleBrowserChange = useCallback((browser: string) => {
+    startTransition(() => {
+      updateSettings({ browser })
+    })
+  }, [updateSettings])
+
+  const handleThemeChange = useCallback((theme: string) => {
+    startTransition(() => {
+      updateSettings({ theme })
+    })
+  }, [updateSettings])
+
+  const handleToggleCollapse = useCallback(() => {
+    setSidebarCollapsed((c) => !c)
+  }, [])
+
+  const diffOptions = useMemo(() => ({
+    staged: settings.staged,
+    untracked: settings.untracked,
+  }), [settings.staged, settings.untracked])
+
+  useEffect(() => {
+    const activeTheme = settings.theme || 'nord'
+    document.documentElement.setAttribute('data-theme', activeTheme)
+  }, [settings.theme])
+
   if (!loaded || loading) {
     return (
       <div className="loading">
@@ -150,14 +218,16 @@ export function App() {
         deletions={diffStats.deletions}
         commentCount={comments.length}
         diffStyle={settings.diffStyle}
-        diffOptions={{ staged: settings.staged, untracked: settings.untracked }}
+        diffOptions={diffOptions}
         defaultTabSize={settings.defaultTabSize}
         browser={settings.browser}
+        theme={settings.theme || 'nord'}
         customMode={customMode}
-        onDiffStyleChange={(style) => updateSettings({ diffStyle: style })}
-        onDiffOptionsChange={(options) => updateSettings(options)}
-        onDefaultTabSizeChange={(size) => updateSettings({ defaultTabSize: size })}
-        onBrowserChange={(browser) => updateSettings({ browser })}
+        onDiffStyleChange={handleDiffStyleChange}
+        onDiffOptionsChange={handleDiffOptionsChange}
+        onDefaultTabSizeChange={handleDefaultTabSizeChange}
+        onBrowserChange={handleBrowserChange}
+        onThemeChange={handleThemeChange}
         onCopyComments={copyAllComments}
       />
       <div className="app-body">
@@ -170,7 +240,7 @@ export function App() {
             untrackedFiles={untrackedSet}
             onFileClick={handleFileClick}
             collapsed={sidebarCollapsed}
-            onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+            onToggleCollapse={handleToggleCollapse}
           />
           {!sidebarCollapsed && <CommentTracker comments={comments} />}
         </aside>
@@ -182,6 +252,7 @@ export function App() {
             defaultTabSize={settings.defaultTabSize}
             viewedFiles={viewedFiles}
             binaryFiles={binaryFileMap}
+            theme={settings.theme || 'nord'}
             onViewedChange={handleViewedChange}
             fileAnnotationsMap={fileAnnotationsMap}
             onAddComment={addComment}

@@ -14,6 +14,12 @@ const mockLoadSettings = vi.fn()
 const mockSaveSettings = vi.fn()
 const mockIsSafePath = vi.fn()
 
+const mockGetGitDiffAsync = vi.fn()
+const mockGetCustomGitDiffAsync = vi.fn()
+const mockGetRepoRootAsync = vi.fn()
+const mockGetBranchNameAsync = vi.fn()
+const mockGetUntrackedFilePathsAsync = vi.fn()
+
 vi.mock('../git.js', () => ({
   getGitDiff: mockGetGitDiff,
   getCustomGitDiff: mockGetCustomGitDiff,
@@ -22,6 +28,11 @@ vi.mock('../git.js', () => ({
   getFileContent: mockGetFileContent,
   getTabSizeForFiles: mockGetTabSizeForFiles,
   getUntrackedFilePaths: mockGetUntrackedFilePaths,
+  getGitDiffAsync: mockGetGitDiffAsync,
+  getCustomGitDiffAsync: mockGetCustomGitDiffAsync,
+  getRepoRootAsync: mockGetRepoRootAsync,
+  getBranchNameAsync: mockGetBranchNameAsync,
+  getUntrackedFilePathsAsync: mockGetUntrackedFilePathsAsync,
 }))
 
 vi.mock('../settings.js', () => ({
@@ -79,6 +90,13 @@ describe('server', () => {
     mockGetTabSizeForFiles.mockReturnValue({})
     mockGetUntrackedFilePaths.mockReturnValue([])
     mockIsSafePath.mockReturnValue(true)
+
+    // Setup async mocks
+    mockGetRepoRootAsync.mockResolvedValue('/tmp/test-repo')
+    mockGetBranchNameAsync.mockResolvedValue('main')
+    mockGetUntrackedFilePathsAsync.mockResolvedValue([])
+    mockGetGitDiffAsync.mockResolvedValue('diff --git a/src/index.ts b/src/index.ts\n@@ -1 +1 @@\n-old\n+new\n')
+    mockGetCustomGitDiffAsync.mockResolvedValue('custom')
   })
 
   describe('createApp', () => {
@@ -89,7 +107,7 @@ describe('server', () => {
 
     describe('GET /api/diff', () => {
       it('returns diff with repo metadata', async () => {
-        mockGetGitDiff.mockReturnValue('diff --git a/src/index.ts b/src/index.ts\n@@ -1 +1 @@\n-old\n+new\n')
+        mockGetGitDiffAsync.mockResolvedValue('diff --git a/src/index.ts b/src/index.ts\n@@ -1 +1 @@\n-old\n+new\n')
         const res = await app.fetch(new Request('http://localhost/api/diff?staged=true&untracked=true'))
         expect(res.status).toBe(200)
         const body = await res.json()
@@ -100,26 +118,26 @@ describe('server', () => {
       })
 
       it('forwards staged/untracked params', async () => {
-        mockGetGitDiff.mockReturnValue('')
+        mockGetGitDiffAsync.mockResolvedValue('')
         await app.fetch(new Request('http://localhost/api/diff?staged=false&untracked=false'))
-        expect(mockGetGitDiff).toHaveBeenCalledWith({ staged: false, untracked: false })
+        expect(mockGetGitDiffAsync).toHaveBeenCalledWith({ staged: false, untracked: false })
       })
 
       it('uses custom diff in custom mode', async () => {
         const { createApp } = await import('../server.js')
         const custom = createApp(clientDir, ['HEAD~3'], mockStore)
-        mockGetCustomGitDiff.mockReturnValue('custom')
-        mockGetRepoName.mockReturnValue('test')
-        mockGetBranchName.mockReturnValue('main')
+        mockGetCustomGitDiffAsync.mockResolvedValue('custom')
+        mockGetRepoRootAsync.mockResolvedValue('/tmp/test')
+        mockGetBranchNameAsync.mockResolvedValue('main')
 
         const res = await custom.fetch(new Request('http://localhost/api/diff'))
         const body = await res.json()
         expect(body.customMode).toBe(true)
-        expect(mockGetCustomGitDiff).toHaveBeenCalledWith(['HEAD~3'])
+        expect(mockGetCustomGitDiffAsync).toHaveBeenCalledWith(['HEAD~3'])
       })
 
       it('detects binary files in patch', async () => {
-        mockGetGitDiff.mockReturnValue(
+        mockGetGitDiffAsync.mockResolvedValue(
           'diff --git a/img.png b/img.png\nnew file mode 100644\nindex 000..001\nBinary files /dev/null and b/img.png differ\n',
         )
         const res = await app.fetch(new Request('http://localhost/api/diff'))
@@ -275,7 +293,7 @@ describe('server', () => {
 
   describe('parseBinaryFiles', () => {
     it('classifies added binary', async () => {
-      mockGetGitDiff.mockReturnValue(
+      mockGetGitDiffAsync.mockResolvedValue(
         'diff --git a/i.png b/i.png\nnew file mode 100644\nBinary files /dev/null and b/i.png differ\n',
       )
       const res = await app.fetch(new Request('http://localhost/api/diff'))
@@ -283,7 +301,7 @@ describe('server', () => {
     })
 
     it('classifies deleted binary', async () => {
-      mockGetGitDiff.mockReturnValue(
+      mockGetGitDiffAsync.mockResolvedValue(
         'diff --git a/i.png b/i.png\ndeleted file mode 100644\nBinary files a/i.png and /dev/null differ\n',
       )
       const res = await app.fetch(new Request('http://localhost/api/diff'))
@@ -291,10 +309,10 @@ describe('server', () => {
     })
 
     it('classifies untracked binary', async () => {
-      mockGetGitDiff.mockReturnValue(
+      mockGetGitDiffAsync.mockResolvedValue(
         'diff --git a/n.png b/n.png\nnew file mode 100644\nBinary files /dev/null and b/n.png differ\n',
       )
-      mockGetUntrackedFilePaths.mockReturnValue(['n.png'])
+      mockGetUntrackedFilePathsAsync.mockResolvedValue(['n.png'])
       const res = await app.fetch(new Request('http://localhost/api/diff?staged=true&untracked=true'))
       expect((await res.json()).binaryFiles[0].type).toBe('untracked')
     })

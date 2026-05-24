@@ -6,6 +6,7 @@ export interface Settings {
   diffStyle: 'split' | 'unified'
   defaultTabSize: number
   browser?: string
+  theme: string
 }
 
 const DEFAULTS: Settings = {
@@ -13,6 +14,7 @@ const DEFAULTS: Settings = {
   untracked: true,
   diffStyle: 'split',
   defaultTabSize: 4,
+  theme: 'nord',
 }
 
 export function useSettings() {
