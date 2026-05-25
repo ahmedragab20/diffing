@@ -291,15 +291,35 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
 
       {comment.replies?.length > 0 && (
         <div className="comment-replies">
-          {comment.replies.map((reply) => (
-            <div key={reply.id} className="comment-reply">
-              <div className="comment-reply-header">
-                <Bot size={16} className="comment-reply-avatar" />
-                <span className="comment-bubble-time">{timeAgo(reply.createdAt)}</span>
+          {comment.replies.map((reply) => {
+            const isAgent = reply.role === 'agent'
+            return (
+              <div key={reply.id} className={`comment-reply ${isAgent ? 'comment-reply-agent' : 'comment-reply-user'}`}>
+                <div className="comment-reply-header" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {isAgent ? (
+                    <>
+                      <Bot size={16} className="comment-reply-avatar" style={{ color: 'var(--primary)' }} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 5px', borderRadius: '4px', background: 'rgba(129, 161, 193, 0.15)', color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Agent</span>
+                        {reply.model && (
+                          <span style={{ fontSize: '10px', fontWeight: 600, padding: '1px 5px', borderRadius: '4px', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+                            {reply.model}
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <UserCircle size={16} className="comment-reply-avatar" style={{ color: 'var(--text-muted)' }} />
+                      <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 5px', borderRadius: '4px', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>User</span>
+                    </>
+                  )}
+                  <span className="comment-bubble-time">{timeAgo(reply.createdAt)}</span>
+                </div>
+                <div className="comment-reply-body markdown-body" dangerouslySetInnerHTML={{ __html: parseMarkdown(reply.body) }} />
               </div>
-              <div className="comment-reply-body markdown-body" dangerouslySetInnerHTML={{ __html: parseMarkdown(reply.body) }} />
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 

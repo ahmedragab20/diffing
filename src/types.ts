@@ -2,6 +2,8 @@ export interface CommentReply {
   id: string
   body: string
   createdAt: number
+  role?: 'user' | 'agent'
+  model?: string
 }
 
 export interface ReviewComment {

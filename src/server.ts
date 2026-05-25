@@ -267,11 +267,13 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
 
   app.post('/api/comments/:id/replies', async (c) => {
     const commentId = c.req.param('id')
-    const { body } = await c.req.json()
+    const { body, role, model } = await c.req.json()
     const reply = {
       id: crypto.randomUUID(),
       body,
       createdAt: Date.now(),
+      role: role || 'user',
+      model: model || undefined,
     }
     const updated = await store.addReply(commentId, reply)
     if (!updated) return c.json({ error: 'Comment not found' }, 404)

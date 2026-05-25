@@ -55,24 +55,61 @@ Examples:
 
 ## Comment Output Format
 
-When you click "Copy comments", the output is structured XML optimized for AI agents:
+When you click "Copy comments", the output is structured XML optimized for AI agents, featuring embedded self-documenting instructions, complete metadata, XML safety using CDATA blocks, and reply threads:
 
 ```xml
 <code-review-comments>
-<file path="src/utils/parser.ts">
-<comment line="42">
-<code>+ const parsedToken = tokenize(input)</code>
-Rename `x` to `parsedToken` for clarity.
-</comment>
-<comment line="15">
-<code>- if (input != null) {</code>
-This null check removal may cause a bug when `input` is undefined.
-</comment>
-</file>
+  <instructions>
+    You are an AI coding assistant. You are receiving a structured list of code review comments to address in the repository.
+    For each file, review the inline comments and apply the changes requested.
+    - Target lines are specified by the "line" attribute (e.g. line="10" or line="10-15").
+    - "side" indicates whether the comment is on "additions" (added/modified lines) or "deletions" (deleted/old lines).
+    - "status" indicates whether the comment is "open" or "resolved". Only address comments with status="open".
+    - The <code> block contains the specific code context at the reviewed lines, prefixed with "+" or "-".
+    - The <body> tag contains the review feedback or request.
+    - If developers have replied to the comment, their discussion is captured under the <replies> element.
+    - The comment "id" attribute can be used to reference or update the comment via API if available.
+
+    HOW TO REPLY OR ASK FOR CLARIFICATION:
+    If you need to ask for clarification, explain what you did, or reply to any comment:
+
+    Option A: Via API (Preferred if the diffit server is running locally)
+    Send a POST request to add a reply:
+      POST http://localhost:<port>/api/comments/<comment-id>/replies
+      Payload: { "body": "Your response or clarification request here" }
+    To mark a comment as resolved:
+      PUT http://localhost:<port>/api/comments/<comment-id>
+      Payload: { "status": "resolved" }
+
+    Option B: Via Text Response (Offline / Chat Copy-Paste)
+    If you do not have local API access, output your comments/replies inside a structured XML block at the end of your response:
+      <comment-replies>
+        <reply to="<comment-id>"><![CDATA[Your reply or clarification request here]]></reply>
+      </comment-replies>
+  </instructions>
+  <file path="src/utils/parser.ts">
+    <comment id="c1" line="42" side="additions" status="open" created-at="2026-05-24T22:00:00.000Z">
+      <code><![CDATA[+ const parsedToken = tokenize(input)]]></code>
+      <body><![CDATA[Rename `x` to `parsedToken` for clarity.]]></body>
+      <replies>
+        <reply id="r1" created-at="2026-05-24T22:05:00.000Z" role="agent" model="claude-3-5-sonnet">
+          <![CDATA[I agree, renamed.]]>
+        </reply>
+      </replies>
+    </comment>
+    <comment id="c2" line="15" side="deletions" status="open" created-at="2026-05-24T22:01:00.000Z">
+      <code><![CDATA[- if (input != null) {]]></code>
+      <body><![CDATA[This null check removal may cause a bug when `input` is undefined.]]></body>
+    </comment>
+  </file>
 </code-review-comments>
 ```
 
-Each comment includes the commented code line with a `+`/`-` prefix indicating whether it's an added or removed line.
+Each comment includes:
+- **Instructions**: A detailed system prompt instructing the agent on how to interpret and act on the comments.
+- **Attributes**: Every `<comment>` includes its unique `id`, targeted line range (`line`), change `side` (`additions` or `deletions`), comment `status` (`open` or `resolved`), and ISO `created-at` timestamp.
+- **CDATA Blocks**: Code snippets (`<code>`) and comment bodies (`<body>`) are wrapped in `<![CDATA[ ... ]]>` to prevent special characters from breaking XML parsers.
+- **Replies**: Nested conversation history (if any) is preserved within `<replies>` and `<reply>` elements.
 
 ## Agent Skills
 

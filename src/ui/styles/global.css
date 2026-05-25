@@ -826,7 +826,25 @@ body {
     padding: 10px 14px;
     background: rgba(var(--bg-secondary-rgb), 0.3);
     border-radius: 6px;
+    transition: all 0.2s ease-in-out;
+}
+
+.comment-reply-agent {
     border-left: 3px solid var(--primary);
+    background: rgba(129, 161, 193, 0.04);
+}
+
+.comment-reply-agent:hover {
+    background: rgba(129, 161, 193, 0.08);
+}
+
+.comment-reply-user {
+    border-left: 3px solid var(--text-muted);
+    background: transparent;
+}
+
+.comment-reply-user:hover {
+    background: var(--bg-tertiary);
 }
 
 .comment-reply-header {

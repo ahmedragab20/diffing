@@ -45,7 +45,7 @@ const sampleComments: ReviewComment[] = [
     body: 'Remove this',
     status: 'open',
     createdAt: 2000,
-    replies: [{ id: 'r1', body: 'Done', createdAt: 3000 }],
+    replies: [{ id: 'r1', body: 'Done', createdAt: 3000, role: 'agent', model: 'claude-3-5-sonnet' }],
   },
 ]
 
@@ -225,11 +225,21 @@ describe('useComments', () => {
       const formatted = result.current.formatAllComments()
       expect(formatted).toContain('<code-review-comments>')
       expect(formatted).toContain('</code-review-comments>')
+      expect(formatted).toContain('<instructions>')
+      expect(formatted).toContain('You are an AI coding assistant.')
+      expect(formatted).toContain('HOW TO REPLY OR ASK FOR CLARIFICATION:')
+      expect(formatted).toContain('<comment-replies>')
       expect(formatted).toContain('<file path="src/index.ts">')
-      expect(formatted).toContain('<comment line="10">')
-      expect(formatted).toContain('<code>+ const x = 1</code>')
+      expect(formatted).toContain('<comment id="c1" line="10" side="additions" status="open" created-at="1970-01-01T00:00:01.000Z">')
+      expect(formatted).toContain('<code><![CDATA[+ const x = 1]]></code>')
+      expect(formatted).toContain('<body><![CDATA[Consider renaming]]></body>')
       expect(formatted).toContain('<file path="src/app.ts">')
-      expect(formatted).toContain('<code>- oldCode()</code>')
+      expect(formatted).toContain('<comment id="c2" line="5" side="deletions" status="open" created-at="1970-01-01T00:00:02.000Z">')
+      expect(formatted).toContain('<code><![CDATA[- oldCode()]]></code>')
+      expect(formatted).toContain('<body><![CDATA[Remove this]]></body>')
+      expect(formatted).toContain('<replies>')
+      expect(formatted).toContain('<reply id="r1" created-at="1970-01-01T00:00:03.000Z" role="agent" model="claude-3-5-sonnet">')
+      expect(formatted).toContain('<![CDATA[Done]]>')
     })
   })
 

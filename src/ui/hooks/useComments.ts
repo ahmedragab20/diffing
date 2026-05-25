@@ -59,7 +59,7 @@ export function useComments() {
       const res = await fetch(`/api/comments/${id}/replies`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body }),
+        body: JSON.stringify({ body, role: 'user' }),
       })
       return res.json() as Promise<ReviewComment>
     },
@@ -145,29 +145,79 @@ export function useComments() {
       grouped.set(comment.filePath, list)
     }
 
-    const lines: string[] = ['<code-review-comments>']
+    const lines: string[] = []
+    lines.push('<code-review-comments>')
+    lines.push('  <instructions>')
+    lines.push('    You are an AI coding assistant. You are receiving a structured list of code review comments to address in the repository.')
+    lines.push('    For each file, review the inline comments and apply the changes requested.')
+    lines.push('    - Target lines are specified by the "line" attribute (e.g. line="10" or line="10-15").')
+    lines.push('    - "side" indicates whether the comment is on "additions" (added/modified lines) or "deletions" (deleted/old lines).')
+    lines.push('    - "status" indicates whether the comment is "open" or "resolved". Only address comments with status="open".')
+    lines.push('    - The <code> block contains the specific code context at the reviewed lines, prefixed with "+" or "-".')
+    lines.push('    - The <body> tag contains the review feedback or request.')
+    lines.push('    - If developers have replied to the comment, their discussion is captured under the <replies> element.')
+    lines.push('    - The comment "id" attribute can be used to reference or update the comment via API if available.')
+    lines.push('')
+    lines.push('    HOW TO REPLY OR ASK FOR CLARIFICATION:')
+    lines.push('    If you need to ask for clarification, explain what you did, or reply to any comment:')
+    lines.push('')
+    lines.push('    Option A: Via API (Preferred if the diffit server is running locally)')
+    lines.push('    Send a POST request to add a reply:')
+    lines.push('      POST http://localhost:<port>/api/comments/<comment-id>/replies')
+    lines.push('      Payload: { "body": "Your response or clarification request here", "model": "<your-model-name>" }')
+    lines.push('    To mark a comment as resolved:')
+    lines.push('      PUT http://localhost:<port>/api/comments/<comment-id>')
+    lines.push('      Payload: { "status": "resolved" }')
+    lines.push('')
+    lines.push('    Option B: Via Text Response (Offline / Chat Copy-Paste)')
+    lines.push('    If you do not have local API access, output your comments/replies inside a structured XML block at the end of your response:')
+    lines.push('      <comment-replies>')
+    lines.push('        <reply to="<comment-id>" model="<your-model-name>"><![CDATA[Your reply or clarification request here]]></reply>')
+    lines.push('      </comment-replies>')
+    lines.push('  </instructions>')
+
     for (const [filePath, fileComments] of grouped) {
-      lines.push(`<file path="${filePath}">`)
+      lines.push(`  <file path="${filePath}">`)
       for (const comment of fileComments) {
         const lineAttr = comment.startLineNumber && comment.startLineNumber !== comment.lineNumber
           ? `${comment.startLineNumber}-${comment.lineNumber}`
           : `${comment.lineNumber}`
-        lines.push(`<comment line="${lineAttr}">`)
+
+        const isoDate = new Date(comment.createdAt).toISOString()
+        lines.push(`    <comment id="${comment.id}" line="${lineAttr}" side="${comment.side}" status="${comment.status}" created-at="${isoDate}">`)
+
         const prefix = comment.side === 'additions' ? '+' : '-'
         const isMultiLine = comment.lineContent && comment.lineContent.includes('\n')
+        let codeVal = ''
         if (isMultiLine) {
           const formattedCodeLines = comment.lineContent
             .split('\n')
             .map((l) => `${prefix} ${l}`)
             .join('\n')
-          lines.push(`<code>\n${formattedCodeLines}\n</code>`)
+          codeVal = `\n${formattedCodeLines}\n`
         } else {
-          lines.push(`<code>${prefix} ${comment.lineContent}</code>`)
+          codeVal = `${prefix} ${comment.lineContent}`
         }
-        lines.push(comment.body)
-        lines.push('</comment>')
+
+        lines.push(`      <code><![CDATA[${codeVal}]]></code>`)
+        lines.push(`      <body><![CDATA[${comment.body}]]></body>`)
+
+        if (comment.replies && comment.replies.length > 0) {
+          lines.push('      <replies>')
+          for (const reply of comment.replies) {
+            const replyIsoDate = new Date(reply.createdAt).toISOString()
+            const roleAttr = reply.role ? ` role="${reply.role}"` : ' role="agent"'
+            const modelAttr = reply.model ? ` model="${reply.model}"` : ''
+            lines.push(`        <reply id="${reply.id}" created-at="${replyIsoDate}"${roleAttr}${modelAttr}>`)
+            lines.push(`          <![CDATA[${reply.body}]]>`)
+            lines.push('        </reply>')
+          }
+          lines.push('      </replies>')
+        }
+
+        lines.push('    </comment>')
       }
-      lines.push('</file>')
+      lines.push('  </file>')
     }
     lines.push('</code-review-comments>')
 
