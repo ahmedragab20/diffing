@@ -17,11 +17,13 @@ import { useComments } from "./hooks/useComments";
 import { useSettings } from "./hooks/useSettings";
 import { useViewed } from "./hooks/useViewed";
 import { useSymbols } from "./hooks/useSymbols";
+import { useDiffSearch } from "./hooks/useDiffSearch";
 import { Toolbar } from "./components/Toolbar";
 import { DiffViewer } from "./components/DiffViewer";
 import { FileTree } from "./components/FileTree";
 import { CommentTracker } from "./components/CommentTracker";
 import { SymbolModal } from "./components/SymbolModal";
+import { DiffSearchModal } from "./components/DiffSearchModal";
 
 export function App() {
     const poolManager = useWorkerPool();
@@ -55,6 +57,7 @@ export function App() {
         }
     });
     const [symbolModalOpen, setSymbolModalOpen] = useState(false);
+    const [diffSearchOpen, setDiffSearchOpen] = useState(false);
     const [commentPanelHeight, setCommentPanelHeight] = useState(() => {
         try {
             const stored = localStorage.getItem("diffit-comment-panel-height");
@@ -103,6 +106,10 @@ export function App() {
 
     useHotkeySequence(['G', 'S'], () => {
         setSymbolModalOpen((o) => !o);
+    });
+
+    useHotkeySequence(['G', 'F'], () => {
+        setDiffSearchOpen((o) => !o);
     });
 
     useEffect(() => {
@@ -179,6 +186,7 @@ export function App() {
     }, [patch, binaryFiles]);
 
     const symbols = useSymbols(files);
+    const diffSearchEntries = useDiffSearch(files);
 
     const diffStats = useMemo(() => {
         if (!patch) return { additions: 0, deletions: 0 };
@@ -554,6 +562,11 @@ export function App() {
                 symbols={symbols}
                 isOpen={symbolModalOpen}
                 onClose={() => setSymbolModalOpen(false)}
+            />
+            <DiffSearchModal
+                entries={diffSearchEntries}
+                isOpen={diffSearchOpen}
+                onClose={() => setDiffSearchOpen(false)}
             />
         </div>
     );
