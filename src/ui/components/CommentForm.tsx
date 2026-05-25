@@ -76,21 +76,26 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
   }
 
   return (
-    <div className="comment-form" style={{ padding: '16px' }}>
-      {/* Tab Buttons */}
-      <div 
-        className="comment-form-tabs" 
-        style={{ 
-          display: 'flex', 
-          gap: '8px', 
-          borderBottom: '1px solid var(--border-color)', 
+    <div className="comment-form" style={{ padding: '16px' }} role="form" aria-label="Comment form">
+      <div
+        className="comment-form-tabs"
+        role="tablist"
+        aria-label="Comment form mode"
+        style={{
+          display: 'flex',
+          gap: '8px',
+          borderBottom: '1px solid var(--border-color)',
           marginBottom: '12px',
           paddingBottom: '4px'
         }}
       >
         <button
           type="button"
+          role="tab"
+          aria-selected={activeTab === 'write'}
+          aria-controls="comment-write-panel"
           onClick={() => setActiveTab('write')}
+          onKeyDown={(e) => { if (e.key === 'ArrowRight') { e.preventDefault(); setActiveTab('preview') } }}
           style={{
             background: 'none',
             border: 'none',
@@ -108,7 +113,11 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
         </button>
         <button
           type="button"
+          role="tab"
+          aria-selected={activeTab === 'preview'}
+          aria-controls="comment-preview-panel"
           onClick={() => setActiveTab('preview')}
+          onKeyDown={(e) => { if (e.key === 'ArrowLeft') { e.preventDefault(); setActiveTab('write') } }}
           style={{
             background: 'none',
             border: 'none',
@@ -128,6 +137,7 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
 
       {activeTab === 'write' ? (
         <textarea
+          id="comment-write-panel"
           ref={textareaRef}
           value={body}
           onChange={(e) => setBody(e.target.value)}
@@ -135,6 +145,7 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
           onPaste={handlePaste}
           placeholder="Leave a review comment (supports Markdown and Pasting Clipboard Images)..."
           rows={4}
+          aria-label="Comment body"
           style={{
             width: '100%',
             padding: '10px 14px',
@@ -150,7 +161,7 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
           }}
         />
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div id="comment-preview-panel" role="tabpanel" aria-label="Preview" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {(() => {
             const suggestionMatch = body.match(/```suggestion\n([\s\S]*?)```/)
             const hasSuggestion = !!suggestionMatch

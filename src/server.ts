@@ -280,6 +280,24 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
     return c.json(updated)
   })
 
+  app.delete('/api/comments/:id/replies/:replyId', async (c) => {
+    const commentId = c.req.param('id')
+    const replyId = c.req.param('replyId')
+    const updated = await store.removeReply(commentId, replyId)
+    if (!updated) return c.json({ error: 'Comment or reply not found' }, 404)
+    return c.json(updated)
+  })
+
+  app.put('/api/comments/:id/replies/:replyId', async (c) => {
+    const commentId = c.req.param('id')
+    const replyId = c.req.param('replyId')
+    const { body } = await c.req.json()
+    if (!body) return c.json({ error: 'Body is required' }, 400)
+    const updated = await store.updateReply(commentId, replyId, body)
+    if (!updated) return c.json({ error: 'Comment or reply not found' }, 404)
+    return c.json(updated)
+  })
+
   app.post('/api/comments/:id/apply-suggestion', async (c) => {
     const id = c.req.param('id')
     const comment = (await store.getAll()).find((c) => c.id === id)

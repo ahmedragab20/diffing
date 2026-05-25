@@ -867,6 +867,132 @@ body {
     color: var(--text-secondary);
 }
 
+/* Reply action buttons (edit/delete) */
+.reply-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.comment-reply:hover .reply-actions,
+.comment-reply:focus-within .reply-actions {
+    opacity: 1;
+}
+
+.reply-action-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 0;
+}
+
+.reply-action-btn:hover {
+    background: rgba(129, 161, 193, 0.15);
+    color: var(--primary-hover);
+}
+
+.reply-action-btn:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+    opacity: 1;
+}
+
+.reply-action-delete:hover {
+    background: rgba(191, 97, 106, 0.1);
+    color: var(--danger);
+}
+
+/* Reply edit textarea */
+.reply-edit-textarea:focus {
+    border-color: var(--border-focus);
+    box-shadow: 0 0 0 3px rgba(129, 161, 193, 0.2);
+}
+
+/* Delete confirmation */
+.comment-delete-confirm {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.comment-delete-confirm-yes:hover {
+    background: rgba(191, 97, 106, 0.2) !important;
+}
+
+/* Focus visible on action buttons */
+.comment-bubble-edit:focus-visible,
+.comment-bubble-delete:focus-visible {
+    opacity: 1;
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
+
+/* Focus visible on reply button */
+.comment-bubble-footer button:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
+
+/* Comment tracker reply badges */
+.ct-item-replies {
+    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.ct-reply-mini-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.ct-reply-mini-agent {
+    background: rgba(129, 161, 193, 0.15);
+    color: var(--primary);
+    border: 1px solid rgba(129, 161, 193, 0.25);
+}
+
+.ct-reply-mini-user {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+}
+
+/* Comment tracker item focus */
+.ct-item-link:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+}
+
+/* Focus visible utility for all interactive elements */
+button:focus-visible,
+a:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
+
 /* Binary file diff */
 .binary-diff-header {
     display: flex;

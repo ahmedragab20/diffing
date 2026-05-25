@@ -9,6 +9,8 @@ export interface CommentStore {
   update(id: string, fields: { body?: string; status?: ReviewComment['status'] }): Promise<ReviewComment | null>
   remove(id: string): Promise<boolean>
   addReply(commentId: string, reply: CommentReply): Promise<ReviewComment | null>
+  removeReply(commentId: string, replyId: string): Promise<ReviewComment | null>
+  updateReply(commentId: string, replyId: string, body: string): Promise<ReviewComment | null>
 }
 
 export class InMemoryCommentStore implements CommentStore {
@@ -42,6 +44,24 @@ export class InMemoryCommentStore implements CommentStore {
     const comment = this.comments.find((c) => c.id === commentId)
     if (!comment) return null
     comment.replies.push(reply)
+    return comment
+  }
+
+  async removeReply(commentId: string, replyId: string): Promise<ReviewComment | null> {
+    const comment = this.comments.find((c) => c.id === commentId)
+    if (!comment) return null
+    const replyIndex = comment.replies.findIndex((r) => r.id === replyId)
+    if (replyIndex === -1) return null
+    comment.replies.splice(replyIndex, 1)
+    return comment
+  }
+
+  async updateReply(commentId: string, replyId: string, body: string): Promise<ReviewComment | null> {
+    const comment = this.comments.find((c) => c.id === commentId)
+    if (!comment) return null
+    const reply = comment.replies.find((r) => r.id === replyId)
+    if (!reply) return null
+    reply.body = body
     return comment
   }
 }
@@ -117,6 +137,30 @@ export class FileCommentStore implements CommentStore {
     const comment = comments[index]
     if (!comment.replies) comment.replies = []
     comment.replies.push(reply)
+    await this.save(comments)
+    return comment
+  }
+
+  async removeReply(commentId: string, replyId: string): Promise<ReviewComment | null> {
+    const comments = await this.getAll()
+    const index = comments.findIndex((c) => c.id === commentId)
+    if (index === -1) return null
+    const comment = comments[index]
+    const replyIndex = comment.replies.findIndex((r) => r.id === replyId)
+    if (replyIndex === -1) return null
+    comment.replies.splice(replyIndex, 1)
+    await this.save(comments)
+    return comment
+  }
+
+  async updateReply(commentId: string, replyId: string, body: string): Promise<ReviewComment | null> {
+    const comments = await this.getAll()
+    const index = comments.findIndex((c) => c.id === commentId)
+    if (index === -1) return null
+    const comment = comments[index]
+    const reply = comment.replies.find((r) => r.id === replyId)
+    if (!reply) return null
+    reply.body = body
     await this.save(comments)
     return comment
   }

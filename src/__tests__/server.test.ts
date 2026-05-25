@@ -104,6 +104,22 @@ class MockCommentStore implements CommentStore {
     c.replies.push(reply)
     return c
   }
+  async removeReply(commentId: string, replyId: string) {
+    const c = this.comments.find((x) => x.id === commentId)
+    if (!c) return null
+    const idx = c.replies.findIndex((r: any) => r.id === replyId)
+    if (idx === -1) return null
+    c.replies.splice(idx, 1)
+    return c
+  }
+  async updateReply(commentId: string, replyId: string, body: string) {
+    const c = this.comments.find((x) => x.id === commentId)
+    if (!c) return null
+    const reply = c.replies.find((r: any) => r.id === replyId)
+    if (!reply) return null
+    reply.body = body
+    return c
+  }
 }
 
 describe('server', () => {

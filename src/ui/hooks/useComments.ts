@@ -70,6 +70,34 @@ export function useComments() {
     },
   })
 
+  const removeReplyMutation = useMutation({
+    mutationFn: async ({ commentId, replyId }: { commentId: string; replyId: string }) => {
+      const res = await fetch(`/api/comments/${commentId}/replies/${replyId}`, { method: 'DELETE' })
+      return res.json() as Promise<ReviewComment>
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData<ReviewComment[]>(COMMENTS_KEY, (prev = []) =>
+        prev.map((c) => (c.id === updated.id ? updated : c)),
+      )
+    },
+  })
+
+  const editReplyMutation = useMutation({
+    mutationFn: async ({ commentId, replyId, body }: { commentId: string; replyId: string; body: string }) => {
+      const res = await fetch(`/api/comments/${commentId}/replies/${replyId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      })
+      return res.json() as Promise<ReviewComment>
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData<ReviewComment[]>(COMMENTS_KEY, (prev = []) =>
+        prev.map((c) => (c.id === updated.id ? updated : c)),
+      )
+    },
+  })
+
   const applySuggestionMutation = useMutation({
     mutationFn: async (id: string) => {
       const res = await fetch(`/api/comments/${id}/apply-suggestion`, {
@@ -126,6 +154,20 @@ export function useComments() {
       addReplyMutation.mutate({ id, body })
     },
     [addReplyMutation.mutate],
+  )
+
+  const removeReply = useCallback(
+    (commentId: string, replyId: string) => {
+      removeReplyMutation.mutate({ commentId, replyId })
+    },
+    [removeReplyMutation.mutate],
+  )
+
+  const editReply = useCallback(
+    (commentId: string, replyId: string, body: string) => {
+      editReplyMutation.mutate({ commentId, replyId, body })
+    },
+    [editReplyMutation.mutate],
   )
 
   const applySuggestion = useCallback(
@@ -250,6 +292,8 @@ export function useComments() {
     resolveComment,
     unresolveComment,
     addReply,
+    removeReply,
+    editReply,
     applySuggestion,
     getAnnotationsForFile,
     formatAllComments,
