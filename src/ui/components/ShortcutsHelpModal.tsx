@@ -75,6 +75,10 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       items: [
         { keys: ['m'], description: 'Toggle Diff Style (Split / Unified)' },
         { keys: ['t'], description: 'Cycle Tab Indentation Size (2 → 4 → 8)' },
+        { keys: ['w'], description: 'Toggle Soft-Wrap Long Lines' },
+        { keys: ['n'], description: 'Toggle Line Numbers' },
+        { keys: ['i'], description: 'Cycle Diff Indicator Style (+/− → bars → none)' },
+        { keys: ['Shift', 'I'], description: 'Cycle Inline Diff Style (word → char → none)' },
       ],
     },
   ]

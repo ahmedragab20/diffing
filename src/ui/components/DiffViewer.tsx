@@ -1,7 +1,14 @@
 import { memo, useMemo } from 'react'
 import type { FileDiffMetadata, DiffLineAnnotation, AnnotationSide } from '@pierre/diffs'
+import { Virtualizer } from '@pierre/diffs/react'
 import type { ReviewComment } from '../../lib/types'
 import type { BinaryFileInfo } from '../hooks/useDiff'
+import type {
+  LineDiffType,
+  DiffIndicators,
+  HunkSeparatorStyle,
+  LineHoverHighlight,
+} from '../hooks/useSettings'
 import { FileDiffCard } from './FileDiffCard'
 import { BinaryFileDiff } from './BinaryFileDiff'
 
@@ -14,6 +21,13 @@ interface DiffViewerProps {
   binaryFiles: Map<string, BinaryFileInfo>
   theme: string
   editorIDE?: string
+  lineDiffType: LineDiffType
+  lineWrap: boolean
+  diffIndicators: DiffIndicators
+  showLineNumbers: boolean
+  hunkSeparators: HunkSeparatorStyle
+  lineHoverHighlight: LineHoverHighlight
+  fontSize: number
   onViewedChange: (filePath: string, viewed: boolean) => void
   fileAnnotationsMap: Map<string, DiffLineAnnotation<ReviewComment>[]>
   onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
@@ -31,6 +45,13 @@ export const DiffViewer = memo(function DiffViewer({
   binaryFiles,
   theme,
   editorIDE,
+  lineDiffType,
+  lineWrap,
+  diffIndicators,
+  showLineNumbers,
+  hunkSeparators,
+  lineHoverHighlight,
+  fontSize,
   onViewedChange,
   fileAnnotationsMap,
   onAddComment,
@@ -61,7 +82,7 @@ export const DiffViewer = memo(function DiffViewer({
   }
 
   return (
-    <div className="diff-viewer">
+    <Virtualizer className="diff-viewer">
       {sortedFiles.map((file, index) => {
         const filePath = file.name
         const binaryInfo = binaryFiles.get(filePath)
@@ -88,12 +109,19 @@ export const DiffViewer = memo(function DiffViewer({
             viewed={viewedFiles.has(filePath)}
             theme={theme}
             editorIDE={editorIDE}
+            lineDiffType={lineDiffType}
+            lineWrap={lineWrap}
+            diffIndicators={diffIndicators}
+            showLineNumbers={showLineNumbers}
+            hunkSeparators={hunkSeparators}
+            lineHoverHighlight={lineHoverHighlight}
+            fontSize={fontSize}
             onViewedChange={onViewedChange}
             onAddComment={onAddComment}
             onDeleteComment={onDeleteComment}
           />
         )
       })}
-    </div>
+    </Virtualizer>
   )
 })

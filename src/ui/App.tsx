@@ -6,9 +6,15 @@ import {
     useEffect,
     useTransition,
 } from "react";
-import { parsePatchFiles } from "@pierre/diffs";
+import { parsePatchFiles, preloadHighlighter } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { useWorkerPool } from "@pierre/diffs/react";
+import type {
+    LineDiffType,
+    DiffIndicators,
+    HunkSeparatorStyle,
+    LineHoverHighlight,
+} from "./hooks/useSettings";
 import { useHotkeySequence } from "@tanstack/react-hotkeys";
 import { SHIKI_THEME_MAP } from "./utils";
 import type { ReviewComment } from "../lib/types";
@@ -373,6 +379,91 @@ export function App() {
         [updateSettings],
     );
 
+    const handleLineDiffTypeChange = useCallback(
+        (v: LineDiffType) => {
+            startTransition(() => {
+                updateSettings({ lineDiffType: v });
+            });
+        },
+        [updateSettings],
+    );
+
+    const handleLineWrapChange = useCallback(
+        (v: boolean) => {
+            startTransition(() => {
+                updateSettings({ lineWrap: v });
+            });
+        },
+        [updateSettings],
+    );
+
+    const handleDiffIndicatorsChange = useCallback(
+        (v: DiffIndicators) => {
+            startTransition(() => {
+                updateSettings({ diffIndicators: v });
+            });
+        },
+        [updateSettings],
+    );
+
+    const handleShowLineNumbersChange = useCallback(
+        (v: boolean) => {
+            startTransition(() => {
+                updateSettings({ showLineNumbers: v });
+            });
+        },
+        [updateSettings],
+    );
+
+    const handleHunkSeparatorsChange = useCallback(
+        (v: HunkSeparatorStyle) => {
+            startTransition(() => {
+                updateSettings({ hunkSeparators: v });
+            });
+        },
+        [updateSettings],
+    );
+
+    const handleLineHoverHighlightChange = useCallback(
+        (v: LineHoverHighlight) => {
+            startTransition(() => {
+                updateSettings({ lineHoverHighlight: v });
+            });
+        },
+        [updateSettings],
+    );
+
+    const handleFontSizeChange = useCallback(
+        (v: number) => {
+            startTransition(() => {
+                updateSettings({ fontSize: v });
+            });
+        },
+        [updateSettings],
+    );
+
+    const toggleLineWrap = useCallback(() => {
+        handleLineWrapChange(!settings.lineWrap);
+    }, [settings.lineWrap, handleLineWrapChange]);
+
+    const toggleLineNumbers = useCallback(() => {
+        handleShowLineNumbersChange(!settings.showLineNumbers);
+    }, [settings.showLineNumbers, handleShowLineNumbersChange]);
+
+    const cycleDiffIndicators = useCallback(() => {
+        const order: DiffIndicators[] = ["classic", "bars", "none"];
+        const cur = settings.diffIndicators || "classic";
+        const next = order[(order.indexOf(cur) + 1) % order.length];
+        handleDiffIndicatorsChange(next);
+    }, [settings.diffIndicators, handleDiffIndicatorsChange]);
+
+    const cycleLineDiffType = useCallback(() => {
+        const order: LineDiffType[] = ["word", "word-alt", "char", "none"];
+        const cur = settings.lineDiffType || "word";
+        const next = order[(order.indexOf(cur) + 1) % order.length];
+        handleLineDiffTypeChange(next);
+    }, [settings.lineDiffType, handleLineDiffTypeChange]);
+
     const handleToggleCollapse = useCallback(() => {
         setSidebarCollapsed((c) => !c);
     }, []);
@@ -503,6 +594,22 @@ export function App() {
                 e.preventDefault();
                 toggleSidebar();
                 keyBuffer = '';
+            } else if (keyBuffer === 'w') {
+                e.preventDefault();
+                toggleLineWrap();
+                keyBuffer = '';
+            } else if (keyBuffer === 'n') {
+                e.preventDefault();
+                toggleLineNumbers();
+                keyBuffer = '';
+            } else if (keyBuffer === 'i') {
+                e.preventDefault();
+                cycleDiffIndicators();
+                keyBuffer = '';
+            } else if (keyBuffer === 'I') {
+                e.preventDefault();
+                cycleLineDiffType();
+                keyBuffer = '';
             } else if (keyBuffer === '/') {
                 e.preventDefault();
                 setDiffSearchOpen(true);
@@ -536,6 +643,10 @@ export function App() {
         toggleDiffStyle,
         cycleTabSize,
         toggleSidebar,
+        toggleLineWrap,
+        toggleLineNumbers,
+        cycleDiffIndicators,
+        cycleLineDiffType,
     ]);
 
 
@@ -576,6 +687,20 @@ export function App() {
                 console.error("Failed to set worker pool render options:", err);
             });
     }, [poolManager, shikiConfig]);
+
+    // Pre-warm the Shiki highlighter on the main thread for snappier first paint
+    useEffect(() => {
+        const dark =
+            shikiConfig.type === "dark" ? shikiConfig.themeName : "nord";
+        const light =
+            shikiConfig.type === "light"
+                ? shikiConfig.themeName
+                : "github-light";
+        preloadHighlighter({
+            themes: Array.from(new Set([dark, light])),
+            langs: [],
+        }).catch(() => {});
+    }, [shikiConfig]);
 
     if (loading) {
         return (
@@ -670,12 +795,26 @@ export function App() {
                 theme={settings.theme || "nord"}
                 editorIDE={settings.editorIDE}
                 customMode={customMode}
+                lineDiffType={settings.lineDiffType}
+                lineWrap={settings.lineWrap}
+                diffIndicators={settings.diffIndicators}
+                showLineNumbers={settings.showLineNumbers}
+                hunkSeparators={settings.hunkSeparators}
+                lineHoverHighlight={settings.lineHoverHighlight}
+                fontSize={settings.fontSize}
                 onDiffStyleChange={handleDiffStyleChange}
                 onDiffOptionsChange={handleDiffOptionsChange}
                 onDefaultTabSizeChange={handleDefaultTabSizeChange}
                 onBrowserChange={handleBrowserChange}
                 onThemeChange={handleThemeChange}
                 onEditorIDEChange={handleEditorIDEChange}
+                onLineDiffTypeChange={handleLineDiffTypeChange}
+                onLineWrapChange={handleLineWrapChange}
+                onDiffIndicatorsChange={handleDiffIndicatorsChange}
+                onShowLineNumbersChange={handleShowLineNumbersChange}
+                onHunkSeparatorsChange={handleHunkSeparatorsChange}
+                onLineHoverHighlightChange={handleLineHoverHighlightChange}
+                onFontSizeChange={handleFontSizeChange}
                 onCopyComments={copyAllComments}
             />
             <div className="app-body">
@@ -730,6 +869,13 @@ export function App() {
                         binaryFiles={binaryFileMap}
                         theme={settings.theme || "nord"}
                         editorIDE={settings.editorIDE}
+                        lineDiffType={settings.lineDiffType}
+                        lineWrap={settings.lineWrap}
+                        diffIndicators={settings.diffIndicators}
+                        showLineNumbers={settings.showLineNumbers}
+                        hunkSeparators={settings.hunkSeparators}
+                        lineHoverHighlight={settings.lineHoverHighlight}
+                        fontSize={settings.fontSize}
                         onViewedChange={handleViewedChange}
                         fileAnnotationsMap={fileAnnotationsMap}
                         onAddComment={addComment}

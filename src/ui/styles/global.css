@@ -3232,5 +3232,71 @@ file-tree,
     cursor: not-allowed;
 }
 
+/* New inline header badges (comment count, live selection, copied permalink) */
+.file-diff-comment-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--radius-round);
+    background: var(--accent-subtle);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--font-sans);
+}
+
+.file-diff-selection-badge {
+    padding: 2px 8px;
+    border-radius: var(--radius-round);
+    background: var(--feedback-warning-bg);
+    color: var(--feedback-warning-text);
+    border: 1px solid var(--feedback-warning-border);
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--font-sans);
+    animation: badge-flash 200ms ease-out;
+}
+
+.file-diff-permalink-flash {
+    padding: 2px 8px;
+    border-radius: var(--radius-round);
+    background: var(--feedback-success-bg);
+    color: var(--feedback-success-text);
+    border: 1px solid var(--feedback-success-border);
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    animation: badge-flash 200ms ease-out;
+}
+
+@keyframes badge-flash {
+    from {
+        opacity: 0;
+        transform: scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Settings menu section label */
+.settings-section-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
+    padding: 10px 14px 4px;
+    margin-top: 4px;
+    border-top: 1px solid var(--border-color);
+}
+
+.settings-section-label:first-child {
+    border-top: none;
+    margin-top: 0;
+}
 
 

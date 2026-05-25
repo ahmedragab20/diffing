@@ -5,6 +5,11 @@ import { homedir } from 'node:os'
 const CONFIG_DIR = join(homedir(), '.config', 'diffit')
 const SETTINGS_FILE = join(CONFIG_DIR, 'settings.json')
 
+export type LineDiffType = 'word' | 'word-alt' | 'char' | 'none'
+export type DiffIndicators = 'classic' | 'bars' | 'none'
+export type HunkSeparatorStyle = 'simple' | 'metadata' | 'line-info' | 'line-info-basic'
+export type LineHoverHighlight = 'disabled' | 'both' | 'number' | 'line'
+
 export interface Settings {
   staged: boolean
   untracked: boolean
@@ -13,6 +18,20 @@ export interface Settings {
   browser?: string
   theme: string
   editorIDE?: 'default' | 'vscode' | 'zed' | 'vim' | 'neovim'
+  /** Inline change highlight algorithm — pinpoint exact diff inside a line. */
+  lineDiffType: LineDiffType
+  /** Soft-wrap long lines instead of horizontal scroll. */
+  lineWrap: boolean
+  /** Visual style for added/removed line indicators. */
+  diffIndicators: DiffIndicators
+  /** Show gutter line numbers. */
+  showLineNumbers: boolean
+  /** Display style for the divider between hunks (includes function context). */
+  hunkSeparators: HunkSeparatorStyle
+  /** How a hovered line should be highlighted. */
+  lineHoverHighlight: LineHoverHighlight
+  /** Render code at this base font-size (px). */
+  fontSize: number
 }
 
 const DEFAULTS: Settings = {
@@ -22,6 +41,13 @@ const DEFAULTS: Settings = {
   defaultTabSize: 4,
   theme: 'nord',
   editorIDE: 'default',
+  lineDiffType: 'word',
+  lineWrap: false,
+  diffIndicators: 'classic',
+  showLineNumbers: true,
+  hunkSeparators: 'line-info',
+  lineHoverHighlight: 'both',
+  fontSize: 13,
 }
 
 export function loadSettings(): Settings {

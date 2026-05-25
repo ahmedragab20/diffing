@@ -1,6 +1,12 @@
 import { useState, useRef, useEffect, memo } from 'react'
 import { GitBranch, Settings, Palette } from 'lucide-react'
 import type { DiffOptions } from '../hooks/useDiff'
+import type {
+  LineDiffType,
+  DiffIndicators,
+  HunkSeparatorStyle,
+  LineHoverHighlight,
+} from '../hooks/useSettings'
 
 interface ToolbarProps {
   repoName: string
@@ -16,12 +22,26 @@ interface ToolbarProps {
   theme: string
   editorIDE?: string
   customMode: boolean
+  lineDiffType: LineDiffType
+  lineWrap: boolean
+  diffIndicators: DiffIndicators
+  showLineNumbers: boolean
+  hunkSeparators: HunkSeparatorStyle
+  lineHoverHighlight: LineHoverHighlight
+  fontSize: number
   onDiffStyleChange: (style: 'split' | 'unified') => void
   onDiffOptionsChange: (options: DiffOptions) => void
   onDefaultTabSizeChange: (size: number) => void
   onBrowserChange: (browser: string) => void
   onThemeChange: (theme: string) => void
   onEditorIDEChange: (editor: string) => void
+  onLineDiffTypeChange: (v: LineDiffType) => void
+  onLineWrapChange: (v: boolean) => void
+  onDiffIndicatorsChange: (v: DiffIndicators) => void
+  onShowLineNumbersChange: (v: boolean) => void
+  onHunkSeparatorsChange: (v: HunkSeparatorStyle) => void
+  onLineHoverHighlightChange: (v: LineHoverHighlight) => void
+  onFontSizeChange: (v: number) => void
   onCopyComments: () => Promise<void>
 }
 
@@ -44,6 +64,12 @@ const THEMES: ThemeOption[] = [
   { id: 'one-dark', name: 'One Dark', type: 'dark', colors: { bg: '#282c34', secondary: '#21252b', accent: '#61afef' } },
   { id: 'synthwave-84', name: 'Synthwave \'84', type: 'dark', colors: { bg: '#2b213a', secondary: '#241b2f', accent: '#f92aad' } },
   { id: 'tokyo-night', name: 'Tokyo Night', type: 'dark', colors: { bg: '#1a1b26', secondary: '#16161e', accent: '#7aa2f7' } },
+  { id: 'catppuccin-mocha', name: 'Catppuccin Mocha', type: 'dark', colors: { bg: '#1e1e2e', secondary: '#181825', accent: '#cba6f7' } },
+  { id: 'catppuccin-latte', name: 'Catppuccin Latte', type: 'light', colors: { bg: '#eff1f5', secondary: '#e6e9ef', accent: '#8839ef' } },
+  { id: 'solarized-dark', name: 'Solarized Dark', type: 'dark', colors: { bg: '#002b36', secondary: '#073642', accent: '#268bd2' } },
+  { id: 'solarized-light', name: 'Solarized Light', type: 'light', colors: { bg: '#fdf6e3', secondary: '#eee8d5', accent: '#268bd2' } },
+  { id: 'monokai', name: 'Monokai', type: 'dark', colors: { bg: '#272822', secondary: '#1d1e19', accent: '#f92672' } },
+  { id: 'ayu-dark', name: 'Ayu Dark', type: 'dark', colors: { bg: '#0a0e14', secondary: '#0d1117', accent: '#e6b450' } },
 ]
 
 export const Toolbar = memo(function Toolbar({
@@ -60,12 +86,26 @@ export const Toolbar = memo(function Toolbar({
   theme,
   editorIDE,
   customMode,
+  lineDiffType,
+  lineWrap,
+  diffIndicators,
+  showLineNumbers,
+  hunkSeparators,
+  lineHoverHighlight,
+  fontSize,
   onDiffStyleChange,
   onDiffOptionsChange,
   onDefaultTabSizeChange,
   onBrowserChange,
   onThemeChange,
   onEditorIDEChange,
+  onLineDiffTypeChange,
+  onLineWrapChange,
+  onDiffIndicatorsChange,
+  onShowLineNumbersChange,
+  onHunkSeparatorsChange,
+  onLineHoverHighlightChange,
+  onFontSizeChange,
   onCopyComments,
 }: ToolbarProps) {
   const [copied, setCopied] = useState(false)
@@ -147,7 +187,7 @@ export const Toolbar = memo(function Toolbar({
             <span>Theme</span>
           </button>
           {themeOpen && (
-            <div className="settings-menu" style={{ minWidth: '180px' }}>
+            <div className="settings-menu" style={{ minWidth: '200px', maxHeight: '420px', overflowY: 'auto' }}>
               {THEMES.map((t) => (
                 <div
                   key={t.id}
@@ -214,9 +254,10 @@ export const Toolbar = memo(function Toolbar({
             <Settings size={14} />
           </button>
           {settingsOpen && (
-            <div className="settings-menu">
+            <div className="settings-menu" style={{ minWidth: '260px', maxHeight: '70vh', overflowY: 'auto' }}>
               {!customMode && (
                 <>
+                  <div className="settings-section-label">Source</div>
                   <label className="settings-item">
                     <input
                       type="checkbox"
@@ -239,6 +280,91 @@ export const Toolbar = memo(function Toolbar({
                   </label>
                 </>
               )}
+              <div className="settings-section-label">Display</div>
+              <div className="settings-item settings-item-spaced">
+                <span>Inline diff</span>
+                <select
+                  className="settings-select"
+                  value={lineDiffType}
+                  onChange={(e) => onLineDiffTypeChange(e.target.value as LineDiffType)}
+                  title="Inline change highlighting style"
+                >
+                  <option value="word">Word</option>
+                  <option value="word-alt">Word (alt)</option>
+                  <option value="char">Character</option>
+                  <option value="none">None</option>
+                </select>
+              </div>
+              <label className="settings-item">
+                <input
+                  type="checkbox"
+                  checked={lineWrap}
+                  onChange={(e) => onLineWrapChange(e.target.checked)}
+                />
+                Wrap long lines
+              </label>
+              <div className="settings-item settings-item-spaced">
+                <span>Diff indicators</span>
+                <select
+                  className="settings-select"
+                  value={diffIndicators}
+                  onChange={(e) => onDiffIndicatorsChange(e.target.value as DiffIndicators)}
+                >
+                  <option value="classic">Classic (+/−)</option>
+                  <option value="bars">Bars</option>
+                  <option value="none">None</option>
+                </select>
+              </div>
+              <label className="settings-item">
+                <input
+                  type="checkbox"
+                  checked={showLineNumbers}
+                  onChange={(e) => onShowLineNumbersChange(e.target.checked)}
+                />
+                Show line numbers
+              </label>
+              <div className="settings-item settings-item-spaced">
+                <span>Hunk separator</span>
+                <select
+                  className="settings-select"
+                  value={hunkSeparators}
+                  onChange={(e) => onHunkSeparatorsChange(e.target.value as HunkSeparatorStyle)}
+                  title="How dividers between hunks are styled"
+                >
+                  <option value="line-info">Line info + context</option>
+                  <option value="line-info-basic">Line info</option>
+                  <option value="metadata">Metadata only</option>
+                  <option value="simple">Simple</option>
+                </select>
+              </div>
+              <div className="settings-item settings-item-spaced">
+                <span>Hover highlight</span>
+                <select
+                  className="settings-select"
+                  value={lineHoverHighlight}
+                  onChange={(e) => onLineHoverHighlightChange(e.target.value as LineHoverHighlight)}
+                >
+                  <option value="both">Both</option>
+                  <option value="line">Line only</option>
+                  <option value="number">Number only</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </div>
+              <div className="settings-item settings-item-spaced">
+                <span>Font size</span>
+                <select
+                  className="settings-select"
+                  value={fontSize}
+                  onChange={(e) => onFontSizeChange(Number(e.target.value))}
+                >
+                  <option value={11}>11px</option>
+                  <option value={12}>12px</option>
+                  <option value={13}>13px</option>
+                  <option value={14}>14px</option>
+                  <option value={15}>15px</option>
+                  <option value={16}>16px</option>
+                </select>
+              </div>
               <div className="settings-item settings-item-spaced">
                 <span>Default tab size</span>
                 <select
@@ -251,6 +377,7 @@ export const Toolbar = memo(function Toolbar({
                   <option value={8}>8</option>
                 </select>
               </div>
+              <div className="settings-section-label">External tools</div>
               <div className="settings-item settings-item-spaced">
                 <span>Browser</span>
                 <select
@@ -258,7 +385,6 @@ export const Toolbar = memo(function Toolbar({
                   value={browser || ''}
                   onChange={(e) => {
                     onBrowserChange(e.target.value)
-                    setSettingsOpen(false)
                   }}
                 >
                   <option value="">Default</option>
@@ -275,7 +401,6 @@ export const Toolbar = memo(function Toolbar({
                   value={editorIDE || 'default'}
                   onChange={(e) => {
                     onEditorIDEChange(e.target.value)
-                    setSettingsOpen(false)
                   }}
                 >
                   <option value="default">Default / System</option>

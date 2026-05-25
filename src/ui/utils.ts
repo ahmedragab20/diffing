@@ -55,6 +55,12 @@ export const SHIKI_THEME_MAP: Record<string, { themeName: string; type: 'dark' |
   'one-dark': { themeName: 'one-dark-pro', type: 'dark' },
   'synthwave-84': { themeName: 'synthwave-84', type: 'dark' },
   'tokyo-night': { themeName: 'tokyo-night', type: 'dark' },
+  'catppuccin-mocha': { themeName: 'catppuccin-mocha', type: 'dark' },
+  'catppuccin-latte': { themeName: 'catppuccin-latte', type: 'light' },
+  'solarized-dark': { themeName: 'solarized-dark', type: 'dark' },
+  'solarized-light': { themeName: 'solarized-light', type: 'light' },
+  monokai: { themeName: 'monokai', type: 'dark' },
+  'ayu-dark': { themeName: 'ayu-dark', type: 'dark' },
 }
 
 export function parseMarkdown(text: string): string {

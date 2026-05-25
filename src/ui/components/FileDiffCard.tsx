@@ -3,6 +3,12 @@ import { FileDiff } from '@pierre/diffs/react'
 import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide, SelectedLineRange } from '@pierre/diffs'
 import { ChevronDown, ChevronRight, Edit3, MessageSquare } from 'lucide-react'
 import type { ReviewComment } from '../../lib/types'
+import type {
+  LineDiffType,
+  DiffIndicators,
+  HunkSeparatorStyle,
+  LineHoverHighlight,
+} from '../hooks/useSettings'
 import { CommentForm } from './CommentForm'
 import { CommentBubble } from './CommentBubble'
 import { SHIKI_THEME_MAP } from '../utils'
@@ -23,6 +29,13 @@ interface FileDiffCardProps {
   viewed: boolean
   theme: string
   editorIDE?: string
+  lineDiffType: LineDiffType
+  lineWrap: boolean
+  diffIndicators: DiffIndicators
+  showLineNumbers: boolean
+  hunkSeparators: HunkSeparatorStyle
+  lineHoverHighlight: LineHoverHighlight
+  fontSize: number
   onViewedChange: (filePath: string, viewed: boolean) => void
   onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
   onDeleteComment: (id: string) => void
@@ -38,12 +51,21 @@ export const FileDiffCard = memo(function FileDiffCard({
   viewed,
   theme,
   editorIDE,
+  lineDiffType,
+  lineWrap,
+  diffIndicators,
+  showLineNumbers,
+  hunkSeparators,
+  lineHoverHighlight,
+  fontSize,
   onViewedChange,
   onAddComment,
   onDeleteComment,
 }: FileDiffCardProps) {
   const [pending, setPending] = useState<PendingComment | null>(null)
   const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
+  const [liveSelectionCount, setLiveSelectionCount] = useState(0)
+  const [permalinkFlash, setPermalinkFlash] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState(viewed)
   const [opening, setOpening] = useState(false)
   const [showFileCommentForm, setShowFileCommentForm] = useState(false)
@@ -151,6 +173,25 @@ export const FileDiffCard = memo(function FileDiffCard({
             {filePath}
           </span>
           {getStatusBadge()}
+          {lineAnnotations.length > 0 && (
+            <span
+              className="file-diff-comment-badge"
+              title={`${lineAnnotations.length} inline comment${lineAnnotations.length === 1 ? '' : 's'}`}
+            >
+              <MessageSquare size={10} />
+              {lineAnnotations.length}
+            </span>
+          )}
+          {liveSelectionCount > 0 && (
+            <span className="file-diff-selection-badge" aria-live="polite">
+              {liveSelectionCount} line{liveSelectionCount === 1 ? '' : 's'} selected
+            </span>
+          )}
+          {permalinkFlash && (
+            <span className="file-diff-permalink-flash" role="status">
+              Copied {permalinkFlash}
+            </span>
+          )}
         </div>
 
         <div className="file-diff-header-right" onClick={(e) => e.stopPropagation()}>
@@ -244,10 +285,25 @@ export const FileDiffCard = memo(function FileDiffCard({
               enableGutterUtility: true,
               enableLineSelection: true,
               disableFileHeader: true, // Disable built-in header to use custom header
+              lineDiffType,
+              overflow: lineWrap ? 'wrap' : 'scroll',
+              diffIndicators,
+              disableLineNumbers: !showLineNumbers,
+              hunkSeparators,
+              lineHoverHighlight,
               onLineSelectionStart: () => {
                 setSelectedRange(null)
+                setLiveSelectionCount(0)
+              },
+              onLineSelectionChange: (range) => {
+                if (range) {
+                  setLiveSelectionCount(Math.abs(range.end - range.start) + 1)
+                } else {
+                  setLiveSelectionCount(0)
+                }
               },
               onLineSelectionEnd: (range) => {
+                setLiveSelectionCount(0)
                 if (range) {
                   setSelectedRange(range)
                   setPending({
@@ -256,6 +312,17 @@ export const FileDiffCard = memo(function FileDiffCard({
                     startLineNumber: range.start,
                   })
                 }
+              },
+              onLineNumberClick: (props) => {
+                const side = props.annotationSide === 'deletions' ? '-' : '+'
+                const link = `${filePath}:${side}${props.lineNumber}`
+                navigator.clipboard?.writeText(link).then(
+                  () => {
+                    setPermalinkFlash(link)
+                    setTimeout(() => setPermalinkFlash(null), 1600)
+                  },
+                  () => {},
+                )
               },
               theme: {
                 dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
@@ -266,12 +333,14 @@ export const FileDiffCard = memo(function FileDiffCard({
                 :host {
                   --diffs-tab-size: ${tabSize} !important;
                   --diffs-font-family: var(--font-mono) !important;
+                  --diffs-font-size: ${fontSize}px !important;
                   --diffs-border: var(--border-normal) !important;
                   --diffs-bg: var(--bg-secondary) !important;
-                  --diffs-line-height: 22px !important;
+                  --diffs-line-height: ${Math.round(fontSize * 1.7)}px !important;
                 }
                 [data-column-number], [data-line] {
                   font-family: var(--font-mono) !important;
+                  font-size: ${fontSize}px !important;
                   font-variant-ligatures: common-ligatures !important;
                   font-feature-settings: "liga" on, "calt" on !important;
                 }
@@ -281,6 +350,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                   opacity: 0.65 !important;
                   user-select: none !important;
                   padding-right: 12px !important;
+                  cursor: pointer !important;
                 }
                 [data-line]:hover [data-column-number] {
                   opacity: 1 !important;
