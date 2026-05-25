@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { CheckCircle2, Bot, Reply, Pencil, Trash2, AlertTriangle } from 'lucide-react'
-import type { ReviewComment } from '../../types'
+import type { ReviewComment } from '../../lib/types'
 import { timeAgo, parseMarkdown } from '../utils'
 import { useComments } from '../hooks/useComments'
 import { CommentForm } from './CommentForm'

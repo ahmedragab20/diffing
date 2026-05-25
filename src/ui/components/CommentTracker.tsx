@@ -8,7 +8,7 @@ import {
   AlertTriangle,
   XCircle,
 } from 'lucide-react'
-import type { ReviewComment } from '../../types'
+import type { ReviewComment } from '../../lib/types'
 import { timeAgo, truncate, fileName } from '../utils'
 
 interface CommentTrackerProps {

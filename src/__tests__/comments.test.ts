@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { InMemoryCommentStore, FileCommentStore, type CommentStore } from '../comments.js'
-import type { ReviewComment, CommentReply } from '../types.js'
+import { InMemoryCommentStore, FileCommentStore, type CommentStore } from '../lib/comments.js'
+import type { ReviewComment, CommentReply } from '../lib/types.js'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 

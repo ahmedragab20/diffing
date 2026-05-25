@@ -16,41 +16,41 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, readFileSync: mockReadFileSync }
 })
 
-vi.mock('../path.js', () => ({ isSafePath: mockIsSafePath }))
+vi.mock('../lib/path.js', () => ({ isSafePath: mockIsSafePath }))
 vi.mock('editorconfig', () => ({ parseSync: mockParseEditorConfig }))
 
 describe('git', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     try {
-      const { _resetRepoRootCache } = await import('../git.js')
+      const { _resetRepoRootCache } = await import('../lib/git.js')
       _resetRepoRootCache()
     } catch {}
   })
 
   describe('isImageFile', () => {
     it('returns true for common image extensions', async () => {
-      const { isImageFile } = await import('../git.js')
+      const { isImageFile } = await import('../lib/git.js')
       for (const ext of ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'avif']) {
         expect(isImageFile(`file.${ext}`)).toBe(true)
       }
     })
 
     it('handles uppercase extensions', async () => {
-      const { isImageFile } = await import('../git.js')
+      const { isImageFile } = await import('../lib/git.js')
       expect(isImageFile('photo.PNG')).toBe(true)
       expect(isImageFile('photo.JPG')).toBe(true)
     })
 
     it('returns false for non-image extensions', async () => {
-      const { isImageFile } = await import('../git.js')
+      const { isImageFile } = await import('../lib/git.js')
       for (const ext of ['ts', 'jsx', 'css', 'md', 'txt', 'json']) {
         expect(isImageFile(`file.${ext}`)).toBe(false)
       }
     })
 
     it('returns false for files without extension', async () => {
-      const { isImageFile } = await import('../git.js')
+      const { isImageFile } = await import('../lib/git.js')
       expect(isImageFile('Makefile')).toBe(false)
     })
   })
@@ -58,13 +58,13 @@ describe('git', () => {
   describe('isGitRepo', () => {
     it('returns true when execFileSync succeeds', async () => {
       mockExecFileSync.mockReturnValue(Buffer.from(''))
-      const { isGitRepo } = await import('../git.js')
+      const { isGitRepo } = await import('../lib/git.js')
       expect(isGitRepo()).toBe(true)
     })
 
     it('returns false when execFileSync throws', async () => {
       mockExecFileSync.mockImplementation(() => { throw new Error('not a repo') })
-      const { isGitRepo } = await import('../git.js')
+      const { isGitRepo } = await import('../lib/git.js')
       expect(isGitRepo()).toBe(false)
     })
   })
@@ -72,7 +72,7 @@ describe('git', () => {
   describe('getRepoRoot', () => {
     it('returns trimmed root path', async () => {
       mockExecFileSync.mockReturnValue('/home/user/project\n')
-      const { getRepoRoot } = await import('../git.js')
+      const { getRepoRoot } = await import('../lib/git.js')
       expect(getRepoRoot()).toBe('/home/user/project')
     })
   })
@@ -80,7 +80,7 @@ describe('git', () => {
   describe('getRepoName', () => {
     it('returns basename', async () => {
       mockExecFileSync.mockReturnValue('/home/user/my-project\n')
-      const { getRepoName } = await import('../git.js')
+      const { getRepoName } = await import('../lib/git.js')
       expect(getRepoName()).toBe('my-project')
     })
   })
@@ -88,13 +88,13 @@ describe('git', () => {
   describe('getBranchName', () => {
     it('returns branch on success', async () => {
       mockExecFileSync.mockReturnValue('main\n')
-      const { getBranchName } = await import('../git.js')
+      const { getBranchName } = await import('../lib/git.js')
       expect(getBranchName()).toBe('main')
     })
 
     it('returns empty string on error', async () => {
       mockExecFileSync.mockImplementation(() => { throw new Error('error') })
-      const { getBranchName } = await import('../git.js')
+      const { getBranchName } = await import('../lib/git.js')
       expect(getBranchName()).toBe('')
     })
   })
@@ -102,7 +102,7 @@ describe('git', () => {
   describe('getCustomGitDiff', () => {
     it('forwards args with DIFF_FLAGS', async () => {
       mockExecFileSync.mockReturnValue('output')
-      const { getCustomGitDiff } = await import('../git.js')
+      const { getCustomGitDiff } = await import('../lib/git.js')
       const result = getCustomGitDiff(['HEAD~3', '--', '*.ts'])
       expect(result).toBe('output')
       expect(mockExecFileSync).toHaveBeenCalledWith(
@@ -117,7 +117,7 @@ describe('git', () => {
       mockExecFileSync
         .mockReturnValueOnce('unstaged\n')
         .mockReturnValueOnce('staged\n')
-      const { getGitDiff } = await import('../git.js')
+      const { getGitDiff } = await import('../lib/git.js')
       expect(getGitDiff({ staged: true, untracked: false })).toBe('unstaged\n\nstaged\n')
     })
 
@@ -125,13 +125,13 @@ describe('git', () => {
       mockExecFileSync
         .mockReturnValueOnce('unstaged\n')
         .mockReturnValueOnce('')
-      const { getGitDiff } = await import('../git.js')
+      const { getGitDiff } = await import('../lib/git.js')
       expect(getGitDiff({ staged: true, untracked: false })).toBe('unstaged\n')
     })
 
     it('returns only unstaged with no options', async () => {
       mockExecFileSync.mockReturnValueOnce('unstaged diff')
-      const { getGitDiff } = await import('../git.js')
+      const { getGitDiff } = await import('../lib/git.js')
       expect(getGitDiff()).toBe('unstaged diff')
     })
   })
@@ -140,21 +140,21 @@ describe('git', () => {
     it('uses tab_width from editorconfig', async () => {
       mockExecFileSync.mockReturnValue('/repo\n')
       mockParseEditorConfig.mockReturnValue({ tab_width: 2, indent_size: 2 })
-      const { getTabSizeForFiles } = await import('../git.js')
+      const { getTabSizeForFiles } = await import('../lib/git.js')
       expect(getTabSizeForFiles(['src/index.ts'])).toEqual({ 'src/index.ts': 2 })
     })
 
     it('falls back to indent_size', async () => {
       mockExecFileSync.mockReturnValue('/repo\n')
       mockParseEditorConfig.mockReturnValue({ indent_size: 4 })
-      const { getTabSizeForFiles } = await import('../git.js')
+      const { getTabSizeForFiles } = await import('../lib/git.js')
       expect(getTabSizeForFiles(['src/index.ts'])).toEqual({ 'src/index.ts': 4 })
     })
 
     it('skips files on error', async () => {
       mockExecFileSync.mockReturnValue('/repo\n')
       mockParseEditorConfig.mockImplementation(() => { throw new Error('fail') })
-      const { getTabSizeForFiles } = await import('../git.js')
+      const { getTabSizeForFiles } = await import('../lib/git.js')
       expect(getTabSizeForFiles(['src/index.ts'])).toEqual({})
     })
   })
@@ -162,13 +162,13 @@ describe('git', () => {
   describe('getUntrackedFilePaths', () => {
     it('splits output by newline', async () => {
       mockExecFileSync.mockReturnValue('a.ts\nb.ts\n')
-      const { getUntrackedFilePaths } = await import('../git.js')
+      const { getUntrackedFilePaths } = await import('../lib/git.js')
       expect(getUntrackedFilePaths()).toEqual(['a.ts', 'b.ts'])
     })
 
     it('returns empty array for empty output', async () => {
       mockExecFileSync.mockReturnValue('')
-      const { getUntrackedFilePaths } = await import('../git.js')
+      const { getUntrackedFilePaths } = await import('../lib/git.js')
       expect(getUntrackedFilePaths()).toEqual([])
     })
   })
@@ -177,7 +177,7 @@ describe('git', () => {
     it('returns null for unsafe path', async () => {
       mockIsSafePath.mockReturnValue(false)
       mockExecFileSync.mockReturnValue('/repo\n')
-      const { getFileContent } = await import('../git.js')
+      const { getFileContent } = await import('../lib/git.js')
       expect(getFileContent('../etc/passwd', 'new')).toBeNull()
     })
 
@@ -185,7 +185,7 @@ describe('git', () => {
       mockIsSafePath.mockReturnValue(true)
       mockExecFileSync.mockReturnValue('/repo\n')
       mockReadFileSync.mockReturnValue(Buffer.from('file content'))
-      const { getFileContent } = await import('../git.js')
+      const { getFileContent } = await import('../lib/git.js')
       expect(getFileContent('src/index.ts', 'new')).toEqual(Buffer.from('file content'))
     })
 
@@ -193,7 +193,7 @@ describe('git', () => {
       mockIsSafePath.mockReturnValue(true)
       mockExecFileSync.mockReturnValue('/repo\n')
       mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT') })
-      const { getFileContent } = await import('../git.js')
+      const { getFileContent } = await import('../lib/git.js')
       expect(getFileContent('src/index.ts', 'new')).toBeNull()
     })
 
@@ -202,7 +202,7 @@ describe('git', () => {
       mockExecFileSync
         .mockReturnValueOnce('/repo\n')
         .mockReturnValueOnce(Buffer.from('old content'))
-      const { getFileContent } = await import('../git.js')
+      const { getFileContent } = await import('../lib/git.js')
       expect(getFileContent('src/index.ts', 'old')).toEqual(Buffer.from('old content'))
     })
 
@@ -211,7 +211,7 @@ describe('git', () => {
       mockExecFileSync
         .mockReturnValueOnce('/repo\n')
         .mockImplementationOnce(() => { throw new Error('fatal') })
-      const { getFileContent } = await import('../git.js')
+      const { getFileContent } = await import('../lib/git.js')
       expect(getFileContent('newfile.ts', 'old')).toBeNull()
     })
   })
@@ -219,14 +219,14 @@ describe('git', () => {
   describe('getProjectStorageDir', () => {
     it('returns correct path format under homedir', async () => {
       mockExecFileSync.mockReturnValue('/Users/user/projects/my-repo\n')
-      const { getProjectStorageDir } = await import('../git.js')
+      const { getProjectStorageDir } = await import('../lib/git.js')
       const dir = getProjectStorageDir()
       expect(dir).toContain('.diffit')
       expect(dir).toContain('my-repo-')
     })
 
     it('respects customRepoRoot when provided', async () => {
-      const { getProjectStorageDir } = await import('../git.js')
+      const { getProjectStorageDir } = await import('../lib/git.js')
       const dir = getProjectStorageDir('/custom/path/some-repo')
       expect(dir).toContain('.diffit')
       expect(dir).toContain('some-repo-')

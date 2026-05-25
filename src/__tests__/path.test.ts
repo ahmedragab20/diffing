@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isSafePath } from '../path.js'
+import { isSafePath } from '../lib/path.js'
 
 describe('isSafePath', () => {
   const baseDir = '/home/user/project'

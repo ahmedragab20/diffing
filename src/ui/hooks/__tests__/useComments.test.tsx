@@ -3,7 +3,7 @@ import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { useComments } from '../useComments.js'
-import type { ReviewComment } from '../../../types.js'
+import type { ReviewComment } from '../../../lib/types.js'
 
 const mockFetch = vi.fn()
 

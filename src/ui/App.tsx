@@ -11,7 +11,7 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 import { useWorkerPool } from "@pierre/diffs/react";
 import { useHotkeySequence } from "@tanstack/react-hotkeys";
 import { SHIKI_THEME_MAP } from "./utils";
-import type { ReviewComment } from "../types";
+import type { ReviewComment } from "../lib/types";
 import { useDiff } from "./hooks/useDiff";
 import { useComments } from "./hooks/useComments";
 import { useSettings } from "./hooks/useSettings";

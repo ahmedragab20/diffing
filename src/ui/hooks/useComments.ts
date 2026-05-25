@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { DiffLineAnnotation } from '@pierre/diffs'
-import type { ReviewComment } from '../../types'
+import type { ReviewComment } from '../../lib/types'
 
 const COMMENTS_KEY = ['comments']
 

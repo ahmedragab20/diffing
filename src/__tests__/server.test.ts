@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Hono } from 'hono'
-import type { CommentStore } from '../comments.js'
+import type { CommentStore } from '../lib/comments.js'
 
 const mockGetGitDiff = vi.fn()
 const mockGetCustomGitDiff = vi.fn()
@@ -22,7 +22,7 @@ const mockGetRepoRootAsync = vi.fn()
 const mockGetBranchNameAsync = vi.fn()
 const mockGetUntrackedFilePathsAsync = vi.fn()
 
-vi.mock('../git.js', () => ({
+vi.mock('../lib/git.js', () => ({
   getGitDiff: mockGetGitDiff,
   getCustomGitDiff: mockGetCustomGitDiff,
   getRepoName: mockGetRepoName,
@@ -39,12 +39,12 @@ vi.mock('../git.js', () => ({
   getProjectStorageDir: mockGetProjectStorageDir,
 }))
 
-vi.mock('../settings.js', () => ({
+vi.mock('../lib/settings.js', () => ({
   loadSettings: mockLoadSettings,
   saveSettings: mockSaveSettings,
 }))
 
-vi.mock('../path.js', () => ({
+vi.mock('../lib/path.js', () => ({
   isSafePath: mockIsSafePath,
 }))
 
@@ -122,26 +122,29 @@ class MockCommentStore implements CommentStore {
   }
 }
 
+let DEFAULTS: any
+
 describe('server', () => {
   let app: Hono
   let mockStore: MockCommentStore
   const clientDir = '/tmp/test-client'
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks()
+    const mod = await import('../lib/diff-options.js')
+    DEFAULTS = mod.DEFAULTS
     mockStore = new MockCommentStore()
     mockGetRepoName.mockReturnValue('test-repo')
     mockGetBranchName.mockReturnValue('main')
     mockLoadSettings.mockReturnValue(defaultSettings)
-    mockSaveSettings.mockImplementation((s) => ({ ...defaultSettings, ...s }))
+    mockSaveSettings.mockImplementation((s: any) => ({ ...defaultSettings, ...s }))
     mockGetTabSizeForFiles.mockReturnValue({})
     mockGetUntrackedFilePaths.mockReturnValue([])
     mockIsSafePath.mockReturnValue(true)
     mockGetProjectStorageDir.mockReturnValue('/tmp/test-project-storage')
     mockGetRepoRoot.mockReturnValue('/tmp/test-repo')
-    mockExistsSync.mockImplementation((p) => originalExistsSync(p))
+    mockExistsSync.mockImplementation((p: string) => originalExistsSync(p))
 
-    // Setup async mocks
     mockGetRepoRootAsync.mockResolvedValue('/tmp/test-repo')
     mockGetBranchNameAsync.mockResolvedValue('main')
     mockGetUntrackedFilePathsAsync.mockResolvedValue([])
@@ -152,7 +155,7 @@ describe('server', () => {
   describe('createApp', () => {
     beforeEach(async () => {
       const { createApp } = await import('../server.js')
-      app = createApp(clientDir, undefined, mockStore)
+      app = createApp(clientDir, DEFAULTS, mockStore)
     })
 
     describe('GET /api/diff', () => {
@@ -175,7 +178,8 @@ describe('server', () => {
 
       it('uses custom diff in custom mode', async () => {
         const { createApp } = await import('../server.js')
-        const custom = createApp(clientDir, ['HEAD~3'], mockStore)
+        const diffOpts = { ...DEFAULTS, revisions: ['HEAD~3'] }
+        const custom = createApp(clientDir, diffOpts, mockStore)
         mockGetCustomGitDiffAsync.mockResolvedValue('custom')
         mockGetRepoRootAsync.mockResolvedValue('/tmp/test')
         mockGetBranchNameAsync.mockResolvedValue('main')
@@ -265,7 +269,7 @@ describe('server', () => {
       it('PUT updates existing comment', async () => {
         const { createApp } = await import('../server.js')
         const s = new MockCommentStore()
-        const a = createApp(clientDir, undefined, s)
+        const a = createApp(clientDir, DEFAULTS, s)
         await s.add({ id: 'c1', filePath: 'f.ts', side: 'additions', lineNumber: 1, lineContent: 'x', body: 'orig', status: 'open', createdAt: 0, replies: [] })
 
         const res = await a.fetch(new Request('http://localhost/api/comments/c1', {
@@ -287,7 +291,7 @@ describe('server', () => {
       it('DELETE removes comment', async () => {
         const { createApp } = await import('../server.js')
         const s = new MockCommentStore()
-        const a = createApp(clientDir, undefined, s)
+        const a = createApp(clientDir, DEFAULTS, s)
         await s.add({ id: 'c1', filePath: 'f.ts', side: 'additions', lineNumber: 1, lineContent: 'x', body: 'x', status: 'open', createdAt: 0, replies: [] })
 
         expect((await a.fetch(new Request('http://localhost/api/comments/c1', { method: 'DELETE' }))).status).toBe(200)
@@ -302,7 +306,7 @@ describe('server', () => {
       it('POST reply to comment', async () => {
         const { createApp } = await import('../server.js')
         const s = new MockCommentStore()
-        const a = createApp(clientDir, undefined, s)
+        const a = createApp(clientDir, DEFAULTS, s)
         await s.add({ id: 'c1', filePath: 'f.ts', side: 'additions', lineNumber: 1, lineContent: 'x', body: 'x', status: 'open', createdAt: 0, replies: [] })
 
         const res = await a.fetch(new Request('http://localhost/api/comments/c1/replies', {
@@ -409,7 +413,12 @@ describe('server', () => {
     })
   })
 
-  describe('parseBinaryFiles', () => {
+  describe('binary file detection', () => {
+    beforeEach(async () => {
+      const { createApp } = await import('../server.js')
+      app = createApp(clientDir, DEFAULTS, mockStore)
+    })
+
     it('classifies added binary', async () => {
       mockGetGitDiffAsync.mockResolvedValue(
         'diff --git a/i.png b/i.png\nnew file mode 100644\nBinary files /dev/null and b/i.png differ\n',
@@ -440,12 +449,11 @@ describe('server', () => {
     it('deletes project directory when the original repository no longer exists (dead project)', async () => {
       const { cleanupStaleProjects } = await import('../server.js')
 
-      // Mock base directory existence
       mockExistsSync.mockImplementation((p: string) => {
         if (p.endsWith('.diffit')) return true
         if (p.endsWith('repo_path.txt')) return true
         if (p.endsWith('comments.json')) return false
-        if (p === '/tmp/deleted-repo') return false // original repo is deleted!
+        if (p === '/tmp/deleted-repo') return false
         return false
       })
 
@@ -471,12 +479,11 @@ describe('server', () => {
     it('deletes project directory when comments.json has not been modified for 14 days (stale project)', async () => {
       const { cleanupStaleProjects } = await import('../server.js')
 
-      // Mock base directory and file existence
       mockExistsSync.mockImplementation((p: string) => {
         if (p.endsWith('.diffit')) return true
         if (p.endsWith('repo_path.txt')) return true
         if (p.endsWith('comments.json')) return true
-        if (p === '/tmp/active-repo') return true // original repo still exists!
+        if (p === '/tmp/active-repo') return true
         return false
       })
 
@@ -491,7 +498,6 @@ describe('server', () => {
         throw new Error('ENOENT')
       })
 
-      // mock stats: last modified 15 days ago
       mockStat.mockResolvedValue({
         mtimeMs: Date.now() - 15 * 24 * 60 * 60 * 1000,
       } as any)
@@ -507,7 +513,6 @@ describe('server', () => {
     it('keeps project directory when repository exists and comments are fresh', async () => {
       const { cleanupStaleProjects } = await import('../server.js')
 
-      // Reset mockRm calls
       mockRm.mockClear()
 
       mockExistsSync.mockImplementation((p: string) => {
@@ -529,7 +534,6 @@ describe('server', () => {
         throw new Error('ENOENT')
       })
 
-      // mock stats: last modified just now
       mockStat.mockResolvedValue({
         mtimeMs: Date.now(),
       } as any)

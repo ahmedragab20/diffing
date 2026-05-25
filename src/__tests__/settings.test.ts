@@ -34,19 +34,19 @@ describe('settings', () => {
   describe('loadSettings', () => {
     it('returns defaults when file missing', async () => {
       mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT') })
-      const { loadSettings } = await import('../settings.js')
+      const { loadSettings } = await import('../lib/settings.js')
       expect(loadSettings()).toEqual(DEFAULTS)
     })
 
     it('merges persisted values with defaults', async () => {
       mockReadFileSync.mockReturnValue(JSON.stringify({ staged: false, defaultTabSize: 2 }))
-      const { loadSettings } = await import('../settings.js')
+      const { loadSettings } = await import('../lib/settings.js')
       expect(loadSettings()).toEqual({ ...DEFAULTS, staged: false, defaultTabSize: 2 })
     })
 
     it('preserves browser setting', async () => {
       mockReadFileSync.mockReturnValue(JSON.stringify({ browser: 'firefox' }))
-      const { loadSettings } = await import('../settings.js')
+      const { loadSettings } = await import('../lib/settings.js')
       expect(loadSettings().browser).toBe('firefox')
     })
   })
@@ -54,7 +54,7 @@ describe('settings', () => {
   describe('saveSettings', () => {
     it('merges partial and writes config', async () => {
       mockReadFileSync.mockReturnValue(JSON.stringify(DEFAULTS))
-      const { saveSettings } = await import('../settings.js')
+      const { saveSettings } = await import('../lib/settings.js')
 
       const result = saveSettings({ staged: false })
       expect(result.staged).toBe(false)
@@ -65,7 +65,7 @@ describe('settings', () => {
 
     it('preserves existing fields when merging', async () => {
       mockReadFileSync.mockReturnValue(JSON.stringify({ defaultTabSize: 8 }))
-      const { saveSettings } = await import('../settings.js')
+      const { saveSettings } = await import('../lib/settings.js')
 
       const result = saveSettings({ diffStyle: 'unified' })
       expect(result.defaultTabSize).toBe(8)

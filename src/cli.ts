@@ -1,63 +1,44 @@
 #!/usr/bin/env node
-import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
 import getPort from 'get-port'
-import { isGitRepo } from './git.js'
+import { parseDiffOptions, DEFAULTS, printHelp } from './lib/diff-options.js'
+import { runTerminalDiff, validateEnvironment } from './lib/diff-engine.js'
 import { startServer } from './server.js'
-import { loadSettings } from './settings.js'
+import { loadSettings } from './lib/settings.js'
+import type { DiffOptions } from './lib/diff-options.js'
 
-const { values, positionals } = parseArgs({
-  options: {
-    port: { type: 'string', short: 'p' },
-    host: { type: 'string' },
-    'no-open': { type: 'boolean', default: false },
-    help: { type: 'boolean' },
-    version: { type: 'boolean', short: 'v' },
-  },
-  allowPositionals: true,
-})
+const args = process.argv.slice(2)
+const opts = parseDiffOptions(args)
 
-if (values.help) {
-  console.log(`diffit - Local code review tool for git diffs
-
-Usage: diffit [options] [-- <git diff args>]
-
-Options:
-  -p, --port <port>  Port to run the server on (default: random available port)
-  --host <host>      Host address to bind to (default: 127.0.0.1). Pass
-                      0.0.0.0 to expose the server to the local network.
-  --no-open          Don't open the browser automatically
-  -v, --version      Show version number
-  -h, --help         Show this help message
-
-Examples:
-  diffit                        Review uncommitted changes
-  diffit -- --staged            Review staged changes
-  diffit -- HEAD~3              Review last 3 commits
-  diffit -- main..feature       Compare branches
-  diffit --host 0.0.0.0         Allow other machines on the LAN to review`)
+if (opts.help) {
+  printHelp()
   process.exit(0)
 }
 
-if (values.version) {
+if (opts.version) {
   const __dirname = dirname(fileURLToPath(import.meta.url))
   const pkg = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf-8'))
   console.log(pkg.version)
   process.exit(0)
 }
 
-// Everything after -- becomes custom git diff args
-const customDiffArgs = positionals.length > 0 ? positionals : undefined
-
-if (!isGitRepo()) {
-  console.error('Error: not inside a git repository')
+const envErr = validateEnvironment()
+if (envErr) {
+  console.error(envErr)
   process.exit(1)
 }
 
-const port = await getPort(values.port ? { port: parseInt(values.port, 10) } : undefined)
-const host = values.host ?? '127.0.0.1'
+// ── Terminal mode: behave exactly like `git diff` ───────
+if (opts.outputMode === 'terminal') {
+  const exitCode = runTerminalDiff(opts)
+  process.exit(exitCode)
+}
+
+// ── Web mode: launch the review server ──────────────────
+const port = await getPort(opts.port ? { port: opts.port } : undefined)
+const host = opts.host
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const clientDir = resolve(__dirname, 'client')
@@ -66,13 +47,18 @@ const resolvedClientDir = existsSync(clientDir)
   ? clientDir
   : resolve(process.cwd(), 'dist/client')
 
-const { port: actualPort } = await startServer({ port, host, clientDir: resolvedClientDir, customDiffArgs })
+const { port: actualPort } = await startServer({
+  port,
+  host,
+  clientDir: resolvedClientDir,
+  diffOpts: opts,
+})
 
 const localUrl = `http://${host}:${actualPort}`
 
 console.log(`diffit server running at ${localUrl}`)
 
-if (!values['no-open']) {
+if (!opts.noOpen) {
   const settings = loadSettings()
   const openHost = host === '0.0.0.0' ? '127.0.0.1' : host
   const openUrl = `http://${openHost}:${actualPort}`

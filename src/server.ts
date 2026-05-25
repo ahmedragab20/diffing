@@ -5,11 +5,14 @@ import { homedir } from 'node:os'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { getFileContent, isImageFile, getTabSizeForFiles, getGitDiffAsync, getCustomGitDiffAsync, getRepoRootAsync, getBranchNameAsync, getUntrackedFilePathsAsync, getRepoRoot, getProjectStorageDir } from './git.js'
-import { loadSettings, saveSettings } from './settings.js'
-import { InMemoryCommentStore, FileCommentStore } from './comments.js'
-import type { CommentStore } from './comments.js'
-import { isSafePath } from './path.js'
+import { getFileContent, isImageFile, getRepoRoot, getProjectStorageDir } from './lib/git.js'
+import { loadSettings, saveSettings } from './lib/settings.js'
+import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
+import type { CommentStore } from './lib/comments.js'
+import { isSafePath } from './lib/path.js'
+import { executeDiffWithMeta } from './lib/diff-engine.js'
+import type { DiffOptions } from './lib/diff-options.js'
+import { DEFAULTS } from './lib/diff-options.js'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -27,69 +30,18 @@ const MIME_TYPES: Record<string, string> = {
   '.avif': 'image/avif',
 }
 
-export interface BinaryFileInfo {
-  path: string
-  type: 'added' | 'deleted' | 'changed' | 'untracked'
+function isCustomMode(opts: DiffOptions): boolean {
+  return opts.revisions.length > 0 || opts.pathspecs.length > 0
 }
 
-function parseFilePaths(patch: string): string[] {
-  const paths = new Set<string>()
-  for (const line of patch.split('\n')) {
-    const match = line.match(/^diff --git a\/.+ b\/(.+)$/)
-    if (match) paths.add(match[1])
-  }
-  return [...paths]
-}
-
-function parseBinaryFiles(patch: string, untrackedFiles?: Set<string>): BinaryFileInfo[] {
-  const binaryFiles: BinaryFileInfo[] = []
-  const lines = patch.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (!line.startsWith('Binary files ') || !line.includes(' differ')) continue
-
-    // Find the file path from the preceding diff --git line
-    let filePath = ''
-    for (let j = i - 1; j >= 0; j--) {
-      const match = lines[j].match(/^diff --git a\/.+ b\/(.+)$/)
-      if (match) {
-        filePath = match[1]
-        break
-      }
-    }
-    if (!filePath) continue
-
-    // Determine change type from surrounding lines
-    let changeType: BinaryFileInfo['type'] = 'changed'
-    for (let j = i - 1; j >= 0; j--) {
-      if (lines[j].startsWith('diff --git')) break
-      if (lines[j].startsWith('new file mode')) {
-        changeType = 'added'
-        break
-      }
-      if (lines[j].startsWith('deleted file mode')) {
-        changeType = 'deleted'
-        break
-      }
-    }
-
-    if (changeType === 'added' && untrackedFiles?.has(filePath)) {
-      changeType = 'untracked'
-    }
-    binaryFiles.push({ path: filePath, type: changeType })
-  }
-  return binaryFiles
-}
-
-export function createApp(clientDir: string, customDiffArgs?: string[], commentStore?: CommentStore) {
+export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, commentStore?: CommentStore) {
   const app = new Hono()
-  const isCustomMode = !!customDiffArgs
+  const customMode = isCustomMode(diffOpts)
   const store = commentStore ?? new FileCommentStore()
   const viewedFiles = new Set<string>()
 
   const activeClients = new Set<(event: string, data: string) => void>()
 
-  // Watch git repository root for changes to trigger live reloads
   let repoRoot: string
   try {
     repoRoot = getRepoRoot()
@@ -171,26 +123,21 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
     const staged = c.req.query('staged') === 'true'
     const untracked = c.req.query('untracked') === 'true'
 
-    const patchPromise = isCustomMode
-      ? getCustomGitDiffAsync(customDiffArgs)
-      : getGitDiffAsync({ staged, untracked })
+    const optsForDiff = customMode
+      ? diffOpts
+      : { ...diffOpts, staged, includeUntracked: untracked }
 
-    const repoNamePromise = getRepoRootAsync().then((root) => basename(root))
-    const branchPromise = getBranchNameAsync()
-    const untrackedFilesPromise = untracked ? getUntrackedFilePathsAsync() : Promise.resolve([])
+    const result = await executeDiffWithMeta(optsForDiff)
 
-    const [patch, repoName, branch, untrackedFiles] = await Promise.all([
-      patchPromise,
-      repoNamePromise,
-      branchPromise,
-      untrackedFilesPromise,
-    ])
-
-    const untrackedSet = new Set(untrackedFiles)
-    const binaryFiles = parseBinaryFiles(patch, untrackedSet)
-    const filePaths = parseFilePaths(patch)
-    const tabSizeMap = getTabSizeForFiles(filePaths)
-    return c.json({ patch, repoName, branch, customMode: isCustomMode, binaryFiles, tabSizeMap, untrackedFiles })
+    return c.json({
+      patch: result.patch,
+      repoName: result.repoName,
+      branch: result.branch,
+      customMode,
+      binaryFiles: result.binaryFiles,
+      tabSizeMap: result.tabSizeMap,
+      untrackedFiles: result.untrackedFiles,
+    })
   })
 
   app.get('/api/file-content', (c) => {
@@ -355,18 +302,16 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
       const absolutePath = resolve(root, comment.filePath)
       const content = await readFile(absolutePath, 'utf-8')
       const lines = content.split(/\r?\n/)
-      
+
       const lineIdx = comment.lineNumber - 1
       if (lineIdx < 0 || lineIdx >= lines.length) {
         return c.json({ error: 'Comment line number out of range' }, 400)
       }
 
-      // Replace target line with suggestion
       lines[lineIdx] = suggestion.trimEnd()
       const newContent = lines.join('\n')
       await writeFile(absolutePath, newContent, 'utf-8')
 
-      // Mark comment as resolved after applying suggestion
       await store.update(id, { status: 'resolved' })
 
       return c.json({ ok: true })
@@ -466,7 +411,7 @@ export async function cleanupStaleProjects(): Promise<void> {
   try {
     const entries = await readdir(baseDir, { withFileTypes: true })
     const now = Date.now()
-    const STALE_TIME = 14 * 24 * 60 * 60 * 1000 // 14 days
+    const STALE_TIME = 14 * 24 * 60 * 60 * 1000
 
     for (const entry of entries) {
       if (entry.isDirectory()) {
@@ -476,7 +421,6 @@ export async function cleanupStaleProjects(): Promise<void> {
 
         let shouldDelete = false
 
-        // 1. Clean up project if original repository folder no longer exists
         if (existsSync(repoPathFile)) {
           try {
             const repoPath = (await readFile(repoPathFile, 'utf-8')).trim()
@@ -488,7 +432,6 @@ export async function cleanupStaleProjects(): Promise<void> {
           }
         }
 
-        // 2. Clean up project if no comments have been modified/accessed for 14 days
         if (!shouldDelete && existsSync(commentsFile)) {
           try {
             const stats = await stat(commentsFile)
@@ -514,14 +457,13 @@ export function startServer(options: {
   port: number
   host: string
   clientDir: string
-  customDiffArgs?: string[]
+  diffOpts?: DiffOptions
 }): Promise<{ port: number }> {
-  // Fire and forget auto-erase / cleanup background task
   cleanupStaleProjects().catch((err) => {
     console.error('Failed to clean up stale projects:', err)
   })
 
-  const app = createApp(options.clientDir, options.customDiffArgs)
+  const app = createApp(options.clientDir, options.diffOpts)
 
   return new Promise((resolve) => {
     const server = serve({
