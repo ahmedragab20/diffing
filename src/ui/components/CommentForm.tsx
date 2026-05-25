@@ -62,24 +62,16 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
       const nextValue = val.slice(0, start) + placeholder + val.slice(end)
       setBody(nextValue)
 
-      const formData = new FormData()
-      formData.append('file', imageFile)
-
-      try {
-        const res = await fetch('/api/attachments', {
-          method: 'POST',
-          body: formData,
-        })
-        const data = await res.json()
-        if (data.url) {
-          const markdownImage = `![Pasted Image](${data.url})`
-          setBody((prev) => prev.replace(placeholder, markdownImage))
-        } else {
-          setBody(val.slice(0, start) + val.slice(end))
-        }
-      } catch {
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        const base64data = reader.result as string
+        const markdownImage = `![Pasted Image](${base64data})`
+        setBody((prev) => prev.replace(placeholder, markdownImage))
+      }
+      reader.onerror = () => {
         setBody(val.slice(0, start) + val.slice(end))
       }
+      reader.readAsDataURL(imageFile)
     }
   }
 

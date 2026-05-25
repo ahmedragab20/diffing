@@ -6,6 +6,7 @@ import {
     useEffect,
     useTransition,
 } from "react";
+console.log("hello");
 import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { useWorkerPool } from "@pierre/diffs/react";

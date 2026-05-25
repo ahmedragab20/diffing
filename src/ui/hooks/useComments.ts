@@ -149,9 +149,21 @@ export function useComments() {
     for (const [filePath, fileComments] of grouped) {
       lines.push(`<file path="${filePath}">`)
       for (const comment of fileComments) {
-        lines.push(`<comment line="${comment.lineNumber}">`)
+        const lineAttr = comment.startLineNumber && comment.startLineNumber !== comment.lineNumber
+          ? `${comment.startLineNumber}-${comment.lineNumber}`
+          : `${comment.lineNumber}`
+        lines.push(`<comment line="${lineAttr}">`)
         const prefix = comment.side === 'additions' ? '+' : '-'
-        lines.push(`<code>${prefix} ${comment.lineContent}</code>`)
+        const isMultiLine = comment.lineContent && comment.lineContent.includes('\n')
+        if (isMultiLine) {
+          const formattedCodeLines = comment.lineContent
+            .split('\n')
+            .map((l) => `${prefix} ${l}`)
+            .join('\n')
+          lines.push(`<code>\n${formattedCodeLines}\n</code>`)
+        } else {
+          lines.push(`<code>${prefix} ${comment.lineContent}</code>`)
+        }
         lines.push(comment.body)
         lines.push('</comment>')
       }
