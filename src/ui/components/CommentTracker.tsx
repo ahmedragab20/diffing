@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   MessageSquare,
   CheckCircle2,
@@ -5,14 +6,19 @@ import {
   Circle,
   Bot,
   UserCircle,
-  ChevronDown,
-  ChevronRight,
+  Trash2,
+  AlertTriangle,
+  XCircle,
 } from 'lucide-react'
 import type { ReviewComment } from '../../types'
 import { timeAgo, truncate, fileName } from '../utils'
 
 interface CommentTrackerProps {
   comments: ReviewComment[]
+  resolveComment: (id: string) => void
+  unresolveComment: (id: string) => void
+  removeComment: (id: string) => void
+  removeReply: (commentId: string, replyId: string) => void
 }
 
 type CommentStatus = 'open' | 'replied' | 'resolved'
@@ -56,7 +62,7 @@ function StatusBadge({ status }: { status: CommentStatus }) {
   }
 }
 
-export function CommentTracker({ comments }: CommentTrackerProps) {
+export function CommentTracker({ comments, resolveComment, unresolveComment, removeComment, removeReply }: CommentTrackerProps) {
   if (comments.length === 0) return null
 
   const sorted = [...comments].sort((a, b) => b.createdAt - a.createdAt)
@@ -80,10 +86,11 @@ export function CommentTracker({ comments }: CommentTrackerProps) {
         {sorted.map((comment) => {
           const status = getCommentStatus(comment)
           const summary = replySummary(comment.replies)
+          const isResolved = comment.status === 'resolved'
           return (
             <li
               key={comment.id}
-              className={`ct-item ${status === 'resolved' ? 'ct-item-resolved' : ''}`}
+              className={`ct-item ${isResolved ? 'ct-item-resolved' : ''}`}
               role="listitem"
             >
               <a
@@ -106,45 +113,124 @@ export function CommentTracker({ comments }: CommentTrackerProps) {
                   <span className="ct-item-time">{timeAgo(comment.createdAt)}</span>
                 </div>
                 <div className="ct-item-body">{truncate(comment.body, 80)}</div>
-                {summary && (
-                  <div className="ct-item-replies" style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
-                      {comment.replies.length} {comment.replies.length === 1 ? 'reply' : 'replies'}
-                    </span>
-                    {comment.replies.slice(0, 3).map((r) => (
-                      <span
-                        key={r.id}
-                        className={`ct-reply-mini-badge ${r.role === 'agent' ? 'ct-reply-mini-agent' : 'ct-reply-mini-user'}`}
-                        title={r.role === 'agent' ? (r.model ? `Agent (${r.model})` : 'Agent') : 'User'}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '2px',
-                          fontSize: '9px',
-                          fontWeight: 700,
-                          padding: '1px 4px',
-                          borderRadius: '3px',
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.3px'
-                        }}
-                      >
-                        {r.role === 'agent' ? (
-                          <><Bot size={10} aria-hidden="true" /> Agent</>
-                        ) : (
-                          <><UserCircle size={10} aria-hidden="true" /> User</>
-                        )}
-                      </span>
-                    ))}
-                    {comment.replies.length > 3 && (
-                      <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>+{comment.replies.length - 3} more</span>
-                    )}
-                  </div>
-                )}
               </a>
+              <div className="ct-item-actions">
+                <ResolveButton
+                  isResolved={isResolved}
+                  onResolve={() => resolveComment(comment.id)}
+                  onUnresolve={() => unresolveComment(comment.id)}
+                />
+                <DeleteButton
+                  label="Delete comment"
+                  onConfirm={() => removeComment(comment.id)}
+                />
+              </div>
+              {summary && (
+                <div className="ct-item-replies">
+                  <span className="ct-item-replies-label">
+                    {comment.replies.length} {comment.replies.length === 1 ? 'reply' : 'replies'}
+                  </span>
+                  {comment.replies.slice(0, 3).map((r) => (
+                    <span
+                      key={r.id}
+                      className={`ct-reply-mini-badge ${r.role === 'agent' ? 'ct-reply-mini-agent' : 'ct-reply-mini-user'}`}
+                      title={r.role === 'agent' ? (r.model ? `Agent (${r.model})` : 'Agent') : 'User'}
+                    >
+                      {r.role === 'agent' ? (
+                        <><Bot size={10} aria-hidden="true" /> Agent</>
+                      ) : (
+                        <><UserCircle size={10} aria-hidden="true" /> User</>
+                      )}
+                      <button
+                        className="ct-reply-delete-btn"
+                        onClick={(e) => { e.stopPropagation(); confirmDeleteReply(() => removeReply(comment.id, r.id)) }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); confirmDeleteReply(() => removeReply(comment.id, r.id)) } }}
+                        title="Delete reply"
+                        aria-label={`Delete reply from ${r.role}`}
+                        tabIndex={0}
+                      >
+                        <XCircle size={10} aria-hidden="true" />
+                      </button>
+                    </span>
+                  ))}
+                  {comment.replies.length > 3 && (
+                    <span className="ct-item-replies-more">+{comment.replies.length - 3} more</span>
+                  )}
+                </div>
+              )}
             </li>
           )
         })}
       </ul>
     </div>
   )
+}
+
+function ResolveButton({ isResolved, onResolve, onUnresolve }: { isResolved: boolean; onResolve: () => void; onUnresolve: () => void }) {
+  return (
+    <button
+      className={`ct-action-btn ct-action-resolve ${isResolved ? 'ct-action-resolved' : ''}`}
+      onClick={(e) => { e.stopPropagation(); e.preventDefault()
+        isResolved ? onUnresolve() : onResolve()
+      }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault()
+        isResolved ? onUnresolve() : onResolve()
+      } }}
+      title={isResolved ? 'Unresolve' : 'Resolve'}
+      aria-label={isResolved ? 'Unresolve comment' : 'Resolve comment'}
+      tabIndex={0}
+    >
+      <CheckCircle2 size={12} aria-hidden="true" />
+    </button>
+  )
+}
+
+function DeleteButton({ label, onConfirm }: { label: string; onConfirm: () => void }) {
+  const [confirming, setConfirming] = useState(false)
+
+  if (confirming) {
+    return (
+      <div className="ct-delete-confirm">
+        <button
+          className="ct-action-btn ct-action-delete-confirm"
+          onClick={(e) => { e.stopPropagation(); e.preventDefault(); onConfirm() }}
+          title="Confirm delete"
+          aria-label={`Confirm ${label}`}
+        >
+          <AlertTriangle size={12} aria-hidden="true" />
+          Delete?
+        </button>
+        <button
+          className="ct-action-btn"
+          onClick={(e) => { e.stopPropagation(); e.preventDefault(); setConfirming(false) }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); setConfirming(false) } }}
+          title="Cancel delete"
+          aria-label="Cancel delete"
+          tabIndex={0}
+          style={{ fontSize: '10px', padding: '1px 4px' }}
+        >
+          Cancel
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <button
+      className="ct-action-btn ct-action-delete"
+      onClick={(e) => { e.stopPropagation(); e.preventDefault(); setConfirming(true) }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); setConfirming(true) } }}
+      title={label}
+      aria-label={label}
+      tabIndex={0}
+    >
+      <Trash2 size={12} aria-hidden="true" />
+    </button>
+  )
+}
+
+function confirmDeleteReply(onConfirm: () => void) {
+  if (window.confirm('Delete this reply?')) {
+    onConfirm()
+  }
 }

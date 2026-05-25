@@ -1256,12 +1256,17 @@ textarea:focus-visible,
 }
 
 /* Comment tracker */
+.ct-wrapper {
+    border-top: 1px solid var(--border-color);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
 .ct {
-    flex: 0 1 auto;
+    flex: 1;
     overflow-y: auto;
     min-height: 0;
-    margin-top: auto;
-    border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
     padding-bottom: 12px;
 }
@@ -1394,6 +1399,146 @@ textarea:focus-visible,
     text-overflow: ellipsis;
     white-space: nowrap;
     font-weight: 500;
+}
+
+/* Resize handle */
+.ct-resize-handle {
+    height: 6px;
+    cursor: row-resize;
+    background: transparent;
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 2;
+    transition: background 0.15s ease;
+}
+
+.ct-resize-handle:hover,
+.ct-resize-handle:active {
+    background: var(--border-focus);
+}
+
+/* Comment tracker item actions */
+.ct-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 14px 10px;
+}
+
+.ct-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+}
+
+.ct-action-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.ct-action-delete:hover {
+    color: var(--danger);
+    background: rgba(191, 97, 106, 0.1);
+}
+
+.ct-action-resolved {
+    color: var(--success);
+}
+
+.ct-action-resolved:hover {
+    color: var(--text-muted);
+}
+
+.ct-delete-confirm {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.ct-action-delete-confirm {
+    width: auto;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--danger);
+    background: rgba(191, 97, 106, 0.12);
+    border: 1px solid var(--danger);
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Comment tracker replies section */
+.ct-item-replies {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 0 14px 10px;
+    border-top: 1px solid var(--border-color);
+    margin-top: 0;
+}
+
+.ct-item-replies-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.ct-item-replies-more {
+    font-size: 9px;
+    color: var(--text-muted);
+}
+
+.ct-reply-mini-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.ct-reply-mini-agent {
+    color: var(--primary);
+    background: rgba(129, 161, 193, 0.15);
+}
+
+.ct-reply-mini-user {
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+}
+
+.ct-reply-delete-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
+    margin-left: 2px;
+    opacity: 0.6;
+    transition: opacity 0.15s ease;
+}
+
+.ct-reply-delete-btn:hover {
+    opacity: 1;
+    color: var(--danger);
 }
 
 /* @pierre/trees component theme variables overrides */

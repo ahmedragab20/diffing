@@ -42,7 +42,7 @@ export function App() {
         },
         true,
     );
-    const { comments, addComment, removeComment, copyAllComments } =
+    const { comments, addComment, removeComment, resolveComment, unresolveComment, removeReply, copyAllComments } =
         useComments();
     const [activeFile, setActiveFile] = useState<string | null>(null);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -52,6 +52,49 @@ export function App() {
             return false;
         }
     });
+    const [commentPanelHeight, setCommentPanelHeight] = useState(() => {
+        try {
+            const stored = localStorage.getItem("diffit-comment-panel-height");
+            return stored ? Number(stored) : 220;
+        } catch {
+            return 220;
+        }
+    });
+    const commentPanelHeightRef = useRef(commentPanelHeight);
+    commentPanelHeightRef.current = commentPanelHeight;
+
+    const handleResizeStart = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        const startY = e.clientY;
+        const startHeight = commentPanelHeightRef.current;
+
+        const handleMove = (ev: MouseEvent) => {
+            const delta = startY - ev.clientY;
+            const newHeight = Math.max(100, Math.min(600, startHeight + delta));
+            setCommentPanelHeight(newHeight);
+        };
+
+        const handleUp = () => {
+            try {
+                localStorage.setItem("diffit-comment-panel-height", String(commentPanelHeightRef.current));
+            } catch {}
+            document.removeEventListener('mousemove', handleMove);
+            document.removeEventListener('mouseup', handleUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+
+        document.addEventListener('mousemove', handleMove);
+        document.addEventListener('mouseup', handleUp);
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+    }, []);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem("diffit-comment-panel-height", String(commentPanelHeight));
+        } catch {}
+    }, [commentPanelHeight]);
     const { viewedFiles, setViewed } = useViewed();
     const diffViewerRef = useRef<HTMLDivElement>(null);
 
@@ -445,18 +488,41 @@ export function App() {
                 <aside
                     className={`sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
                 >
-                    <FileTree
-                        files={files}
-                        activeFile={activeFile}
-                        commentCounts={commentCounts}
-                        viewedFiles={viewedFiles}
-                        untrackedFiles={untrackedSet}
-                        onFileClick={handleFileClick}
-                        collapsed={sidebarCollapsed}
-                        onToggleCollapse={handleToggleCollapse}
-                    />
-                    {!sidebarCollapsed && (
-                        <CommentTracker comments={comments} />
+                    <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                        <FileTree
+                            files={files}
+                            activeFile={activeFile}
+                            commentCounts={commentCounts}
+                            viewedFiles={viewedFiles}
+                            untrackedFiles={untrackedSet}
+                            onFileClick={handleFileClick}
+                            collapsed={sidebarCollapsed}
+                            onToggleCollapse={handleToggleCollapse}
+                        />
+                    </div>
+                    {!sidebarCollapsed && comments.length > 0 && (
+                        <>
+                            <div
+                                className="ct-resize-handle"
+                                onMouseDown={handleResizeStart}
+                                role="separator"
+                                aria-label="Resize comments panel"
+                                aria-orientation="horizontal"
+                                tabIndex={0}
+                            />
+                            <div
+                                className="ct-wrapper"
+                                style={{ height: commentPanelHeight, flexShrink: 0 }}
+                            >
+                                <CommentTracker
+                                    comments={comments}
+                                    resolveComment={resolveComment}
+                                    unresolveComment={unresolveComment}
+                                    removeComment={removeComment}
+                                    removeReply={removeReply}
+                                />
+                            </div>
+                        </>
                     )}
                 </aside>
                 <main className="main" ref={diffViewerRef}>
