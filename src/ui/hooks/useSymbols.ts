@@ -28,24 +28,20 @@ const SYMBOL_PATTERNS: { pattern: RegExp; kind: string; nameGroup: number }[] = 
   { pattern: /^\s*(?:func\s+)?\((\w[\w$]*)\s+\*?\w+\)\s+(\w[\w$]*)\s*\(/i, kind: 'method', nameGroup: 2 },
 ]
 
-function extractSymbolsFromLines(
-  lines: string[],
-  lineIndex: number,
-  lineStart: number,
+function extractSymbolsFromLine(
+  line: string,
+  lineNumber: number,
   side: 'additions' | 'deletions',
   filePath: string,
   symbols: SymbolEntry[],
 ) {
-  for (let i = 0; i < lines.length; i++) {
-    const lineNumber = lineStart + i
-    for (const { pattern, kind, nameGroup } of SYMBOL_PATTERNS) {
-      const match = pattern.exec(lines[i])
-      if (match) {
-        const name = match[nameGroup]
-        if (name) {
-          symbols.push({ name, kind, filePath, lineNumber, side })
-          break
-        }
+  for (const { pattern, kind, nameGroup } of SYMBOL_PATTERNS) {
+    const match = pattern.exec(line)
+    if (match) {
+      const name = match[nameGroup]
+      if (name) {
+        symbols.push({ name, kind, filePath, lineNumber, side })
+        break
       }
     }
   }
@@ -57,20 +53,37 @@ export function useSymbols(files: FileDiffMetadata[]): SymbolEntry[] {
 
     for (const file of files) {
       for (const hunk of file.hunks) {
-        // Extract from addition lines
-        const additionOffset = hunk.additionLineIndex
-        const additionCount = hunk.additionCount
-        if (additionCount > 0) {
-          const additionSlice = file.additionLines.slice(additionOffset, additionOffset + additionCount)
-          extractSymbolsFromLines(additionSlice, additionOffset, hunk.additionStart, 'additions', file.name, symbols)
-        }
+        for (const segment of hunk.hunkContent) {
+          // Only extract symbols from actual change blocks (not context blocks)
+          if (segment.type === 'change') {
+            // Additions
+            if (segment.additions > 0) {
+              const startIdx = segment.additionLineIndex
+              const count = segment.additions
+              for (let i = 0; i < count; i++) {
+                const idx = startIdx + i
+                const lineNumber = hunk.additionStart + (idx - hunk.additionLineIndex)
+                const lineContent = file.additionLines[idx]
+                if (lineContent) {
+                  extractSymbolsFromLine(lineContent, lineNumber, 'additions', file.name, symbols)
+                }
+              }
+            }
 
-        // Extract from deletion lines
-        const deletionOffset = hunk.deletionLineIndex
-        const deletionCount = hunk.deletionCount
-        if (deletionCount > 0) {
-          const deletionSlice = file.deletionLines.slice(deletionOffset, deletionOffset + deletionCount)
-          extractSymbolsFromLines(deletionSlice, deletionOffset, hunk.deletionStart, 'deletions', file.name, symbols)
+            // Deletions
+            if (segment.deletions > 0) {
+              const startIdx = segment.deletionLineIndex
+              const count = segment.deletions
+              for (let i = 0; i < count; i++) {
+                const idx = startIdx + i
+                const lineNumber = hunk.deletionStart + (idx - hunk.deletionLineIndex)
+                const lineContent = file.deletionLines[idx]
+                if (lineContent) {
+                  extractSymbolsFromLine(lineContent, lineNumber, 'deletions', file.name, symbols)
+                }
+              }
+            }
+          }
         }
       }
     }

@@ -12,7 +12,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-const defaultSettings = { staged: true, untracked: true, diffStyle: 'split', defaultTabSize: 4, theme: 'nord' }
+const defaultSettings = { staged: true, untracked: true, diffStyle: 'split', defaultTabSize: 4, theme: 'nord', editorIDE: 'default' }
 
 describe('useSettings', () => {
   beforeEach(() => {

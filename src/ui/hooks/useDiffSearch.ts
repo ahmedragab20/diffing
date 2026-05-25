@@ -14,36 +14,43 @@ export function useDiffSearch(files: FileDiffMetadata[]): DiffLineEntry[] {
 
     for (const file of files) {
       for (const hunk of file.hunks) {
-        const additionOffset = hunk.additionLineIndex
-        const additionCount = hunk.additionCount
-        if (additionCount > 0) {
-          const additionSlice = file.additionLines.slice(additionOffset, additionOffset + additionCount)
-          for (let i = 0; i < additionSlice.length; i++) {
-            const line = additionSlice[i]
-            if (line.trim()) {
-              entries.push({
-                filePath: file.name,
-                lineNumber: hunk.additionStart + i,
-                side: 'additions',
-                content: line,
-              })
+        for (const segment of hunk.hunkContent) {
+          // Only compile search entries from actual change blocks (not context blocks)
+          if (segment.type === 'change') {
+            // Additions
+            if (segment.additions > 0) {
+              const startIdx = segment.additionLineIndex
+              const count = segment.additions
+              for (let i = 0; i < count; i++) {
+                const idx = startIdx + i
+                const line = file.additionLines[idx]
+                if (line && line.trim()) {
+                  entries.push({
+                    filePath: file.name,
+                    lineNumber: hunk.additionStart + (idx - hunk.additionLineIndex),
+                    side: 'additions',
+                    content: line,
+                  })
+                }
+              }
             }
-          }
-        }
 
-        const deletionOffset = hunk.deletionLineIndex
-        const deletionCount = hunk.deletionCount
-        if (deletionCount > 0) {
-          const deletionSlice = file.deletionLines.slice(deletionOffset, deletionOffset + deletionCount)
-          for (let i = 0; i < deletionSlice.length; i++) {
-            const line = deletionSlice[i]
-            if (line.trim()) {
-              entries.push({
-                filePath: file.name,
-                lineNumber: hunk.deletionStart + i,
-                side: 'deletions',
-                content: line,
-              })
+            // Deletions
+            if (segment.deletions > 0) {
+              const startIdx = segment.deletionLineIndex
+              const count = segment.deletions
+              for (let i = 0; i < count; i++) {
+                const idx = startIdx + i
+                const line = file.deletionLines[idx]
+                if (line && line.trim()) {
+                  entries.push({
+                    filePath: file.name,
+                    lineNumber: hunk.deletionStart + (idx - hunk.deletionLineIndex),
+                    side: 'deletions',
+                    content: line,
+                  })
+                }
+              }
             }
           }
         }

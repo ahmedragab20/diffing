@@ -14,12 +14,14 @@ interface ToolbarProps {
   defaultTabSize: number
   browser?: string
   theme: string
+  editorIDE?: string
   customMode: boolean
   onDiffStyleChange: (style: 'split' | 'unified') => void
   onDiffOptionsChange: (options: DiffOptions) => void
   onDefaultTabSizeChange: (size: number) => void
   onBrowserChange: (browser: string) => void
   onThemeChange: (theme: string) => void
+  onEditorIDEChange: (editor: string) => void
   onCopyComments: () => Promise<void>
 }
 
@@ -56,12 +58,14 @@ export const Toolbar = memo(function Toolbar({
   defaultTabSize,
   browser,
   theme,
+  editorIDE,
   customMode,
   onDiffStyleChange,
   onDiffOptionsChange,
   onDefaultTabSizeChange,
   onBrowserChange,
   onThemeChange,
+  onEditorIDEChange,
   onCopyComments,
 }: ToolbarProps) {
   const [copied, setCopied] = useState(false)
@@ -262,6 +266,23 @@ export const Toolbar = memo(function Toolbar({
                   <option value="firefox">Firefox</option>
                   <option value="edge">Edge</option>
                   <option value="brave">Brave</option>
+                </select>
+              </div>
+              <div className="settings-item settings-item-spaced">
+                <span>Preferred IDE</span>
+                <select
+                  className="settings-select"
+                  value={editorIDE || 'default'}
+                  onChange={(e) => {
+                    onEditorIDEChange(e.target.value)
+                    setSettingsOpen(false)
+                  }}
+                >
+                  <option value="default">Default / System</option>
+                  <option value="vscode">VS Code</option>
+                  <option value="zed">Zed</option>
+                  <option value="vim">Vim</option>
+                  <option value="neovim">Neovim</option>
                 </select>
               </div>
             </div>

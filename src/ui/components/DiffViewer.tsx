@@ -13,6 +13,7 @@ interface DiffViewerProps {
   viewedFiles: Set<string>
   binaryFiles: Map<string, BinaryFileInfo>
   theme: string
+  editorIDE?: string
   onViewedChange: (filePath: string, viewed: boolean) => void
   fileAnnotationsMap: Map<string, DiffLineAnnotation<ReviewComment>[]>
   onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
@@ -29,6 +30,7 @@ export const DiffViewer = memo(function DiffViewer({
   viewedFiles,
   binaryFiles,
   theme,
+  editorIDE,
   onViewedChange,
   fileAnnotationsMap,
   onAddComment,
@@ -85,6 +87,7 @@ export const DiffViewer = memo(function DiffViewer({
             tabSize={tabSizeMap[filePath] ?? defaultTabSize}
             viewed={viewedFiles.has(filePath)}
             theme={theme}
+            editorIDE={editorIDE}
             onViewedChange={onViewedChange}
             onAddComment={onAddComment}
             onDeleteComment={onDeleteComment}

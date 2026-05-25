@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Search, X } from 'lucide-react'
 import type { SymbolEntry } from '../hooks/useSymbols'
+import { scrollToLine } from '../utils'
 
 interface SymbolModalProps {
   symbols: SymbolEntry[]
@@ -19,44 +20,6 @@ const KIND_ICONS: Record<string, string> = {
   struct: 'S',
   impl: 'i',
   trait: 't',
-}
-
-function scrollToSymbol(filePath: string, lineNumber: number, side: 'additions' | 'deletions') {
-  const fileEl = document.getElementById(`file-${filePath}`)
-  if (!fileEl) return
-
-  const expectedType = side === 'additions' ? 'addition' : 'deletion'
-
-  const allLineEls = fileEl.querySelectorAll('[data-line]')
-  let found: HTMLElement | null = null
-
-  for (const el of allLineEls) {
-    const elLine = (el as HTMLElement).getAttribute('data-line')
-    const elType = (el as HTMLElement).getAttribute('data-line-type')
-    if (elLine && parseInt(elLine, 10) === lineNumber && elType === expectedType) {
-      found = el as HTMLElement
-      break
-    }
-  }
-
-  if (!found) {
-    for (const el of allLineEls) {
-      const elLine = (el as HTMLElement).getAttribute('data-line')
-      if (elLine && parseInt(elLine, 10) === lineNumber) {
-        found = el as HTMLElement
-        break
-      }
-    }
-  }
-
-  if (found) {
-    found.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  } else {
-    fileEl.scrollIntoView({ block: 'start', behavior: 'smooth' })
-  }
-
-  fileEl.classList.add('symbol-flash')
-  setTimeout(() => fileEl.classList.remove('symbol-flash'), 1200)
 }
 
 export function SymbolModal({ symbols, isOpen, onClose }: SymbolModalProps) {
@@ -89,22 +52,23 @@ export function SymbolModal({ symbols, isOpen, onClose }: SymbolModalProps) {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (filtered.length === 0) return
       switch (e.key) {
         case 'ArrowDown':
         case 'j':
           e.preventDefault()
-          setFocusedIndex((i) => Math.min(i + 1, filtered.length - 1))
+          setFocusedIndex((i) => (i + 1) % filtered.length)
           break
         case 'ArrowUp':
         case 'k':
           e.preventDefault()
-          setFocusedIndex((i) => Math.max(i - 1, 0))
+          setFocusedIndex((i) => (i - 1 + filtered.length) % filtered.length)
           break
         case 'Enter':
           e.preventDefault()
           if (filtered[focusedIndex]) {
             const s = filtered[focusedIndex]
-            scrollToSymbol(s.filePath, s.lineNumber, s.side)
+            scrollToLine(s.filePath, s.lineNumber, s.side, s.name)
             onClose()
           }
           break
@@ -121,12 +85,8 @@ export function SymbolModal({ symbols, isOpen, onClose }: SymbolModalProps) {
     if (!isOpen) return
     const focused = listRef.current?.children[focusedIndex] as HTMLElement | undefined
     focused?.scrollIntoView({ block: 'nearest' })
+  }, [focusedIndex, isOpen])
 
-    if (filtered[focusedIndex]) {
-      const s = filtered[focusedIndex]
-      scrollToSymbol(s.filePath, s.lineNumber, s.side)
-    }
-  }, [focusedIndex, filtered, isOpen])
 
   if (!isOpen) return null
 
@@ -164,7 +124,7 @@ export function SymbolModal({ symbols, isOpen, onClose }: SymbolModalProps) {
                   key={`${s.filePath}:${s.side}:${s.lineNumber}:${s.name}`}
                   className={`symbol-item ${i === focusedIndex ? 'symbol-item-focused' : ''}`}
                   onClick={() => {
-                    scrollToSymbol(s.filePath, s.lineNumber, s.side)
+                    scrollToLine(s.filePath, s.lineNumber, s.side, s.name)
                     onClose()
                   }}
                   onMouseEnter={() => setFocusedIndex(i)}

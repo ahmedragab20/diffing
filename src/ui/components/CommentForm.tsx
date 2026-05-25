@@ -1,15 +1,23 @@
 import { useState, useRef, useEffect } from 'react'
 import { parseMarkdown } from '../utils'
+import { getDraft, setDraft, clearDraft } from '../drafts'
 
 interface CommentFormProps {
   initialBody?: string
   lineContent?: string
+  draftKey?: string
   onSubmit: (body: string) => void
   onCancel: () => void
 }
 
-export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: CommentFormProps) {
-  const [body, setBody] = useState(initialBody || '')
+export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCancel }: CommentFormProps) {
+  const [body, setBody] = useState(() => {
+    if (draftKey) {
+      const draft = getDraft(draftKey)
+      if (draft) return draft
+    }
+    return initialBody || ''
+  })
   const [activeTab, setActiveTab] = useState<'write' | 'preview'>('write')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -19,9 +27,16 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
     }
   }, [activeTab])
 
+  useEffect(() => {
+    if (draftKey) {
+      setDraft(body, draftKey)
+    }
+  }, [body, draftKey])
+
   const handleSubmit = () => {
     const trimmed = body.trim()
     if (trimmed) {
+      if (draftKey) clearDraft(draftKey)
       onSubmit(trimmed)
     }
   }
@@ -32,6 +47,7 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
       handleSubmit()
     }
     if (e.key === 'Escape') {
+      if (body.includes('\n')) return
       onCancel()
     }
   }
@@ -81,13 +97,6 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
         className="comment-form-tabs"
         role="tablist"
         aria-label="Comment form mode"
-        style={{
-          display: 'flex',
-          gap: '8px',
-          borderBottom: '1px solid var(--border-color)',
-          marginBottom: '12px',
-          paddingBottom: '4px'
-        }}
       >
         <button
           type="button"
@@ -96,18 +105,7 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
           aria-controls="comment-write-panel"
           onClick={() => setActiveTab('write')}
           onKeyDown={(e) => { if (e.key === 'ArrowRight') { e.preventDefault(); setActiveTab('preview') } }}
-          style={{
-            background: 'none',
-            border: 'none',
-            padding: '6px 12px',
-            fontSize: '13px',
-            fontWeight: 600,
-            cursor: 'pointer',
-            color: activeTab === 'write' ? 'var(--text-primary)' : 'var(--text-muted)',
-            borderBottom: activeTab === 'write' ? '2px solid var(--primary)' : '2px solid transparent',
-            marginBottom: '-6px',
-            transition: 'color 0.15s ease'
-          }}
+          className={`comment-form-tab-btn ${activeTab === 'write' ? 'comment-form-tab-btn-active' : 'comment-form-tab-btn-inactive'}`}
         >
           Write
         </button>
@@ -118,18 +116,7 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
           aria-controls="comment-preview-panel"
           onClick={() => setActiveTab('preview')}
           onKeyDown={(e) => { if (e.key === 'ArrowLeft') { e.preventDefault(); setActiveTab('write') } }}
-          style={{
-            background: 'none',
-            border: 'none',
-            padding: '6px 12px',
-            fontSize: '13px',
-            fontWeight: 600,
-            cursor: 'pointer',
-            color: activeTab === 'preview' ? 'var(--text-primary)' : 'var(--text-muted)',
-            borderBottom: activeTab === 'preview' ? '2px solid var(--primary)' : '2px solid transparent',
-            marginBottom: '-6px',
-            transition: 'color 0.15s ease'
-          }}
+          className={`comment-form-tab-btn ${activeTab === 'preview' ? 'comment-form-tab-btn-active' : 'comment-form-tab-btn-inactive'}`}
         >
           Preview
         </button>
@@ -146,19 +133,7 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
           placeholder="Leave a review comment (supports Markdown and Pasting Clipboard Images)..."
           rows={4}
           aria-label="Comment body"
-          style={{
-            width: '100%',
-            padding: '10px 14px',
-            fontFamily: 'var(--font-sans)',
-            fontSize: '14px',
-            border: '1px solid var(--border-color)',
-            borderRadius: '8px',
-            background: 'var(--bg-primary)',
-            color: 'var(--text-primary)',
-            resize: 'vertical',
-            outline: 'none',
-            minHeight: '100px'
-          }}
+          style={{ minHeight: '100px' }}
         />
       ) : (
         <div id="comment-preview-panel" role="tabpanel" aria-label="Preview" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -175,14 +150,17 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
                 className="comment-preview markdown-body" 
                 style={{ 
                   minHeight: '100px',
-                  padding: '10px 14px',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  border: '1px solid var(--border-normal)',
+                  borderRadius: 'var(--radius-md)',
                   background: 'var(--bg-primary)',
                   fontSize: '14px',
                   lineHeight: 1.6,
                   color: 'var(--text-primary)',
-                  overflowY: 'auto'
+                  overflowY: 'auto',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  overflowWrap: 'break-word'
                 }}
                 dangerouslySetInnerHTML={{ 
                   __html: body.trim() ? parseMarkdown(body) : '<span style="color: var(--text-muted); font-style: italic;">Nothing to preview</span>' 
@@ -200,18 +178,19 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
               <div 
                 className="suggestion-card" 
                 style={{
-                  border: '1px solid var(--border-color)',
-                  borderRadius: '8px',
+                  border: '1px solid var(--border-normal)',
+                  borderRadius: 'var(--radius-md)',
                   overflow: 'hidden',
-                  background: 'var(--bg-primary)'
+                  background: 'var(--bg-primary)',
+                  boxShadow: 'var(--shadow-sm)'
                 }}
               >
                 <div 
                   className="suggestion-header" 
                   style={{
                     padding: '8px 12px',
-                    background: 'var(--bg-tertiary)',
-                    borderBottom: '1px solid var(--border-color)',
+                    background: 'var(--bg-secondary)',
+                    borderBottom: '1px solid var(--border-normal)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
@@ -227,9 +206,9 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
                       style={{ 
                         display: 'flex', 
                         padding: '8px 12px', 
-                        background: 'rgba(191, 97, 106, 0.08)', 
+                        background: 'var(--feedback-danger-bg)', 
                         borderBottom: '1px dashed var(--border-color)',
-                        color: 'var(--danger)',
+                        color: 'var(--feedback-danger-text)',
                         minWidth: 'max-content'
                       }}
                     >
@@ -241,8 +220,8 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
                     style={{ 
                       display: 'flex', 
                       padding: '8px 12px', 
-                      background: 'rgba(163, 190, 140, 0.08)',
-                      color: 'var(--success)',
+                      background: 'var(--feedback-success-bg)',
+                      color: 'var(--feedback-success-text)',
                       minWidth: 'max-content'
                     }}
                   >
@@ -256,7 +235,7 @@ export function CommentForm({ initialBody, lineContent, onSubmit, onCancel }: Co
         </div>
       )}
 
-      <div className="comment-form-actions">
+      <div className="comment-form-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px' }}>
         <button className="btn btn-secondary btn-sm" onClick={onCancel}>
           Cancel
         </button>

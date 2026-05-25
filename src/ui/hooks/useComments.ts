@@ -221,27 +221,31 @@ export function useComments() {
     for (const [filePath, fileComments] of grouped) {
       lines.push(`  <file path="${filePath}">`)
       for (const comment of fileComments) {
-        const lineAttr = comment.startLineNumber && comment.startLineNumber !== comment.lineNumber
-          ? `${comment.startLineNumber}-${comment.lineNumber}`
-          : `${comment.lineNumber}`
+        const lineAttr = comment.lineNumber === 0
+          ? 'file'
+          : (comment.startLineNumber && comment.startLineNumber !== comment.lineNumber
+            ? `${comment.startLineNumber}-${comment.lineNumber}`
+            : `${comment.lineNumber}`)
 
         const isoDate = new Date(comment.createdAt).toISOString()
         lines.push(`    <comment id="${comment.id}" line="${lineAttr}" side="${comment.side}" status="${comment.status}" created-at="${isoDate}">`)
 
-        const prefix = comment.side === 'additions' ? '+' : '-'
-        const isMultiLine = comment.lineContent && comment.lineContent.includes('\n')
-        let codeVal = ''
-        if (isMultiLine) {
-          const formattedCodeLines = comment.lineContent
-            .split('\n')
-            .map((l) => `${prefix} ${l}`)
-            .join('\n')
-          codeVal = `\n${formattedCodeLines}\n`
-        } else {
-          codeVal = `${prefix} ${comment.lineContent}`
-        }
+        if (comment.lineNumber !== 0) {
+          const prefix = comment.side === 'additions' ? '+' : '-'
+          const isMultiLine = comment.lineContent && comment.lineContent.includes('\n')
+          let codeVal = ''
+          if (isMultiLine) {
+            const formattedCodeLines = comment.lineContent
+              .split('\n')
+              .map((l) => `${prefix} ${l}`)
+              .join('\n')
+            codeVal = `\n${formattedCodeLines}\n`
+          } else {
+            codeVal = `${prefix} ${comment.lineContent}`
+          }
 
-        lines.push(`      <code><![CDATA[${codeVal}]]></code>`)
+          lines.push(`      <code><![CDATA[${codeVal}]]></code>`)
+        }
         lines.push(`      <body><![CDATA[${comment.body}]]></body>`)
 
         if (comment.replies && comment.replies.length > 0) {

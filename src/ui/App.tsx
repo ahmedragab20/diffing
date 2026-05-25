@@ -24,6 +24,9 @@ import { FileTree } from "./components/FileTree";
 import { CommentTracker } from "./components/CommentTracker";
 import { SymbolModal } from "./components/SymbolModal";
 import { DiffSearchModal } from "./components/DiffSearchModal";
+import { VimStatusBar } from "./components/VimStatusBar";
+import { ShortcutsHelpModal } from "./components/ShortcutsHelpModal";
+
 
 export function App() {
     const poolManager = useWorkerPool();
@@ -58,6 +61,7 @@ export function App() {
     });
     const [symbolModalOpen, setSymbolModalOpen] = useState(false);
     const [diffSearchOpen, setDiffSearchOpen] = useState(false);
+    const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
     const [commentPanelHeight, setCommentPanelHeight] = useState(() => {
         try {
             const stored = localStorage.getItem("diffit-comment-panel-height");
@@ -360,9 +364,180 @@ export function App() {
         [updateSettings],
     );
 
+    const handleEditorIDEChange = useCallback(
+        (editor: string) => {
+            startTransition(() => {
+                updateSettings({ editorIDE: editor as any });
+            });
+        },
+        [updateSettings],
+    );
+
     const handleToggleCollapse = useCallback(() => {
         setSidebarCollapsed((c) => !c);
     }, []);
+
+    const navigateFile = useCallback((direction: 'next' | 'prev') => {
+        if (files.length === 0) return;
+        let nextIndex = 0;
+        if (activeFile) {
+            const currentIndex = files.findIndex(f => f.name === activeFile);
+            if (currentIndex !== -1) {
+                if (direction === 'next') {
+                    nextIndex = Math.min(currentIndex + 1, files.length - 1);
+                } else {
+                    nextIndex = Math.max(currentIndex - 1, 0);
+                }
+            }
+        }
+        const nextFile = files[nextIndex].name;
+        setActiveFile(nextFile);
+        const el = document.getElementById(`file-${nextFile}`);
+        if (el) {
+            el.scrollIntoView({ block: 'start' });
+        }
+    }, [files, activeFile, setActiveFile]);
+
+    const toggleActiveFileViewed = useCallback(() => {
+        if (!activeFile) return;
+        const isCurrentlyViewed = viewedFiles.has(activeFile);
+        setViewed(activeFile, !isCurrentlyViewed);
+    }, [activeFile, viewedFiles, setViewed]);
+
+    const toggleDiffStyle = useCallback(() => {
+        const nextStyle = settings.diffStyle === 'split' ? 'unified' : 'split';
+        handleDiffStyleChange(nextStyle);
+    }, [settings.diffStyle, handleDiffStyleChange]);
+
+    const cycleTabSize = useCallback(() => {
+        const sizes = [2, 4, 8];
+        const current = settings.defaultTabSize || 4;
+        const nextIndex = (sizes.indexOf(current) + 1) % sizes.length;
+        handleDefaultTabSizeChange(sizes[nextIndex]);
+    }, [settings.defaultTabSize, handleDefaultTabSizeChange]);
+
+    const toggleSidebar = useCallback(() => {
+        handleToggleCollapse();
+    }, [handleToggleCollapse]);
+
+    useEffect(() => {
+        let keyBuffer = '';
+        let bufferTimeout: NodeJS.Timeout;
+
+        const handleGlobalKeyDown = (e: KeyboardEvent) => {
+            const active = document.activeElement;
+            if (active) {
+                const tag = active.tagName.toLowerCase();
+                if (
+                    tag === 'input' ||
+                    tag === 'textarea' ||
+                    active.hasAttribute('contenteditable')
+                ) {
+                    return;
+                }
+            }
+
+            clearTimeout(bufferTimeout);
+            const key = e.key;
+
+            if (e.ctrlKey) {
+                if (key === 'd') {
+                    e.preventDefault();
+                    window.scrollBy({ top: window.innerHeight / 2, behavior: 'auto' });
+                    keyBuffer = '';
+                } else if (key === 'u') {
+                    e.preventDefault();
+                    window.scrollBy({ top: -window.innerHeight / 2, behavior: 'auto' });
+                    keyBuffer = '';
+                }
+                return;
+            }
+
+            if (key.length > 1 && key !== 'Escape' && key !== 'Enter') return;
+
+            keyBuffer += key;
+            bufferTimeout = setTimeout(() => {
+                keyBuffer = '';
+            }, 800);
+
+            if (keyBuffer === 'j') {
+                e.preventDefault();
+                window.scrollBy({ top: 100, behavior: 'auto' });
+                keyBuffer = '';
+            } else if (keyBuffer === 'k') {
+                e.preventDefault();
+                window.scrollBy({ top: -100, behavior: 'auto' });
+                keyBuffer = '';
+            } else if (keyBuffer === 'gg') {
+                e.preventDefault();
+                window.scrollTo({ top: 0, behavior: 'auto' });
+                keyBuffer = '';
+            } else if (keyBuffer === 'G') {
+                e.preventDefault();
+                window.scrollTo({
+                    top: document.documentElement.scrollHeight,
+                    behavior: 'auto',
+                });
+                keyBuffer = '';
+            } else if (keyBuffer === 'J') {
+                e.preventDefault();
+                navigateFile('next');
+                keyBuffer = '';
+            } else if (keyBuffer === 'K') {
+                e.preventDefault();
+                navigateFile('prev');
+                keyBuffer = '';
+            } else if (keyBuffer === 'v') {
+                e.preventDefault();
+                toggleActiveFileViewed();
+                keyBuffer = '';
+            } else if (keyBuffer === 'm') {
+                e.preventDefault();
+                toggleDiffStyle();
+                keyBuffer = '';
+            } else if (keyBuffer === 't') {
+                e.preventDefault();
+                cycleTabSize();
+                keyBuffer = '';
+            } else if (keyBuffer === 'b') {
+                e.preventDefault();
+                toggleSidebar();
+                keyBuffer = '';
+            } else if (keyBuffer === '/') {
+                e.preventDefault();
+                setDiffSearchOpen(true);
+                keyBuffer = '';
+            } else if (keyBuffer === 'gs' || keyBuffer === 's') {
+                e.preventDefault();
+                setSymbolModalOpen(true);
+                keyBuffer = '';
+            } else if (keyBuffer === '?') {
+                e.preventDefault();
+                setShortcutsHelpOpen(true);
+                keyBuffer = '';
+            } else if (keyBuffer.length >= 2) {
+                keyBuffer = '';
+            }
+        };
+
+        window.addEventListener('keydown', handleGlobalKeyDown);
+        return () => {
+            window.removeEventListener('keydown', handleGlobalKeyDown);
+            clearTimeout(bufferTimeout);
+        };
+    }, [
+        files,
+        activeFile,
+        viewedFiles,
+        settings.diffStyle,
+        settings.defaultTabSize,
+        navigateFile,
+        toggleActiveFileViewed,
+        toggleDiffStyle,
+        cycleTabSize,
+        toggleSidebar,
+    ]);
+
 
     const diffOptions = useMemo(
         () => ({
@@ -493,12 +668,14 @@ export function App() {
                 defaultTabSize={settings.defaultTabSize}
                 browser={settings.browser}
                 theme={settings.theme || "nord"}
+                editorIDE={settings.editorIDE}
                 customMode={customMode}
                 onDiffStyleChange={handleDiffStyleChange}
                 onDiffOptionsChange={handleDiffOptionsChange}
                 onDefaultTabSizeChange={handleDefaultTabSizeChange}
                 onBrowserChange={handleBrowserChange}
                 onThemeChange={handleThemeChange}
+                onEditorIDEChange={handleEditorIDEChange}
                 onCopyComments={copyAllComments}
             />
             <div className="app-body">
@@ -541,6 +718,7 @@ export function App() {
                             </div>
                         </>
                     )}
+
                 </aside>
                 <main className="main" ref={diffViewerRef}>
                     <DiffViewer
@@ -551,6 +729,7 @@ export function App() {
                         viewedFiles={viewedFiles}
                         binaryFiles={binaryFileMap}
                         theme={settings.theme || "nord"}
+                        editorIDE={settings.editorIDE}
                         onViewedChange={handleViewedChange}
                         fileAnnotationsMap={fileAnnotationsMap}
                         onAddComment={addComment}
@@ -567,6 +746,14 @@ export function App() {
                 entries={diffSearchEntries}
                 isOpen={diffSearchOpen}
                 onClose={() => setDiffSearchOpen(false)}
+            />
+            <VimStatusBar
+                activeFile={activeFile}
+                onShowHelp={() => setShortcutsHelpOpen(true)}
+            />
+            <ShortcutsHelpModal
+                isOpen={shortcutsHelpOpen}
+                onClose={() => setShortcutsHelpOpen(false)}
             />
         </div>
     );

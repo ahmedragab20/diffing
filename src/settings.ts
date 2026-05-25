@@ -12,6 +12,7 @@ export interface Settings {
   defaultTabSize: number
   browser?: string
   theme: string
+  editorIDE?: 'default' | 'vscode' | 'zed' | 'vim' | 'neovim'
 }
 
 const DEFAULTS: Settings = {
@@ -20,6 +21,7 @@ const DEFAULTS: Settings = {
   diffStyle: 'split',
   defaultTabSize: 4,
   theme: 'nord',
+  editorIDE: 'default',
 }
 
 export function loadSettings(): Settings {

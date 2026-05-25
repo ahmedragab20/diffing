@@ -210,6 +210,38 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
     })
   })
 
+  app.post('/api/open-file', async (c) => {
+    const { filePath, editor } = await c.req.json<{ filePath: string; editor?: string }>()
+    if (!filePath) {
+      return c.json({ error: 'filePath is required' }, 400)
+    }
+
+    try {
+      const root = getRepoRoot()
+      if (!isSafePath(filePath, root)) {
+        return c.json({ error: 'Forbidden file path' }, 403)
+      }
+      const absolutePath = resolve(root, filePath)
+      const { exec } = await import('node:child_process')
+
+      if (editor === 'vscode') {
+        exec(`code "${absolutePath}"`)
+      } else if (editor === 'zed') {
+        exec(`zed "${absolutePath}"`)
+      } else if (editor === 'vim') {
+        exec(`osascript -e 'tell application "Terminal" to do script "vim \\"${absolutePath}\\""'`)
+      } else if (editor === 'neovim') {
+        exec(`osascript -e 'tell application "Terminal" to do script "nvim \\"${absolutePath}\\""'`)
+      } else {
+        const openModule = await import('open')
+        await openModule.default(absolutePath)
+      }
+      return c.json({ ok: true })
+    } catch (err: any) {
+      return c.json({ error: `Failed to open file: ${err.message}` }, 500)
+    }
+  })
+
   app.get('/api/settings', (c) => {
     return c.json(loadSettings())
   })

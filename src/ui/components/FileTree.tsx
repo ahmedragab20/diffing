@@ -34,6 +34,17 @@ export const FileTree = memo(function FileTree({
   // Map files to paths required by @pierre/trees
   const paths = useMemo(() => files.map((f) => f.name), [files])
 
+  const expandedPaths = useMemo(() => {
+    const set = new Set<string>()
+    paths.forEach((path) => {
+      const parts = path.split('/')
+      for (let i = 1; i < parts.length; i++) {
+        set.add(parts.slice(0, i).join('/'))
+      }
+    })
+    return Array.from(set)
+  }, [paths])
+
   // Map file change type to GitStatusEntry
   const gitStatus = useMemo<GitStatusEntry[]>(() => {
     return files.map((file) => {
@@ -92,6 +103,7 @@ export const FileTree = memo(function FileTree({
     gitStatus,
     renderRowDecoration,
     initialSelectedPaths: activeFile ? [activeFile] : [],
+    initialExpandedPaths: expandedPaths,
     onSelectionChange: (selectedPaths) => {
       if (selectedPaths.length > 0 && selectedPaths[0] !== activeFile) {
         onFileClick(selectedPaths[0])
@@ -101,8 +113,8 @@ export const FileTree = memo(function FileTree({
 
   // Synchronize paths update on model
   useEffect(() => {
-    model.resetPaths(paths)
-  }, [paths, model])
+    model.resetPaths(paths, { initialExpandedPaths: expandedPaths })
+  }, [paths, expandedPaths, model])
 
   // Synchronize git status and force redraw of decorations when comments/viewed states change
   useEffect(() => {
@@ -112,17 +124,11 @@ export const FileTree = memo(function FileTree({
   // Synchronize activeFile selection and viewport scroll
   useEffect(() => {
     if (activeFile) {
-      const selected = model.getSelectedPaths()
-      if (!selected.includes(activeFile)) {
-        model.selectOnlyPath(activeFile)
+      try {
+        model.focusPath(activeFile)
         model.scrollToPath(activeFile, { focus: true, offset: 'nearest' })
-      }
-    } else {
-      const selected = model.getSelectedPaths()
-      if (selected.length > 0) {
-        for (const p of selected) {
-          model.deselectPath(p)
-        }
+      } catch (err) {
+        console.error('Failed to scroll to active file:', err)
       }
     }
   }, [activeFile, model])

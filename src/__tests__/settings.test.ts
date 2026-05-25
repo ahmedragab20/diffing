@@ -22,6 +22,7 @@ const DEFAULTS = {
   diffStyle: 'split' as const,
   defaultTabSize: 4,
   theme: 'nord',
+  editorIDE: 'default',
 }
 
 describe('settings', () => {

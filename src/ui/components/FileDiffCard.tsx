@@ -1,6 +1,7 @@
 import { useState, memo, useRef, useEffect } from 'react'
 import { FileDiff } from '@pierre/diffs/react'
 import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide, SelectedLineRange } from '@pierre/diffs'
+import { ChevronDown, ChevronRight, Edit3, MessageSquare } from 'lucide-react'
 import type { ReviewComment } from '../../types'
 import { CommentForm } from './CommentForm'
 import { CommentBubble } from './CommentBubble'
@@ -21,6 +22,7 @@ interface FileDiffCardProps {
   tabSize: number
   viewed: boolean
   theme: string
+  editorIDE?: string
   onViewedChange: (filePath: string, viewed: boolean) => void
   onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
   onDeleteComment: (id: string) => void
@@ -35,33 +37,24 @@ export const FileDiffCard = memo(function FileDiffCard({
   tabSize,
   viewed,
   theme,
+  editorIDE,
   onViewedChange,
   onAddComment,
   onDeleteComment,
 }: FileDiffCardProps) {
   const [pending, setPending] = useState<PendingComment | null>(null)
   const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
-  const [hasIntersected, setHasIntersected] = useState(false)
+  const [collapsed, setCollapsed] = useState(viewed)
+  const [opening, setOpening] = useState(false)
+  const [showFileCommentForm, setShowFileCommentForm] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
 
+  // Synchronize collapse with viewed state changes from parent
   useEffect(() => {
-    if (viewed) return
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        setHasIntersected(entry.isIntersecting)
-      },
-      { rootMargin: '600px' }
-    )
-
-    if (cardRef.current) {
-      observer.observe(cardRef.current)
-    }
-
-    return () => {
-      observer.disconnect()
-    }
+    setCollapsed(viewed)
   }, [viewed])
+
+
 
   const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP.nord
 
@@ -93,8 +86,42 @@ export const FileDiffCard = memo(function FileDiffCard({
     return resultLines.join('\n')
   }
 
+  const handleOpenEditor = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (fileDiff.type === 'deleted') return
+    setOpening(true)
+    try {
+      await fetch('/api/open-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath, editor: editorIDE }),
+      })
+    } catch (err) {
+      console.error('Failed to open file in IDE editor:', err)
+    } finally {
+      setOpening(false)
+    }
+  }
+
+  const getStatusBadge = () => {
+    switch (fileDiff.type) {
+      case 'new':
+        return <span className="diff-status-badge diff-status-new">Added</span>
+      case 'deleted':
+        return <span className="diff-status-badge diff-status-deleted">Deleted</span>
+      case 'rename-pure':
+      case 'rename-changed':
+        return <span className="diff-status-badge diff-status-renamed">Renamed</span>
+      default:
+        return <span className="diff-status-badge diff-status-modified">Modified</span>
+    }
+  }
+
+  const fileLevelAnnotations = annotations.filter((a) => a.lineNumber === 0)
+  const lineAnnotations = annotations.filter((a) => a.lineNumber > 0)
+
   const allAnnotations: DiffLineAnnotation<ReviewComment | { _pending: true }>[] = [
-    ...annotations,
+    ...lineAnnotations,
     ...(pending
       ? [
           {
@@ -109,13 +136,47 @@ export const FileDiffCard = memo(function FileDiffCard({
   return (
     <div
       ref={cardRef}
-      className={`file-diff-card ${viewed ? 'file-diff-viewed' : ''}`}
+      className={`file-diff-card ${viewed ? 'file-diff-viewed' : ''} ${collapsed ? 'file-diff-collapsed' : ''}`}
       id={id}
     >
-      {viewed ? (
-        <div className="file-diff-viewed-header">
-          <span className="file-diff-viewed-name">{filePath}</span>
-          <label className="viewed-label viewed-checked" onClick={(e) => e.stopPropagation()}>
+      <div 
+        className="file-diff-card-header"
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <div className="file-diff-header-left">
+          <span className="file-diff-collapse-indicator">
+            {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+          </span>
+          <span className="file-diff-name" title={filePath}>
+            {filePath}
+          </span>
+          {getStatusBadge()}
+        </div>
+
+        <div className="file-diff-header-right" onClick={(e) => e.stopPropagation()}>
+          {fileDiff.type !== 'deleted' && (
+            <button 
+              className="file-diff-edit-btn" 
+              onClick={handleOpenEditor}
+              disabled={opening}
+              title="Open and edit full file locally"
+            >
+              <Edit3 size={11} />
+              <span>{opening ? 'Opening...' : 'Edit File'}</span>
+            </button>
+          )}
+          <button
+            className="file-diff-edit-btn"
+            onClick={() => {
+              setCollapsed(false)
+              setShowFileCommentForm(true)
+            }}
+            title="Comment on this entire file"
+          >
+            <MessageSquare size={11} />
+            <span>Add Comment</span>
+          </button>
+          <label className={`viewed-label ${viewed ? 'viewed-checked' : ''}`}>
             <input
               type="checkbox"
               checked={viewed}
@@ -124,47 +185,65 @@ export const FileDiffCard = memo(function FileDiffCard({
             Viewed
           </label>
         </div>
-      ) : !hasIntersected ? (
-        <div className="file-diff-placeholder">
-          <div className="file-diff-placeholder-header" style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '12px 20px',
-            background: 'var(--bg-secondary)',
-            borderBottom: '1px solid var(--border-color)',
-            minHeight: '45px'
-          }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 600 }}>{filePath}</span>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading diff...</span>
-              <label className="viewed-label" onClick={(e) => e.stopPropagation()}>
-                <input
-                  type="checkbox"
-                  checked={viewed}
-                  onChange={(e) => onViewedChange(filePath, e.target.checked)}
-                />
-                Viewed
-              </label>
+      </div>
+
+      {!collapsed && (
+        <div className="file-diff-card-body">
+          {/* File-level comments section */}
+          {(fileLevelAnnotations.length > 0 || showFileCommentForm) && (
+            <div 
+              className="file-level-comments-section"
+              style={{
+                margin: '16px 20px',
+                padding: '12px',
+                background: 'rgba(255,255,255,0.02)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '8px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                <MessageSquare size={14} />
+                <span>File-Level Comments ({fileLevelAnnotations.length})</span>
+              </div>
+              
+              {fileLevelAnnotations.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {fileLevelAnnotations.map((anno) => (
+                    <CommentBubble
+                      key={anno.metadata.id}
+                      comment={anno.metadata}
+                      onDelete={onDeleteComment}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {showFileCommentForm && (
+                <div style={{ background: 'var(--bg-secondary)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                  <CommentForm
+                    draftKey={`file-comment:${filePath}`}
+                    lineContent=""
+                    onSubmit={(body) => {
+                      onAddComment(filePath, 'additions', 0, '', body)
+                      setShowFileCommentForm(false)
+                    }}
+                    onCancel={() => setShowFileCommentForm(false)}
+                  />
+                </div>
+              )}
             </div>
-          </div>
-          <div className="file-diff-placeholder-body" style={{
-            height: '100px',
-            background: 'var(--bg-primary)',
-            position: 'relative',
-            overflow: 'hidden'
-          }}>
-            <div className="shimmer" />
-          </div>
-        </div>
-      ) : (
-        <>
+          )}
+
           <FileDiff<ReviewComment | { _pending: true }>
             fileDiff={fileDiff}
             options={{
               diffStyle,
               enableGutterUtility: true,
               enableLineSelection: true,
+              disableFileHeader: true, // Disable built-in header to use custom header
               onLineSelectionStart: () => {
                 setSelectedRange(null)
               },
@@ -187,7 +266,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 :host {
                   --diffs-tab-size: ${tabSize} !important;
                   --diffs-font-family: var(--font-mono) !important;
-                  --diffs-border: var(--border-color) !important;
+                  --diffs-border: var(--border-normal) !important;
                   --diffs-bg: var(--bg-secondary) !important;
                   --diffs-line-height: 22px !important;
                 }
@@ -196,24 +275,41 @@ export const FileDiffCard = memo(function FileDiffCard({
                   font-variant-ligatures: common-ligatures !important;
                   font-feature-settings: "liga" on, "calt" on !important;
                 }
+                /* Premium High-Contrast accessible Gutter Line Numbers */
+                [data-column-number] {
+                  color: var(--text-muted) !important;
+                  opacity: 0.65 !important;
+                  user-select: none !important;
+                  padding-right: 12px !important;
+                }
+                [data-line]:hover [data-column-number] {
+                  opacity: 1 !important;
+                  color: var(--primary) !important;
+                }
+                /* Premium Translucent Vercel-style Highlights */
+                [data-line][data-line-type="addition"] {
+                  background-color: var(--feedback-success-bg) !important;
+                  border-left: 3px solid var(--feedback-success-border) !important;
+                }
+                [data-line][data-line-type="deletion"] {
+                  background-color: var(--feedback-danger-bg) !important;
+                  border-left: 3px solid var(--feedback-danger-border) !important;
+                }
+                /* Selection high-contrast visual */
+                [data-line].selected-line {
+                  background-color: var(--accent-subtle) !important;
+                }
               `,
             }}
             selectedLines={selectedRange}
             lineAnnotations={allAnnotations}
-            renderHeaderMetadata={() => (
-              <label className="viewed-label" onClick={(e) => e.stopPropagation()}>
-                <input
-                  type="checkbox"
-                  checked={viewed}
-                  onChange={(e) => onViewedChange(filePath, e.target.checked)}
-                />
-                Viewed
-              </label>
-            )}
+            renderHeaderMetadata={() => null} // Header is disabled
             renderAnnotation={(annotation) => {
               if ('_pending' in annotation.metadata) {
+                const draftKey = `new:${filePath}:${pending!.side}:${pending!.startLineNumber || pending!.lineNumber}:${pending!.lineNumber}`
                 return (
                   <CommentForm
+                    draftKey={draftKey}
                     lineContent={getLineContent(pending!.side, pending!.lineNumber, pending!.startLineNumber)}
                     onSubmit={(body) => {
                       const lineContent = getLineContent(pending!.side, pending!.lineNumber, pending!.startLineNumber)
@@ -249,7 +345,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               </button>
             )}
           />
-        </>
+        </div>
       )}
     </div>
   )
