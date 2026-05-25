@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
-import { getRepoRoot } from './git.js'
+import { getRepoRoot, getProjectStorageDir } from './git.js'
 import type { ReviewComment, CommentReply } from './types.js'
 
 export interface CommentStore {
@@ -51,15 +51,11 @@ export class FileCommentStore implements CommentStore {
   private filePath: string
 
   constructor(customRepoRoot?: string) {
-    let root = customRepoRoot
-    if (!root) {
-      try {
-        root = getRepoRoot()
-      } catch {
-        root = process.cwd()
-      }
+    if (customRepoRoot) {
+      this.dirPath = join(customRepoRoot, '.diffit')
+    } else {
+      this.dirPath = getProjectStorageDir()
     }
-    this.dirPath = join(root, '.diffit')
     this.filePath = join(this.dirPath, 'comments.json')
   }
 
@@ -75,6 +71,12 @@ export class FileCommentStore implements CommentStore {
   private async save(comments: ReviewComment[]): Promise<void> {
     try {
       await mkdir(this.dirPath, { recursive: true })
+      try {
+        const repoRoot = getRepoRoot()
+        await writeFile(join(this.dirPath, 'repo_path.txt'), repoRoot, 'utf-8')
+      } catch {
+        // Ignore if outside git repo or in mock sandboxes
+      }
       await writeFile(this.filePath, JSON.stringify(comments, null, 2), 'utf-8')
     } catch (err) {
       console.error('Failed to save comments to file:', err)

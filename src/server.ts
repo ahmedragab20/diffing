@@ -1,10 +1,11 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, readdir, stat, rm } from 'node:fs/promises'
 import { join, extname, resolve, basename } from 'node:path'
-import { watch } from 'node:fs'
+import { watch, existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { getFileContent, isImageFile, getTabSizeForFiles, getGitDiffAsync, getCustomGitDiffAsync, getRepoRootAsync, getBranchNameAsync, getUntrackedFilePathsAsync, getRepoRoot } from './git.js'
+import { getFileContent, isImageFile, getTabSizeForFiles, getGitDiffAsync, getCustomGitDiffAsync, getRepoRootAsync, getBranchNameAsync, getUntrackedFilePathsAsync, getRepoRoot, getProjectStorageDir } from './git.js'
 import { loadSettings, saveSettings } from './settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './comments.js'
 import type { CommentStore } from './comments.js'
@@ -337,9 +338,12 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
     }
 
     try {
-      const root = getRepoRoot()
-      const attachmentsDir = join(root, '.diffit', 'attachments')
+      const storageDir = getProjectStorageDir()
+      const attachmentsDir = join(storageDir, 'attachments')
       await mkdir(attachmentsDir, { recursive: true })
+
+      const repoRoot = getRepoRoot()
+      await writeFile(join(storageDir, 'repo_path.txt'), repoRoot, 'utf-8')
 
       const ext = extname(file.name) || '.png'
       const filename = `pasted_image_${crypto.randomUUID()}${ext}`
@@ -356,14 +360,14 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
 
   app.get('/api/attachments/:filename', async (c) => {
     const filename = c.req.param('filename')
-    const root = getRepoRoot()
-    const relativePath = join('.diffit', 'attachments', filename)
+    const storageDir = getProjectStorageDir()
+    const attachmentsDir = join(storageDir, 'attachments')
+    const absolutePath = resolve(attachmentsDir, filename)
 
-    if (!isSafePath(relativePath, root)) {
+    if (!absolutePath.startsWith(attachmentsDir)) {
       return c.text('Forbidden', 403)
     }
 
-    const absolutePath = join(root, relativePath)
     try {
       const content = await readFile(absolutePath)
       const ext = extname(absolutePath)
@@ -403,12 +407,68 @@ export function createApp(clientDir: string, customDiffArgs?: string[], commentS
   return app
 }
 
+export async function cleanupStaleProjects(): Promise<void> {
+  const baseDir = join(homedir(), '.diffit')
+  if (!existsSync(baseDir)) return
+
+  try {
+    const entries = await readdir(baseDir, { withFileTypes: true })
+    const now = Date.now()
+    const STALE_TIME = 14 * 24 * 60 * 60 * 1000 // 14 days
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const projectDir = join(baseDir, entry.name)
+        const repoPathFile = join(projectDir, 'repo_path.txt')
+        const commentsFile = join(projectDir, 'comments.json')
+
+        let shouldDelete = false
+
+        // 1. Clean up project if original repository folder no longer exists
+        if (existsSync(repoPathFile)) {
+          try {
+            const repoPath = (await readFile(repoPathFile, 'utf-8')).trim()
+            if (!repoPath || !existsSync(repoPath)) {
+              shouldDelete = true
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        // 2. Clean up project if no comments have been modified/accessed for 14 days
+        if (!shouldDelete && existsSync(commentsFile)) {
+          try {
+            const stats = await stat(commentsFile)
+            if (now - stats.mtimeMs > STALE_TIME) {
+              shouldDelete = true
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (shouldDelete) {
+          await rm(projectDir, { recursive: true, force: true })
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to cleanup stale projects:', err)
+  }
+}
+
 export function startServer(options: {
   port: number
   host: string
   clientDir: string
   customDiffArgs?: string[]
 }): Promise<{ port: number }> {
+  // Fire and forget auto-erase / cleanup background task
+  cleanupStaleProjects().catch((err) => {
+    console.error('Failed to clean up stale projects:', err)
+  })
+
   const app = createApp(options.clientDir, options.customDiffArgs)
 
   return new Promise((resolve) => {

@@ -13,6 +13,8 @@ const mockGetUntrackedFilePaths = vi.fn()
 const mockLoadSettings = vi.fn()
 const mockSaveSettings = vi.fn()
 const mockIsSafePath = vi.fn()
+const mockGetRepoRoot = vi.fn()
+const mockGetProjectStorageDir = vi.fn()
 
 const mockGetGitDiffAsync = vi.fn()
 const mockGetCustomGitDiffAsync = vi.fn()
@@ -33,6 +35,8 @@ vi.mock('../git.js', () => ({
   getRepoRootAsync: mockGetRepoRootAsync,
   getBranchNameAsync: mockGetBranchNameAsync,
   getUntrackedFilePathsAsync: mockGetUntrackedFilePathsAsync,
+  getRepoRoot: mockGetRepoRoot,
+  getProjectStorageDir: mockGetProjectStorageDir,
 }))
 
 vi.mock('../settings.js', () => ({
@@ -44,9 +48,36 @@ vi.mock('../path.js', () => ({
   isSafePath: mockIsSafePath,
 }))
 
+const mockReadFile = vi.fn()
+const mockWriteFile = vi.fn()
+const mockMkdir = vi.fn()
+const mockReaddir = vi.fn()
+const mockStat = vi.fn()
+const mockRm = vi.fn()
+
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal()
-  return { ...actual, readFile: vi.fn() }
+  return {
+    ...actual,
+    readFile: mockReadFile,
+    writeFile: mockWriteFile,
+    mkdir: mockMkdir,
+    readdir: mockReaddir,
+    stat: mockStat,
+    rm: mockRm,
+  }
+})
+
+const mockExistsSync = vi.fn()
+let originalExistsSync: any
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal()
+  originalExistsSync = actual.existsSync
+  return {
+    ...actual,
+    existsSync: (path: any) => mockExistsSync(path),
+  }
 })
 
 const defaultSettings = { staged: true, untracked: true, diffStyle: 'split', defaultTabSize: 4 }
@@ -90,6 +121,9 @@ describe('server', () => {
     mockGetTabSizeForFiles.mockReturnValue({})
     mockGetUntrackedFilePaths.mockReturnValue([])
     mockIsSafePath.mockReturnValue(true)
+    mockGetProjectStorageDir.mockReturnValue('/tmp/test-project-storage')
+    mockGetRepoRoot.mockReturnValue('/tmp/test-repo')
+    mockExistsSync.mockImplementation((p) => originalExistsSync(p))
 
     // Setup async mocks
     mockGetRepoRootAsync.mockResolvedValue('/tmp/test-repo')
@@ -302,6 +336,61 @@ describe('server', () => {
         }
       })
     })
+    describe('GET /api/attachments/:filename', () => {
+      it('serves file with correct MIME type', async () => {
+        mockGetProjectStorageDir.mockReturnValue('/tmp/test-project-storage')
+        mockReadFile.mockResolvedValue(Buffer.from('my-image-data'))
+
+        const res = await app.fetch(new Request('http://localhost/api/attachments/test-img.png'))
+        expect(res.status).toBe(200)
+        expect(res.headers.get('Content-Type')).toBe('image/png')
+        expect(await res.text()).toBe('my-image-data')
+      })
+
+      it('returns 403 on path traversal attempt', async () => {
+        mockGetProjectStorageDir.mockReturnValue('/tmp/test-project-storage')
+        const res = await app.fetch(new Request('http://localhost/api/attachments/..%2F..%2Fetc%2Fpasswd'))
+        expect(res.status).toBe(403)
+      })
+
+      it('returns 404 if file reading fails', async () => {
+        mockGetProjectStorageDir.mockReturnValue('/tmp/test-project-storage')
+        mockReadFile.mockRejectedValue(new Error('ENOENT'))
+        const res = await app.fetch(new Request('http://localhost/api/attachments/missing.png'))
+        expect(res.status).toBe(404)
+      })
+    })
+
+    describe('POST /api/attachments', () => {
+      it('saves pasted/uploaded image', async () => {
+        mockGetProjectStorageDir.mockReturnValue('/tmp/test-project-storage')
+        mockGetRepoRoot.mockReturnValue('/tmp/test-repo')
+        mockMkdir.mockResolvedValue(undefined)
+        mockWriteFile.mockResolvedValue(undefined)
+
+        const formData = new FormData()
+        formData.append('file', new File(['content'], 'screenshot.png', { type: 'image/png' }))
+
+        const res = await app.fetch(new Request('http://localhost/api/attachments', {
+          method: 'POST',
+          body: formData,
+        }))
+
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.url).toContain('/api/attachments/pasted_image_')
+        expect(mockMkdir).toHaveBeenCalledWith('/tmp/test-project-storage/attachments', { recursive: true })
+        expect(mockWriteFile).toHaveBeenCalledWith('/tmp/test-project-storage/repo_path.txt', '/tmp/test-repo', 'utf-8')
+      })
+
+      it('returns 400 if no file uploaded', async () => {
+        const res = await app.fetch(new Request('http://localhost/api/attachments', {
+          method: 'POST',
+          body: new FormData(),
+        }))
+        expect(res.status).toBe(400)
+      })
+    })
   })
 
   describe('parseBinaryFiles', () => {
@@ -328,6 +417,110 @@ describe('server', () => {
       mockGetUntrackedFilePathsAsync.mockResolvedValue(['n.png'])
       const res = await app.fetch(new Request('http://localhost/api/diff?staged=true&untracked=true'))
       expect((await res.json()).binaryFiles[0].type).toBe('untracked')
+    })
+  })
+
+  describe('cleanupStaleProjects', () => {
+    it('deletes project directory when the original repository no longer exists (dead project)', async () => {
+      const { cleanupStaleProjects } = await import('../server.js')
+
+      // Mock base directory existence
+      mockExistsSync.mockImplementation((p: string) => {
+        if (p.endsWith('.diffit')) return true
+        if (p.endsWith('repo_path.txt')) return true
+        if (p.endsWith('comments.json')) return false
+        if (p === '/tmp/deleted-repo') return false // original repo is deleted!
+        return false
+      })
+
+      mockReaddir.mockResolvedValue([
+        { name: 'dead-repo-hash', isDirectory: () => true },
+      ] as any)
+
+      mockReadFile.mockImplementation(async (p: string) => {
+        if (p.endsWith('repo_path.txt')) {
+          return '/tmp/deleted-repo'
+        }
+        throw new Error('ENOENT')
+      })
+
+      await cleanupStaleProjects()
+
+      expect(mockRm).toHaveBeenCalledWith(expect.stringContaining('dead-repo-hash'), {
+        recursive: true,
+        force: true,
+      })
+    })
+
+    it('deletes project directory when comments.json has not been modified for 14 days (stale project)', async () => {
+      const { cleanupStaleProjects } = await import('../server.js')
+
+      // Mock base directory and file existence
+      mockExistsSync.mockImplementation((p: string) => {
+        if (p.endsWith('.diffit')) return true
+        if (p.endsWith('repo_path.txt')) return true
+        if (p.endsWith('comments.json')) return true
+        if (p === '/tmp/active-repo') return true // original repo still exists!
+        return false
+      })
+
+      mockReaddir.mockResolvedValue([
+        { name: 'stale-repo-hash', isDirectory: () => true },
+      ] as any)
+
+      mockReadFile.mockImplementation(async (p: string) => {
+        if (p.endsWith('repo_path.txt')) {
+          return '/tmp/active-repo'
+        }
+        throw new Error('ENOENT')
+      })
+
+      // mock stats: last modified 15 days ago
+      mockStat.mockResolvedValue({
+        mtimeMs: Date.now() - 15 * 24 * 60 * 60 * 1000,
+      } as any)
+
+      await cleanupStaleProjects()
+
+      expect(mockRm).toHaveBeenCalledWith(expect.stringContaining('stale-repo-hash'), {
+        recursive: true,
+        force: true,
+      })
+    })
+
+    it('keeps project directory when repository exists and comments are fresh', async () => {
+      const { cleanupStaleProjects } = await import('../server.js')
+
+      // Reset mockRm calls
+      mockRm.mockClear()
+
+      mockExistsSync.mockImplementation((p: string) => {
+        if (p.endsWith('.diffit')) return true
+        if (p.endsWith('repo_path.txt')) return true
+        if (p.endsWith('comments.json')) return true
+        if (p === '/tmp/active-repo') return true
+        return false
+      })
+
+      mockReaddir.mockResolvedValue([
+        { name: 'fresh-repo-hash', isDirectory: () => true },
+      ] as any)
+
+      mockReadFile.mockImplementation(async (p: string) => {
+        if (p.endsWith('repo_path.txt')) {
+          return '/tmp/active-repo'
+        }
+        throw new Error('ENOENT')
+      })
+
+      // mock stats: last modified just now
+      mockStat.mockResolvedValue({
+        mtimeMs: Date.now(),
+      } as any)
+
+      await cleanupStaleProjects()
+
+      expect(mockRm).not.toHaveBeenCalled()
     })
   })
 })

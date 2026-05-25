@@ -3,6 +3,8 @@ import { basename, join, resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
+import { homedir } from 'node:os'
+import { createHash } from 'node:crypto'
 import { isSafePath } from './path.js'
 import { parseSync as parseEditorConfig, type ProcessedFileConfig } from 'editorconfig'
 
@@ -301,4 +303,11 @@ export async function getGitDiffAsync(options: { staged?: boolean; untracked?: b
   if (untrackedPatch) parts.push(untrackedPatch)
 
   return parts.join('\n')
+}
+
+export function getProjectStorageDir(customRepoRoot?: string): string {
+  const root = customRepoRoot || getRepoRoot()
+  const hash = createHash('sha256').update(root).digest('hex').slice(0, 8)
+  const repoName = basename(root)
+  return join(homedir(), '.diffit', `${repoName}-${hash}`)
 }

@@ -215,4 +215,21 @@ describe('git', () => {
       expect(getFileContent('newfile.ts', 'old')).toBeNull()
     })
   })
+
+  describe('getProjectStorageDir', () => {
+    it('returns correct path format under homedir', async () => {
+      mockExecFileSync.mockReturnValue('/Users/user/projects/my-repo\n')
+      const { getProjectStorageDir } = await import('../git.js')
+      const dir = getProjectStorageDir()
+      expect(dir).toContain('.diffit')
+      expect(dir).toContain('my-repo-')
+    })
+
+    it('respects customRepoRoot when provided', async () => {
+      const { getProjectStorageDir } = await import('../git.js')
+      const dir = getProjectStorageDir('/custom/path/some-repo')
+      expect(dir).toContain('.diffit')
+      expect(dir).toContain('some-repo-')
+    })
+  })
 })
