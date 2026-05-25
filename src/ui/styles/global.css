@@ -1629,4 +1629,15 @@ file-tree,
     display: none !important;
 }
 
+/* Make embedded markdown images fully responsive and look premium */
+.markdown-body img {
+    max-width: 100% !important;
+    height: auto !important;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-sm);
+    margin: 8px 0;
+    display: block;
+}
+
 

@@ -1,5 +1,3 @@
-// hello world!
-
 import {
     useState,
     useMemo,
@@ -356,9 +354,20 @@ export function App() {
                         <div className="skeleton-search"></div>
                         <div className="skeleton-tree-nodes">
                             {Array.from({ length: 8 }).map((_, i) => (
-                                <div key={i} className="skeleton-tree-node" style={{ paddingLeft: `${(i % 3) * 16 + 16}px` }}>
+                                <div
+                                    key={i}
+                                    className="skeleton-tree-node"
+                                    style={{
+                                        paddingLeft: `${(i % 3) * 16 + 16}px`,
+                                    }}
+                                >
                                     <div className="skeleton-node-icon"></div>
-                                    <div className="skeleton-node-text" style={{ width: `${60 + (i * 12) % 60}px` }}></div>
+                                    <div
+                                        className="skeleton-node-text"
+                                        style={{
+                                            width: `${60 + ((i * 12) % 60)}px`,
+                                        }}
+                                    ></div>
                                 </div>
                             ))}
                         </div>
@@ -366,15 +375,31 @@ export function App() {
                     <main className="main skeleton-main">
                         <div className="diff-viewer">
                             {Array.from({ length: 3 }).map((_, i) => (
-                                <div key={i} className="file-diff-card skeleton-card">
+                                <div
+                                    key={i}
+                                    className="file-diff-card skeleton-card"
+                                >
                                     <div className="skeleton-card-header">
-                                        <div className="skeleton-card-title" style={{ width: `${120 + (i * 45) % 150}px` }}></div>
+                                        <div
+                                            className="skeleton-card-title"
+                                            style={{
+                                                width: `${120 + ((i * 45) % 150)}px`,
+                                            }}
+                                        ></div>
                                         <div className="skeleton-card-badge"></div>
                                     </div>
                                     <div className="skeleton-card-body">
-                                        {Array.from({ length: 5 }).map((_, j) => (
-                                            <div key={j} className="skeleton-code-line" style={{ width: `${50 + (j * 15) % 45}%` }}></div>
-                                        ))}
+                                        {Array.from({ length: 5 }).map(
+                                            (_, j) => (
+                                                <div
+                                                    key={j}
+                                                    className="skeleton-code-line"
+                                                    style={{
+                                                        width: `${50 + ((j * 15) % 45)}%`,
+                                                    }}
+                                                ></div>
+                                            ),
+                                        )}
                                     </div>
                                 </div>
                             ))}

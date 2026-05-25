@@ -1,0 +1,14 @@
+[
+  {
+    "id": "e8df59c0-152b-4c3c-ab9c-85a06c8cd22b",
+    "filePath": "src/ui/App.tsx",
+    "side": "additions",
+    "lineNumber": 363,
+    "startLineNumber": 357,
+    "lineContent": "                                <div\n\n                                    key={i}\n\n                                    className=\"skeleton-tree-node\"\n\n                                    style={{\n\n                                        paddingLeft: `${(i % 3) * 16 + 16}px`,\n\n                                    }}\n\n                                >\n",
+    "body": "![Pasted Image](/api/attachments/pasted_image_3a36fb08-8600-4f99-8082-8ef064904b9c.png)",
+    "status": "open",
+    "createdAt": 1779667339686,
+    "replies": []
+  }
+]
