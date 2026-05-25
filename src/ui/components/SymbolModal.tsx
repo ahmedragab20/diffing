@@ -1,0 +1,192 @@
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { Search, X } from 'lucide-react'
+import type { SymbolEntry } from '../hooks/useSymbols'
+
+interface SymbolModalProps {
+  symbols: SymbolEntry[]
+  isOpen: boolean
+  onClose: () => void
+}
+
+const KIND_ICONS: Record<string, string> = {
+  function: 'f',
+  method: 'm',
+  class: 'C',
+  variable: 'v',
+  interface: 'I',
+  type: 'T',
+  enum: 'E',
+  struct: 'S',
+  impl: 'i',
+  trait: 't',
+}
+
+function scrollToSymbol(filePath: string, lineNumber: number, side: 'additions' | 'deletions') {
+  const fileEl = document.getElementById(`file-${filePath}`)
+  if (!fileEl) return
+
+  const expectedType = side === 'additions' ? 'addition' : 'deletion'
+
+  const allLineEls = fileEl.querySelectorAll('[data-line]')
+  let found: HTMLElement | null = null
+
+  for (const el of allLineEls) {
+    const elLine = (el as HTMLElement).getAttribute('data-line')
+    const elType = (el as HTMLElement).getAttribute('data-line-type')
+    if (elLine && parseInt(elLine, 10) === lineNumber && elType === expectedType) {
+      found = el as HTMLElement
+      break
+    }
+  }
+
+  if (!found) {
+    for (const el of allLineEls) {
+      const elLine = (el as HTMLElement).getAttribute('data-line')
+      if (elLine && parseInt(elLine, 10) === lineNumber) {
+        found = el as HTMLElement
+        break
+      }
+    }
+  }
+
+  if (found) {
+    found.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  } else {
+    fileEl.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }
+
+  fileEl.classList.add('symbol-flash')
+  setTimeout(() => fileEl.classList.remove('symbol-flash'), 1200)
+}
+
+export function SymbolModal({ symbols, isOpen, onClose }: SymbolModalProps) {
+  const [query, setQuery] = useState('')
+  const [focusedIndex, setFocusedIndex] = useState(0)
+  const listRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return symbols
+    const q = query.toLowerCase()
+    return symbols.filter(
+      (s) => s.name.toLowerCase().includes(q) || s.filePath.toLowerCase().includes(q),
+    )
+  }, [symbols, query])
+
+  useEffect(() => {
+    setFocusedIndex(0)
+  }, [query])
+
+  useEffect(() => {
+    setQuery('')
+  }, [isOpen])
+
+  useEffect(() => {
+    if (isOpen && searchRef.current) {
+      searchRef.current.focus()
+    }
+  }, [isOpen])
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      switch (e.key) {
+        case 'ArrowDown':
+        case 'j':
+          e.preventDefault()
+          setFocusedIndex((i) => Math.min(i + 1, filtered.length - 1))
+          break
+        case 'ArrowUp':
+        case 'k':
+          e.preventDefault()
+          setFocusedIndex((i) => Math.max(i - 1, 0))
+          break
+        case 'Enter':
+          e.preventDefault()
+          if (filtered[focusedIndex]) {
+            const s = filtered[focusedIndex]
+            scrollToSymbol(s.filePath, s.lineNumber, s.side)
+            onClose()
+          }
+          break
+        case 'Escape':
+          e.preventDefault()
+          onClose()
+          break
+      }
+    },
+    [filtered, focusedIndex, onClose],
+  )
+
+  useEffect(() => {
+    if (!isOpen) return
+    const focused = listRef.current?.children[focusedIndex] as HTMLElement | undefined
+    focused?.scrollIntoView({ block: 'nearest' })
+
+    if (filtered[focusedIndex]) {
+      const s = filtered[focusedIndex]
+      scrollToSymbol(s.filePath, s.lineNumber, s.side)
+    }
+  }, [focusedIndex, filtered, isOpen])
+
+  if (!isOpen) return null
+
+  return (
+    <div className="symbol-modal-overlay" onClick={onClose}>
+      <div className="symbol-modal" onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
+        <div className="symbol-modal-header">
+          <div className="symbol-search">
+            <Search size={14} className="symbol-search-icon" />
+            <input
+              ref={searchRef}
+              type="text"
+              className="symbol-search-input"
+              placeholder="Search symbols..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            {query && (
+              <button className="symbol-search-clear" onClick={() => setQuery('')}>
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          <span className="symbol-count">{filtered.length} symbols</span>
+        </div>
+        <div className="symbol-list" ref={listRef}>
+          {filtered.length === 0 ? (
+            <div className="symbol-empty">No symbols found</div>
+          ) : (
+            filtered.map((s, i) => {
+              const dir = s.filePath.split('/').slice(0, -1).join('/')
+              const fileName = s.filePath.split('/').pop()
+              return (
+                <div
+                  key={`${s.filePath}:${s.side}:${s.lineNumber}:${s.name}`}
+                  className={`symbol-item ${i === focusedIndex ? 'symbol-item-focused' : ''}`}
+                  onClick={() => {
+                    scrollToSymbol(s.filePath, s.lineNumber, s.side)
+                    onClose()
+                  }}
+                  onMouseEnter={() => setFocusedIndex(i)}
+                >
+                  <span className={`symbol-kind symbol-kind-${s.kind}`}>
+                    {KIND_ICONS[s.kind] || '?'}
+                  </span>
+                  <div className="symbol-info">
+                    <span className="symbol-name">{s.name}</span>
+                    <span className="symbol-location">
+                      {dir ? `${dir}/` : ''}
+                      <strong>{fileName}</strong>
+                      <span className="symbol-line">:{s.lineNumber}</span>
+                    </span>
+                  </div>
+                  <span className="symbol-badge">{s.kind}</span>
+                </div>
+              )
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

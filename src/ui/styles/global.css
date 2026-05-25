@@ -1929,4 +1929,255 @@ file-tree,
     display: block;
 }
 
+/* Symbol Modal */
+.symbol-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 300;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 12vh;
+    backdrop-filter: blur(4px);
+}
+
+.symbol-modal {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    width: 600px;
+    max-width: 90vw;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.symbol-modal-header {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.symbol-search {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0 10px;
+    gap: 8px;
+}
+
+.symbol-search-icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.symbol-search-input {
+    flex: 1;
+    border: none;
+    background: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    padding: 7px 0;
+    outline: none;
+}
+
+.symbol-search-input::placeholder {
+    color: var(--text-muted);
+}
+
+.symbol-search-clear {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    align-items: center;
+    border-radius: 3px;
+}
+
+.symbol-search-clear:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+}
+
+.symbol-count {
+    font-size: 11px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+}
+
+.symbol-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px;
+}
+
+.symbol-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.symbol-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.symbol-list::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+.symbol-empty {
+    padding: 32px 16px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.symbol-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.1s;
+}
+
+.symbol-item:hover {
+    background: var(--bg-secondary);
+}
+
+.symbol-item-focused {
+    background: var(--bg-tertiary) !important;
+}
+
+.symbol-kind {
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+}
+
+.symbol-kind-function {
+    color: #bf616a;
+    border-color: #bf616a40;
+}
+
+.symbol-kind-method {
+    color: #d08770;
+    border-color: #d0877040;
+}
+
+.symbol-kind-class {
+    color: #ebcb8b;
+    border-color: #ebcb8b40;
+}
+
+.symbol-kind-variable {
+    color: #a3be8c;
+    border-color: #a3be8c40;
+}
+
+.symbol-kind-interface {
+    color: #8fbcbb;
+    border-color: #8fbcbb40;
+}
+
+.symbol-kind-type {
+    color: #b48ead;
+    border-color: #b48ead40;
+}
+
+.symbol-kind-enum {
+    color: #d08770;
+    border-color: #d0877040;
+}
+
+.symbol-kind-struct,
+.symbol-kind-impl,
+.symbol-kind-trait {
+    color: #ebcb8b;
+    border-color: #ebcb8b40;
+}
+
+.symbol-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.symbol-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.symbol-location {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.symbol-location strong {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.symbol-line {
+    color: var(--text-muted);
+}
+
+.symbol-badge {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    padding: 1px 6px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.symbol-flash {
+    animation: symbolFlash 1200ms ease-out;
+}
+
+@keyframes symbolFlash {
+    0% {
+        box-shadow: 0 0 0 2px var(--primary-hover);
+    }
+    100% {
+        box-shadow: 0 0 0 0px transparent;
+    }
+}
+
 

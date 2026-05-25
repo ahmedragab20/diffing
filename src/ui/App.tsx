@@ -6,20 +6,22 @@ import {
     useEffect,
     useTransition,
 } from "react";
-console.log("hello");
 import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { useWorkerPool } from "@pierre/diffs/react";
+import { useHotkeySequence } from "@tanstack/react-hotkeys";
 import { SHIKI_THEME_MAP } from "./utils";
 import type { ReviewComment } from "../types";
 import { useDiff } from "./hooks/useDiff";
 import { useComments } from "./hooks/useComments";
 import { useSettings } from "./hooks/useSettings";
 import { useViewed } from "./hooks/useViewed";
+import { useSymbols } from "./hooks/useSymbols";
 import { Toolbar } from "./components/Toolbar";
 import { DiffViewer } from "./components/DiffViewer";
 import { FileTree } from "./components/FileTree";
 import { CommentTracker } from "./components/CommentTracker";
+import { SymbolModal } from "./components/SymbolModal";
 
 export function App() {
     const poolManager = useWorkerPool();
@@ -52,6 +54,7 @@ export function App() {
             return false;
         }
     });
+    const [symbolModalOpen, setSymbolModalOpen] = useState(false);
     const [commentPanelHeight, setCommentPanelHeight] = useState(() => {
         try {
             const stored = localStorage.getItem("diffit-comment-panel-height");
@@ -97,6 +100,10 @@ export function App() {
     }, [commentPanelHeight]);
     const { viewedFiles, setViewed } = useViewed();
     const diffViewerRef = useRef<HTMLDivElement>(null);
+
+    useHotkeySequence(['G', 'S'], () => {
+        setSymbolModalOpen((o) => !o);
+    });
 
     useEffect(() => {
         try {
@@ -170,6 +177,8 @@ export function App() {
             return [];
         }
     }, [patch, binaryFiles]);
+
+    const symbols = useSymbols(files);
 
     const diffStats = useMemo(() => {
         if (!patch) return { additions: 0, deletions: 0 };
@@ -541,6 +550,11 @@ export function App() {
                     />
                 </main>
             </div>
+            <SymbolModal
+                symbols={symbols}
+                isOpen={symbolModalOpen}
+                onClose={() => setSymbolModalOpen(false)}
+            />
         </div>
     );
 }

@@ -39,7 +39,10 @@
   "dependencies": {
     "@hono/node-server": "^1.14.1",
     "@pierre/trees": "1.0.0-beta.4",
+    "@tanstack/hotkeys": "^0.8.0",
+    "@tanstack/react-hotkeys": "^0.10.0",
     "@tanstack/react-query": "^5.96.2",
+    "@tanstack/react-store": "^0.11.0",
     "editorconfig": "^3.0.2",
     "get-port": "^7.2.0",
     "highlight.js": "^11.11.1",
