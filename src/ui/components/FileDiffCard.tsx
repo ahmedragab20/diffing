@@ -1,7 +1,8 @@
 import { useState, memo, useRef, useEffect } from 'react'
-import { FileDiff } from '@pierre/diffs/react'
+import { FileDiff, MultiFileDiff } from '@pierre/diffs/react'
 import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide, SelectedLineRange } from '@pierre/diffs'
-import { ChevronDown, ChevronRight, Edit3, MessageSquare } from 'lucide-react'
+import { ChevronDown, ChevronRight, Edit3, MessageSquare, Maximize2, Loader2 } from 'lucide-react'
+import { useFileContents } from '../hooks/useFileContents'
 import type { ReviewComment } from '../../lib/types'
 import type {
   LineDiffType,
@@ -36,6 +37,9 @@ interface FileDiffCardProps {
   hunkSeparators: HunkSeparatorStyle
   lineHoverHighlight: LineHoverHighlight
   fontSize: number
+  expandContextByDefault: boolean
+  collapsedContextThreshold: number
+  expansionLineCount: number
   onViewedChange: (filePath: string, viewed: boolean) => void
   onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
   onDeleteComment: (id: string) => void
@@ -58,6 +62,9 @@ export const FileDiffCard = memo(function FileDiffCard({
   hunkSeparators,
   lineHoverHighlight,
   fontSize,
+  expandContextByDefault,
+  collapsedContextThreshold,
+  expansionLineCount,
   onViewedChange,
   onAddComment,
   onDeleteComment,
@@ -69,7 +76,18 @@ export const FileDiffCard = memo(function FileDiffCard({
   const [collapsed, setCollapsed] = useState(viewed)
   const [opening, setOpening] = useState(false)
   const [showFileCommentForm, setShowFileCommentForm] = useState(false)
+  const [contextExpanded, setContextExpanded] = useState(expandContextByDefault)
   const cardRef = useRef<HTMLDivElement>(null)
+
+  const isChangedFile = fileDiff.type === 'change' || fileDiff.type === 'rename-changed'
+  const canExpandContext = !collapsed && isChangedFile
+  const { loading: contentsLoading, oldContent, newContent } = useFileContents(
+    filePath,
+    contextExpanded && canExpandContext,
+  )
+  const contentsReady =
+    contextExpanded && oldContent !== null && newContent !== null
+  const oldFilePath = fileDiff.prevName ?? filePath
 
   // Synchronize collapse with viewed state changes from parent
   useEffect(() => {
@@ -142,6 +160,67 @@ export const FileDiffCard = memo(function FileDiffCard({
   const fileLevelAnnotations = annotations.filter((a) => a.lineNumber === 0)
   const lineAnnotations = annotations.filter((a) => a.lineNumber > 0)
 
+  const renderAnnotationFn = (
+    annotation: DiffLineAnnotation<ReviewComment | { _pending: true }>,
+  ) => {
+    if ('_pending' in annotation.metadata) {
+      const draftKey = `new:${filePath}:${pending!.side}:${pending!.startLineNumber || pending!.lineNumber}:${pending!.lineNumber}`
+      return (
+        <CommentForm
+          draftKey={draftKey}
+          lineContent={getLineContent(
+            pending!.side,
+            pending!.lineNumber,
+            pending!.startLineNumber,
+          )}
+          onSubmit={(body) => {
+            const lineContent = getLineContent(
+              pending!.side,
+              pending!.lineNumber,
+              pending!.startLineNumber,
+            )
+            onAddComment(
+              filePath,
+              pending!.side,
+              pending!.lineNumber,
+              lineContent,
+              body,
+              pending!.startLineNumber,
+            )
+            setPending(null)
+            setSelectedRange(null)
+          }}
+          onCancel={() => {
+            setPending(null)
+            setSelectedRange(null)
+          }}
+        />
+      )
+    }
+    return (
+      <CommentBubble
+        comment={annotation.metadata as ReviewComment}
+        onDelete={onDeleteComment}
+      />
+    )
+  }
+
+  const renderGutter = (
+    getHoveredLine: () => { lineNumber: number; side: AnnotationSide } | undefined,
+  ) => (
+    <button
+      className="gutter-add-btn"
+      onClick={() => {
+        const line = getHoveredLine()
+        if (line) {
+          setPending({ side: line.side, lineNumber: line.lineNumber })
+        }
+      }}
+    >
+      +
+    </button>
+  )
+
   const allAnnotations: DiffLineAnnotation<ReviewComment | { _pending: true }>[] = [
     ...lineAnnotations,
     ...(pending
@@ -195,9 +274,30 @@ export const FileDiffCard = memo(function FileDiffCard({
         </div>
 
         <div className="file-diff-header-right" onClick={(e) => e.stopPropagation()}>
+          {canExpandContext && (
+            <button
+              className={`file-diff-edit-btn ${contextExpanded ? 'btn-active' : ''}`}
+              onClick={() => setContextExpanded((v) => !v)}
+              disabled={contentsLoading}
+              title={
+                contextExpanded
+                  ? 'Hide unchanged context (use original patch render)'
+                  : 'Load full file so unchanged context becomes expandable'
+              }
+            >
+              {contentsLoading ? <Loader2 size={11} className="spin" /> : <Maximize2 size={11} />}
+              <span>
+                {contentsLoading
+                  ? 'Loading…'
+                  : contextExpanded
+                    ? 'Hide Context'
+                    : 'Expand Context'}
+              </span>
+            </button>
+          )}
           {fileDiff.type !== 'deleted' && (
-            <button 
-              className="file-diff-edit-btn" 
+            <button
+              className="file-diff-edit-btn"
               onClick={handleOpenEditor}
               disabled={opening}
               title="Open and edit full file locally"
@@ -278,6 +378,76 @@ export const FileDiffCard = memo(function FileDiffCard({
             </div>
           )}
 
+          {/* Render switch: when the user opts in to "Expand Context",
+              we use MultiFileDiff (computes the diff from full file
+              contents, so unchanged hunks are expandable). Otherwise
+              the cheaper FileDiff render is used against the parsed
+              partial patch. */}
+          {contentsReady ? (
+            <MultiFileDiff<ReviewComment | { _pending: true }>
+              oldFile={{ name: oldFilePath, contents: oldContent ?? '' }}
+              newFile={{ name: filePath, contents: newContent ?? '' }}
+              options={{
+                diffStyle,
+                enableGutterUtility: true,
+                enableLineSelection: true,
+                disableFileHeader: true,
+                lineDiffType,
+                overflow: lineWrap ? 'wrap' : 'scroll',
+                diffIndicators,
+                disableLineNumbers: !showLineNumbers,
+                hunkSeparators,
+                lineHoverHighlight,
+                expandUnchanged: false,
+                collapsedContextThreshold,
+                expansionLineCount,
+                onLineSelectionStart: () => {
+                  setSelectedRange(null)
+                  setLiveSelectionCount(0)
+                },
+                onLineSelectionChange: (range) => {
+                  if (range) {
+                    setLiveSelectionCount(Math.abs(range.end - range.start) + 1)
+                  } else {
+                    setLiveSelectionCount(0)
+                  }
+                },
+                onLineSelectionEnd: (range) => {
+                  setLiveSelectionCount(0)
+                  if (range) {
+                    setSelectedRange(range)
+                    setPending({
+                      side: range.endSide || 'additions',
+                      lineNumber: range.end,
+                      startLineNumber: range.start,
+                    })
+                  }
+                },
+                onLineNumberClick: (props) => {
+                  const side = props.annotationSide === 'deletions' ? '-' : '+'
+                  const link = `${filePath}:${side}${props.lineNumber}`
+                  navigator.clipboard?.writeText(link).then(
+                    () => {
+                      setPermalinkFlash(link)
+                      setTimeout(() => setPermalinkFlash(null), 1600)
+                    },
+                    () => {},
+                  )
+                },
+                theme: {
+                  dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
+                  light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
+                },
+                themeType: shikiConfig.type,
+                unsafeCSS: buildUnsafeCSS(tabSize, fontSize),
+              }}
+              selectedLines={selectedRange}
+              lineAnnotations={allAnnotations}
+              renderHeaderMetadata={() => null}
+              renderAnnotation={renderAnnotationFn}
+              renderGutterUtility={renderGutter}
+            />
+          ) : (
           <FileDiff<ReviewComment | { _pending: true }>
             fileDiff={fileDiff}
             options={{
@@ -415,8 +585,50 @@ export const FileDiffCard = memo(function FileDiffCard({
               </button>
             )}
           />
+          )}
         </div>
       )}
     </div>
   )
 })
+
+function buildUnsafeCSS(tabSize: number, fontSize: number): string {
+  return `
+    :host {
+      --diffs-tab-size: ${tabSize} !important;
+      --diffs-font-family: var(--font-mono) !important;
+      --diffs-font-size: ${fontSize}px !important;
+      --diffs-border: var(--border-normal) !important;
+      --diffs-bg: var(--bg-secondary) !important;
+      --diffs-line-height: ${Math.round(fontSize * 1.7)}px !important;
+    }
+    [data-column-number], [data-line] {
+      font-family: var(--font-mono) !important;
+      font-size: ${fontSize}px !important;
+      font-variant-ligatures: common-ligatures !important;
+      font-feature-settings: "liga" on, "calt" on !important;
+    }
+    [data-column-number] {
+      color: var(--text-muted) !important;
+      opacity: 0.65 !important;
+      user-select: none !important;
+      padding-right: 12px !important;
+      cursor: pointer !important;
+    }
+    [data-line]:hover [data-column-number] {
+      opacity: 1 !important;
+      color: var(--primary) !important;
+    }
+    [data-line][data-line-type="addition"] {
+      background-color: var(--feedback-success-bg) !important;
+      border-left: 3px solid var(--feedback-success-border) !important;
+    }
+    [data-line][data-line-type="deletion"] {
+      background-color: var(--feedback-danger-bg) !important;
+      border-left: 3px solid var(--feedback-danger-border) !important;
+    }
+    [data-line].selected-line {
+      background-color: var(--accent-subtle) !important;
+    }
+  `
+}

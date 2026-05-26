@@ -876,6 +876,9 @@ export function App() {
                         hunkSeparators={settings.hunkSeparators}
                         lineHoverHighlight={settings.lineHoverHighlight}
                         fontSize={settings.fontSize}
+                        expandContextByDefault={settings.expandContextByDefault}
+                        collapsedContextThreshold={settings.collapsedContextThreshold}
+                        expansionLineCount={settings.expansionLineCount}
                         onViewedChange={handleViewedChange}
                         fileAnnotationsMap={fileAnnotationsMap}
                         onAddComment={addComment}

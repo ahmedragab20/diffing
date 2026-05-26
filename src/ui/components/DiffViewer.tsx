@@ -28,6 +28,9 @@ interface DiffViewerProps {
   hunkSeparators: HunkSeparatorStyle
   lineHoverHighlight: LineHoverHighlight
   fontSize: number
+  expandContextByDefault: boolean
+  collapsedContextThreshold: number
+  expansionLineCount: number
   onViewedChange: (filePath: string, viewed: boolean) => void
   fileAnnotationsMap: Map<string, DiffLineAnnotation<ReviewComment>[]>
   onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
@@ -52,6 +55,9 @@ export const DiffViewer = memo(function DiffViewer({
   hunkSeparators,
   lineHoverHighlight,
   fontSize,
+  expandContextByDefault,
+  collapsedContextThreshold,
+  expansionLineCount,
   onViewedChange,
   fileAnnotationsMap,
   onAddComment,
@@ -116,6 +122,9 @@ export const DiffViewer = memo(function DiffViewer({
             hunkSeparators={hunkSeparators}
             lineHoverHighlight={lineHoverHighlight}
             fontSize={fontSize}
+            expandContextByDefault={expandContextByDefault}
+            collapsedContextThreshold={collapsedContextThreshold}
+            expansionLineCount={expansionLineCount}
             onViewedChange={onViewedChange}
             onAddComment={onAddComment}
             onDeleteComment={onDeleteComment}

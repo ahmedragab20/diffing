@@ -20,6 +20,9 @@ export interface Settings {
   hunkSeparators: HunkSeparatorStyle
   lineHoverHighlight: LineHoverHighlight
   fontSize: number
+  expandContextByDefault: boolean
+  collapsedContextThreshold: number
+  expansionLineCount: number
 }
 
 const DEFAULTS: Settings = {
@@ -36,6 +39,9 @@ const DEFAULTS: Settings = {
   hunkSeparators: 'line-info',
   lineHoverHighlight: 'both',
   fontSize: 13,
+  expandContextByDefault: false,
+  collapsedContextThreshold: 10,
+  expansionLineCount: 20,
 }
 
 export function useSettings() {

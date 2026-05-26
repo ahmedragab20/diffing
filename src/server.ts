@@ -157,6 +157,29 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
     })
   })
 
+  // Text-friendly file-content endpoint used by the hunk-expansion feature
+  // (Phase B). Returns JSON { content, missing } where `missing` indicates the
+  // version didn't exist (new file → old missing, deleted → new missing).
+  app.get('/api/file-text', (c) => {
+    const path = c.req.query('path')
+    const version = c.req.query('version') as 'old' | 'new'
+    if (!path || !version) {
+      return c.json({ error: 'Missing path or version' }, 400)
+    }
+    const buffer = getFileContent(path, version)
+    if (!buffer) {
+      return c.json({ content: '', missing: true })
+    }
+    // Detect binary by null byte in the first 8KB
+    const sample = buffer.subarray(0, Math.min(buffer.length, 8192))
+    for (let i = 0; i < sample.length; i++) {
+      if (sample[i] === 0) {
+        return c.json({ error: 'Binary file' }, 415)
+      }
+    }
+    return c.json({ content: buffer.toString('utf-8'), missing: false })
+  })
+
   app.post('/api/open-file', async (c) => {
     const { filePath, editor } = await c.req.json<{ filePath: string; editor?: string }>()
     if (!filePath) {

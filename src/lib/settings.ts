@@ -32,6 +32,12 @@ export interface Settings {
   lineHoverHighlight: LineHoverHighlight
   /** Render code at this base font-size (px). */
   fontSize: number
+  /** Auto-load full file contents so hunk context becomes expandable. */
+  expandContextByDefault: boolean
+  /** Only collapse unchanged context gaps larger than this. */
+  collapsedContextThreshold: number
+  /** How many lines to reveal per expand-up / expand-down click. */
+  expansionLineCount: number
 }
 
 const DEFAULTS: Settings = {
@@ -48,6 +54,9 @@ const DEFAULTS: Settings = {
   hunkSeparators: 'line-info',
   lineHoverHighlight: 'both',
   fontSize: 13,
+  expandContextByDefault: false,
+  collapsedContextThreshold: 10,
+  expansionLineCount: 20,
 }
 
 export function loadSettings(): Settings {
