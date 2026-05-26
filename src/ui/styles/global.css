@@ -3432,6 +3432,72 @@ file-tree,
     margin-right: 8px;
 }
 
+/* Per-hunk revert buttons (Phase E) */
+.file-diff-hunk-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 20px;
+    background: var(--bg-tertiary);
+    border-top: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+    font-family: var(--font-sans);
+    font-size: 11px;
+    flex-wrap: wrap;
+}
+
+.file-diff-hunk-actions-label {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+.file-diff-hunk-actions-buttons {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.file-diff-hunk-revert-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-normal);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.file-diff-hunk-revert-btn:hover:not(:disabled) {
+    border-color: var(--feedback-warning-border);
+    color: var(--feedback-warning-text);
+    background: var(--feedback-warning-bg);
+}
+
+.file-diff-hunk-revert-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.file-diff-hunk-error {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--feedback-danger-text);
+    background: var(--feedback-danger-bg);
+    border: 1px solid var(--feedback-danger-border);
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+}
+
 @keyframes diffit-spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }

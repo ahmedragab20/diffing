@@ -1,7 +1,7 @@
 import { useState, memo, useRef, useEffect } from 'react'
 import { FileDiff, MultiFileDiff } from '@pierre/diffs/react'
 import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide, SelectedLineRange } from '@pierre/diffs'
-import { ChevronDown, ChevronRight, Edit3, MessageSquare, Maximize2, Loader2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Edit3, MessageSquare, Maximize2, Loader2, Undo2, AlertCircle } from 'lucide-react'
 import { useFileContents } from '../hooks/useFileContents'
 import type { ReviewComment } from '../../lib/types'
 import type {
@@ -77,7 +77,38 @@ export const FileDiffCard = memo(function FileDiffCard({
   const [opening, setOpening] = useState(false)
   const [showFileCommentForm, setShowFileCommentForm] = useState(false)
   const [contextExpanded, setContextExpanded] = useState(expandContextByDefault)
+  const [revertingHunk, setRevertingHunk] = useState<number | null>(null)
+  const [revertError, setRevertError] = useState<string | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
+
+  const handleRevertHunk = async (hunkIndex: number) => {
+    if (revertingHunk !== null) return
+    if (
+      typeof window !== 'undefined' &&
+      !window.confirm(
+        `Revert hunk #${hunkIndex + 1} in ${filePath}? This rewrites the file via "git apply --reverse".`,
+      )
+    )
+      return
+    setRevertingHunk(hunkIndex)
+    setRevertError(null)
+    try {
+      const res = await fetch('/api/revert-hunk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath, hunkIndex }),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      // SSE will refresh the diff automatically.
+    } catch (err: any) {
+      setRevertError(err.message)
+    } finally {
+      setRevertingHunk(null)
+    }
+  }
 
   const isChangedFile = fileDiff.type === 'change' || fileDiff.type === 'rename-changed'
   const canExpandContext = !collapsed && isChangedFile
@@ -328,6 +359,38 @@ export const FileDiffCard = memo(function FileDiffCard({
         </div>
       </div>
 
+      {!collapsed && fileDiff.hunks.length > 0 && (
+        <div className="file-diff-hunk-actions" onClick={(e) => e.stopPropagation()}>
+          <span className="file-diff-hunk-actions-label">
+            Hunks · {fileDiff.hunks.length}
+          </span>
+          <div className="file-diff-hunk-actions-buttons">
+            {fileDiff.hunks.map((h, i) => (
+              <button
+                key={i}
+                type="button"
+                className="file-diff-hunk-revert-btn"
+                onClick={() => handleRevertHunk(i)}
+                disabled={revertingHunk !== null}
+                title={`Revert hunk #${i + 1} (lines @${h.additionStart}+${h.additionLines}) via git apply --reverse`}
+              >
+                {revertingHunk === i ? (
+                  <Loader2 size={10} className="spin" />
+                ) : (
+                  <Undo2 size={10} />
+                )}
+                <span>#{i + 1}</span>
+              </button>
+            ))}
+          </div>
+          {revertError && (
+            <span className="file-diff-hunk-error" role="alert">
+              <AlertCircle size={11} />
+              {revertError}
+            </span>
+          )}
+        </div>
+      )}
       {!collapsed && (
         <div className="file-diff-card-body">
           {/* File-level comments section */}

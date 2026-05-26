@@ -379,6 +379,94 @@ export function gitAddFile(filePath: string): void {
   execFileSync('git', ['add', '--', filePath], { stdio: 'pipe' })
 }
 
+/**
+ * Returns a unified diff for a single working-tree file (covers unstaged
+ * and untracked changes). Used by the Phase E hunk-revert flow to derive
+ * the exact patch text we need to `git apply --reverse`.
+ */
+export function getFilePatch(filePath: string): string {
+  try {
+    const unstaged = execFileSync(
+      'git',
+      ['diff', ...DIFF_FLAGS, '--', filePath],
+      { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 },
+    )
+    if (unstaged) return unstaged
+  } catch {
+    // fall through
+  }
+  // Untracked: synthesize a new-file patch like getGitDiff does.
+  try {
+    const root = getRepoRoot()
+    const absolutePath = join(root, filePath)
+    if (isBinaryFile(absolutePath)) return ''
+    const content = readFileSync(absolutePath, 'utf-8')
+    const lines = content.split('\n')
+    return [
+      `diff --git a/${filePath} b/${filePath}`,
+      'new file mode 100644',
+      'index 0000000..0000001',
+      '--- /dev/null',
+      `+++ b/${filePath}`,
+      `@@ -0,0 +1,${lines.length} @@`,
+      ...lines.map((l) => `+${l}`),
+    ].join('\n')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Extracts the Nth hunk text from a single-file patch. Returns the lines
+ * from `@@ ... @@` through the line before the next `@@` (or EOF).
+ */
+export function extractHunk(patch: string, hunkIndex: number): string | null {
+  const lines = patch.split('\n')
+  const hunkStarts: number[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith('@@ ')) hunkStarts.push(i)
+  }
+  if (hunkIndex < 0 || hunkIndex >= hunkStarts.length) return null
+  const start = hunkStarts[hunkIndex]
+  const end =
+    hunkIndex + 1 < hunkStarts.length ? hunkStarts[hunkIndex + 1] : lines.length
+  return lines.slice(start, end).join('\n')
+}
+
+/** Header lines that the per-file patch needs in order for `git apply` to
+ * recognize the target. Stops just before the first `@@` hunk header. */
+export function extractPatchHeader(patch: string): string {
+  const lines = patch.split('\n')
+  const out: string[] = []
+  for (const line of lines) {
+    if (line.startsWith('@@ ')) break
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
+/**
+ * Reverts a single hunk from the working tree by piping a minimal patch to
+ * `git apply --reverse`. Throws if git rejects the apply (typically because
+ * the file has shifted since the diff was rendered).
+ */
+export function revertHunk(filePath: string, hunkIndex: number): void {
+  const patch = getFilePatch(filePath)
+  if (!patch) {
+    throw new Error('No diff available for this file')
+  }
+  const header = extractPatchHeader(patch)
+  const hunk = extractHunk(patch, hunkIndex)
+  if (!hunk) {
+    throw new Error(`Hunk ${hunkIndex} not found`)
+  }
+  const minimal = `${header}\n${hunk}\n`
+  execFileSync('git', ['apply', '--reverse', '-'], {
+    input: minimal,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+}
+
 export function getProjectStorageDir(customRepoRoot?: string): string {
   const root = customRepoRoot || getRepoRoot()
   const hash = createHash('sha256').update(root).digest('hex').slice(0, 8)

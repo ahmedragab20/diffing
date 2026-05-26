@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { getFileContent, isImageFile, getRepoRoot, getProjectStorageDir, getMergeStatus, gitAddFile, listRepoFiles } from './lib/git.js'
+import { getFileContent, isImageFile, getRepoRoot, getProjectStorageDir, getMergeStatus, gitAddFile, listRepoFiles, revertHunk } from './lib/git.js'
 import { loadSettings, saveSettings } from './lib/settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
 import type { CommentStore } from './lib/comments.js'
@@ -226,6 +226,35 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
       return c.json(status)
     } catch (err: any) {
       return c.json({ error: err.message }, 500)
+    }
+  })
+
+  app.post('/api/revert-hunk', async (c) => {
+    const { filePath, hunkIndex } = await c.req.json<{
+      filePath: string
+      hunkIndex: number
+    }>()
+    if (!filePath || typeof hunkIndex !== 'number') {
+      return c.json({ error: 'Missing filePath or hunkIndex' }, 400)
+    }
+    try {
+      const root = getRepoRoot()
+      if (!isSafePath(filePath, root)) {
+        return c.json({ error: 'Forbidden file path' }, 403)
+      }
+      revertHunk(filePath, hunkIndex)
+      return c.json({ ok: true })
+    } catch (err: any) {
+      const stderr =
+        typeof err?.stderr === 'string'
+          ? err.stderr
+          : err?.stderr instanceof Buffer
+            ? err.stderr.toString('utf-8')
+            : ''
+      return c.json(
+        { error: stderr || err?.message || 'Failed to revert hunk' },
+        500,
+      )
     }
   })
 
