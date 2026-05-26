@@ -65,6 +65,7 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       items: [
         { keys: ['/'], description: 'Open Diff Search Modal' },
         { keys: ['g', 's'], description: 'Open Symbol Search Modal (or "s")' },
+        { keys: ['g', 'v'], description: 'Open File Viewer (any file in repo)' },
         { keys: ['?'], description: 'Toggle Keyboard Shortcuts Guide' },
         { keys: ['Esc'], description: 'Close active search/modal dialog' },
       ],

@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { getFileContent, isImageFile, getRepoRoot, getProjectStorageDir, getMergeStatus, gitAddFile } from './lib/git.js'
+import { getFileContent, isImageFile, getRepoRoot, getProjectStorageDir, getMergeStatus, gitAddFile, listRepoFiles } from './lib/git.js'
 import { loadSettings, saveSettings } from './lib/settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
 import type { CommentStore } from './lib/comments.js'
@@ -209,6 +209,14 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
       return c.json({ ok: true })
     } catch (err: any) {
       return c.json({ error: `Failed to open file: ${err.message}` }, 500)
+    }
+  })
+
+  app.get('/api/repo-files', (c) => {
+    try {
+      return c.json({ files: listRepoFiles() })
+    } catch (err: any) {
+      return c.json({ error: err.message }, 500)
     }
   })
 

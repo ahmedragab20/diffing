@@ -32,6 +32,7 @@ import { FileTree } from "./components/FileTree";
 import { CommentTracker } from "./components/CommentTracker";
 import { SymbolModal } from "./components/SymbolModal";
 import { DiffSearchModal } from "./components/DiffSearchModal";
+import { FileViewerModal } from "./components/FileViewerModal";
 import { VimStatusBar } from "./components/VimStatusBar";
 import { ShortcutsHelpModal } from "./components/ShortcutsHelpModal";
 
@@ -70,6 +71,7 @@ export function App() {
     });
     const [symbolModalOpen, setSymbolModalOpen] = useState(false);
     const [diffSearchOpen, setDiffSearchOpen] = useState(false);
+    const [fileViewerOpen, setFileViewerOpen] = useState(false);
     const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
     const [commentPanelHeight, setCommentPanelHeight] = useState(() => {
         try {
@@ -621,6 +623,10 @@ export function App() {
                 e.preventDefault();
                 setSymbolModalOpen(true);
                 keyBuffer = '';
+            } else if (keyBuffer === 'gv') {
+                e.preventDefault();
+                setFileViewerOpen(true);
+                keyBuffer = '';
             } else if (keyBuffer === '?') {
                 e.preventDefault();
                 setShortcutsHelpOpen(true);
@@ -923,6 +929,17 @@ export function App() {
                 entries={diffSearchEntries}
                 isOpen={diffSearchOpen}
                 onClose={() => setDiffSearchOpen(false)}
+            />
+            <FileViewerModal
+                isOpen={fileViewerOpen}
+                onClose={() => setFileViewerOpen(false)}
+                theme={settings.theme || "nord"}
+                fontSize={settings.fontSize}
+                defaultTabSize={settings.defaultTabSize}
+                lineDiffType={settings.lineDiffType}
+                lineWrap={settings.lineWrap}
+                showLineNumbers={settings.showLineNumbers}
+                lineHoverHighlight={settings.lineHoverHighlight}
             />
             <VimStatusBar
                 activeFile={activeFile}

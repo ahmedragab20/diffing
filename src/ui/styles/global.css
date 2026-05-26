@@ -3407,6 +3407,31 @@ file-tree,
     color: var(--feedback-danger-text);
 }
 
+/* File viewer modal (Phase D) */
+.file-viewer-modal {
+    width: 78vw;
+    max-width: 1100px;
+    height: 78vh;
+    max-height: 820px;
+    display: flex;
+    flex-direction: column;
+}
+
+.file-viewer-content {
+    flex: 1;
+    overflow: auto;
+    padding: 8px 4px;
+}
+
+.file-viewer-error {
+    color: var(--feedback-danger-text);
+}
+
+.file-viewer-item-icon {
+    color: var(--text-muted);
+    margin-right: 8px;
+}
+
 @keyframes diffit-spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }

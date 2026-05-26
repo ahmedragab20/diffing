@@ -305,6 +305,36 @@ export async function getGitDiffAsync(options: { staged?: boolean; untracked?: b
   return parts.join('\n')
 }
 
+/**
+ * Lists every file the working tree knows about (tracked + untracked,
+ * excluding standard-ignored paths). Used by the Phase D file viewer to
+ * power a path picker.
+ */
+export function listRepoFiles(): string[] {
+  try {
+    const tracked = execFileSync(
+      'git',
+      ['ls-files'],
+      { encoding: 'utf-8', maxBuffer: 100 * 1024 * 1024 },
+    ).trim()
+    const untracked = execFileSync(
+      'git',
+      ['ls-files', '--others', '--exclude-standard'],
+      { encoding: 'utf-8', maxBuffer: 100 * 1024 * 1024 },
+    ).trim()
+    const set = new Set<string>()
+    for (const list of [tracked, untracked]) {
+      if (!list) continue
+      for (const line of list.split('\n')) {
+        if (line) set.add(line)
+      }
+    }
+    return [...set].sort()
+  } catch {
+    return []
+  }
+}
+
 export interface MergeStatus {
   inMerge: boolean
   conflicts: string[]
