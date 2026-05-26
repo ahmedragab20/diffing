@@ -20,12 +20,14 @@ import { SHIKI_THEME_MAP } from "./utils";
 import type { ReviewComment } from "../lib/types";
 import { useDiff } from "./hooks/useDiff";
 import { useComments } from "./hooks/useComments";
+import { useMergeStatus } from "./hooks/useMergeStatus";
 import { useSettings } from "./hooks/useSettings";
 import { useViewed } from "./hooks/useViewed";
 import { useSymbols } from "./hooks/useSymbols";
 import { useDiffSearch } from "./hooks/useDiffSearch";
 import { Toolbar } from "./components/Toolbar";
 import { DiffViewer } from "./components/DiffViewer";
+import { MergeConflictResolver } from "./components/MergeConflictResolver";
 import { FileTree } from "./components/FileTree";
 import { CommentTracker } from "./components/CommentTracker";
 import { SymbolModal } from "./components/SymbolModal";
@@ -57,6 +59,7 @@ export function App() {
     );
     const { comments, addComment, removeComment, resolveComment, unresolveComment, removeReply, copyAllComments } =
         useComments();
+    const { status: mergeStatus, refresh: refreshMergeStatus } = useMergeStatus(patch);
     const [activeFile, setActiveFile] = useState<string | null>(null);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
         try {
@@ -860,6 +863,31 @@ export function App() {
 
                 </aside>
                 <main className="main" ref={diffViewerRef}>
+                    {mergeStatus.inMerge && mergeStatus.conflicts.length > 0 && (
+                        <div className="merge-conflict-banner">
+                            <strong>Merge in progress</strong>
+                            <span>
+                                {mergeStatus.conflicts.length} unresolved file
+                                {mergeStatus.conflicts.length === 1 ? "" : "s"} below.
+                                Use the inline buttons to accept current/incoming/both,
+                                then "Save &amp; stage".
+                            </span>
+                        </div>
+                    )}
+                    {mergeStatus.conflicts.map((conflictPath) => (
+                        <MergeConflictResolver
+                            key={conflictPath}
+                            filePath={conflictPath}
+                            theme={settings.theme || "nord"}
+                            fontSize={settings.fontSize}
+                            tabSize={
+                                tabSizeMap[conflictPath] ?? settings.defaultTabSize
+                            }
+                            onSaved={() => {
+                                refreshMergeStatus();
+                            }}
+                        />
+                    ))}
                     <DiffViewer
                         files={files}
                         diffStyle={settings.diffStyle}

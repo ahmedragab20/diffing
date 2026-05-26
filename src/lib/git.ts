@@ -305,6 +305,50 @@ export async function getGitDiffAsync(options: { staged?: boolean; untracked?: b
   return parts.join('\n')
 }
 
+export interface MergeStatus {
+  inMerge: boolean
+  conflicts: string[]
+}
+
+/**
+ * Reports whether the repo is currently in the middle of a merge and which
+ * files have unresolved conflicts. Used by the Phase C merge-conflict UI to
+ * decide when to render the @pierre/diffs UnresolvedFile component.
+ */
+export function getMergeStatus(): MergeStatus {
+  let root: string
+  try {
+    root = getRepoRoot()
+  } catch {
+    return { inMerge: false, conflicts: [] }
+  }
+  const mergeHead = join(root, '.git', 'MERGE_HEAD')
+  let inMerge = false
+  try {
+    readFileSync(mergeHead)
+    inMerge = true
+  } catch {
+    inMerge = false
+  }
+
+  let conflicts: string[] = []
+  try {
+    const out = execFileSync(
+      'git',
+      ['diff', '--name-only', '--diff-filter=U'],
+      { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 },
+    ).trim()
+    conflicts = out ? out.split('\n') : []
+  } catch {
+    conflicts = []
+  }
+  return { inMerge: inMerge || conflicts.length > 0, conflicts }
+}
+
+export function gitAddFile(filePath: string): void {
+  execFileSync('git', ['add', '--', filePath], { stdio: 'pipe' })
+}
+
 export function getProjectStorageDir(customRepoRoot?: string): string {
   const root = customRepoRoot || getRepoRoot()
   const hash = createHash('sha256').update(root).digest('hex').slice(0, 8)

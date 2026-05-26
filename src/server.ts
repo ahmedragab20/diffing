@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { getFileContent, isImageFile, getRepoRoot, getProjectStorageDir } from './lib/git.js'
+import { getFileContent, isImageFile, getRepoRoot, getProjectStorageDir, getMergeStatus, gitAddFile } from './lib/git.js'
 import { loadSettings, saveSettings } from './lib/settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
 import type { CommentStore } from './lib/comments.js'
@@ -209,6 +209,44 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
       return c.json({ ok: true })
     } catch (err: any) {
       return c.json({ error: `Failed to open file: ${err.message}` }, 500)
+    }
+  })
+
+  app.get('/api/merge-status', (c) => {
+    try {
+      const status = getMergeStatus()
+      return c.json(status)
+    } catch (err: any) {
+      return c.json({ error: err.message }, 500)
+    }
+  })
+
+  app.post('/api/save-file', async (c) => {
+    const { filePath, content, gitAdd } = await c.req.json<{
+      filePath: string
+      content: string
+      gitAdd?: boolean
+    }>()
+    if (!filePath || typeof content !== 'string') {
+      return c.json({ error: 'Missing filePath or content' }, 400)
+    }
+    try {
+      const root = getRepoRoot()
+      if (!isSafePath(filePath, root)) {
+        return c.json({ error: 'Forbidden file path' }, 403)
+      }
+      const absolutePath = resolve(root, filePath)
+      await writeFile(absolutePath, content, 'utf-8')
+      if (gitAdd) {
+        try {
+          gitAddFile(filePath)
+        } catch (err: any) {
+          return c.json({ ok: true, gitAddError: err.message })
+        }
+      }
+      return c.json({ ok: true })
+    } catch (err: any) {
+      return c.json({ error: `Failed to save file: ${err.message}` }, 500)
     }
   })
 
