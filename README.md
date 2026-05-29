@@ -209,7 +209,7 @@ Exposes four powerful tools directly to your agent: `await_review`, `list_commen
 ### C. Agent Skills
 You can install diffing skills directly into your AI coding assistant:
 ```bash
-npx skills add diffing
+npx skills add ahmedragab20/diffing
 ```
 Provides three primary commands to coordinate reviews:
 1. **`/diffing-start-review`** — Launches the review server.
