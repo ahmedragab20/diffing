@@ -295,6 +295,9 @@ self-documenting `<plan-review>` envelope:
 </plan-review>
 ```
 
+<img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/992ef3e0-49ce-420a-9fdd-647c4bb41bc5" />
+
+
 ---
 
 ## Inline Comment System
