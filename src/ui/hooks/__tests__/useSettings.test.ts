@@ -12,7 +12,25 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-const defaultSettings = { staged: true, untracked: true, diffStyle: 'split', defaultTabSize: 4, theme: 'nord', editorIDE: 'default' }
+const defaultSettings = {
+  staged: true,
+  untracked: true,
+  diffStyle: 'split',
+  defaultTabSize: 4,
+  theme: 'nord',
+  editorIDE: 'default',
+  lineDiffType: 'word',
+  lineWrap: false,
+  diffIndicators: 'classic',
+  showLineNumbers: true,
+  hunkSeparators: 'line-info',
+  lineHoverHighlight: 'both',
+  fontSize: 13,
+  expandContextByDefault: false,
+  collapsedContextThreshold: 10,
+  expansionLineCount: 20,
+  haptics: true,
+}
 
 describe('useSettings', () => {
   beforeEach(() => {
@@ -31,7 +49,7 @@ describe('useSettings', () => {
     expect(result.current.loaded).toBe(false)
 
     await waitFor(() => expect(result.current.loaded).toBe(true))
-    expect(result.current.settings).toEqual(apiSettings)
+    expect(result.current.settings).toEqual({ ...defaultSettings, ...apiSettings })
   })
 
   it('marks as loaded even on fetch error', async () => {
@@ -44,7 +62,7 @@ describe('useSettings', () => {
   })
 
   it('updateSettings merges and persists', async () => {
-    const apiSettings = { staged: true, untracked: true, diffStyle: 'split', defaultTabSize: 4 }
+    const apiSettings = { ...defaultSettings }
     mockFetch.mockResolvedValue({
       json: () => Promise.resolve(apiSettings),
     })

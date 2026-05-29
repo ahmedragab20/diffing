@@ -1,7 +1,9 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { DiffLineAnnotation } from '@pierre/diffs'
 import type { ReviewComment } from '../../lib/types'
+import { formatComments } from '../../lib/comment-format'
+import { subscribeLive } from '../live'
 
 const COMMENTS_KEY = ['comments']
 
@@ -10,9 +12,81 @@ async function fetchComments(): Promise<ReviewComment[]> {
   return res.json()
 }
 
+export interface AgentActivity {
+  at: number
+  commentId: string
+  filePath: string
+  model?: string
+  body: string
+}
+
+interface AgentStatus {
+  round: number
+  waiters: number
+  lastSentAt: number | null
+}
+
 export function useComments() {
   const queryClient = useQueryClient()
-  const { data: comments = [] } = useQuery({ queryKey: COMMENTS_KEY, queryFn: fetchComments, refetchInterval: 3000 })
+  const { data: comments = [] } = useQuery({ queryKey: COMMENTS_KEY, queryFn: fetchComments })
+
+  // Realtime: the server pushes a `comments` event whenever the store changes
+  // (a user or agent added / replied / resolved / deleted). Refetch on push
+  // instead of polling, so user<->agent exchanges feel instant.
+  useEffect(() => {
+    return subscribeLive('comments', () => {
+      queryClient.invalidateQueries({ queryKey: COMMENTS_KEY })
+    })
+  }, [queryClient])
+
+  // Track the agent-handoff state so the "Send to agent" button can show
+  // whether an agent is connected and waiting. Seed once, then follow the
+  // server's `agent-status` pushes (an agent connected/left, or a round sent).
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>({ round: 0, waiters: 0, lastSentAt: null })
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/review/status')
+      .then((r) => r.json())
+      .then((s) => { if (!cancelled) setAgentStatus(s) })
+      .catch(() => {})
+    const unsubscribe = subscribeLive('agent-status', (data) => {
+      try { setAgentStatus(JSON.parse(data)) } catch { /* ignore malformed */ }
+    })
+    return () => { cancelled = true; unsubscribe() }
+  }, [])
+
+  // Surface fresh agent replies so the UI can flash a "the agent responded"
+  // indicator. We track which reply ids we've already seen; on the first load
+  // we just seed the set (no flash for pre-existing history).
+  const seenReplyIds = useRef<Set<string> | null>(null)
+  const [agentActivity, setAgentActivity] = useState<AgentActivity | null>(null)
+
+  useEffect(() => {
+    const firstLoad = seenReplyIds.current === null
+    if (seenReplyIds.current === null) seenReplyIds.current = new Set()
+    const seen = seenReplyIds.current
+
+    let latest: AgentActivity | null = null
+    for (const comment of comments) {
+      for (const reply of comment.replies ?? []) {
+        if (seen.has(reply.id)) continue
+        seen.add(reply.id)
+        const isAgent = reply.role === 'agent' || (reply.role == null && !!reply.model)
+        if (!firstLoad && isAgent) {
+          if (!latest || reply.createdAt > latest.at) {
+            latest = {
+              at: reply.createdAt,
+              commentId: comment.id,
+              filePath: comment.filePath,
+              model: reply.model,
+              body: reply.body,
+            }
+          }
+        }
+      }
+    }
+    if (latest) setAgentActivity(latest)
+  }, [comments])
 
   const addMutation = useMutation({
     mutationFn: async (params: { filePath: string; side: 'deletions' | 'additions'; lineNumber: number; startLineNumber?: number; lineContent: string; body: string }) => {
@@ -98,6 +172,18 @@ export function useComments() {
     },
   })
 
+  const sendToAgentMutation = useMutation({
+    mutationFn: async (generalComment?: string) => {
+      const res = await fetch('/api/review/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ generalComment: generalComment?.trim() || undefined }),
+      })
+      if (!res.ok) throw new Error('Failed to send to agent')
+      return res.json() as Promise<{ ok: boolean; round: number; openCount: number; waiters: number }>
+    },
+  })
+
   const applySuggestionMutation = useMutation({
     mutationFn: async (id: string) => {
       const res = await fetch(`/api/comments/${id}/apply-suggestion`, {
@@ -177,98 +263,7 @@ export function useComments() {
     [applySuggestionMutation.mutateAsync],
   )
 
-  const formatAllComments = useCallback((): string => {
-    if (comments.length === 0) return ''
-
-    const grouped = new Map<string, ReviewComment[]>()
-    for (const comment of comments) {
-      const list = grouped.get(comment.filePath) ?? []
-      list.push(comment)
-      grouped.set(comment.filePath, list)
-    }
-
-    const lines: string[] = []
-    lines.push('<code-review-comments>')
-    lines.push('  <instructions>')
-    lines.push('    You are an AI coding assistant. You are receiving a structured list of code review comments to address in the repository.')
-    lines.push('    For each file, review the inline comments and apply the changes requested.')
-    lines.push('    - Target lines are specified by the "line" attribute (e.g. line="10" or line="10-15").')
-    lines.push('    - "side" indicates whether the comment is on "additions" (added/modified lines) or "deletions" (deleted/old lines).')
-    lines.push('    - "status" indicates whether the comment is "open" or "resolved". Only address comments with status="open".')
-    lines.push('    - The <code> block contains the specific code context at the reviewed lines, prefixed with "+" or "-".')
-    lines.push('    - The <body> tag contains the review feedback or request.')
-    lines.push('    - If developers have replied to the comment, their discussion is captured under the <replies> element.')
-    lines.push('    - The comment "id" attribute can be used to reference or update the comment via API if available.')
-    lines.push('')
-    lines.push('    HOW TO REPLY OR ASK FOR CLARIFICATION:')
-    lines.push('    If you need to ask for clarification, explain what you did, or reply to any comment:')
-    lines.push('')
-    lines.push('    Option A: Via API (Preferred if the diffit server is running locally)')
-    lines.push('    Send a POST request to add a reply:')
-    lines.push('      POST http://localhost:<port>/api/comments/<comment-id>/replies')
-    lines.push('      Payload: { "body": "Your response or clarification request here", "model": "<your-model-name>" }')
-    lines.push('    To mark a comment as resolved:')
-    lines.push('      PUT http://localhost:<port>/api/comments/<comment-id>')
-    lines.push('      Payload: { "status": "resolved" }')
-    lines.push('')
-    lines.push('    Option B: Via Text Response (Offline / Chat Copy-Paste)')
-    lines.push('    If you do not have local API access, output your comments/replies inside a structured XML block at the end of your response:')
-    lines.push('      <comment-replies>')
-    lines.push('        <reply to="<comment-id>" model="<your-model-name>"><![CDATA[Your reply or clarification request here]]></reply>')
-    lines.push('      </comment-replies>')
-    lines.push('  </instructions>')
-
-    for (const [filePath, fileComments] of grouped) {
-      lines.push(`  <file path="${filePath}">`)
-      for (const comment of fileComments) {
-        const lineAttr = comment.lineNumber === 0
-          ? 'file'
-          : (comment.startLineNumber && comment.startLineNumber !== comment.lineNumber
-            ? `${comment.startLineNumber}-${comment.lineNumber}`
-            : `${comment.lineNumber}`)
-
-        const isoDate = new Date(comment.createdAt).toISOString()
-        lines.push(`    <comment id="${comment.id}" line="${lineAttr}" side="${comment.side}" status="${comment.status}" created-at="${isoDate}">`)
-
-        if (comment.lineNumber !== 0) {
-          const prefix = comment.side === 'additions' ? '+' : '-'
-          const isMultiLine = comment.lineContent && comment.lineContent.includes('\n')
-          let codeVal = ''
-          if (isMultiLine) {
-            const formattedCodeLines = comment.lineContent
-              .split('\n')
-              .map((l) => `${prefix} ${l}`)
-              .join('\n')
-            codeVal = `\n${formattedCodeLines}\n`
-          } else {
-            codeVal = `${prefix} ${comment.lineContent}`
-          }
-
-          lines.push(`      <code><![CDATA[${codeVal}]]></code>`)
-        }
-        lines.push(`      <body><![CDATA[${comment.body}]]></body>`)
-
-        if (comment.replies && comment.replies.length > 0) {
-          lines.push('      <replies>')
-          for (const reply of comment.replies) {
-            const replyIsoDate = new Date(reply.createdAt).toISOString()
-            const roleAttr = reply.role ? ` role="${reply.role}"` : ' role="agent"'
-            const modelAttr = reply.model ? ` model="${reply.model}"` : ''
-            lines.push(`        <reply id="${reply.id}" created-at="${replyIsoDate}"${roleAttr}${modelAttr}>`)
-            lines.push(`          <![CDATA[${reply.body}]]>`)
-            lines.push('        </reply>')
-          }
-          lines.push('      </replies>')
-        }
-
-        lines.push('    </comment>')
-      }
-      lines.push('  </file>')
-    }
-    lines.push('</code-review-comments>')
-
-    return lines.join('\n')
-  }, [comments])
+  const formatAllComments = useCallback((): string => formatComments(comments), [comments])
 
   const getAnnotationsForFile = useCallback(
     (filePath: string): DiffLineAnnotation<ReviewComment>[] => {
@@ -288,6 +283,11 @@ export function useComments() {
     await navigator.clipboard.writeText(text)
   }, [formatAllComments])
 
+  const sendToAgent = useCallback(
+    (generalComment?: string) => sendToAgentMutation.mutateAsync(generalComment),
+    [sendToAgentMutation.mutateAsync],
+  )
+
   return {
     comments,
     addComment,
@@ -302,5 +302,10 @@ export function useComments() {
     getAnnotationsForFile,
     formatAllComments,
     copyAllComments,
+    agentActivity,
+    clearAgentActivity: useCallback(() => setAgentActivity(null), []),
+    sendToAgent,
+    sending: sendToAgentMutation.isPending,
+    agentWaiting: agentStatus.waiters > 0,
   }
 }

@@ -268,9 +268,11 @@ export const GIT_DIFF_OPTIONS = {
 
 /** Options that are diffit-specific, not git-diff options. */
 export const DIFFIT_OPTIONS = {
-  port: { type: 'string' as const, short: 'p' },
+  port: { type: 'string' as const },
   host: { type: 'string' as const },
   'no-open': { type: 'boolean' as const, default: false },
+  web: { type: 'boolean' as const, default: false },
+  terminal: { type: 'boolean' as const, default: false },
   help: { type: 'boolean' as const, short: 'h' },
   version: { type: 'boolean' as const },
 }
@@ -298,7 +300,7 @@ Git Diff Options (drop-in replacement for git diff):`)
 
   console.log(`
 Diffit Server Options:
-  -p, --port <port>    Port to run the server on (default: random available port)
+  --port <port>        Port to run the server on (default: random available port)
   --host <host>        Host address to bind to (default: 127.0.0.1). Pass
                        0.0.0.0 to expose the server to the local network.
   --no-open            Don't open the browser automatically
@@ -582,6 +584,10 @@ export function parseDiffOptions(rawArgs: string[]): DiffOptions {
   }
 
   // ── Determine output mode ─────────────────────────
+  // Explicit --web / --terminal flags win over auto-detection.
+  if (values.web) opts.outputMode = 'web'
+  else if (values.terminal) opts.outputMode = 'terminal'
+
   // Default: auto (TTY → web, pipe → terminal)
   if (process.stdout.isTTY && opts.outputMode === 'auto') {
     opts.outputMode = 'web'

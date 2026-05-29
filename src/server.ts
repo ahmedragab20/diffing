@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir, readdir, stat, rm } from 'node:fs/promises'
 import { join, extname, resolve, basename } from 'node:path'
-import { watch, existsSync } from 'node:fs'
+import { watch, existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
@@ -10,6 +10,8 @@ import { loadSettings, saveSettings } from './lib/settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
 import type { CommentStore } from './lib/comments.js'
 import { isSafePath } from './lib/path.js'
+import { ReviewSession } from './lib/review-session.js'
+import { formatComments } from './lib/comment-format.js'
 import { executeDiffWithMeta } from './lib/diff-engine.js'
 import type { DiffOptions } from './lib/diff-options.js'
 import { DEFAULTS } from './lib/diff-options.js'
@@ -42,11 +44,50 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
 
   const activeClients = new Set<(event: string, data: string) => void>()
 
+  const broadcast = (event: string, data: string) => {
+    for (const send of activeClients) {
+      try {
+        send(event, data)
+      } catch {
+        // Client will be cleaned up on next interval or abort
+      }
+    }
+  }
+
+  // Tracks the "agent waits, human releases" handoff. Whenever the set of
+  // blocked agents or the round changes, push an `agent-status` event so the
+  // UI's "Send to agent" button can show whether an agent is connected.
+  const reviewSession = new ReviewSession((snapshot) =>
+    broadcast('agent-status', JSON.stringify(snapshot)),
+  )
+
   let repoRoot: string
   try {
     repoRoot = getRepoRoot()
   } catch {
     repoRoot = process.cwd()
+  }
+
+  // Watch the project comment store so any write — whether from this server's
+  // own API handlers or from an external agent editing comments.json directly —
+  // pushes a `comments` event to every connected client in real time. This is
+  // the bidirectional user<->agent channel: one file, one broadcast trigger.
+  // Skipped when a comment store is injected (e.g. the in-memory store in
+  // tests) since there is no backing file to watch.
+  if (!commentStore) {
+    try {
+      const storageDir = getProjectStorageDir()
+      mkdirSync(storageDir, { recursive: true })
+      let commentsDebounce: NodeJS.Timeout | null = null
+      const commentsWatcher = watch(storageDir, (_eventType, filename) => {
+        if (filename && !filename.startsWith('comments.json')) return
+        if (commentsDebounce) clearTimeout(commentsDebounce)
+        commentsDebounce = setTimeout(() => broadcast('comments', Date.now().toString()), 120)
+      })
+      commentsWatcher.unref()
+    } catch (err) {
+      console.warn('Failed to initialize comment store watcher:', err)
+    }
   }
 
   let debounceTimeout: NodeJS.Timeout | null = null
@@ -74,15 +115,7 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
 
       if (shouldTrigger) {
         if (debounceTimeout) clearTimeout(debounceTimeout)
-        debounceTimeout = setTimeout(() => {
-          for (const sendUpdate of activeClients) {
-            try {
-              sendUpdate('change', Date.now().toString())
-            } catch {
-              // Client will be cleaned up on next interval or abort
-            }
-          }
-        }, 200)
+        debounceTimeout = setTimeout(() => broadcast('change', Date.now().toString()), 200)
       }
     })
     watcher.unref()
@@ -93,28 +126,27 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
   app.get('/api/live', async (c) => {
     return streamSSE(c, async (stream) => {
       const sendUpdate = (event: string, data: string) => {
-        stream.writeSSE({
-          event,
-          data,
-        })
+        stream.writeSSE({ event, data })
       }
       activeClients.add(sendUpdate)
 
+      // Confirm the connection so the client's EventSource fires `open`
+      // immediately instead of waiting for the first real event.
+      await stream.writeSSE({ event: 'heartbeat', data: Date.now().toString() })
+
       const heartbeatInterval = setInterval(() => {
-        try {
-          stream.writeSSE({
-            event: 'heartbeat',
-            data: Date.now().toString(),
-          })
-        } catch {
+        stream.writeSSE({ event: 'heartbeat', data: Date.now().toString() }).catch(() => {})
+      }, 15000)
+
+      // Keep the SSE callback pending until the client disconnects. Without
+      // this await the callback resolves instantly and hono closes the stream,
+      // so no events would ever reach connected clients.
+      await new Promise<void>((resolve) => {
+        stream.onAbort(() => {
           clearInterval(heartbeatInterval)
           activeClients.delete(sendUpdate)
-        }
-      }, 30000)
-
-      stream.onAbort(() => {
-        clearInterval(heartbeatInterval)
-        activeClients.delete(sendUpdate)
+          resolve()
+        })
       })
     })
   })
@@ -349,7 +381,11 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
       id: crypto.randomUUID(),
       body,
       createdAt: Date.now(),
-      role: role || 'user',
+      // Agents identify themselves by sending a `model`. Honour an explicit
+      // role, otherwise infer agent-vs-user from the presence of a model so
+      // replies posted via the documented `{ body, model }` payload are
+      // attributed correctly.
+      role: role || (model ? 'agent' : 'user'),
       model: model || undefined,
     }
     const updated = await store.addReply(commentId, reply)
@@ -423,6 +459,49 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
     const removed = await store.remove(id)
     if (!removed) return c.json({ error: 'Comment not found' }, 404)
     return c.json({ ok: true })
+  })
+
+  // ── Agent handoff: "agent waits, human releases" ──────────────────────────
+  // The UI's "Send to agent" button POSTs here. We snapshot the current
+  // comments, format them, and release every agent blocked on /api/review/await.
+  app.post('/api/review/send', async (c) => {
+    const body = await c.req.json().catch(() => ({}) as Record<string, unknown>)
+    const generalComment =
+      typeof body?.generalComment === 'string' ? body.generalComment : undefined
+    const all = await store.getAll()
+    const openCount = all.filter((x) => x.status === 'open').length
+    const payload = reviewSession.send({
+      sentAt: Date.now(),
+      commentXml: formatComments(all, generalComment),
+      openCount,
+      comments: all,
+    })
+    return c.json({
+      ok: true,
+      round: payload.round,
+      openCount: payload.openCount,
+      waiters: reviewSession.snapshot().waiters,
+    })
+  })
+
+  // Long-poll the waiting agent blocks on. Each request stays short (≤50s) so
+  // it survives proxy/keep-alive limits; the client owns the total wait budget
+  // by re-polling with the `sinceRound` cursor it last saw.
+  app.get('/api/review/await', async (c) => {
+    const sinceRaw = c.req.query('sinceRound')
+    const sinceRound = sinceRaw !== undefined && sinceRaw !== '' ? Number(sinceRaw) : undefined
+    const requested = Number(c.req.query('timeoutMs')) || 25000
+    const timeoutMs = Math.min(Math.max(requested, 1000), 50000)
+    const result = await reviewSession.await({
+      sinceRound: Number.isNaN(sinceRound as number) ? undefined : sinceRound,
+      timeoutMs,
+      signal: c.req.raw.signal,
+    })
+    return c.json(result)
+  })
+
+  app.get('/api/review/status', (c) => {
+    return c.json(reviewSession.snapshot())
   })
 
   app.post('/api/attachments', async (c) => {

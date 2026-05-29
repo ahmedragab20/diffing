@@ -1,266 +1,356 @@
-import { useState } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import {
   MessageSquare,
-  CheckCircle2,
-  Reply,
-  Bot,
+  Check,
+  RotateCcw,
+  CornerUpLeft,
+  Pencil,
   Trash2,
-  AlertTriangle,
-  XCircle,
+  Bot,
+  ChevronRight,
+  X,
 } from 'lucide-react'
-import type { ReviewComment } from '../../lib/types'
-import { timeAgo, truncate, fileName } from '../utils'
+import type { ReviewComment, CommentReply } from '../../lib/types'
+import { timeAgo, fileName, scrollToLine } from '../utils'
 
 interface CommentTrackerProps {
   comments: ReviewComment[]
   resolveComment: (id: string) => void
   unresolveComment: (id: string) => void
   removeComment: (id: string) => void
+  addReply: (id: string, body: string) => void
+  editComment: (id: string, body: string) => void
+  editReply: (commentId: string, replyId: string, body: string) => void
   removeReply: (commentId: string, replyId: string) => void
 }
 
-type CommentStatus = 'open' | 'replied' | 'resolved'
+type Status = 'open' | 'replied' | 'resolved'
+type FilterKey = 'all' | Status
 
-function getCommentStatus(comment: ReviewComment): CommentStatus {
-  if (comment.status === 'resolved') return 'resolved'
-  if (comment.replies?.length > 0) return 'replied'
+function statusOf(c: ReviewComment): Status {
+  if (c.status === 'resolved') return 'resolved'
+  if (c.replies?.length) return 'replied'
   return 'open'
 }
 
-function replySummary(replies: ReviewComment['replies']): string {
-  if (!replies || replies.length === 0) return ''
-  const agentCount = replies.filter((r) => r.role === 'agent').length
-  const userCount = replies.filter((r) => r.role !== 'agent').length
-  const parts: string[] = []
-  if (userCount > 0) parts.push(`${userCount} user`)
-  if (agentCount > 0) parts.push(`${agentCount} agent`)
-  return parts.join(', ')
-}
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'open', label: 'Open' },
+  { key: 'replied', label: 'Replied' },
+  { key: 'resolved', label: 'Resolved' },
+]
 
-function getAvatarInfo(id: string, role?: 'user' | 'agent', model?: string) {
-  if (role === 'agent') {
-    const initial = model ? model.charAt(0).toUpperCase() : 'A'
-    return {
-      bg: 'var(--primary)', // Solid primary theme color for Agent
-      initial
-    }
-  }
+export function CommentTracker({
+  comments,
+  resolveComment,
+  unresolveComment,
+  removeComment,
+  addReply,
+  editComment,
+  editReply,
+  removeReply,
+}: CommentTrackerProps) {
+  const [filter, setFilter] = useState<FilterKey>('all')
 
-  // Deterministic vibrant solid colors for users
-  const colors = [
-    '#ff5858', // Coral red
-    '#11998e', // Teal green
-    '#ff9966', // Sunset orange
-    '#7f00ff', // Purple magic
-    '#00c6ff', // Sky blue
-    '#f12711', // Fire red
-    '#0575e6', // Royal blue
-  ]
-  const charSum = id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
-  const bg = colors[Math.abs(charSum) % colors.length]
-  return {
-    bg,
-    initial: 'U'
-  }
-}
+  const counts = useMemo(() => {
+    const c = { all: comments.length, open: 0, replied: 0, resolved: 0 }
+    for (const comment of comments) c[statusOf(comment)]++
+    return c
+  }, [comments])
 
-export function CommentTracker({ comments, resolveComment, unresolveComment, removeComment, removeReply }: CommentTrackerProps) {
+  const sorted = useMemo(
+    () => [...comments].sort((a, b) => b.createdAt - a.createdAt),
+    [comments],
+  )
+
+  const visible = useMemo(
+    () => (filter === 'all' ? sorted : sorted.filter((c) => statusOf(c) === filter)),
+    [sorted, filter],
+  )
+
   if (comments.length === 0) return null
 
-  const sorted = [...comments].sort((a, b) => b.createdAt - a.createdAt)
-
-  const openCount = sorted.filter((c) => getCommentStatus(c) === 'open').length
-  const repliedCount = sorted.filter((c) => getCommentStatus(c) === 'replied').length
-  const resolvedCount = sorted.filter((c) => getCommentStatus(c) === 'resolved').length
-
   return (
-    <div className="ct" role="complementary" aria-label="Comments tracker" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div className="ct-header" style={{ flexShrink: 0 }}>
-        <MessageSquare size={14} aria-hidden="true" />
-        <span className="ct-title">Comments</span>
-        <span className="ct-counts">
-          {openCount > 0 && <span className="ct-count ct-count-open">{openCount} open</span>}
-          {repliedCount > 0 && <span className="ct-count ct-count-replied">{repliedCount} replied</span>}
-          {resolvedCount > 0 && <span className="ct-count ct-count-resolved">{resolvedCount} resolved</span>}
-        </span>
-      </div>
-      <ul className="ct-list" role="list" aria-label="Comment threads" style={{ flex: 1, overflowY: 'auto', paddingBottom: '16px' }}>
-        {sorted.map((comment) => {
-          const status = getCommentStatus(comment)
-          const summary = replySummary(comment.replies)
-          const isResolved = comment.status === 'resolved'
-          const userAvatar = getAvatarInfo(comment.id, 'user')
-          return (
-            <li
-              key={comment.id}
-              className={`ct-item ${isResolved ? 'ct-item-resolved' : ''}`}
-              role="listitem"
+    <div className="cmt" role="complementary" aria-label="Review comments">
+      <div className="cmt-head">
+        <div className="cmt-title">
+          <MessageSquare size={14} aria-hidden="true" />
+          <span>Comments</span>
+          <span className="cmt-total">{comments.length}</span>
+        </div>
+        <div className="cmt-filters" role="tablist" aria-label="Filter comments">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              role="tab"
+              aria-selected={filter === f.key}
+              className={`cmt-filter ${filter === f.key ? 'cmt-filter-active' : ''}`}
+              onClick={() => setFilter(f.key)}
+              disabled={f.key !== 'all' && counts[f.key] === 0}
             >
-              <a
-                href={`#comment-${comment.id}`}
-                className="ct-item-link"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    document.querySelector(`#comment-${comment.id}`)?.scrollIntoView({ behavior: 'smooth' })
-                  }
-                }}
-                aria-label={comment.lineNumber === 0 
-                  ? `${status} file comment on ${fileName(comment.filePath)}`
-                  : `${status} comment on ${fileName(comment.filePath)} line ${comment.lineNumber}`
-                }
-              >
-                <div className="ct-item-header">
-                  <div className="ct-item-avatar" style={{ background: userAvatar.bg }}>
-                    {userAvatar.initial}
-                  </div>
-                  <span className="ct-item-file" title={comment.filePath}>
-                    {fileName(comment.filePath)}:{comment.lineNumber === 0 ? 'file' : comment.lineNumber}
-                  </span>
-                  <span className="ct-item-time">{timeAgo(comment.createdAt)}</span>
-                </div>
-                <div className="ct-item-body">{truncate(comment.body, 80)}</div>
-              </a>
-              <div className="ct-item-actions">
-                <ResolveButton
-                  isResolved={isResolved}
-                  onResolve={() => resolveComment(comment.id)}
-                  onUnresolve={() => unresolveComment(comment.id)}
-                />
-                <DeleteButton
-                  label="Delete comment"
-                  onConfirm={() => removeComment(comment.id)}
-                />
-              </div>
-              {summary && (
-                <div className="ct-item-replies">
-                  <span className="ct-item-replies-label" style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
-                    {comment.replies.length} {comment.replies.length === 1 ? 'reply' : 'replies'}
-                  </span>
-                  {comment.replies.slice(0, 3).map((r) => {
-                    const replyAvatar = getAvatarInfo(r.id, r.role, r.model)
-                    return (
-                      <span
-                        key={r.id}
-                        className={`ct-reply-mini-badge ${r.role === 'agent' ? 'ct-reply-mini-agent' : 'ct-reply-mini-user'}`}
-                        title={r.role === 'agent' ? (r.model ? `Agent (${r.model})` : 'Agent') : 'User'}
-                      >
-                        {r.role === 'agent' ? (
-                          <><Bot size={10} aria-hidden="true" /> Agent</>
-                        ) : (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                            <span style={{ 
-                              display: 'inline-block', 
-                              width: '8px', 
-                              height: '8px', 
-                              borderRadius: '50%', 
-                              background: replyAvatar.bg 
-                            }} /> 
-                            User
-                          </span>
-                        )}
-                        <button
-                          className="ct-reply-delete-btn"
-                          onClick={(e) => { e.stopPropagation(); confirmDeleteReply(() => removeReply(comment.id, r.id)) }}
-                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); confirmDeleteReply(() => removeReply(comment.id, r.id)) } }}
-                          title="Delete reply"
-                          aria-label={`Delete reply from ${r.role}`}
-                          tabIndex={0}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            padding: 0,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            marginLeft: '4px',
-                            color: 'var(--text-muted)'
-                          }}
-                        >
-                          <XCircle size={10} aria-hidden="true" />
-                        </button>
-                      </span>
-                    )
-                  })}
-                  {comment.replies.length > 3 && (
-                    <span className="ct-item-replies-more">+{comment.replies.length - 3} more</span>
-                  )}
-                </div>
-              )}
-            </li>
-          )
-        })}
+              {f.label}
+              <span className="cmt-filter-count">{counts[f.key]}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <ul className="cmt-list" aria-label="Comment threads">
+        {visible.length === 0 ? (
+          <li className="cmt-empty">No {filter} comments</li>
+        ) : (
+          visible.map((comment) => (
+            <CommentCard
+              key={comment.id}
+              comment={comment}
+              resolveComment={resolveComment}
+              unresolveComment={unresolveComment}
+              removeComment={removeComment}
+              addReply={addReply}
+              editComment={editComment}
+              editReply={editReply}
+              removeReply={removeReply}
+            />
+          ))
+        )}
       </ul>
     </div>
   )
 }
 
-function ResolveButton({ isResolved, onResolve, onUnresolve }: { isResolved: boolean; onResolve: () => void; onUnresolve: () => void }) {
+interface CardProps extends Omit<CommentTrackerProps, 'comments'> {
+  comment: ReviewComment
+}
+
+function CommentCard({
+  comment,
+  resolveComment,
+  unresolveComment,
+  removeComment,
+  addReply,
+  editComment,
+  editReply,
+  removeReply,
+}: CardProps) {
+  const status = statusOf(comment)
+  const resolved = comment.status === 'resolved'
+  const replyCount = comment.replies?.length ?? 0
+
+  const [expanded, setExpanded] = useState(false)
+  const [replying, setReplying] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const jump = useCallback(() => {
+    if (comment.lineNumber > 0) {
+      scrollToLine(comment.filePath, comment.lineNumber, comment.side)
+    } else {
+      document.getElementById(`file-${comment.filePath}`)?.scrollIntoView({ block: 'start' })
+    }
+  }, [comment.filePath, comment.lineNumber, comment.side])
+
+  const lineLabel = comment.lineNumber > 0 ? `:${comment.lineNumber}` : ' · file'
+
   return (
-    <button
-      className={`ct-action-btn ct-action-resolve ${isResolved ? 'ct-action-resolved' : ''}`}
-      onClick={(e) => { e.stopPropagation(); e.preventDefault()
-        isResolved ? onUnresolve() : onResolve()
-      }}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault()
-        isResolved ? onUnresolve() : onResolve()
-      } }}
-      title={isResolved ? 'Unresolve' : 'Resolve'}
-      aria-label={isResolved ? 'Unresolve comment' : 'Resolve comment'}
-      tabIndex={0}
-    >
-      <CheckCircle2 size={12} aria-hidden="true" />
-    </button>
+    <li className={`cmt-card cmt-card-${status} ${resolved ? 'cmt-card-resolved' : ''}`}>
+      <div className="cmt-card-top">
+        <span className={`cmt-dot cmt-dot-${status}`} aria-hidden="true" />
+        <button className="cmt-loc" onClick={jump} title={`Jump to ${comment.filePath}${lineLabel}`}>
+          <span className="cmt-loc-file">{fileName(comment.filePath)}</span>
+          <span className="cmt-loc-line">{lineLabel}</span>
+        </button>
+        <span className="cmt-time">{timeAgo(comment.createdAt)}</span>
+      </div>
+
+      {comment.lineContent?.trim() && (
+        <button className="cmt-codeline" onClick={jump} title="Jump to line">
+          <code>{comment.lineContent.trim().slice(0, 160)}</code>
+        </button>
+      )}
+
+      {editing ? (
+        <Composer
+          initial={comment.body}
+          placeholder="Edit comment…"
+          submitLabel="Save"
+          onCancel={() => setEditing(false)}
+          onSubmit={(body) => {
+            editComment(comment.id, body)
+            setEditing(false)
+          }}
+        />
+      ) : (
+        <p className="cmt-body">{comment.body}</p>
+      )}
+
+      <div className="cmt-actions">
+        <button className="cmt-act" onClick={() => { setReplying((v) => !v); setExpanded(true) }} title="Reply">
+          <CornerUpLeft size={13} aria-hidden="true" />
+          <span>Reply</span>
+        </button>
+        <button className="cmt-act" onClick={() => setEditing((v) => !v)} title="Edit comment">
+          <Pencil size={13} aria-hidden="true" />
+        </button>
+        <button
+          className={`cmt-act ${resolved ? 'cmt-act-resolved' : ''}`}
+          onClick={() => (resolved ? unresolveComment(comment.id) : resolveComment(comment.id))}
+          title={resolved ? 'Reopen' : 'Resolve'}
+        >
+          {resolved ? <RotateCcw size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
+        </button>
+        {confirmDelete ? (
+          <span className="cmt-confirm">
+            <button className="cmt-act cmt-act-danger" onClick={() => removeComment(comment.id)} title="Confirm delete">
+              Delete?
+            </button>
+            <button className="cmt-act" onClick={() => setConfirmDelete(false)} title="Cancel">
+              <X size={13} aria-hidden="true" />
+            </button>
+          </span>
+        ) : (
+          <button className="cmt-act cmt-act-del" onClick={() => setConfirmDelete(true)} title="Delete comment">
+            <Trash2 size={13} aria-hidden="true" />
+          </button>
+        )}
+      </div>
+
+      {replyCount > 0 && (
+        <button className="cmt-thread-toggle" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
+          <ChevronRight size={12} className={`cmt-chev ${expanded ? 'cmt-chev-open' : ''}`} aria-hidden="true" />
+          {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
+        </button>
+      )}
+
+      {expanded && replyCount > 0 && (
+        <ul className="cmt-replies">
+          {comment.replies.map((r) => (
+            <ReplyRow
+              key={r.id}
+              reply={r}
+              onEdit={(body) => editReply(comment.id, r.id, body)}
+              onRemove={() => removeReply(comment.id, r.id)}
+            />
+          ))}
+        </ul>
+      )}
+
+      {replying && (
+        <Composer
+          placeholder="Write a reply…"
+          submitLabel="Reply"
+          autoFocus
+          onCancel={() => setReplying(false)}
+          onSubmit={(body) => {
+            addReply(comment.id, body)
+            setReplying(false)
+            setExpanded(true)
+          }}
+        />
+      )}
+    </li>
   )
 }
 
-function DeleteButton({ label, onConfirm }: { label: string; onConfirm: () => void }) {
-  const [confirming, setConfirming] = useState(false)
+function ReplyRow({
+  reply,
+  onEdit,
+  onRemove,
+}: {
+  reply: CommentReply
+  onEdit: (body: string) => void
+  onRemove: () => void
+}) {
+  const isAgent = reply.role === 'agent' || (reply.role == null && !!reply.model)
+  const [editing, setEditing] = useState(false)
 
-  if (confirming) {
-    return (
-      <div className="ct-delete-confirm">
-        <button
-          className="ct-action-btn ct-action-delete-confirm"
-          onClick={(e) => { e.stopPropagation(); e.preventDefault(); onConfirm() }}
-          title="Confirm delete"
-          aria-label={`Confirm ${label}`}
-        >
-          <AlertTriangle size={12} aria-hidden="true" />
-          Delete?
-        </button>
-        <button
-          className="ct-action-btn"
-          onClick={(e) => { e.stopPropagation(); e.preventDefault(); setConfirming(false) }}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); setConfirming(false) } }}
-          title="Cancel delete"
-          aria-label="Cancel delete"
-          tabIndex={0}
-          style={{ fontSize: '10px', padding: '1px 4px' }}
-        >
-          Cancel
+  return (
+    <li className={`cmt-reply ${isAgent ? 'cmt-reply-agent' : ''}`}>
+      <div className="cmt-reply-head">
+        <span className={`cmt-reply-who ${isAgent ? 'cmt-reply-who-agent' : ''}`}>
+          {isAgent ? <Bot size={11} aria-hidden="true" /> : null}
+          {isAgent ? reply.model || 'Agent' : 'You'}
+        </span>
+        <span className="cmt-time">{timeAgo(reply.createdAt)}</span>
+        {!isAgent && (
+          <button className="cmt-reply-act" onClick={() => setEditing((v) => !v)} title="Edit reply">
+            <Pencil size={11} aria-hidden="true" />
+          </button>
+        )}
+        <button className="cmt-reply-act cmt-act-del" onClick={onRemove} title="Delete reply">
+          <Trash2 size={11} aria-hidden="true" />
         </button>
       </div>
-    )
-  }
-
-  return (
-    <button
-      className="ct-action-btn ct-action-delete"
-      onClick={(e) => { e.stopPropagation(); e.preventDefault(); setConfirming(true) }}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); setConfirming(true) } }}
-      title={label}
-      aria-label={label}
-      tabIndex={0}
-    >
-      <Trash2 size={12} aria-hidden="true" />
-    </button>
+      {editing ? (
+        <Composer
+          initial={reply.body}
+          submitLabel="Save"
+          placeholder="Edit reply…"
+          autoFocus
+          onCancel={() => setEditing(false)}
+          onSubmit={(body) => {
+            onEdit(body)
+            setEditing(false)
+          }}
+        />
+      ) : (
+        <p className="cmt-reply-body">{reply.body}</p>
+      )}
+    </li>
   )
 }
 
-function confirmDeleteReply(onConfirm: () => void) {
-  if (window.confirm('Delete this reply?')) {
-    onConfirm()
+function Composer({
+  initial = '',
+  placeholder,
+  submitLabel,
+  autoFocus,
+  onSubmit,
+  onCancel,
+}: {
+  initial?: string
+  placeholder?: string
+  submitLabel: string
+  autoFocus?: boolean
+  onSubmit: (body: string) => void
+  onCancel: () => void
+}) {
+  const [value, setValue] = useState(initial)
+  const ref = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    if (autoFocus) ref.current?.focus()
+  }, [autoFocus])
+
+  const submit = () => {
+    const trimmed = value.trim()
+    if (trimmed) onSubmit(trimmed)
   }
+
+  return (
+    <div className="cmt-composer">
+      <textarea
+        ref={ref}
+        className="cmt-composer-input"
+        value={value}
+        placeholder={placeholder}
+        rows={2}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault()
+            submit()
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            onCancel()
+          }
+        }}
+      />
+      <div className="cmt-composer-actions">
+        <button className="cmt-act" onClick={onCancel}>Cancel</button>
+        <button className="cmt-act cmt-act-primary" onClick={submit} disabled={!value.trim()}>
+          {submitLabel}
+        </button>
+      </div>
+    </div>
+  )
 }

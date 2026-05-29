@@ -23,6 +23,7 @@ import { useComments } from "./hooks/useComments";
 import { useMergeStatus } from "./hooks/useMergeStatus";
 import { useSettings } from "./hooks/useSettings";
 import { useViewed } from "./hooks/useViewed";
+import { HapticsProvider } from "./hooks/useHaptics";
 import { useSymbols } from "./hooks/useSymbols";
 import { useDiffSearch } from "./hooks/useDiffSearch";
 import { Toolbar } from "./components/Toolbar";
@@ -35,6 +36,7 @@ import { DiffSearchModal } from "./components/DiffSearchModal";
 import { FileViewerModal } from "./components/FileViewerModal";
 import { VimStatusBar } from "./components/VimStatusBar";
 import { ShortcutsHelpModal } from "./components/ShortcutsHelpModal";
+import { AgentActivityToast } from "./components/AgentActivityToast";
 
 
 export function App() {
@@ -50,6 +52,7 @@ export function App() {
         tabSizeMap,
         untrackedFiles,
         loading,
+        refreshing,
         error,
     } = useDiff(
         {
@@ -58,7 +61,7 @@ export function App() {
         },
         true,
     );
-    const { comments, addComment, removeComment, resolveComment, unresolveComment, removeReply, copyAllComments } =
+    const { comments, addComment, removeComment, resolveComment, unresolveComment, addReply, editComment, editReply, removeReply, copyAllComments, agentActivity, clearAgentActivity, sendToAgent, sending, agentWaiting } =
         useComments();
     const { status: mergeStatus, refresh: refreshMergeStatus } = useMergeStatus(patch);
     const [activeFile, setActiveFile] = useState<string | null>(null);
@@ -69,6 +72,50 @@ export function App() {
             return false;
         }
     });
+    const [sidebarWidth, setSidebarWidth] = useState(() => {
+        try {
+            const stored = localStorage.getItem("diffit-sidebar-width");
+            return stored ? Number(stored) : 320;
+        } catch {
+            return 320;
+        }
+    });
+    const sidebarWidthRef = useRef(sidebarWidth);
+    sidebarWidthRef.current = sidebarWidth;
+
+    const SIDEBAR_MIN_WIDTH = 240;
+    const SIDEBAR_MAX_WIDTH = 640;
+
+    const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = sidebarWidthRef.current;
+
+        const handleMove = (ev: MouseEvent) => {
+            const delta = ev.clientX - startX;
+            const newWidth = Math.max(
+                SIDEBAR_MIN_WIDTH,
+                Math.min(SIDEBAR_MAX_WIDTH, startWidth + delta),
+            );
+            setSidebarWidth(newWidth);
+        };
+
+        const handleUp = () => {
+            try {
+                localStorage.setItem("diffit-sidebar-width", String(sidebarWidthRef.current));
+            } catch {}
+            document.removeEventListener('mousemove', handleMove);
+            document.removeEventListener('mouseup', handleUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+
+        document.addEventListener('mousemove', handleMove);
+        document.addEventListener('mouseup', handleUp);
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+    }, []);
+
     const [symbolModalOpen, setSymbolModalOpen] = useState(false);
     const [diffSearchOpen, setDiffSearchOpen] = useState(false);
     const [fileViewerOpen, setFileViewerOpen] = useState(false);
@@ -447,6 +494,13 @@ export function App() {
         [updateSettings],
     );
 
+    const handleHapticsChange = useCallback(
+        (v: boolean) => {
+            updateSettings({ haptics: v });
+        },
+        [updateSettings],
+    );
+
     const toggleLineWrap = useCallback(() => {
         handleLineWrapChange(!settings.lineWrap);
     }, [settings.lineWrap, handleLineWrapChange]);
@@ -789,7 +843,9 @@ export function App() {
     }
 
     return (
+        <HapticsProvider enabled={settings.haptics ?? true}>
         <div className="app">
+            {refreshing && <div className="refresh-bar" role="status" aria-label="Refreshing diff" />}
             <Toolbar
                 repoName={repoName}
                 branch={branch}
@@ -811,6 +867,7 @@ export function App() {
                 hunkSeparators={settings.hunkSeparators}
                 lineHoverHighlight={settings.lineHoverHighlight}
                 fontSize={settings.fontSize}
+                haptics={settings.haptics ?? true}
                 onDiffStyleChange={handleDiffStyleChange}
                 onDiffOptionsChange={handleDiffOptionsChange}
                 onDefaultTabSizeChange={handleDefaultTabSizeChange}
@@ -824,11 +881,23 @@ export function App() {
                 onHunkSeparatorsChange={handleHunkSeparatorsChange}
                 onLineHoverHighlightChange={handleLineHoverHighlightChange}
                 onFontSizeChange={handleFontSizeChange}
+                onHapticsChange={handleHapticsChange}
                 onCopyComments={copyAllComments}
+                onSendToAgent={sendToAgent}
+                agentWaiting={agentWaiting}
+                sending={sending}
+                comments={comments}
+                onEditComment={editComment}
+                onDeleteComment={removeComment}
             />
             <div className="app-body">
                 <aside
                     className={`sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+                    style={
+                        sidebarCollapsed
+                            ? undefined
+                            : { width: sidebarWidth, minWidth: sidebarWidth }
+                    }
                 >
                     <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                         <FileTree
@@ -861,6 +930,9 @@ export function App() {
                                     resolveComment={resolveComment}
                                     unresolveComment={unresolveComment}
                                     removeComment={removeComment}
+                                    addReply={addReply}
+                                    editComment={editComment}
+                                    editReply={editReply}
                                     removeReply={removeReply}
                                 />
                             </div>
@@ -868,6 +940,16 @@ export function App() {
                     )}
 
                 </aside>
+                {!sidebarCollapsed && (
+                    <div
+                        className="sidebar-resize-handle"
+                        onMouseDown={handleSidebarResizeStart}
+                        role="separator"
+                        aria-label="Resize sidebar"
+                        aria-orientation="vertical"
+                        tabIndex={0}
+                    />
+                )}
                 <main className="main" ref={diffViewerRef}>
                     {mergeStatus.inMerge && mergeStatus.conflicts.length > 0 && (
                         <div className="merge-conflict-banner">
@@ -926,7 +1008,9 @@ export function App() {
                 onClose={() => setSymbolModalOpen(false)}
             />
             <DiffSearchModal
+                files={files}
                 entries={diffSearchEntries}
+                symbols={symbols}
                 isOpen={diffSearchOpen}
                 onClose={() => setDiffSearchOpen(false)}
             />
@@ -949,6 +1033,12 @@ export function App() {
                 isOpen={shortcutsHelpOpen}
                 onClose={() => setShortcutsHelpOpen(false)}
             />
+            <AgentActivityToast
+                activity={agentActivity}
+                onDismiss={clearAgentActivity}
+                onJump={handleFileClick}
+            />
         </div>
+        </HapticsProvider>
     );
 }

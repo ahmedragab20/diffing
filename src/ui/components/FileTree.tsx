@@ -7,6 +7,7 @@ import {
 import type { FileDiffMetadata } from '@pierre/diffs'
 import { FileTree as PierreFileTree, useFileTree } from '@pierre/trees/react'
 import type { FileTreeRowDecorationRenderer, GitStatusEntry, GitStatus } from '@pierre/trees'
+import { Tooltip } from '../primitives/Tooltip'
 
 interface FileTreeProps {
   files: FileDiffMetadata[]
@@ -143,14 +144,15 @@ export const FileTree = memo(function FileTree({
       <div className="ft">
         <div className="ft-search">
           {onToggleCollapse && (
-            <button
-              className="sidebar-toggle"
-              onClick={onToggleCollapse}
-              title="Expand sidebar"
-              aria-label="Expand sidebar"
-            >
-              <PanelLeftOpen size={16} />
-            </button>
+            <Tooltip content="Expand sidebar" side="right">
+              <button
+                className="sidebar-toggle"
+                onClick={onToggleCollapse}
+                aria-label="Expand sidebar"
+              >
+                <PanelLeftOpen size={16} />
+              </button>
+            </Tooltip>
           )}
         </div>
       </div>
@@ -161,14 +163,15 @@ export const FileTree = memo(function FileTree({
     <div className="ft" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div className="ft-search">
         {onToggleCollapse && (
-          <button
-            className="sidebar-toggle"
-            onClick={onToggleCollapse}
-            title="Collapse sidebar"
-            aria-label="Collapse sidebar"
-          >
-            <PanelLeftClose size={16} />
-          </button>
+          <Tooltip content="Collapse sidebar" side="right">
+            <button
+              className="sidebar-toggle"
+              onClick={onToggleCollapse}
+              aria-label="Collapse sidebar"
+            >
+              <PanelLeftClose size={16} />
+            </button>
+          </Tooltip>
         )}
         <div className="ft-search-wrapper">
           <Search size={14} className="ft-search-icon" />

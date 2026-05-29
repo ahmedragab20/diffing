@@ -1,6 +1,5 @@
 import { memo, useMemo } from 'react'
 import type { FileDiffMetadata, DiffLineAnnotation, AnnotationSide } from '@pierre/diffs'
-import { Virtualizer } from '@pierre/diffs/react'
 import type { ReviewComment } from '../../lib/types'
 import type { BinaryFileInfo } from '../hooks/useDiff'
 import type {
@@ -88,7 +87,7 @@ export const DiffViewer = memo(function DiffViewer({
   }
 
   return (
-    <Virtualizer className="diff-viewer">
+    <div className="diff-viewer">
       {sortedFiles.map((file, index) => {
         const filePath = file.name
         const binaryInfo = binaryFiles.get(filePath)
@@ -131,6 +130,6 @@ export const DiffViewer = memo(function DiffViewer({
           />
         )
       })}
-    </Virtualizer>
+    </div>
   )
 })

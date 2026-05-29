@@ -23,6 +23,8 @@ export interface Settings {
   expandContextByDefault: boolean
   collapsedContextThreshold: number
   expansionLineCount: number
+  /** Tactile feedback (web-haptics) on interaction. */
+  haptics: boolean
 }
 
 const DEFAULTS: Settings = {
@@ -42,6 +44,7 @@ const DEFAULTS: Settings = {
   expandContextByDefault: false,
   collapsedContextThreshold: 10,
   expansionLineCount: 20,
+  haptics: true,
 }
 
 export function useSettings() {

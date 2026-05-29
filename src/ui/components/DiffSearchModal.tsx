@@ -1,214 +1,322 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Search, X } from 'lucide-react'
+import { Search, X, FileText, Type, Code2 } from 'lucide-react'
+import type { FileDiffMetadata } from '@pierre/diffs'
 import type { DiffLineEntry } from '../hooks/useDiffSearch'
-import { scrollToLine } from '../utils'
+import type { SymbolEntry } from '../hooks/useSymbols'
+import { scrollToLine, fileName } from '../utils'
+import { Modal } from '../primitives/Modal'
+
+type Scope = 'all' | 'files' | 'text' | 'symbols'
+
+const SCOPES: { key: Scope; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'files', label: 'Files' },
+  { key: 'text', label: 'Text' },
+  { key: 'symbols', label: 'Symbols' },
+]
 
 interface DiffSearchModalProps {
+  files: FileDiffMetadata[]
   entries: DiffLineEntry[]
+  symbols: SymbolEntry[]
   isOpen: boolean
   onClose: () => void
 }
 
-function fuzzyMatch(text: string, query: string): { score: number; matches: number[] } | null {
+interface Result {
+  kind: 'file' | 'text' | 'symbol'
+  id: string
+  /** Text the query is matched against. */
+  haystack: string
+  primary: string
+  secondary: string
+  filePath: string
+  lineNumber?: number
+  side?: 'additions' | 'deletions'
+  badge: string
+  score: number
+}
+
+function fuzzyMatch(text: string, query: string): number | null {
   const textLower = text.toLowerCase()
   const queryLower = query.toLowerCase()
   let qi = 0
   let score = 0
   let prevPos = -1
-  const matches: number[] = []
 
   for (let ti = 0; ti < textLower.length && qi < queryLower.length; ti++) {
     if (textLower[ti] === queryLower[qi]) {
-      matches.push(ti)
       if (prevPos >= 0) {
         const gap = ti - prevPos
-        if (gap === 1) {
-          score += 15
-        } else {
-          score += Math.max(0, 10 - gap)
-        }
+        score += gap === 1 ? 15 : Math.max(0, 10 - gap)
       } else {
         score += 10
         const ch = text[ti - 1]
         if (ti === 0 || !ch || ch === ' ' || ch === '_' || ch === '-' || ch === '.' || ch === '/') {
           score += 10
         }
+        score += ti * -0.05
       }
       prevPos = ti
       qi++
-    } else {
-      if (prevPos >= 0 && ti - prevPos > 20) {
-        return null
-      }
+    } else if (prevPos >= 0 && ti - prevPos > 24) {
+      return null
     }
   }
 
   if (qi < queryLower.length) return null
-
-  score -= text.length * 0.02
-  score += matches[0] * -0.05
-
-  return { score, matches }
+  return score - text.length * 0.02
 }
 
-interface ScoredEntry {
-  entry: DiffLineEntry
-  score: number
+function buildCandidates(
+  scope: Scope,
+  files: FileDiffMetadata[],
+  entries: DiffLineEntry[],
+  symbols: SymbolEntry[],
+): Result[] {
+  const out: Result[] = []
+
+  if (scope === 'all' || scope === 'files') {
+    for (const f of files) {
+      out.push({
+        kind: 'file',
+        id: `f:${f.name}`,
+        haystack: f.name,
+        primary: fileName(f.name),
+        secondary: f.name.split('/').slice(0, -1).join('/'),
+        filePath: f.name,
+        badge: f.type === 'new' ? 'new' : f.type === 'deleted' ? 'del' : 'mod',
+        score: 0,
+      })
+    }
+  }
+
+  if (scope === 'all' || scope === 'symbols') {
+    for (const s of symbols) {
+      out.push({
+        kind: 'symbol',
+        id: `s:${s.filePath}:${s.side}:${s.lineNumber}:${s.name}`,
+        haystack: `${s.name} ${s.filePath}`,
+        primary: s.name,
+        secondary: `${fileName(s.filePath)}:${s.lineNumber}`,
+        filePath: s.filePath,
+        lineNumber: s.lineNumber,
+        side: s.side,
+        badge: s.kind,
+        score: 0,
+      })
+    }
+  }
+
+  if (scope === 'all' || scope === 'text') {
+    const seen = new Set<string>()
+    for (const e of entries) {
+      const key = `${e.filePath}:${e.side}:${e.lineNumber}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({
+        kind: 'text',
+        id: `t:${key}`,
+        haystack: `${e.content} ${e.filePath}`,
+        primary: e.content.trim().slice(0, 120),
+        secondary: `${fileName(e.filePath)}:${e.lineNumber}`,
+        filePath: e.filePath,
+        lineNumber: e.lineNumber,
+        side: e.side,
+        badge: e.side === 'additions' ? '+' : '−',
+        score: 0,
+      })
+    }
+  }
+
+  return out
 }
 
+const KIND_ICON = {
+  file: FileText,
+  text: Type,
+  symbol: Code2,
+} as const
 
-function deduplicate(entries: DiffLineEntry[]): DiffLineEntry[] {
-  const seen = new Set<string>()
-  return entries.filter((e) => {
-    const key = `${e.filePath}:${e.side}:${e.lineNumber}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-export function DiffSearchModal({ entries, isOpen, onClose }: DiffSearchModalProps) {
+export function DiffSearchModal({ files, entries, symbols, isOpen, onClose }: DiffSearchModalProps) {
   const [query, setQuery] = useState('')
+  const [scope, setScope] = useState<Scope>('all')
   const [focusedIndex, setFocusedIndex] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const uniqueEntries = useMemo(() => deduplicate(entries), [entries])
+  const candidates = useMemo(
+    () => buildCandidates(scope, files, entries, symbols),
+    [scope, files, entries, symbols],
+  )
 
-  const results = useMemo<ScoredEntry[]>(() => {
-    if (!query.trim()) return []
-
+  const results = useMemo<Result[]>(() => {
     const q = query.trim()
-    const scored: ScoredEntry[] = []
-
-    for (const entry of uniqueEntries) {
-      const searchText = `${entry.filePath} ${entry.content.trim()}`
-      const result = fuzzyMatch(searchText, q)
-      if (result) {
-        scored.push({ entry, score: result.score })
-      }
+    if (!q) {
+      // With no query, the line-level text scope is too noisy to dump wholesale;
+      // files and symbols are a useful at-a-glance index.
+      const browseable = candidates.filter((c) => c.kind !== 'text')
+      return browseable.slice(0, 200)
     }
-
+    const scored: Result[] = []
+    for (const c of candidates) {
+      const score = fuzzyMatch(c.haystack, q)
+      if (score !== null) scored.push({ ...c, score })
+    }
     scored.sort((a, b) => b.score - a.score)
     return scored.slice(0, 100)
-  }, [uniqueEntries, query])
+  }, [candidates, query])
 
+  useEffect(() => setFocusedIndex(0), [query, scope])
   useEffect(() => {
-    setFocusedIndex(0)
-  }, [query])
-
-  useEffect(() => {
-    setQuery('')
-  }, [isOpen])
-
-  useEffect(() => {
-    if (isOpen && searchRef.current) {
-      searchRef.current.focus()
+    if (isOpen) {
+      setQuery('')
+      setScope('all')
     }
   }, [isOpen])
+  useEffect(() => {
+    if (isOpen) searchRef.current?.focus()
+  }, [isOpen])
 
-  const selectEntry = useCallback(
-    (entry: DiffLineEntry) => {
-      scrollToLine(entry.filePath, entry.lineNumber, entry.side, query)
+  const select = useCallback(
+    (r: Result) => {
+      if (r.lineNumber && r.side) {
+        scrollToLine(r.filePath, r.lineNumber, r.side, query.trim() || undefined)
+      } else {
+        document.getElementById(`file-${r.filePath}`)?.scrollIntoView({ block: 'start' })
+      }
       onClose()
     },
     [onClose, query],
   )
 
+  const cycleScope = useCallback((dir: 1 | -1) => {
+    setScope((cur) => {
+      const i = SCOPES.findIndex((s) => s.key === cur)
+      return SCOPES[(i + dir + SCOPES.length) % SCOPES.length].key
+    })
+  }, [])
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Tab cycles scope — vim-ish "switch register"
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        cycleScope(e.shiftKey ? -1 : 1)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+        return
+      }
       if (results.length === 0) return
-      switch (e.key) {
-        case 'ArrowDown':
-        case 'j':
-          e.preventDefault()
-          setFocusedIndex((i) => (i + 1) % results.length)
-          break
-        case 'ArrowUp':
-        case 'k':
-          e.preventDefault()
-          setFocusedIndex((i) => (i - 1 + results.length) % results.length)
-          break
-        case 'Enter':
-          e.preventDefault()
-          if (results[focusedIndex]) {
-            selectEntry(results[focusedIndex].entry)
-          }
-          break
-        case 'Escape':
-          e.preventDefault()
-          onClose()
-          break
+
+      const move = (delta: number) =>
+        setFocusedIndex((i) => (i + delta + results.length) % results.length)
+
+      // Ctrl-n/p and Ctrl-j/k navigate even while typing; bare j/k/arrows too.
+      if (e.key === 'ArrowDown' || (e.ctrlKey && (e.key === 'n' || e.key === 'j'))) {
+        e.preventDefault()
+        move(1)
+      } else if (e.key === 'ArrowUp' || (e.ctrlKey && (e.key === 'p' || e.key === 'k'))) {
+        e.preventDefault()
+        move(-1)
+      } else if (e.ctrlKey && e.key === 'd') {
+        e.preventDefault()
+        move(8)
+      } else if (e.ctrlKey && e.key === 'u') {
+        e.preventDefault()
+        move(-8)
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        if (results[focusedIndex]) select(results[focusedIndex])
       }
     },
-    [results, focusedIndex, onClose, selectEntry],
+    [results, focusedIndex, onClose, select, cycleScope],
   )
 
   useEffect(() => {
     if (!isOpen) return
-    const focused = listRef.current?.children[focusedIndex] as HTMLElement | undefined
-    focused?.scrollIntoView({ block: 'nearest' })
+    const el = listRef.current?.children[focusedIndex] as HTMLElement | undefined
+    el?.scrollIntoView({ block: 'nearest' })
   }, [focusedIndex, isOpen])
 
-  if (!isOpen) return null
-
   return (
-    <div className="diffsearch-overlay" onClick={onClose}>
-      <div className="diffsearch-modal" onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
-        <div className="diffsearch-header">
-          <div className="diffsearch-search">
-            <Search size={14} className="diffsearch-search-icon" />
-            <input
-              ref={searchRef}
-              type="text"
-              className="diffsearch-search-input"
-              placeholder="Search diffs..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            {query && (
-              <button className="diffsearch-search-clear" onClick={() => setQuery('')}>
-                <X size={14} />
-              </button>
-            )}
-          </div>
-          <span className="diffsearch-count">
-            {query.trim() ? `${results.length} matches` : 'Type to search'}
-          </span>
-        </div>
-        <div className="diffsearch-list" ref={listRef}>
-          {query.trim() && results.length === 0 ? (
-            <div className="diffsearch-empty">No matches found</div>
-          ) : (
-            results.map((r, i) => {
-              const { entry } = r
-              const dir = entry.filePath.split('/').slice(0, -1).join('/')
-              const fileName = entry.filePath.split('/').pop()
-              const sideLabel = entry.side === 'additions' ? '+' : '-'
-              return (
-                <div
-                  key={`${entry.filePath}:${entry.side}:${entry.lineNumber}`}
-                  className={`diffsearch-item ${i === focusedIndex ? 'diffsearch-item-focused' : ''}`}
-                  onClick={() => selectEntry(entry)}
-                  onMouseEnter={() => setFocusedIndex(i)}
-                >
-                  <span className={`diffsearch-side diffsearch-side-${entry.side}`}>
-                    {sideLabel}
-                  </span>
-                  <div className="diffsearch-info">
-                    <span className="diffsearch-location">
-                      {dir ? `${dir}/` : ''}
-                      <strong>{fileName}</strong>
-                      <span className="diffsearch-line">:{entry.lineNumber}</span>
-                    </span>
-                    <span className="diffsearch-content">{entry.content.trim().slice(0, 120)}</span>
-                  </div>
-                </div>
-              )
-            })
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      className="diffsearch-modal ui-modal--palette"
+      ariaLabel="Search files, text and symbols"
+      initialFocus={searchRef}
+      onKeyDown={handleKeyDown}
+    >
+      <div className="diffsearch-header">
+        <div className="diffsearch-search">
+          <Search size={14} className="diffsearch-search-icon" />
+          <input
+            ref={searchRef}
+            type="text"
+            className="diffsearch-search-input"
+            placeholder="Search files, text & symbols…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {query && (
+            <button className="diffsearch-search-clear" onClick={() => setQuery('')} aria-label="Clear">
+              <X size={14} />
+            </button>
           )}
         </div>
+        <div className="diffsearch-scopes" role="tablist" aria-label="Search scope">
+          {SCOPES.map((s) => (
+            <button
+              key={s.key}
+              role="tab"
+              aria-selected={scope === s.key}
+              className={`diffsearch-scope ${scope === s.key ? 'diffsearch-scope-active' : ''}`}
+              onClick={() => setScope(s.key)}
+            >
+              {s.label}
+            </button>
+          ))}
+          <span className="diffsearch-count">{results.length}</span>
+        </div>
       </div>
-    </div>
+      <div className="diffsearch-list" ref={listRef}>
+        {results.length === 0 ? (
+          <div className="diffsearch-empty">
+            {query.trim() ? 'No matches found' : 'Type to search'}
+          </div>
+        ) : (
+          results.map((r, i) => {
+            const Icon = KIND_ICON[r.kind]
+            return (
+              <div
+                key={r.id}
+                className={`diffsearch-item ${i === focusedIndex ? 'diffsearch-item-focused' : ''}`}
+                onClick={() => select(r)}
+                onMouseEnter={() => setFocusedIndex(i)}
+              >
+                <span className={`diffsearch-kind diffsearch-kind-${r.kind}`} title={r.kind}>
+                  <Icon size={13} />
+                </span>
+                <div className="diffsearch-info">
+                  <span className="diffsearch-primary">{r.primary || '(blank)'}</span>
+                  {r.secondary && <span className="diffsearch-secondary">{r.secondary}</span>}
+                </div>
+                <span className={`diffsearch-badge diffsearch-badge-${r.kind}`}>{r.badge}</span>
+              </div>
+            )
+          })
+        )}
+      </div>
+      <div className="diffsearch-foot">
+        <span><kbd>Tab</kbd> scope</span>
+        <span><kbd>↑↓</kbd>/<kbd>^j</kbd><kbd>^k</kbd> move</span>
+        <span><kbd>↵</kbd> open</span>
+        <span><kbd>esc</kbd> close</span>
+      </div>
+    </Modal>
   )
 }

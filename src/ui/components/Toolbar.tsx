@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, memo } from 'react'
+import { useState, memo } from 'react'
 import { GitBranch, Settings, Palette } from 'lucide-react'
 import type { DiffOptions } from '../hooks/useDiff'
 import type {
@@ -7,6 +7,10 @@ import type {
   HunkSeparatorStyle,
   LineHoverHighlight,
 } from '../hooks/useSettings'
+import { Popover } from '../primitives/Popover'
+import { Select } from '../primitives/Select'
+import { SendReviewPopover } from '../components/SendReviewPopover'
+import type { ReviewComment } from '../../lib/types'
 
 interface ToolbarProps {
   repoName: string
@@ -29,6 +33,7 @@ interface ToolbarProps {
   hunkSeparators: HunkSeparatorStyle
   lineHoverHighlight: LineHoverHighlight
   fontSize: number
+  haptics: boolean
   onDiffStyleChange: (style: 'split' | 'unified') => void
   onDiffOptionsChange: (options: DiffOptions) => void
   onDefaultTabSizeChange: (size: number) => void
@@ -42,18 +47,21 @@ interface ToolbarProps {
   onHunkSeparatorsChange: (v: HunkSeparatorStyle) => void
   onLineHoverHighlightChange: (v: LineHoverHighlight) => void
   onFontSizeChange: (v: number) => void
+  onHapticsChange: (v: boolean) => void
   onCopyComments: () => Promise<void>
+  onSendToAgent: (generalComment?: string) => Promise<unknown>
+  agentWaiting: boolean
+  sending: boolean
+  comments: ReviewComment[]
+  onEditComment: (id: string, body: string) => void
+  onDeleteComment: (id: string) => void
 }
 
 interface ThemeOption {
   id: string
   name: string
   type: 'dark' | 'light'
-  colors: {
-    bg: string
-    secondary: string
-    accent: string
-  }
+  colors: { bg: string; secondary: string; accent: string }
 }
 
 const THEMES: ThemeOption[] = [
@@ -70,6 +78,46 @@ const THEMES: ThemeOption[] = [
   { id: 'solarized-light', name: 'Solarized Light', type: 'light', colors: { bg: '#fdf6e3', secondary: '#eee8d5', accent: '#268bd2' } },
   { id: 'monokai', name: 'Monokai', type: 'dark', colors: { bg: '#272822', secondary: '#1d1e19', accent: '#f92672' } },
   { id: 'ayu-dark', name: 'Ayu Dark', type: 'dark', colors: { bg: '#0a0e14', secondary: '#0d1117', accent: '#e6b450' } },
+]
+
+const INLINE_DIFF_OPTS = [
+  { value: 'word', label: 'Word' },
+  { value: 'word-alt', label: 'Word (alt)' },
+  { value: 'char', label: 'Character' },
+  { value: 'none', label: 'None' },
+]
+const INDICATOR_OPTS = [
+  { value: 'classic', label: 'Classic (+/−)' },
+  { value: 'bars', label: 'Bars' },
+  { value: 'none', label: 'None' },
+]
+const HUNK_SEP_OPTS = [
+  { value: 'line-info', label: 'Line info + context' },
+  { value: 'line-info-basic', label: 'Line info' },
+  { value: 'metadata', label: 'Metadata only' },
+  { value: 'simple', label: 'Simple' },
+]
+const HOVER_OPTS = [
+  { value: 'both', label: 'Both' },
+  { value: 'line', label: 'Line only' },
+  { value: 'number', label: 'Number only' },
+  { value: 'disabled', label: 'Disabled' },
+]
+const FONT_SIZE_OPTS = [11, 12, 13, 14, 15, 16].map((n) => ({ value: String(n), label: `${n}px` }))
+const TAB_SIZE_OPTS = [2, 4, 8].map((n) => ({ value: String(n), label: String(n) }))
+const BROWSER_OPTS = [
+  { value: '', label: 'Default' },
+  { value: 'chrome', label: 'Chrome' },
+  { value: 'firefox', label: 'Firefox' },
+  { value: 'edge', label: 'Edge' },
+  { value: 'brave', label: 'Brave' },
+]
+const IDE_OPTS = [
+  { value: 'default', label: 'Default / System' },
+  { value: 'vscode', label: 'VS Code' },
+  { value: 'zed', label: 'Zed' },
+  { value: 'vim', label: 'Vim' },
+  { value: 'neovim', label: 'Neovim' },
 ]
 
 export const Toolbar = memo(function Toolbar({
@@ -93,6 +141,7 @@ export const Toolbar = memo(function Toolbar({
   hunkSeparators,
   lineHoverHighlight,
   fontSize,
+  haptics,
   onDiffStyleChange,
   onDiffOptionsChange,
   onDefaultTabSizeChange,
@@ -106,43 +155,24 @@ export const Toolbar = memo(function Toolbar({
   onHunkSeparatorsChange,
   onLineHoverHighlightChange,
   onFontSizeChange,
+  onHapticsChange,
   onCopyComments,
+  onSendToAgent,
+  agentWaiting,
+  sending,
+  comments,
+  onEditComment,
+  onDeleteComment,
 }: ToolbarProps) {
   const [copied, setCopied] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themeOpen, setThemeOpen] = useState(false)
-  const settingsRef = useRef<HTMLDivElement>(null)
-  const themeRef = useRef<HTMLDivElement>(null)
 
   const handleCopy = async () => {
     await onCopyComments()
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
-        setSettingsOpen(false)
-      }
-    }
-    if (settingsOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [settingsOpen])
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (themeRef.current && !themeRef.current.contains(e.target as Node)) {
-        setThemeOpen(false)
-      }
-    }
-    if (themeOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [themeOpen])
 
   return (
     <div className="toolbar">
@@ -176,250 +206,183 @@ export const Toolbar = memo(function Toolbar({
           </button>
         </div>
 
-        {/* Theme Picker Dropdown */}
-        <div className="settings-wrapper" ref={themeRef}>
-          <button
-            className={`btn btn-sm settings-btn ${themeOpen ? 'btn-active' : ''}`}
-            onClick={() => setThemeOpen(!themeOpen)}
-            title="Switch Theme"
-          >
-            <Palette size={14} style={{ marginRight: '6px' }} />
-            <span>Theme</span>
-          </button>
-          {themeOpen && (
-            <div className="settings-menu" style={{ minWidth: '200px', maxHeight: '420px', overflowY: 'auto' }}>
-              {THEMES.map((t) => (
-                <div
-                  key={t.id}
-                  className={`settings-item settings-item-spaced ${theme === t.id ? 'btn-active' : ''}`}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    margin: '2px 6px',
-                  }}
-                  onClick={() => {
-                    onThemeChange(t.id)
-                    setThemeOpen(false)
-                  }}
-                >
-                  <span style={{ fontWeight: theme === t.id ? '700' : '500' }}>{t.name}</span>
-                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                    <span
-                      style={{
-                        display: 'block',
-                        width: '8px',
-                        height: '8px',
-                        borderRadius: '50%',
-                        background: t.colors.bg,
-                        border: '1px solid rgba(255,255,255,0.1)',
-                      }}
-                    />
-                    <span
-                      style={{
-                        display: 'block',
-                        width: '8px',
-                        height: '8px',
-                        borderRadius: '50%',
-                        background: t.colors.secondary,
-                        border: '1px solid rgba(255,255,255,0.1)',
-                      }}
-                    />
-                    <span
-                      style={{
-                        display: 'block',
-                        width: '8px',
-                        height: '8px',
-                        borderRadius: '50%',
-                        background: t.colors.accent,
-                        border: '1px solid rgba(255,255,255,0.1)',
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Settings Dropdown */}
-        <div className="settings-wrapper" ref={settingsRef}>
-          <button
-            className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`}
-            onClick={() => setSettingsOpen(!settingsOpen)}
-            title="Settings"
-          >
-            <Settings size={14} />
-          </button>
-          {settingsOpen && (
-            <div className="settings-menu" style={{ minWidth: '260px', maxHeight: '70vh', overflowY: 'auto' }}>
-              {!customMode && (
-                <>
-                  <div className="settings-section-label">Source</div>
-                  <label className="settings-item">
-                    <input
-                      type="checkbox"
-                      checked={diffOptions.staged}
-                      onChange={(e) =>
-                        onDiffOptionsChange({ ...diffOptions, staged: e.target.checked })
-                      }
-                    />
-                    Show staged
-                  </label>
-                  <label className="settings-item">
-                    <input
-                      type="checkbox"
-                      checked={diffOptions.untracked}
-                      onChange={(e) =>
-                        onDiffOptionsChange({ ...diffOptions, untracked: e.target.checked })
-                      }
-                    />
-                    Show untracked
-                  </label>
-                </>
-              )}
-              <div className="settings-section-label">Display</div>
-              <div className="settings-item settings-item-spaced">
-                <span>Inline diff</span>
-                <select
-                  className="settings-select"
-                  value={lineDiffType}
-                  onChange={(e) => onLineDiffTypeChange(e.target.value as LineDiffType)}
-                  title="Inline change highlighting style"
-                >
-                  <option value="word">Word</option>
-                  <option value="word-alt">Word (alt)</option>
-                  <option value="char">Character</option>
-                  <option value="none">None</option>
-                </select>
-              </div>
-              <label className="settings-item">
-                <input
-                  type="checkbox"
-                  checked={lineWrap}
-                  onChange={(e) => onLineWrapChange(e.target.checked)}
-                />
-                Wrap long lines
-              </label>
-              <div className="settings-item settings-item-spaced">
-                <span>Diff indicators</span>
-                <select
-                  className="settings-select"
-                  value={diffIndicators}
-                  onChange={(e) => onDiffIndicatorsChange(e.target.value as DiffIndicators)}
-                >
-                  <option value="classic">Classic (+/−)</option>
-                  <option value="bars">Bars</option>
-                  <option value="none">None</option>
-                </select>
-              </div>
-              <label className="settings-item">
-                <input
-                  type="checkbox"
-                  checked={showLineNumbers}
-                  onChange={(e) => onShowLineNumbersChange(e.target.checked)}
-                />
-                Show line numbers
-              </label>
-              <div className="settings-item settings-item-spaced">
-                <span>Hunk separator</span>
-                <select
-                  className="settings-select"
-                  value={hunkSeparators}
-                  onChange={(e) => onHunkSeparatorsChange(e.target.value as HunkSeparatorStyle)}
-                  title="How dividers between hunks are styled"
-                >
-                  <option value="line-info">Line info + context</option>
-                  <option value="line-info-basic">Line info</option>
-                  <option value="metadata">Metadata only</option>
-                  <option value="simple">Simple</option>
-                </select>
-              </div>
-              <div className="settings-item settings-item-spaced">
-                <span>Hover highlight</span>
-                <select
-                  className="settings-select"
-                  value={lineHoverHighlight}
-                  onChange={(e) => onLineHoverHighlightChange(e.target.value as LineHoverHighlight)}
-                >
-                  <option value="both">Both</option>
-                  <option value="line">Line only</option>
-                  <option value="number">Number only</option>
-                  <option value="disabled">Disabled</option>
-                </select>
-              </div>
-              <div className="settings-item settings-item-spaced">
-                <span>Font size</span>
-                <select
-                  className="settings-select"
-                  value={fontSize}
-                  onChange={(e) => onFontSizeChange(Number(e.target.value))}
-                >
-                  <option value={11}>11px</option>
-                  <option value={12}>12px</option>
-                  <option value={13}>13px</option>
-                  <option value={14}>14px</option>
-                  <option value={15}>15px</option>
-                  <option value={16}>16px</option>
-                </select>
-              </div>
-              <div className="settings-item settings-item-spaced">
-                <span>Default tab size</span>
-                <select
-                  className="settings-select"
-                  value={defaultTabSize}
-                  onChange={(e) => onDefaultTabSizeChange(Number(e.target.value))}
-                >
-                  <option value={2}>2</option>
-                  <option value={4}>4</option>
-                  <option value={8}>8</option>
-                </select>
-              </div>
-              <div className="settings-section-label">External tools</div>
-              <div className="settings-item settings-item-spaced">
-                <span>Browser</span>
-                <select
-                  className="settings-select"
-                  value={browser || ''}
-                  onChange={(e) => {
-                    onBrowserChange(e.target.value)
-                  }}
-                >
-                  <option value="">Default</option>
-                  <option value="chrome">Chrome</option>
-                  <option value="firefox">Firefox</option>
-                  <option value="edge">Edge</option>
-                  <option value="brave">Brave</option>
-                </select>
-              </div>
-              <div className="settings-item settings-item-spaced">
-                <span>Preferred IDE</span>
-                <select
-                  className="settings-select"
-                  value={editorIDE || 'default'}
-                  onChange={(e) => {
-                    onEditorIDEChange(e.target.value)
-                  }}
-                >
-                  <option value="default">Default / System</option>
-                  <option value="vscode">VS Code</option>
-                  <option value="zed">Zed</option>
-                  <option value="vim">Vim</option>
-                  <option value="neovim">Neovim</option>
-                </select>
-              </div>
-            </div>
-          )}
-        </div>
-        <button
-          className="btn btn-primary btn-sm"
-          onClick={handleCopy}
-          disabled={commentCount === 0}
+        {/* Theme picker */}
+        <Popover
+          open={themeOpen}
+          onOpenChange={setThemeOpen}
+          ariaLabel="Switch theme"
+          className="theme-popover"
+          trigger={
+            <button className={`btn btn-sm settings-btn ${themeOpen ? 'btn-active' : ''}`} title="Switch Theme">
+              <Palette size={14} style={{ marginRight: '6px' }} />
+              <span>Theme</span>
+            </button>
+          }
         >
+          <div className="popover-scroll">
+            {THEMES.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={`theme-item ${theme === t.id ? 'theme-item-active' : ''}`}
+                onClick={() => {
+                  onThemeChange(t.id)
+                  setThemeOpen(false)
+                }}
+              >
+                <span className="theme-item-name">{t.name}</span>
+                <span className="theme-swatches">
+                  <span className="theme-swatch" style={{ background: t.colors.bg }} />
+                  <span className="theme-swatch" style={{ background: t.colors.secondary }} />
+                  <span className="theme-swatch" style={{ background: t.colors.accent }} />
+                </span>
+              </button>
+            ))}
+          </div>
+        </Popover>
+
+        {/* Settings */}
+        <Popover
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          ariaLabel="Settings"
+          className="settings-popover"
+          trigger={
+            <button className={`btn btn-sm settings-btn icon-only ${settingsOpen ? 'btn-active' : ''}`} title="Settings">
+              <Settings size={14} />
+            </button>
+          }
+        >
+          <div className="popover-scroll settings-panel">
+            {!customMode && (
+              <>
+                <div className="settings-section-label">Source</div>
+                <label className="settings-item">
+                  <input
+                    type="checkbox"
+                    checked={diffOptions.staged}
+                    onChange={(e) => onDiffOptionsChange({ ...diffOptions, staged: e.target.checked })}
+                  />
+                  Show staged
+                </label>
+                <label className="settings-item">
+                  <input
+                    type="checkbox"
+                    checked={diffOptions.untracked}
+                    onChange={(e) => onDiffOptionsChange({ ...diffOptions, untracked: e.target.checked })}
+                  />
+                  Show untracked
+                </label>
+              </>
+            )}
+            <div className="settings-section-label">Display</div>
+            <div className="settings-item settings-item-spaced">
+              <span>Inline diff</span>
+              <Select
+                value={lineDiffType}
+                onValueChange={(v) => onLineDiffTypeChange(v as LineDiffType)}
+                options={INLINE_DIFF_OPTS}
+                ariaLabel="Inline diff style"
+              />
+            </div>
+            <label className="settings-item">
+              <input type="checkbox" checked={lineWrap} onChange={(e) => onLineWrapChange(e.target.checked)} />
+              Wrap long lines
+            </label>
+            <div className="settings-item settings-item-spaced">
+              <span>Diff indicators</span>
+              <Select
+                value={diffIndicators}
+                onValueChange={(v) => onDiffIndicatorsChange(v as DiffIndicators)}
+                options={INDICATOR_OPTS}
+                ariaLabel="Diff indicators"
+              />
+            </div>
+            <label className="settings-item">
+              <input
+                type="checkbox"
+                checked={showLineNumbers}
+                onChange={(e) => onShowLineNumbersChange(e.target.checked)}
+              />
+              Show line numbers
+            </label>
+            <div className="settings-item settings-item-spaced">
+              <span>Hunk separator</span>
+              <Select
+                value={hunkSeparators}
+                onValueChange={(v) => onHunkSeparatorsChange(v as HunkSeparatorStyle)}
+                options={HUNK_SEP_OPTS}
+                ariaLabel="Hunk separator style"
+              />
+            </div>
+            <div className="settings-item settings-item-spaced">
+              <span>Hover highlight</span>
+              <Select
+                value={lineHoverHighlight}
+                onValueChange={(v) => onLineHoverHighlightChange(v as LineHoverHighlight)}
+                options={HOVER_OPTS}
+                ariaLabel="Hover highlight"
+              />
+            </div>
+            <div className="settings-item settings-item-spaced">
+              <span>Font size</span>
+              <Select
+                value={String(fontSize)}
+                onValueChange={(v) => onFontSizeChange(Number(v))}
+                options={FONT_SIZE_OPTS}
+                ariaLabel="Font size"
+              />
+            </div>
+            <div className="settings-item settings-item-spaced">
+              <span>Default tab size</span>
+              <Select
+                value={String(defaultTabSize)}
+                onValueChange={(v) => onDefaultTabSizeChange(Number(v))}
+                options={TAB_SIZE_OPTS}
+                ariaLabel="Default tab size"
+              />
+            </div>
+            <div className="settings-section-label">External tools</div>
+            <div className="settings-item settings-item-spaced">
+              <span>Browser</span>
+              <Select
+                value={browser || ''}
+                onValueChange={onBrowserChange}
+                options={BROWSER_OPTS}
+                ariaLabel="Browser"
+              />
+            </div>
+            <div className="settings-item settings-item-spaced">
+              <span>Preferred IDE</span>
+              <Select
+                value={editorIDE || 'default'}
+                onValueChange={onEditorIDEChange}
+                options={IDE_OPTS}
+                ariaLabel="Preferred IDE"
+              />
+            </div>
+            <div className="settings-section-label">Feedback</div>
+            <label className="settings-item">
+              <input
+                type="checkbox"
+                checked={haptics}
+                onChange={(e) => onHapticsChange(e.target.checked)}
+              />
+              Haptic feedback
+            </label>
+          </div>
+        </Popover>
+        <button className="btn btn-sm" onClick={handleCopy} disabled={commentCount === 0}>
           {copied ? 'Copied!' : `Copy comments (${commentCount})`}
         </button>
+        <SendReviewPopover
+          comments={comments}
+          onEditComment={onEditComment}
+          onDeleteComment={onDeleteComment}
+          onSend={onSendToAgent}
+          sending={sending}
+          agentWaiting={agentWaiting}
+        />
       </div>
     </div>
   )

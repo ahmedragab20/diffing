@@ -7,12 +7,12 @@ const mockIsSafePath = vi.fn()
 const mockParseEditorConfig = vi.fn()
 
 vi.mock('node:child_process', async (importOriginal) => {
-  const actual = await importOriginal()
+  const actual = await importOriginal<typeof import('node:child_process')>()
   return { ...actual, execFileSync: mockExecFileSync }
 })
 
 vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal()
+  const actual = await importOriginal<typeof import('node:fs')>()
   return { ...actual, readFileSync: mockReadFileSync }
 })
 

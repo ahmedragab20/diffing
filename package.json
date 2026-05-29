@@ -29,7 +29,7 @@
     "build": "vite build && tsdown",
     "changeset": "changeset",
     "dev:client": "vite",
-    "dev:server": "tsx src/cli.ts --no-open -p 3433",
+    "dev:server": "tsx src/cli.ts --no-open --port 3433",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "pnpm run build",
@@ -37,7 +37,9 @@
     "version-packages": "changeset version"
   },
   "dependencies": {
+    "@base-ui-components/react": "1.0.0-rc.0",
     "@hono/node-server": "^1.14.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@pierre/trees": "1.0.0-beta.4",
     "@tanstack/hotkeys": "^0.8.0",
     "@tanstack/react-hotkeys": "^0.10.0",
@@ -48,7 +50,9 @@
     "highlight.js": "^11.11.1",
     "hono": "^4.7.6",
     "marked": "^18.0.4",
-    "open": "^11.0.0"
+    "open": "^11.0.0",
+    "web-haptics": "0.0.6",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@changesets/changelog-git": "^0.2.1",

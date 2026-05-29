@@ -205,7 +205,7 @@ export async function getRepoRootAsync(): Promise<string> {
 
 export async function getBranchNameAsync(): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { stdio: 'pipe', encoding: 'utf-8' })
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf-8' })
     return stdout.trim()
   } catch {
     return ''

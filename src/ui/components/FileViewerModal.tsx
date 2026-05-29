@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Search, X, FileText, Loader2 } from 'lucide-react'
 import { File as DiffsFile } from '@pierre/diffs/react'
 import { SHIKI_THEME_MAP } from '../utils'
+import { Modal } from '../primitives/Modal'
 
 interface FileViewerModalProps {
   isOpen: boolean
@@ -178,15 +179,15 @@ export function FileViewerModal({
     [results, focusedIndex, onClose, selectedPath],
   )
 
-  if (!isOpen) return null
-
   return (
-    <div className="diffsearch-overlay" onClick={onClose}>
-      <div
-        className="diffsearch-modal file-viewer-modal"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={handleKeyDown}
-      >
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      className="diffsearch-modal file-viewer-modal ui-modal--palette"
+      ariaLabel="File viewer"
+      initialFocus={searchRef}
+      onKeyDown={handleKeyDown}
+    >
         <div className="diffsearch-header">
           <div className="diffsearch-search">
             <Search size={14} className="diffsearch-search-icon" />
@@ -294,7 +295,6 @@ export function FileViewerModal({
             ) : null}
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   )
 }

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "diffit-client",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["run", "dev:client", "--", "--port", "5173", "--strictPort"],
+      "port": 5173
+    }
+  ]
+}

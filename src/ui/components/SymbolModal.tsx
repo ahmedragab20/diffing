@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Search, X } from 'lucide-react'
 import type { SymbolEntry } from '../hooks/useSymbols'
 import { scrollToLine } from '../utils'
+import { Modal } from '../primitives/Modal'
 
 interface SymbolModalProps {
   symbols: SymbolEntry[]
@@ -87,12 +88,15 @@ export function SymbolModal({ symbols, isOpen, onClose }: SymbolModalProps) {
     focused?.scrollIntoView({ block: 'nearest' })
   }, [focusedIndex, isOpen])
 
-
-  if (!isOpen) return null
-
   return (
-    <div className="symbol-modal-overlay" onClick={onClose}>
-      <div className="symbol-modal" onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      className="symbol-modal ui-modal--palette"
+      ariaLabel="Symbol search"
+      initialFocus={searchRef}
+      onKeyDown={handleKeyDown}
+    >
         <div className="symbol-modal-header">
           <div className="symbol-search">
             <Search size={14} className="symbol-search-icon" />
@@ -146,7 +150,6 @@ export function SymbolModal({ symbols, isOpen, onClose }: SymbolModalProps) {
             })
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

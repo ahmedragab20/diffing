@@ -38,6 +38,8 @@ export interface Settings {
   collapsedContextThreshold: number
   /** How many lines to reveal per expand-up / expand-down click. */
   expansionLineCount: number
+  /** Tactile feedback (web-haptics) on interaction. */
+  haptics: boolean
 }
 
 const DEFAULTS: Settings = {
@@ -57,6 +59,7 @@ const DEFAULTS: Settings = {
   expandContextByDefault: false,
   collapsedContextThreshold: 10,
   expansionLineCount: 20,
+  haptics: true,
 }
 
 export function loadSettings(): Settings {

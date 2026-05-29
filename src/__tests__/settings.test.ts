@@ -7,12 +7,12 @@ const mockWriteFileSync = vi.fn()
 const mockMkdirSync = vi.fn()
 
 vi.mock('node:os', async (importOriginal) => {
-  const actual = await importOriginal()
+  const actual = await importOriginal<typeof import('node:os')>()
   return { ...actual, homedir: mockHomedir }
 })
 
 vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal()
+  const actual = await importOriginal<typeof import('node:fs')>()
   return { ...actual, readFileSync: mockReadFileSync, writeFileSync: mockWriteFileSync, mkdirSync: mockMkdirSync }
 })
 
@@ -23,6 +23,17 @@ const DEFAULTS = {
   defaultTabSize: 4,
   theme: 'nord',
   editorIDE: 'default',
+  lineDiffType: 'word',
+  lineWrap: false,
+  diffIndicators: 'classic',
+  showLineNumbers: true,
+  hunkSeparators: 'line-info',
+  lineHoverHighlight: 'both',
+  fontSize: 13,
+  expandContextByDefault: false,
+  collapsedContextThreshold: 10,
+  expansionLineCount: 20,
+  haptics: true,
 }
 
 describe('settings', () => {

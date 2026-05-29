@@ -35,6 +35,16 @@ Anything after `--` is passed directly to `git diff`, so any valid git diff argu
 
 After launching, tell the user:
 
-> diffit is running. Review your changes in the browser and leave inline comments. When you're done, come back here and run `/diffit-finish-review`.
+> diffit is running. Review your changes in the browser and leave inline comments. When you're done, click **"Send to agent"** in the toolbar — I'll pick the comments up automatically.
 
 Keep it brief.
+
+### 3. Wait for the handoff (optional, recommended)
+
+Rather than making the user run a second command, you can block on the handoff immediately. Run:
+
+```bash
+diffit await-review
+```
+
+It sleeps until the user clicks **"Send to agent"**, then prints the review comments as XML — at which point follow the `diffit-finish-review` workflow to apply them. (If it exits with code 2 / `DIFFIT_AWAIT_TIMEOUT`, just run it again to keep waiting.) Agents configured with the diffit MCP server can use the `await_review` tool instead.

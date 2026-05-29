@@ -50,12 +50,12 @@ const sampleComments: ReviewComment[] = [
 ]
 
 function mockApi() {
-  mockFetch.mockImplementation((url: string, options?: RequestInit) => {
+  mockFetch.mockImplementation((url: string | URL, options?: RequestInit) => {
     const urlStr = typeof url === 'string' ? url : url.toString()
     if (urlStr === '/api/comments' && (!options || options.method === 'GET' || !options.method)) {
-      return Promise.resolve({ json: () => Promise.resolve(sampleComments) })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(sampleComments) })
     }
-    return Promise.resolve({ json: () => Promise.resolve({ ok: true }) })
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) })
   })
 }
 
@@ -88,7 +88,7 @@ describe('useComments', () => {
       replies: [],
     }
 
-    mockFetch.mockImplementation((url: string, options?: RequestInit) => {
+    mockFetch.mockImplementation((url: string | URL, options?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url.toString()
       if (urlStr === '/api/comments' && options?.method === 'POST') {
         return Promise.resolve({ json: () => Promise.resolve(newComment) })
@@ -135,7 +135,7 @@ describe('useComments', () => {
   it('edits a comment via mutation', async () => {
     const updatedComment: ReviewComment = { ...sampleComments[0], body: 'Updated body' }
 
-    mockFetch.mockImplementation((url: string, options?: RequestInit) => {
+    mockFetch.mockImplementation((url: string | URL, options?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url.toString()
       if (urlStr.startsWith('/api/comments/') && options?.method === 'PUT') {
         return Promise.resolve({ json: () => Promise.resolve(updatedComment) })
@@ -160,7 +160,7 @@ describe('useComments', () => {
   it('resolves a comment via mutation', async () => {
     const resolvedComment: ReviewComment = { ...sampleComments[0], status: 'resolved' }
 
-    mockFetch.mockImplementation((url: string, options?: RequestInit) => {
+    mockFetch.mockImplementation((url: string | URL, options?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url.toString()
       if (urlStr.startsWith('/api/comments/') && options?.method === 'PUT') {
         return Promise.resolve({ json: () => Promise.resolve(resolvedComment) })
@@ -257,6 +257,52 @@ describe('useComments', () => {
       })
 
       expect(writeText).toHaveBeenCalledWith(result.current.formatAllComments())
+    })
+  })
+
+  describe('agent handoff', () => {
+    it('sendToAgent POSTs to /api/review/send', async () => {
+      mockApi()
+      const { result } = renderHook(() => useComments(), { wrapper: createWrapper() })
+      await waitFor(() => expect(result.current.comments).toHaveLength(2))
+
+      await act(async () => {
+        await result.current.sendToAgent()
+      })
+
+      expect(mockFetch).toHaveBeenCalledWith('/api/review/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ generalComment: undefined }),
+      })
+    })
+
+    it('sendToAgent forwards an overall comment in the request body', async () => {
+      mockApi()
+      const { result } = renderHook(() => useComments(), { wrapper: createWrapper() })
+      await waitFor(() => expect(result.current.comments).toHaveLength(2))
+
+      await act(async () => {
+        await result.current.sendToAgent('Please prioritise the security fixes')
+      })
+
+      expect(mockFetch).toHaveBeenCalledWith('/api/review/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ generalComment: 'Please prioritise the security fixes' }),
+      })
+    })
+
+    it('agentWaiting reflects the seeded review status', async () => {
+      mockFetch.mockImplementation((url: string | URL) => {
+        const urlStr = typeof url === 'string' ? url : url.toString()
+        if (urlStr === '/api/review/status') {
+          return Promise.resolve({ json: () => Promise.resolve({ round: 0, waiters: 1, lastSentAt: null }) })
+        }
+        return Promise.resolve({ json: () => Promise.resolve([]) })
+      })
+      const { result } = renderHook(() => useComments(), { wrapper: createWrapper() })
+      await waitFor(() => expect(result.current.agentWaiting).toBe(true))
     })
   })
 })

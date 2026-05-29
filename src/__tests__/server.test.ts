@@ -56,7 +56,7 @@ const mockStat = vi.fn()
 const mockRm = vi.fn()
 
 vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal()
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
     readFile: mockReadFile,
@@ -72,7 +72,7 @@ const mockExistsSync = vi.fn()
 let originalExistsSync: any
 
 vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal()
+  const actual = await importOriginal<typeof import('node:fs')>()
   originalExistsSync = actual.existsSync
   return {
     ...actual,
@@ -322,6 +322,43 @@ describe('server', () => {
           body: JSON.stringify({ body: 'x' }),
         }))
         expect(res.status).toBe(404)
+      })
+    })
+
+    describe('agent handoff /api/review/*', () => {
+      it('GET /api/review/status starts at round 0 with no waiters', async () => {
+        const res = await app.fetch(new Request('http://localhost/api/review/status'))
+        expect(await res.json()).toEqual({ round: 0, waiters: 0, lastSentAt: null })
+      })
+
+      it('POST /api/review/send increments the round and reports open count', async () => {
+        await mockStore.add({ id: 'c1', filePath: 'f.ts', side: 'additions', lineNumber: 1, lineContent: 'x', body: 'fix', status: 'open', createdAt: 0, replies: [] })
+        await mockStore.add({ id: 'c2', filePath: 'f.ts', side: 'additions', lineNumber: 2, lineContent: 'y', body: 'done', status: 'resolved', createdAt: 0, replies: [] })
+
+        const first = await (await app.fetch(new Request('http://localhost/api/review/send', { method: 'POST' }))).json()
+        expect(first).toMatchObject({ ok: true, round: 1, openCount: 1 })
+
+        const second = await (await app.fetch(new Request('http://localhost/api/review/send', { method: 'POST' }))).json()
+        expect(second.round).toBe(2)
+      })
+
+      it('GET /api/review/await returns keep-waiting after the timeout', async () => {
+        const res = await app.fetch(new Request('http://localhost/api/review/await?timeoutMs=1000'))
+        expect(await res.json()).toEqual({ status: 'keep-waiting', round: 0 })
+      })
+
+      it('releases a blocked await when a send arrives', async () => {
+        await mockStore.add({ id: 'c1', filePath: 'src/x.ts', side: 'additions', lineNumber: 3, lineContent: 'z', body: 'rename', status: 'open', createdAt: 0, replies: [] })
+
+        const pending = app.fetch(new Request('http://localhost/api/review/await?timeoutMs=5000'))
+        // Let the await register before sending.
+        await new Promise((r) => setTimeout(r, 10))
+        await app.fetch(new Request('http://localhost/api/review/send', { method: 'POST' }))
+
+        const result = await (await pending).json()
+        expect(result.status).toBe('released')
+        expect(result.payload.round).toBe(1)
+        expect(result.payload.commentXml).toContain('<comment id="c1"')
       })
     })
 

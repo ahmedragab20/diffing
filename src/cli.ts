@@ -7,9 +7,29 @@ import { parseDiffOptions, DEFAULTS, printHelp } from './lib/diff-options.js'
 import { runTerminalDiff, validateEnvironment } from './lib/diff-engine.js'
 import { startServer } from './server.js'
 import { loadSettings } from './lib/settings.js'
+import { writeServerLock, removeServerLock } from './lib/server-lock.js'
+import { getRepoRoot } from './lib/git.js'
 import type { DiffOptions } from './lib/diff-options.js'
 
 const args = process.argv.slice(2)
+
+// ── Agent subcommands ───────────────────────────────────
+// A small reserved set of verbs drives the user→agent handoff. They're checked
+// before diff parsing so they never collide with `git diff` revisions.
+const SUBCOMMANDS = new Set(['await-review', 'reply', 'resolve', 'comments', 'url', 'mcp'])
+if (SUBCOMMANDS.has(args[0])) {
+  if (args[0] === 'mcp') {
+    const { startMcpServer } = await import('./mcp.js')
+    await startMcpServer()
+    // The MCP server owns stdio until the client disconnects (at which point
+    // the event loop empties and the process exits). Park here so we never fall
+    // through to diff parsing.
+    await new Promise<never>(() => {})
+  }
+  const { runSubcommand } = await import('./cli-agent.js')
+  process.exit(await runSubcommand(args[0], args.slice(1)))
+}
+
 const opts = parseDiffOptions(args)
 
 if (opts.help) {
@@ -56,6 +76,23 @@ const { port: actualPort } = await startServer({
 
 const localUrl = `http://${host}:${actualPort}`
 
+// Advertise the running server so the agent subcommands / MCP server can find
+// the port without the user telling them. Best-effort: a failure here only
+// disables port-agnostic discovery, not the server itself.
+try {
+  let repoRoot: string
+  try {
+    repoRoot = getRepoRoot()
+  } catch {
+    repoRoot = process.cwd()
+  }
+  const __pkgDir = dirname(fileURLToPath(import.meta.url))
+  const version = JSON.parse(readFileSync(resolve(__pkgDir, '..', 'package.json'), 'utf-8')).version
+  writeServerLock({ port: actualPort, host, pid: process.pid, repoRoot, startedAt: Date.now(), version })
+} catch {
+  // discovery is optional
+}
+
 console.log(`diffit server running at ${localUrl}`)
 
 if (!opts.noOpen) {
@@ -72,7 +109,10 @@ if (!opts.noOpen) {
   openModule.default(openUrl, options)
 }
 
-process.on('SIGINT', () => {
+const shutdown = () => {
   console.log('\nShutting down...')
+  removeServerLock()
   process.exit(0)
-})
+}
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)

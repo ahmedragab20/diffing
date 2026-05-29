@@ -45,7 +45,8 @@ Examples:
 - **Inline comments** — Click the `+` button on any line to add a review comment
 - **Comment replies** — AI agents can reply to comments via API, displayed with bot avatar in the UI
 - **Comment status tracker** — Sidebar widget showing open, replied, and resolved comment counts with click-to-navigate links
-- **Copy comments** — One-click copy all comments as structured XML for AI coding agents
+- **Send to agent** — One click hands your comments to a waiting agent automatically — no copy-paste, works with any agent/model via the `diffit` CLI or an MCP server
+- **Copy comments** — One-click copy all comments as structured XML for AI coding agents (offline fallback)
 - **Image preview** — Side-by-side comparison for added, modified, and deleted images
 - **Viewed tracking** — Mark files as reviewed to track progress
 - **Staged / Untracked toggles** — Choose which changes to include
@@ -73,18 +74,20 @@ When you click "Copy comments", the output is structured XML optimized for AI ag
     HOW TO REPLY OR ASK FOR CLARIFICATION:
     If you need to ask for clarification, explain what you did, or reply to any comment:
 
-    Option A: Via API (Preferred if the diffit server is running locally)
-    Send a POST request to add a reply:
-      POST http://localhost:<port>/api/comments/<comment-id>/replies
-      Payload: { "body": "Your response or clarification request here" }
-    To mark a comment as resolved:
-      PUT http://localhost:<port>/api/comments/<comment-id>
-      Payload: { "status": "resolved" }
+    Option A: Via the diffit CLI or MCP (Preferred — port-agnostic, no copy-paste)
+      diffit reply <comment-id> --body "Your response" --model "<your-model-name>"
+      diffit resolve <comment-id>
+    (Or the equivalent MCP tools: reply_to_comment, resolve_comment.)
 
-    Option B: Via Text Response (Offline / Chat Copy-Paste)
+    Option B: Via the local HTTP API (if you know the running port)
+      POST http://localhost:<port>/api/comments/<comment-id>/replies
+      Payload: { "body": "Your response or clarification request here", "model": "<your-model-name>" }
+      PUT  http://localhost:<port>/api/comments/<comment-id>  Payload: { "status": "resolved" }
+
+    Option C: Via Text Response (Offline / Chat Copy-Paste)
     If you do not have local API access, output your comments/replies inside a structured XML block at the end of your response:
       <comment-replies>
-        <reply to="<comment-id>"><![CDATA[Your reply or clarification request here]]></reply>
+        <reply to="<comment-id>" model="<your-model-name>"><![CDATA[Your reply or clarification request here]]></reply>
       </comment-replies>
   </instructions>
   <file path="src/utils/parser.ts">
@@ -111,6 +114,38 @@ Each comment includes:
 - **CDATA Blocks**: Code snippets (`<code>`) and comment bodies (`<body>`) are wrapped in `<![CDATA[ ... ]]>` to prevent special characters from breaking XML parsers.
 - **Replies**: Nested conversation history (if any) is preserved within `<replies>` and `<reply>` elements.
 
+## Agent Handoff (no copy-paste)
+
+Instead of copying comments into a chat, you can hand them to an agent automatically — and it works regardless of which agent/model is active. The model is **"the agent waits, you release it"**:
+
+1. The agent runs a blocking command (or MCP tool) and sleeps.
+2. You review in the browser and click **"Send to agent"** in the toolbar (a green dot on the button means an agent is connected and waiting).
+3. The agent instantly receives your comments, applies changes, and replies — the UI updates live as it works. Add more comments and click Send again for another round.
+
+### CLI (any agent with a shell)
+
+The `diffit` binary doubles as a port-agnostic client. Each subcommand discovers the running server for the current repo via a lockfile — no port needed:
+
+```bash
+diffit await-review                 # block until you click "Send to agent"; prints comments as XML
+diffit comments [--open] [--json]   # one-shot dump of current comments
+diffit reply <id> --body "…" --model "<name>"   # post an agent reply
+diffit resolve <id>                 # mark a comment resolved
+diffit url                          # print the running server's base URL (for raw API calls)
+```
+
+`await-review` exits `0` when comments arrive (XML on stdout), `2` if it times out (just run it again to keep waiting), and `3` if no server is running.
+
+### MCP server (any MCP-capable agent: Claude, Cursor, Codex, Gemini…)
+
+Run `diffit mcp` as an MCP server over stdio. It exposes the tools `await_review`, `list_comments`, `reply_to_comment`, and `resolve_comment`. Configure your client:
+
+```json
+{ "mcpServers": { "diffit": { "command": "diffit", "args": ["mcp"] } } }
+```
+
+No port configuration is needed — the server is discovered from the repo's lockfile.
+
 ## Agent Skills
 
 Install the diffit skills to use diffit directly from your AI coding agent:
@@ -122,7 +157,7 @@ npx skills add ahmedragab20/diffit
 The review workflow uses two commands:
 
 1. **`/diffit-start-review`** — Launches the diffit server and opens the browser. Review your changes and leave inline comments.
-2. **`/diffit-finish-review`** — The agent fetches all comments from the running diffit server via API, applies the requested changes, and marks each comment as resolved. The browser UI updates in real time as comments are resolved.
+2. **`/diffit-finish-review`** — The agent runs `diffit await-review`, blocks until you click **"Send to agent"**, then applies the requested changes and marks each comment as resolved. The browser UI updates in real time as comments are resolved.
 
 ## License
 

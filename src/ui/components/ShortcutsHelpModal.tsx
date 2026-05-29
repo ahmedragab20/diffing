@@ -1,5 +1,6 @@
-import { useEffect, memo } from 'react'
+import { memo } from 'react'
 import { X, Keyboard, Navigation, Eye, MessageSquare } from 'lucide-react'
+import { Modal } from '../primitives/Modal'
 
 interface ShortcutsHelpModalProps {
   isOpen: boolean
@@ -21,21 +22,6 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
   isOpen,
   onClose,
 }: ShortcutsHelpModalProps) {
-  useEffect(() => {
-    if (!isOpen) return
-    
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose()
-      }
-    }
-    
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, onClose])
-
-  if (!isOpen) return null
-
   const categories: ShortcutCategory[] = [
     {
       title: 'Scrolling & Diffs',
@@ -85,8 +71,7 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
   ]
 
   return (
-    <div className="shortcuts-overlay" onClick={onClose}>
-      <div className="shortcuts-modal" onClick={(e) => e.stopPropagation()}>
+    <Modal open={isOpen} onClose={onClose} className="shortcuts-modal" ariaLabel="Keyboard shortcuts">
         <div className="shortcuts-header">
           <div className="shortcuts-header-title">
             <Keyboard size={18} className="shortcuts-icon" />
@@ -132,7 +117,6 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
         <div className="shortcuts-footer">
           Press <kbd className="vim-kbd-small">?</kbd> to dismiss this menu at any time.
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 })
