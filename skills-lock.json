@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "diffing-finish-review": {
+      "source": "ahmedragab20/diffing",
+      "sourceType": "github",
+      "skillPath": "skills/diffing-finish-review/SKILL.md",
+      "computedHash": "11ef36837b463da449a118838c927a8d85f3f88ae4634de4a787331ffaf67e5b"
+    },
+    "diffing-review": {
+      "source": "ahmedragab20/diffing",
+      "sourceType": "github",
+      "skillPath": "skills/diffing-review/SKILL.md",
+      "computedHash": "7ceddfa190c721a353261b99481a120dc369b8f7167b9abd95c87a6c738faa79"
+    },
+    "diffing-start-review": {
+      "source": "ahmedragab20/diffing",
+      "sourceType": "github",
+      "skillPath": "skills/diffing-start-review/SKILL.md",
+      "computedHash": "3a3ae3e3bd705f9b434991a47db6e734465acb3c4a7179e7c8184afe890e3eff"
+    }
+  }
+}
