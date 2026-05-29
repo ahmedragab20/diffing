@@ -9,7 +9,7 @@
  *    missing/incompatible platform binary degrades gracefully (search returns
  *    an error) instead of crashing the whole server at module load.
  *  - One finder per process, keyed implicitly to the repo root. Its frecency /
- *    history databases live under the project's `~/.diffit/<repo>` storage dir
+ *    history databases live under the project's `~/.diffing/<repo>` storage dir
  *    so we never write stray files into the user's repository.
  *  - fff runs its own file-system watcher, so the index stays fresh as the
  *    working tree changes during a review.

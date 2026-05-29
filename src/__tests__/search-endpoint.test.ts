@@ -20,8 +20,8 @@ vi.mock('../lib/search.js', () => search)
 // returns a non-existent path; the repo watcher's error is swallowed by the
 // try/catch in createApp, which is exactly what we want for a unit test.
 vi.mock('../lib/git.js', () => ({
-  getRepoRoot: () => '/tmp/__diffit_search_test__',
-  getProjectStorageDir: () => '/tmp/__diffit_search_test__',
+  getRepoRoot: () => '/tmp/__diffing_search_test__',
+  getProjectStorageDir: () => '/tmp/__diffing_search_test__',
   getFileContent: () => null,
   isImageFile: () => false,
   getMergeStatus: () => ({}),
@@ -34,7 +34,7 @@ import { createApp } from '../server.js'
 import { InMemoryCommentStore } from '../lib/comments.js'
 
 function makeApp() {
-  return createApp('/tmp/__diffit_search_test__', undefined, new InMemoryCommentStore())
+  return createApp('/tmp/__diffing_search_test__', undefined, new InMemoryCommentStore())
 }
 
 function postSearch(app: ReturnType<typeof makeApp>, body: unknown) {

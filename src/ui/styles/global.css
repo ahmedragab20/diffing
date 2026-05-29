@@ -4671,7 +4671,7 @@ file-tree,
 }
 
 .spin {
-    animation: diffit-spin 0.8s linear infinite;
+    animation: diffing-spin 0.8s linear infinite;
 }
 
 /* Merge conflict resolver UI (Phase C) */
@@ -4861,7 +4861,7 @@ file-tree,
     font-family: var(--font-mono);
 }
 
-@keyframes diffit-spin {
+@keyframes diffing-spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }

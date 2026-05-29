@@ -72,7 +72,7 @@ export class FileCommentStore implements CommentStore {
 
   constructor(customRepoRoot?: string) {
     if (customRepoRoot) {
-      this.dirPath = join(customRepoRoot, '.diffit')
+      this.dirPath = join(customRepoRoot, '.diffing')
     } else {
       this.dirPath = getProjectStorageDir()
     }

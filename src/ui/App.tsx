@@ -66,14 +66,14 @@ export function App() {
     const [activeFile, setActiveFile] = useState<string | null>(null);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
         try {
-            return localStorage.getItem("diffit-sidebar-collapsed") === "true";
+            return localStorage.getItem("diffing-sidebar-collapsed") === "true";
         } catch {
             return false;
         }
     });
     const [sidebarWidth, setSidebarWidth] = useState(() => {
         try {
-            const stored = localStorage.getItem("diffit-sidebar-width");
+            const stored = localStorage.getItem("diffing-sidebar-width");
             return stored ? Number(stored) : 320;
         } catch {
             return 320;
@@ -137,7 +137,7 @@ export function App() {
             // Single, one-time width commit -> one reflow of the diff.
             setSidebarWidth(latestWidth);
             try {
-                localStorage.setItem("diffit-sidebar-width", String(latestWidth));
+                localStorage.setItem("diffing-sidebar-width", String(latestWidth));
             } catch {}
             document.removeEventListener('mousemove', handleMove);
             document.removeEventListener('mouseup', handleUp);
@@ -167,7 +167,7 @@ export function App() {
     const [themeModalOpen, setThemeModalOpen] = useState(false);
     const [commentPanelHeight, setCommentPanelHeight] = useState(() => {
         try {
-            const stored = localStorage.getItem("diffit-comment-panel-height");
+            const stored = localStorage.getItem("diffing-comment-panel-height");
             return stored ? Number(stored) : 220;
         } catch {
             return 220;
@@ -199,7 +199,7 @@ export function App() {
             if (rafId) cancelAnimationFrame(rafId);
             setCommentPanelHeight(latestHeight);
             try {
-                localStorage.setItem("diffit-comment-panel-height", String(latestHeight));
+                localStorage.setItem("diffing-comment-panel-height", String(latestHeight));
             } catch {}
             document.removeEventListener('mousemove', handleMove);
             document.removeEventListener('mouseup', handleUp);
@@ -215,7 +215,7 @@ export function App() {
 
     useEffect(() => {
         try {
-            localStorage.setItem("diffit-comment-panel-height", String(commentPanelHeight));
+            localStorage.setItem("diffing-comment-panel-height", String(commentPanelHeight));
         } catch {}
     }, [commentPanelHeight]);
     const { viewedFiles, setViewed } = useViewed();
@@ -241,7 +241,7 @@ export function App() {
     useEffect(() => {
         try {
             localStorage.setItem(
-                "diffit-sidebar-collapsed",
+                "diffing-sidebar-collapsed",
                 String(sidebarCollapsed),
             );
         } catch {}

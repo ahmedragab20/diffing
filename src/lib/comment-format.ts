@@ -4,7 +4,7 @@ import type { ReviewComment } from './types.js'
  * Render review comments as the `<code-review-comments>` XML envelope used to
  * hand a review to an AI agent. Shared by the UI clipboard button
  * (`useComments.formatAllComments`), the server's `/api/review/send` handoff,
- * and the `diffit` CLI/MCP so every channel emits byte-identical output.
+ * and the `diffing` CLI/MCP so every channel emits byte-identical output.
  */
 export function formatComments(comments: ReviewComment[], generalComment?: string): string {
   if (comments.length === 0) return ''
@@ -32,9 +32,9 @@ export function formatComments(comments: ReviewComment[], generalComment?: strin
   lines.push('    HOW TO REPLY OR ASK FOR CLARIFICATION:')
   lines.push('    If you need to ask for clarification, explain what you did, or reply to any comment:')
   lines.push('')
-  lines.push('    Option A: Via the diffit CLI or MCP (Preferred — port-agnostic, no copy-paste)')
-  lines.push('      diffit reply <comment-id> --body "Your response" --model "<your-model-name>"')
-  lines.push('      diffit resolve <comment-id>')
+  lines.push('    Option A: Via the diffing CLI or MCP (Preferred — port-agnostic, no copy-paste)')
+  lines.push('      diffing reply <comment-id> --body "Your response" --model "<your-model-name>"')
+  lines.push('      diffing resolve <comment-id>')
   lines.push('    (Or the equivalent MCP tools: reply_to_comment, resolve_comment.)')
   lines.push('')
   lines.push('    Option B: Via the local HTTP API (if you know the running port)')

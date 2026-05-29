@@ -653,7 +653,7 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
 }
 
 export async function cleanupStaleProjects(): Promise<void> {
-  const baseDir = join(homedir(), '.diffit')
+  const baseDir = join(homedir(), '.diffing')
   if (!existsSync(baseDir)) return
 
   try {

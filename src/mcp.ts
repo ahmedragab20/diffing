@@ -6,21 +6,21 @@ import { formatComments } from './lib/comment-format.js'
 import type { ReviewComment } from './lib/types.js'
 
 /**
- * MCP server exposing diffit's review handoff as cross-vendor tools, so any
+ * MCP server exposing diffing's review handoff as cross-vendor tools, so any
  * MCP-capable agent (Claude, Cursor, Codex, Gemini, …) can drive the same loop
- * the CLI does. Launched via `diffit mcp` over stdio. The port is discovered
+ * the CLI does. Launched via `diffing mcp` over stdio. The port is discovered
  * per call from the per-repo lockfile, so the MCP server works whether it
- * starts before or after the diffit web server.
+ * starts before or after the diffing web server.
  *
  * Client config (no port needed):
- *   { "mcpServers": { "diffit": { "command": "diffit", "args": ["mcp"] } } }
+ *   { "mcpServers": { "diffing": { "command": "diffing", "args": ["mcp"] } } }
  */
 
 /** Resolve the running server's base URL, throwing a tool-friendly error. */
 function baseUrl(): string {
   const lock = readServerLock()
   if (!lock || !isLockAlive(lock)) {
-    throw new Error('No diffit server running for this repo. Start one with `diffit` in the repository, then retry.')
+    throw new Error('No diffing server running for this repo. Start one with `diffing` in the repository, then retry.')
   }
   const host = lock.host === '0.0.0.0' || lock.host === '::' ? '127.0.0.1' : lock.host
   return `http://${host}:${lock.port}`
@@ -34,14 +34,14 @@ function textResult(text: string, structuredContent?: Record<string, unknown>) {
 }
 
 export async function startMcpServer(): Promise<void> {
-  const server = new McpServer({ name: 'diffit', version: '0.12.1' })
+  const server = new McpServer({ name: 'diffing', version: '0.12.1' })
 
   server.registerTool(
     'await_review',
     {
       title: 'Await review',
       description:
-        'Block until the human clicks "Send to agent" in the diffit UI, then return the review comments as XML. Re-poll-safe: returns the next review batch.',
+        'Block until the human clicks "Send to agent" in the diffing UI, then return the review comments as XML. Re-poll-safe: returns the next review batch.',
       inputSchema: { timeoutSeconds: z.number().optional() },
     },
     async ({ timeoutSeconds }, extra) => {
@@ -103,7 +103,7 @@ export async function startMcpServer(): Promise<void> {
     'reply_to_comment',
     {
       title: 'Reply to comment',
-      description: 'Post an agent reply to a review comment. Shows up in the diffit UI in real time.',
+      description: 'Post an agent reply to a review comment. Shows up in the diffing UI in real time.',
       inputSchema: { commentId: z.string(), body: z.string(), model: z.string().optional() },
     },
     async ({ commentId, body, model }) => {

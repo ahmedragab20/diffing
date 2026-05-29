@@ -3,7 +3,7 @@ interface DraftEntry {
   timestamp: number
 }
 
-const PREFIX = 'diffit-draft-'
+const PREFIX = 'diffing-draft-'
 const TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 function makeKey(...parts: string[]): string {

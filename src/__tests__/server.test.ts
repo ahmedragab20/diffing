@@ -487,7 +487,7 @@ describe('server', () => {
       const { cleanupStaleProjects } = await import('../server.js')
 
       mockExistsSync.mockImplementation((p: string) => {
-        if (p.endsWith('.diffit')) return true
+        if (p.endsWith('.diffing')) return true
         if (p.endsWith('repo_path.txt')) return true
         if (p.endsWith('comments.json')) return false
         if (p === '/tmp/deleted-repo') return false
@@ -517,7 +517,7 @@ describe('server', () => {
       const { cleanupStaleProjects } = await import('../server.js')
 
       mockExistsSync.mockImplementation((p: string) => {
-        if (p.endsWith('.diffit')) return true
+        if (p.endsWith('.diffing')) return true
         if (p.endsWith('repo_path.txt')) return true
         if (p.endsWith('comments.json')) return true
         if (p === '/tmp/active-repo') return true
@@ -553,7 +553,7 @@ describe('server', () => {
       mockRm.mockClear()
 
       mockExistsSync.mockImplementation((p: string) => {
-        if (p.endsWith('.diffit')) return true
+        if (p.endsWith('.diffing')) return true
         if (p.endsWith('repo_path.txt')) return true
         if (p.endsWith('comments.json')) return true
         if (p === '/tmp/active-repo') return true

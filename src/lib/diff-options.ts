@@ -108,7 +108,7 @@ export interface DiffOptions {
   ignoreSubmodules?: 'none' | 'untracked' | 'dirty' | 'all'
   check: boolean
 
-  // ── diffit-specific ────────────────────────────────────
+  // ── diffing-specific ────────────────────────────────────
   /** How to output the diff result */
   outputMode: OutputMode
 
@@ -266,8 +266,8 @@ export const GIT_DIFF_OPTIONS = {
   'ignore-submodules': { type: 'string' as const },
 } as const
 
-/** Options that are diffit-specific, not git-diff options. */
-export const DIFFIT_OPTIONS = {
+/** Options that are diffing-specific, not git-diff options. */
+export const DIFFING_OPTIONS = {
   port: { type: 'string' as const },
   host: { type: 'string' as const },
   'no-open': { type: 'boolean' as const, default: false },
@@ -289,39 +289,39 @@ function getVersion(): string {
 
 export function printHelp(): void {
   const version = getVersion()
-  console.log(`diffit v${version} – Local code review tool for git diffs
+  console.log(`diffing v${version} – Local code review tool for git diffs
 
-Usage: diffit [<git diff options>] [<revision>...] [-- <path>...]
-       diffit --web [<git diff options>] [<revision>...] [-- <path>...]
-       diffit [server options]
+Usage: diffing [<git diff options>] [<revision>...] [-- <path>...]
+       diffing --web [<git diff options>] [<revision>...] [-- <path>...]
+       diffing [server options]
 
 Git Diff Options (drop-in replacement for git diff):`)
   printGitDiffHelp()
 
   console.log(`
-Diffit Server Options:
+Diffing Server Options:
   --port <port>        Port to run the server on (default: random available port)
   --host <host>        Host address to bind to (default: 127.0.0.1). Pass
                        0.0.0.0 to expose the server to the local network.
   --no-open            Don't open the browser automatically
 
 Output Modes:
-  By default diffit auto-selects the best output mode:
+  By default diffing auto-selects the best output mode:
   - Terminal mode: when output is a pipe, redirect, or non-TTY
   - Web mode:     when output is a TTY (interactive terminal)
 
   Force a mode with --web or --terminal flags.
 
 Examples:
-  diffit                        Review uncommitted changes (web UI)
-  diffit --staged               Review staged changes
-  diffit HEAD~3                 Review last 3 commits
-  diffit main..feature          Compare branches
-  diffit --diff-algorithm=patience src/  Diff with patience algorithm
-  diffit -U10                   Diff with 10 context lines
-  diffit --word-diff=color      Word-level diff in color
-  diffit -b -w                  Ignore whitespace changes
-  diffit --host 0.0.0.0         Allow other machines on the LAN to review`)
+  diffing                        Review uncommitted changes (web UI)
+  diffing --staged               Review staged changes
+  diffing HEAD~3                 Review last 3 commits
+  diffing main..feature          Compare branches
+  diffing --diff-algorithm=patience src/  Diff with patience algorithm
+  diffing -U10                   Diff with 10 context lines
+  diffing --word-diff=color      Word-level diff in color
+  diffing -b -w                  Ignore whitespace changes
+  diffing --host 0.0.0.0         Allow other machines on the LAN to review`)
 }
 
 function printGitDiffHelp(): void {
@@ -419,12 +419,12 @@ function printGitDiffHelp(): void {
  * Parse raw `process.argv` slice into typed DiffOptions.
  *
  * Strategy:
- * 1. Split argv into: [diffit options] [git revisions] [-- pathspecs]
+ * 1. Split argv into: [diffing options] [git revisions] [-- pathspecs]
  * 2. Parse known flags via node:util.parseArgs
  * 3. Anything unknown / positional becomes a revision or pathspec
  */
 export function parseDiffOptions(rawArgs: string[]): DiffOptions {
-  const allOptions = { ...GIT_DIFF_OPTIONS, ...DIFFIT_OPTIONS }
+  const allOptions = { ...GIT_DIFF_OPTIONS, ...DIFFING_OPTIONS }
 
   const { values, positionals } = parseArgs({
     options: allOptions,
@@ -435,7 +435,7 @@ export function parseDiffOptions(rawArgs: string[]): DiffOptions {
 
   const opts: DiffOptions = { ...DEFAULTS }
 
-  // ── diffit-specific flags ──────────────────────────
+  // ── diffing-specific flags ──────────────────────────
   if (values.help) opts.help = true
   if (values.version) opts.version = true
   if (values.port) opts.port = parseInt(values.port as string, 10)
@@ -733,7 +733,7 @@ export function buildGitDiffArgs(opts: DiffOptions): string[] {
 }
 
 /**
- * Build the set of diffit-diff args used for the web UI.
+ * Build the set of diffing-diff args used for the web UI.
  * Includes unstaged (always) + optionally staged/untracked.
  */
 export function buildWebDiffArgs(opts: DiffOptions): string[] {

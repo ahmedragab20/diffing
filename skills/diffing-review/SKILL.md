@@ -1,20 +1,20 @@
 ---
-name: diffit-review
+name: diffing-review
 description: >
-  Perform a GitHub-style code review of local git changes using diffit.
-  Fetches the diff and inline comments from the running diffit server,
+  Perform a GitHub-style code review of local git changes using diffing.
+  Fetches the diff and inline comments from the running diffing server,
   analyses every changed file, posts inline review comments, replies to
   existing human comments, applies requested code changes, and marks comments
-  resolved — all without touching the browser. Port-agnostic: uses the diffit
-  CLI subcommands and `diffit url` for discovery, so no port is ever hard-coded.
+  resolved — all without touching the browser. Port-agnostic: uses the diffing
+  CLI subcommands and `diffing url` for discovery, so no port is ever hard-coded.
   Use when the user asks you to review their local changes, address review
-  comments, or work through a diffit review session.
+  comments, or work through a diffing review session.
 user_invocable: true
 ---
 
-# diffit Review — Full Agent Workflow
+# diffing Review — Full Agent Workflow
 
-diffit exposes a local HTTP server that mirrors a GitHub PR review experience
+diffing exposes a local HTTP server that mirrors a GitHub PR review experience
 for uncommitted git changes. This skill covers the complete lifecycle:
 
 1. **Discover** the running server (port-agnostic) and fetch the diff + comments
@@ -23,7 +23,7 @@ for uncommitted git changes. This skill covers the complete lifecycle:
 4. **Reply** and **resolve** so the human sees progress live in the UI
 
 The common loop — read comments, reply, resolve, wait for handoff — has
-dedicated `diffit` subcommands. The richer operations (fetch the diff, post a
+dedicated `diffing` subcommands. The richer operations (fetch the diff, post a
 new inline comment, apply a suggestion) use the HTTP API against the
 auto-discovered base URL.
 
@@ -31,24 +31,24 @@ auto-discovered base URL.
 
 ## 0. Prerequisites & discovery
 
-The diffit server must already be running. If not, start it in the background:
+The diffing server must already be running. If not, start it in the background:
 
 ```bash
-diffit                        # all working-tree changes (staged + unstaged + untracked)
-diffit -- --staged            # staged only
-diffit -- HEAD~3              # last 3 commits
-diffit -- main..HEAD          # branch vs main
+diffing                        # all working-tree changes (staged + unstaged + untracked)
+diffing -- --staged            # staged only
+diffing -- HEAD~3              # last 3 commits
+diffing -- main..HEAD          # branch vs main
 ```
 
-You never need to know the port. The subcommands (`diffit comments`,
-`diffit reply`, `diffit resolve`, `diffit await-review`) discover the running
+You never need to know the port. The subcommands (`diffing comments`,
+`diffing reply`, `diffing resolve`, `diffing await-review`) discover the running
 server automatically. For raw HTTP calls, capture the base URL once:
 
 ```bash
-DIFFIT=$(diffit url)          # e.g. http://127.0.0.1:5173 — fails (exit 3) if no server
+DIFFING=$(diffing url)          # e.g. http://127.0.0.1:5173 — fails (exit 3) if no server
 ```
 
-> Every raw `curl` below uses `$DIFFIT`. If `diffit url` errors, the server
+> Every raw `curl` below uses `$DIFFING`. If `diffing url` errors, the server
 > isn't running for this repo — start it first.
 
 ---
@@ -56,7 +56,7 @@ DIFFIT=$(diffit url)          # e.g. http://127.0.0.1:5173 — fails (exit 3) if
 ## 1. Fetch the diff
 
 ```bash
-curl -s "$DIFFIT/api/diff" | jq '{branch, repoName, binaryFiles: .binaryFiles}'
+curl -s "$DIFFING/api/diff" | jq '{branch, repoName, binaryFiles: .binaryFiles}'
 ```
 
 The full unified diff is in the `patch` field. Parse it to understand every
@@ -71,9 +71,9 @@ Use the subcommand — it prints the same `<code-review-comments>` XML the human
 would copy, or raw JSON with `--json`:
 
 ```bash
-diffit comments              # all comments as XML
-diffit comments --open       # only open comments
-diffit comments --json       # raw JSON array
+diffing comments              # all comments as XML
+diffing comments --open       # only open comments
+diffing comments --json       # raw JSON array
 ```
 
 Each comment carries `id`, `filePath`, `side` (`additions`/`deletions`),
@@ -89,7 +89,7 @@ to GitHub's "Add a comment" on a diff line). There's no subcommand for creating
 comments, so use the API:
 
 ```bash
-curl -s -X POST "$DIFFIT/api/comments" \
+curl -s -X POST "$DIFFING/api/comments" \
   -H "Content-Type: application/json" \
   -d '{
     "filePath": "src/utils/parser.ts",
@@ -131,23 +131,23 @@ For each comment where `status === "open"`:
 4. Reply, then resolve:
 
 ```bash
-diffit reply <comment-id> --body "Done. Renamed \`x\` to \`parsedToken\` on line 42." --model "<your-model-name>"
-diffit resolve <comment-id>
+diffing reply <comment-id> --body "Done. Renamed \`x\` to \`parsedToken\` on line 42." --model "<your-model-name>"
+diffing resolve <comment-id>
 ```
 
 ### 4b. Question → reply only, leave open
 
 ```bash
-diffit reply <comment-id> --body "A Map would work too, but a plain object is used because the keys are always strings." --model "<your-model-name>"
+diffing reply <comment-id> --body "A Map would work too, but a plain object is used because the keys are always strings." --model "<your-model-name>"
 ```
 
 ### 4c. Ambiguous → ask for clarification, leave open
 
 ```bash
-diffit reply <comment-id> --body "Should I rename just this variable, or also the type alias and all call sites?" --model "<your-model-name>"
+diffing reply <comment-id> --body "Should I rename just this variable, or also the type alias and all call sites?" --model "<your-model-name>"
 ```
 
-`diffit reply` always attributes the reply to `role: agent`; pass `--model` so
+`diffing reply` always attributes the reply to `role: agent`; pass `--model` so
 the UI shows your model chip. You can also pipe a long body via stdin with
 `--body -`. Each reply/resolve appears in the UI in real time (the human sees a
 toast).
@@ -156,17 +156,17 @@ toast).
 
 ## 5. Edit, delete, apply-suggestion (HTTP API)
 
-These have no subcommand — use `$DIFFIT`:
+These have no subcommand — use `$DIFFING`:
 
 ```bash
 # Edit a comment body
-curl -s -X PUT "$DIFFIT/api/comments/<id>" -H "Content-Type: application/json" -d '{"body": "Updated text."}'
+curl -s -X PUT "$DIFFING/api/comments/<id>" -H "Content-Type: application/json" -d '{"body": "Updated text."}'
 
 # Delete a comment
-curl -s -X DELETE "$DIFFIT/api/comments/<id>"
+curl -s -X DELETE "$DIFFING/api/comments/<id>"
 
 # Apply a ```suggestion block (writes the file, resolves the comment). additions only.
-curl -s -X POST "$DIFFIT/api/comments/<id>/apply-suggestion"
+curl -s -X POST "$DIFFING/api/comments/<id>/apply-suggestion"
 ```
 
 ---
@@ -174,11 +174,11 @@ curl -s -X POST "$DIFFIT/api/comments/<id>/apply-suggestion"
 ## 6. Waiting for the human (handoff)
 
 If you want to act exactly when the human finishes reviewing, block on the
-handoff instead of polling. `diffit await-review` sleeps until the human clicks
+handoff instead of polling. `diffing await-review` sleeps until the human clicks
 **"Send to agent"**, then prints the open comments as XML:
 
 ```bash
-diffit await-review          # exit 0 + XML on send; exit 2 (DIFFIT_AWAIT_TIMEOUT) → run again
+diffing await-review          # exit 0 + XML on send; exit 2 (DIFFING_AWAIT_TIMEOUT) → run again
 ```
 
 Supports multiple rounds — loop back to `await-review` after a round to pick up
@@ -188,12 +188,12 @@ the human's next batch.
 
 ## 7. MCP alternative
 
-If you're configured with the diffit MCP server (`diffit mcp`) rather than a
+If you're configured with the diffing MCP server (`diffing mcp`) rather than a
 shell, the equivalent tools are `await_review`, `list_comments`,
 `reply_to_comment`, and `resolve_comment`. Client config:
 
 ```json
-{ "mcpServers": { "diffit": { "command": "diffit", "args": ["mcp"] } } }
+{ "mcpServers": { "diffing": { "command": "diffing", "args": ["mcp"] } } }
 ```
 
 ---
@@ -202,7 +202,7 @@ shell, the equivalent tools are `await_review`, `list_comments`,
 
 When the human copies all comments from the UI ("Copy comments" button), they
 get a structured XML payload you can act on if pasted into a chat. The embedded
-`<instructions>` block describes three reply paths: **(A)** the `diffit` CLI /
+`<instructions>` block describes three reply paths: **(A)** the `diffing` CLI /
 MCP (preferred, port-agnostic), **(B)** the local HTTP API, and **(C)** an
 offline `<comment-replies>` block you emit at the end of your response when you
 have no machine access:
@@ -213,7 +213,7 @@ have no machine access:
 </comment-replies>
 ```
 
-Prefer (A) whenever you can run `diffit`.
+Prefer (A) whenever you can run `diffing`.
 
 ---
 

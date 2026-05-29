@@ -70,7 +70,7 @@ describe('settings', () => {
       const result = saveSettings({ staged: false })
       expect(result.staged).toBe(false)
       expect(result.untracked).toBe(true)
-      expect(mockMkdirSync).toHaveBeenCalledWith('/home/test/.config/diffit', { recursive: true })
+      expect(mockMkdirSync).toHaveBeenCalledWith('/home/test/.config/diffing', { recursive: true })
       expect(mockWriteFileSync).toHaveBeenCalled()
     })
 

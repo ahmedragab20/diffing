@@ -4,7 +4,7 @@ import { getProjectStorageDir, getRepoRoot } from './git.js'
 
 /**
  * A tiny lockfile (`server.json`) written into the per-repo storage dir when a
- * diffit web server starts. It lets the `diffit` CLI subcommands and the MCP
+ * diffing web server starts. It lets the `diffing` CLI subcommands and the MCP
  * server discover the running server's port with zero user input — they resolve
  * the same per-repo directory from the cwd and read this file. Stale locks (from
  * a crashed server) self-heal via `isLockAlive`.

@@ -471,7 +471,7 @@ export function getProjectStorageDir(customRepoRoot?: string): string {
   const root = customRepoRoot || getRepoRoot()
   const hash = createHash('sha256').update(root).digest('hex').slice(0, 8)
   const repoName = basename(root)
-  return join(homedir(), '.diffit', `${repoName}-${hash}`)
+  return join(homedir(), '.diffing', `${repoName}-${hash}`)
 }
 
 export interface BlameEntry {

@@ -93,7 +93,7 @@ try {
   // discovery is optional
 }
 
-console.log(`diffit server running at ${localUrl}`)
+console.log(`diffing server running at ${localUrl}`)
 
 if (!opts.noOpen) {
   const settings = loadSettings()

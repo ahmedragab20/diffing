@@ -1,7 +1,7 @@
 /**
  * Shared live channel over a single Server-Sent Events connection.
  *
- * diffit's UI and any connected agent talk over one stable, named-event
+ * diffing's UI and any connected agent talk over one stable, named-event
  * protocol on `/api/live`:
  *   - `change`    the working tree / git state changed → re-read the diff
  *   - `comments`  the comment store changed (a user or agent added / replied /

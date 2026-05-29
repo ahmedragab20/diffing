@@ -1,17 +1,17 @@
 {
-  "name": "diffit",
-  "version": "0.12.1",
-  "description": "Local code review tool for git diffs with a GitHub PR-like web UI",
+  "name": "diffing",
+  "version": "0.1.0",
+  "description": "local-first CLI for reviewing, navigating, and discussing git diffs with AI",
   "type": "module",
   "license": "MIT",
   "packageManager": "pnpm@10.32.1",
-  "homepage": "https://github.com/ahmedragab20/diffit",
+  "homepage": "https://github.com/ahmedragab20/diffing",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ahmedragab20/diffit.git"
+    "url": "git+https://github.com/ahmedragab20/diffing.git"
   },
   "bugs": {
-    "url": "https://github.com/ahmedragab20/diffit/issues"
+    "url": "https://github.com/ahmedragab20/diffing/issues"
   },
   "keywords": [
     "git",
@@ -20,7 +20,7 @@
     "cli"
   ],
   "bin": {
-    "diffit": "./dist/cli.mjs"
+    "diffing": "./dist/cli.mjs"
   },
   "files": [
     "dist"

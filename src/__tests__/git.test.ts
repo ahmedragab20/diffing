@@ -221,14 +221,14 @@ describe('git', () => {
       mockExecFileSync.mockReturnValue('/Users/user/projects/my-repo\n')
       const { getProjectStorageDir } = await import('../lib/git.js')
       const dir = getProjectStorageDir()
-      expect(dir).toContain('.diffit')
+      expect(dir).toContain('.diffing')
       expect(dir).toContain('my-repo-')
     })
 
     it('respects customRepoRoot when provided', async () => {
       const { getProjectStorageDir } = await import('../lib/git.js')
       const dir = getProjectStorageDir('/custom/path/some-repo')
-      expect(dir).toContain('.diffit')
+      expect(dir).toContain('.diffing')
       expect(dir).toContain('some-repo-')
     })
   })

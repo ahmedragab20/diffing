@@ -33,7 +33,7 @@ function makeLock(overrides: Partial<import('../lib/server-lock.js').ServerLock>
 describe('server-lock', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    storageDir = mkdtempSync(join(tmpdir(), 'diffit-lock-'))
+    storageDir = mkdtempSync(join(tmpdir(), 'diffing-lock-'))
     mockGetProjectStorageDir.mockReturnValue(storageDir)
     mockGetRepoRoot.mockReturnValue('/tmp/test-repo')
   })
