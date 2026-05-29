@@ -327,7 +327,7 @@ Now, running `git review` inside any repository will spin up the interactive bro
 
 ### Architectural Strategy
 1. **Platform Independence & Isolation**: The native Rust binary is loaded dynamically via ES import hooks within the server's search initializer. If a platform is incompatible or the binary is missing, search capabilities degrade gracefully (reporting search as unavailable via API) instead of crashing the primary `diffing` Hono web server.
-2. **SQLite-Backed Frecency & History**: Search history is preserved across restarts inside the `~/.diffing/<repo>/fff/` database directory using two lightweight databases (`frecency.db` and `history.db`).
+2. **SQLite-Backed Frecency & History**: Search history is preserved across restarts inside the `~/.diffing/<repo-name>-<sha256(repo-root-path).slice(0, 8)>/fff/` database directory using two lightweight databases (`frecency.db` and `history.db`).
 3. **Automatic Watchers**: `@ff-labs/fff-node` handles its own high-efficiency file system watcher, ensuring search indices stay fully up-to-date in real time as files change in the repository working tree during code review.
 
 ### Search Scopes
@@ -428,5 +428,228 @@ When review comments are exported (either via copying from the UI clipboard or r
   </file>
 </code-review-comments>
 ```
+
+---
+
+## 10. Settings & User Configuration
+
+User-specific preferences, layout options, editor choices, and themes are persisted across review sessions in a central settings file.
+
+- **Storage Location**: `~/.config/diffing/settings.json`
+- **JSON Configuration Schema & Default Settings**:
+```json
+{
+  "staged": true,                    // Include staged changes by default in web mode
+  "untracked": true,                 // Include untracked files by default in web mode
+  "diffStyle": "split",              // Layout presentation ("split" or "unified")
+  "defaultTabSize": 4,               // Fallback tab size if .editorconfig is not found
+  "theme": "nord",                   // Core visual theme (Nord, Tokyo Night, Catppuccin, rose-pine, etc.)
+  "editorIDE": "default",            // Target IDE to open files in ("default", "vscode", "zed", "vim", "neovim")
+  "lineDiffType": "word",            // Pinpoint difference algorithm ("word", "word-alt", "char", "none")
+  "lineWrap": false,                 // Soft-wrap long source lines to fit page
+  "diffIndicators": "classic",       // Margin line indicators ("classic" (+/-), "bars", "none")
+  "showLineNumbers": true,           // Toggle gutter line numbers
+  "hunkSeparators": "line-info",     // visual style of dividers between hunks
+  "lineHoverHighlight": "both",      // Highlight on hover ("both", "line", "number", "disabled")
+  "fontSize": 13,                    // Base code editor font size (in pixels)
+  "expandContextByDefault": false,   // Automatically load and expand full file context
+  "collapsedContextThreshold": 10,   // Context lines gap before collapsing is applied
+  "expansionLineCount": 20,          // Context lines revealed per click on expand up/down
+  "haptics": true                    // Interface sound effects and tactile feedback triggers
+}
+```
+
+---
+
+## 11. Web API Reference
+
+The local server exposes a powerful REST HTTP API to allow the web frontend dashboard and local AI agent scripts to synchronize comments, track status, mutate the working tree, and launch editors.
+
+### 1. Handoff & Synchronization Loop
+
+#### `POST /api/review/send`
+Releases all waiting agent processes (blocked in `/api/review/await`) by incrementing the monotonic `round` sequence and broadcasting the snapshots.
+- **Payload Schema**:
+  ```json
+  {
+    "generalComment": "Optional high-level markdown text summarizing this review round"
+  }
+  ```
+- **Response Schema**:
+  ```json
+  {
+    "ok": true,
+    "round": 4,
+    "openCount": 2,
+    "waiters": 0
+  }
+  ```
+
+#### `GET /api/review/await`
+A long-poll endpoint used by CLI subcommands and MCP tools to block until a review is released.
+- **Query Parameters**:
+  - `sinceRound` (number, required): The last round processed by the client.
+  - `timeoutMs` (number, default: `25000`): Maximum server hold time. Server caps this to `50000`ms to prevent intermediate proxy dropouts.
+- **Response Schema (on release)**:
+  ```json
+  {
+    "status": "released",
+    "round": 4,
+    "payload": {
+      "sentAt": 1782782782782,
+      "commentXml": "<code-review-comments>...</code-review-comments>",
+      "openCount": 2,
+      "comments": [...]
+    }
+  }
+  ```
+
+#### `GET /api/review/status`
+Queries a snapshot of the current review session state.
+- **Response Schema**:
+  ```json
+  {
+    "round": 4,
+    "waiters": 0,
+    "lastPayload": { ... }
+  }
+  ```
+
+---
+
+### 2. Comments & Replies System
+
+#### `GET /api/comments`
+Fetches a list of all current code review comment threads.
+- **Response Schema**: Array of `ReviewComment` objects.
+
+#### `POST /api/comments`
+Opens a new inline comment thread on a line of code.
+- **Payload Schema**:
+  ```json
+  {
+    "filePath": "src/lib/git.ts",
+    "side": "additions | deletions",
+    "lineNumber": 142,
+    "startLineNumber": 140,            // Supports range select
+    "lineContent": "The exact source line context",
+    "body": "Markdown comment message"
+  }
+  ```
+
+#### `PUT /api/comments/:id`
+Updates an existing comment thread body or toggles its status.
+- **Payload Schema**:
+  ```json
+  {
+    "body": "Updated markdown comment message",
+    "status": "open | resolved"
+  }
+  ```
+
+#### `DELETE /api/comments/:id`
+Permanently deletes a comment thread.
+
+#### `POST /api/comments/:id/replies`
+Appends a conversation reply to an existing comment thread.
+- **Payload Schema**:
+  ```json
+  {
+    "body": "Reply message body",
+    "role": "user | agent",
+    "model": "claude-3-5-sonnet"       // Required if role is agent
+  }
+  ```
+
+#### `PUT /api/comments/:id/replies/:replyId`
+Updates the body text of a comment reply.
+
+#### `DELETE /api/comments/:id/replies/:replyId`
+Deletes a comment reply.
+
+#### `POST /api/comments/:id/apply-suggestion`
+Parses a Markdown ```suggestion code block inside the comment body, applies the proposed lines of code to the physical working tree file, and marks the comment thread as `resolved`.
+
+---
+
+### 3. File Attachments & Media
+
+#### `POST /api/attachments`
+Uploads a pasted image file from the clipboard or file picker.
+- **Payload**: Multi-part Form Data containing a `file` field.
+- **Response Schema**:
+  ```json
+  {
+    "url": "/api/attachments/pasted_image_de4f55-bc11...png"
+  }
+  ```
+
+#### `GET /api/attachments/:filename`
+Serves an uploaded attachment file. Uploads are strictly isolated and stored inside `~/.diffing/<repo-name>-<hash>/attachments/`.
+
+---
+
+### 4. Git Operations & IDE Integration
+
+#### `POST /api/open-file`
+Launches the developer's preferred editor to target the specified file.
+- **Payload Schema**:
+  ```json
+  {
+    "filePath": "src/server.ts",
+    "editor": "vscode | zed | vim | neovim | default"
+  }
+  ```
+
+#### `POST /api/revert-hunk`
+Performs hunk-level reverts. The server extracts the hunk patch from the working tree, constructs a minimal patch, and applies it in reverse (`git apply --reverse`).
+- **Payload Schema**:
+  ```json
+  {
+    "filePath": "src/server.ts",
+    "hunkIndex": 2
+  }
+  ```
+
+#### `GET /api/hunk-history`
+Gathers context regarding deleted lines. Retrieves `git blame` annotations for the target deletion range and extracts the last 5 commits affecting the file to locate who authored the code and when it was introduced.
+- **Query Parameters**:
+  - `filePath` (string, required): File path relative to repo root.
+  - `deletionStart` (number, required): Line number index where the deleted block started.
+  - `deletionCount` (number, required): Total count of deleted lines.
+
+#### `POST /api/save-file`
+Writes updated code to disk and optionally stages it in git.
+- **Payload Schema**:
+  ```json
+  {
+    "filePath": "src/lib/git.ts",
+    "content": "Full source file contents...",
+    "gitAdd": true                     // Automatically runs git add on the file
+  }
+  ```
+
+#### `GET /api/merge-status`
+Probes if the working tree has merge conflicts (`.git/MERGE_HEAD` exists) and returns a list of files currently in conflict state.
+- **Response Schema**:
+  ```json
+  {
+    "inMerge": true,
+    "conflicts": ["src/main.ts", "package.json"]
+  }
+  ```
+
+#### `GET /api/repo-files`
+Returns a sorted list of all active files under the repository working tree (tracked + untracked), excluding paths specified in `.gitignore`.
+
+#### `GET /api/file-text`
+Retrieves a file version as text. Includes a `missing` indicator in the JSON output if the requested revision version is missing (such as deleted files or new files).
+- **Query Parameters**:
+  - `path` (string, required)
+  - `version` (string, required): `"old" | "new"`
+
+#### `GET /api/settings` / `PUT /api/settings`
+Retrieves or overwrites the global user configuration stored in `~/.config/diffing/settings.json`.
+
 
 

@@ -34,7 +34,7 @@ function textResult(text: string, structuredContent?: Record<string, unknown>) {
 }
 
 export async function startMcpServer(): Promise<void> {
-  const server = new McpServer({ name: 'diffing', version: '0.12.1' })
+  const server = new McpServer({ name: 'diffing', version: '0.1.0' })
 
   server.registerTool(
     'await_review',
