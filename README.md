@@ -408,6 +408,8 @@ For advanced features, internal API endpoints, sequence specifications, and conf
 
 ---
 
+👉🏻 The project was intially forked from **wong2/diffx**
+
 ## License
 
 MIT
