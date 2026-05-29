@@ -16,7 +16,7 @@ const args = process.argv.slice(2)
 // ── Agent subcommands ───────────────────────────────────
 // A small reserved set of verbs drives the user→agent handoff. They're checked
 // before diff parsing so they never collide with `git diff` revisions.
-const SUBCOMMANDS = new Set(['await-review', 'reply', 'resolve', 'comments', 'url', 'mcp'])
+const SUBCOMMANDS = new Set(['await-review', 'reply', 'resolve', 'comments', 'url', 'mcp', 'plan'])
 if (SUBCOMMANDS.has(args[0])) {
   if (args[0] === 'mcp') {
     const { startMcpServer } = await import('./mcp.js')

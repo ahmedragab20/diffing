@@ -1,5 +1,5 @@
 import { useState, useEffect, memo } from 'react'
-import { GitBranch, Settings, Palette, Search } from 'lucide-react'
+import { GitBranch, Settings, Palette, Search, ClipboardList } from 'lucide-react'
 import type { DiffOptions } from '../hooks/useDiff'
 import type {
   LineDiffType,
@@ -19,6 +19,9 @@ interface ToolbarProps {
   additions: number
   deletions: number
   commentCount: number
+  planCount: number
+  pendingPlanCount: number
+  onOpenPlans: () => void
   diffStyle: 'split' | 'unified'
   diffOptions: DiffOptions
   defaultTabSize: number
@@ -109,6 +112,9 @@ export const Toolbar = memo(function Toolbar({
   additions,
   deletions,
   commentCount,
+  planCount,
+  pendingPlanCount,
+  onOpenPlans,
   diffStyle,
   diffOptions,
   defaultTabSize,
@@ -193,6 +199,22 @@ export const Toolbar = memo(function Toolbar({
           <span>Search</span>
           <kbd className="toolbar-search-kbd">⌘K</kbd>
         </button>
+        {planCount > 0 && (
+          <button
+            className={`btn btn-sm toolbar-plans-btn ${pendingPlanCount > 0 ? 'toolbar-plans-btn-pending' : ''}`}
+            onClick={onOpenPlans}
+            title={
+              pendingPlanCount > 0
+                ? `${pendingPlanCount} plan${pendingPlanCount === 1 ? '' : 's'} awaiting your review`
+                : 'Review agent plans'
+            }
+          >
+            {pendingPlanCount > 0 && <span className="agent-waiting-dot" aria-hidden="true" />}
+            <ClipboardList size={14} style={{ marginRight: '6px' }} />
+            <span>Plans</span>
+            {pendingPlanCount > 0 && <span className="toolbar-plans-badge">{pendingPlanCount}</span>}
+          </button>
+        )}
         <div className="toolbar-toggle">
           <button
             className={`btn btn-sm ${diffStyle === 'split' ? 'btn-active' : ''}`}

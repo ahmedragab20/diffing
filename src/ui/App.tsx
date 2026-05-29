@@ -20,6 +20,8 @@ import { SHIKI_THEME_MAP } from "./utils";
 import type { ReviewComment } from "../lib/types";
 import { useDiff } from "./hooks/useDiff";
 import { useComments } from "./hooks/useComments";
+import { usePlans } from "./hooks/usePlans";
+import { navigate } from "./router";
 import { useMergeStatus } from "./hooks/useMergeStatus";
 import { useSettings } from "./hooks/useSettings";
 import { useViewed } from "./hooks/useViewed";
@@ -62,6 +64,11 @@ export function App() {
     );
     const { comments, addComment, removeComment, resolveComment, unresolveComment, addReply, editComment, editReply, removeReply, copyAllComments, agentActivity, clearAgentActivity, sendToAgent, sending, agentWaiting } =
         useComments();
+    const { plans } = usePlans();
+    const pendingPlanCount = useMemo(
+        () => plans.filter((p) => p.decision === "pending").length,
+        [plans],
+    );
     const { status: mergeStatus, refresh: refreshMergeStatus } = useMergeStatus(patch);
     const [activeFile, setActiveFile] = useState<string | null>(null);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -977,6 +984,9 @@ export function App() {
                 additions={diffStats.additions}
                 deletions={diffStats.deletions}
                 commentCount={comments.length}
+                planCount={plans.length}
+                pendingPlanCount={pendingPlanCount}
+                onOpenPlans={() => navigate("/plan")}
                 diffStyle={settings.diffStyle}
                 diffOptions={diffOptions}
                 defaultTabSize={settings.defaultTabSize}

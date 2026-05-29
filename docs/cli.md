@@ -175,6 +175,75 @@ diffing url
 
 ---
 
+## 4b. Plan-Review Subcommands
+
+`diffing plan <action>` drives the **plan-review** handoff — the plan-side twin
+of the comment review. An agent submits a markdown plan, blocks until the human
+approves / rejects / requests changes, and acts on the verdict. All actions are
+port-agnostic (resolved from the lockfile).
+
+### `plan submit`
+Submit (or resubmit) a markdown plan for review.
+
+```bash
+diffing plan submit <file> [--title T] [--source S] [--model M] [--id <id>] [--wait] [--timeout N]
+cat PLAN.md | diffing plan submit                 # body via stdin (omit <file> or pass "-")
+```
+
+- `--title` — display title (defaults to the plan's first heading/line).
+- `--source` / `--model` — origin label and authoring model, shown in the UI.
+- `--id <id>` — resubmit a revised body for an existing plan: bumps `version`,
+  resets the verdict to `pending`, and re-opens it for review.
+- `--wait` — after submitting, block until the verdict arrives (combines
+  `submit` + `await`); `--timeout` sets the total wait budget in seconds.
+- **Output**: the plan id on stdout; the review URL (`<base>/plan/<id>`) on stderr.
+
+### `plan await`
+Block until the human decides, then print the `<plan-review>` XML.
+
+```bash
+diffing plan await [--timeout N]
+```
+
+- **Exit codes**: `0` on a decision (XML on stdout); `2` (`DIFFING_PLAN_AWAIT_TIMEOUT`)
+  if no decision arrives within the budget — call again to keep waiting.
+- stderr carries `DIFFING_PLAN_DECISION=<verdict>` and `DIFFING_PLAN_ROUND=<n>`.
+
+### `plan list`
+List submitted plans.
+
+```bash
+diffing plan list [--json]
+```
+
+- Default: one tab-separated row per plan (`id  [decision]  vN  K open comment(s)  title`).
+- `--json`: the raw plan array.
+
+### `plan show`
+Print a single plan.
+
+```bash
+diffing plan show [<id>] [--json]      # latest plan if <id> omitted
+```
+
+- Default: the `<plan-review>` XML. `--json`: the raw plan object.
+
+### `plan reply`
+Reply to an inline plan comment (the owning plan is resolved automatically).
+
+```bash
+diffing plan reply <commentId> --body "..." [--model <name>]
+```
+
+### `plan resolve`
+Mark a plan comment resolved.
+
+```bash
+diffing plan resolve <commentId>
+```
+
+---
+
 ## 5. Model Context Protocol (MCP) Server
 
 `diffing` bundles a full MCP-compliant server over standard I/O (stdio). This allows agents running in tools like Cursor, Claude Desktop, or Gemini to interact with the review session natively.
@@ -236,6 +305,39 @@ Posts a comment thread reply from the agent.
 Resolves a comment thread.
 - **Input Schema**:
   - `commentId` (string, required): Target UUID.
+
+#### `submit_plan`
+Submits a markdown plan for review (or resubmits a revised version).
+- **Input Schema**:
+  - `body` (string, required): The plan markdown.
+  - `title` (optional string), `source` (optional string), `model` (optional string).
+  - `planId` (optional string): resubmit this existing plan (version bump, verdict reset).
+- **Output**: confirmation text + `{ planId, version, url }`.
+
+#### `await_plan_review`
+Blocks until the human approves / rejects / requests changes on a plan.
+- **Input Schema**:
+  - `timeoutSeconds` (optional number): max wait (defaults to 570).
+- **Output**: the `<plan-review>` XML + `{ round, planId, decision, decisionComment, openCommentCount, plan }`.
+
+#### `list_plans`
+Lists all submitted plans.
+- **Output**: a per-plan summary + structured `{ plans: [...] }`.
+
+#### `get_plan`
+Fetches one plan as `<plan-review>` XML.
+- **Input Schema**:
+  - `planId` (string, required).
+
+#### `reply_to_plan_comment`
+Posts an agent reply to a plan comment (the owning plan is resolved automatically).
+- **Input Schema**:
+  - `commentId` (string, required), `body` (string, required), `model` (optional string).
+
+#### `resolve_plan_comment`
+Resolves a plan comment.
+- **Input Schema**:
+  - `commentId` (string, required).
 
 ---
 
@@ -650,6 +752,76 @@ Retrieves a file version as text. Includes a `missing` indicator in the JSON out
 
 #### `GET /api/settings` / `PUT /api/settings`
 Retrieves or overwrites the global user configuration stored in `~/.config/diffing/settings.json`.
+
+### 5. Plan Review
+
+Plans are persisted to `plans.json` in the per-repo storage dir (watched for live
+`plans` SSE broadcasts). The verdict handoff mirrors the comment handoff but uses
+the `PlanReviewSession` and a separate long-poll endpoint.
+
+#### `GET /api/plans` / `GET /api/plans/:id`
+Returns all plans, or a single plan (404 if unknown). Each plan carries
+`{ id, title, body, source?, model?, version, decision, decisionComment?, decidedAt?, createdAt, updatedAt, comments[] }`.
+
+#### `POST /api/plans`
+Creates a plan, or revises one when `id` matches an existing plan (version bump,
+verdict reset to `pending`). Returns the plan (201).
+- **Payload Schema**:
+  ```json
+  {
+    "body": "# My Plan\n## Phase 1\n…",   // required (markdown)
+    "title": "Refactor the parser",        // optional (defaults to first heading/line)
+    "source": "claude-code",               // optional origin label
+    "model": "claude-opus-4-8",            // optional authoring model
+    "id": "<existing-plan-id>"             // optional → revise instead of create
+  }
+  ```
+
+#### `PUT /api/plans/:id` / `DELETE /api/plans/:id`
+Updates a plan's `title`/`body`/`source`/`model`, or deletes a plan.
+
+#### `POST /api/plans/:id/comments`
+Adds an inline comment. `lineNumber: 0` marks a whole-plan comment; `startLineNumber`
+makes it a range. When `lineContent`/`sectionTitle` are omitted, the server derives
+them from the plan body (the anchored text and nearest preceding heading). Returns
+the updated plan (201).
+- **Payload Schema**:
+  ```json
+  {
+    "lineNumber": 4,                 // 0 = whole-plan comment
+    "startLineNumber": 3,            // optional (multi-line range)
+    "body": "Clarify this step.",
+    "lineContent": "…",             // optional (auto-derived)
+    "sectionTitle": "Phase 1"        // optional (auto-derived)
+  }
+  ```
+
+#### `PUT /api/plans/:id/comments/:commentId` / `DELETE …`
+Edits a comment's `body`/`status`, or deletes it.
+
+#### `POST /api/plans/:id/comments/:commentId/replies` / `PUT … /replies/:replyId` / `DELETE … /replies/:replyId`
+Adds, edits, or deletes a reply. A `model` in the payload attributes the reply to `role: "agent"`.
+
+#### `POST /api/plans/:id/decision`
+The human's verdict. Records the decision on the plan **and** releases every agent
+blocked on `/api/plan-review/await`.
+- **Payload Schema**:
+  ```json
+  {
+    "decision": "approved | rejected | changes-requested",   // required
+    "decisionComment": "Optional overall note"
+  }
+  ```
+- **Response**: `{ ok, round, decision, openCommentCount, waiters }`.
+
+#### `GET /api/plan-review/await`
+Long-poll for the next plan decision. Same `sinceRound` / `timeoutMs` mechanics as
+`/api/review/await`. Returns `{ status: "released", payload }` (payload includes
+`reviewXml`, `decision`, `decisionComment`, `planId`, `openCommentCount`, `plan`)
+or `{ status: "keep-waiting", round }`.
+
+#### `GET /api/plan-review/status`
+Returns `{ round, waiters, lastDecidedAt }` for the plan handoff session.
 
 
 

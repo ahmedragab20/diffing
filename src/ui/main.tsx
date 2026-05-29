@@ -9,7 +9,7 @@ import DiffsWorker from '@pierre/diffs/worker/worker.js?worker'
 // and the element never registers. Importing it directly keeps it alive.
 import '../../node_modules/@pierre/diffs/dist/components/web-components.js'
 import { TooltipProvider } from './primitives/Tooltip'
-import { App } from './App'
+import { Root } from './Root'
 import './styles/global.css'
 
 const queryClient = new QueryClient()
@@ -30,7 +30,7 @@ createRoot(document.getElementById('root')!).render(
         }}
       >
         <TooltipProvider>
-          <App />
+          <Root />
         </TooltipProvider>
       </WorkerPoolContextProvider>
     </HotkeysProvider>

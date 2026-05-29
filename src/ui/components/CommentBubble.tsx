@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { CheckCircle2, Bot, Reply, Pencil, Trash2, AlertTriangle } from 'lucide-react'
+import { CheckCircle2, Bot, User, Reply, Pencil, Trash2, AlertTriangle } from 'lucide-react'
 import type { ReviewComment } from '../../lib/types'
 import { timeAgo, parseMarkdown } from '../utils'
 import { useComments } from '../hooks/useComments'
@@ -10,31 +10,19 @@ interface CommentBubbleProps {
   onDelete: (id: string) => void
 }
 
-function getAvatarInfo(id: string, role?: 'user' | 'agent', model?: string) {
+function AvatarIcon({ role, size = 16 }: { role: 'user' | 'agent'; size?: number }) {
   if (role === 'agent') {
-    const initial = model ? model.charAt(0).toUpperCase() : 'A'
-    return {
-      bg: 'var(--primary)', // Solid primary theme color for Agent
-      initial
-    }
+    return (
+      <div className="comment-avatar-circle comment-avatar-agent" style={{ width: `${size * 2}px`, height: `${size * 2}px` }}>
+        <Bot size={size} aria-hidden="true" />
+      </div>
+    )
   }
-
-  // Deterministic vibrant solid colors for users
-  const colors = [
-    '#ff5858', // Coral red
-    '#11998e', // Teal green
-    '#ff9966', // Sunset orange
-    '#7f00ff', // Purple magic
-    '#00c6ff', // Sky blue
-    '#f12711', // Fire red
-    '#0575e6', // Royal blue
-  ]
-  const charSum = id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
-  const bg = colors[Math.abs(charSum) % colors.length]
-  return {
-    bg,
-    initial: 'U'
-  }
+  return (
+    <div className="comment-avatar-circle comment-avatar-user" style={{ width: `${size * 2}px`, height: `${size * 2}px` }}>
+      <User size={size} aria-hidden="true" />
+    </div>
+  )
 }
 
 export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
@@ -147,16 +135,12 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
     )
   }
 
-  const parentAvatar = getAvatarInfo(comment.id, 'user')
-
   if (isEditing) {
     return (
       <div className="comment-bubble-canvas" id={`comment-${comment.id}`} role="article" aria-label="Edit comment">
         <div className="comment-node">
           <div className="comment-avatar-col">
-            <div className="comment-avatar-circle" style={{ background: parentAvatar.bg }}>
-              {parentAvatar.initial}
-            </div>
+            <AvatarIcon role="user" size={16} />
           </div>
           <div className="comment-content-col">
             <div className="comment-node-header">
@@ -227,9 +211,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
       {/* Parent Comment Node */}
       <div className={`comment-node ${isResolved ? 'comment-node-resolved' : ''}`}>
         <div className="comment-avatar-col">
-          <div className="comment-avatar-circle" style={{ background: parentAvatar.bg }}>
-            {parentAvatar.initial}
-          </div>
+          <AvatarIcon role="user" size={16} />
         </div>
         <div className="comment-content-col">
           <div className="comment-node-header">
@@ -446,7 +428,6 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
           {comment.replies.map((reply, idx) => {
             const isAgent = reply.role === 'agent'
             const isEditingThis = editingReplyId === reply.id
-            const replyAvatar = getAvatarInfo(reply.id, reply.role, reply.model)
             return (
               <div
                 key={reply.id}
@@ -455,13 +436,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                 aria-label={`${isAgent ? 'Agent' : 'User'} reply ${idx + 1}`}
               >
                 <div className="comment-avatar-col">
-                  {isAgent ? (
-                    <div className="comment-avatar-circle" style={{ background: replyAvatar.bg, width: '28px', height: '28px', fontSize: '11px' }}>
-                      {replyAvatar.initial}
-                    </div>
-                  ) : (
-                    <div style={{ width: '28px' }} />
-                  )}
+                  <AvatarIcon role={isAgent ? 'agent' : 'user'} size={14} />
                 </div>
                 <div className="comment-content-col">
                   <div className="comment-node-header">
@@ -541,14 +516,24 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
             </button>
 
             {isResolved ? (
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={handleUnresolve}
-                style={{ fontSize: '12px', padding: '4px 10px', marginLeft: '12px' }}
-                aria-label="Unresolve conversation"
-              >
-                Unresolve conversation
-              </button>
+              <div style={{ display: 'flex', gap: '6px', marginLeft: '12px' }}>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setCollapsed(true)}
+                  style={{ fontSize: '12px', padding: '4px 10px' }}
+                  aria-label="Hide resolved conversation"
+                >
+                  Hide
+                </button>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleUnresolve}
+                  style={{ fontSize: '12px', padding: '4px 10px' }}
+                  aria-label="Unresolve conversation"
+                >
+                  Unresolve
+                </button>
+              </div>
             ) : (
               <button
                 className="btn btn-secondary btn-sm"

@@ -10,9 +10,14 @@ import { searchFiles, searchContent, searchSymbols, searchAll, getSearchStatus, 
 import { loadSettings, saveSettings } from './lib/settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
 import type { CommentStore } from './lib/comments.js'
+import { FilePlanStore } from './lib/plans.js'
+import type { PlanStore } from './lib/plans.js'
 import { isSafePath } from './lib/path.js'
 import { ReviewSession } from './lib/review-session.js'
+import { PlanReviewSession } from './lib/plan-review-session.js'
 import { formatComments } from './lib/comment-format.js'
+import { formatPlanReview, sectionTitleForLine, extractPlanLines } from './lib/plan-format.js'
+import type { PlanDecision } from './lib/plan-types.js'
 import { executeDiffWithMeta } from './lib/diff-engine.js'
 import type { DiffOptions } from './lib/diff-options.js'
 import { DEFAULTS } from './lib/diff-options.js'
@@ -37,10 +42,16 @@ function isCustomMode(opts: DiffOptions): boolean {
   return opts.revisions.length > 0 || opts.pathspecs.length > 0
 }
 
-export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, commentStore?: CommentStore) {
+export function createApp(
+  clientDir: string,
+  diffOpts: DiffOptions = DEFAULTS,
+  commentStore?: CommentStore,
+  planStore?: PlanStore,
+) {
   const app = new Hono()
   const customMode = isCustomMode(diffOpts)
   const store = commentStore ?? new FileCommentStore()
+  const plans = planStore ?? new FilePlanStore()
   const viewedFiles = new Set<string>()
 
   const activeClients = new Set<(event: string, data: string) => void>()
@@ -62,6 +73,12 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
     broadcast('agent-status', JSON.stringify(snapshot)),
   )
 
+  // The plan-review twin of reviewSession: tracks agents blocked waiting for a
+  // plan verdict so the UI can show whether one is connected.
+  const planReviewSession = new PlanReviewSession((snapshot) =>
+    broadcast('plan-review-status', JSON.stringify(snapshot)),
+  )
+
   let repoRoot: string
   try {
     repoRoot = getRepoRoot()
@@ -69,25 +86,31 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
     repoRoot = process.cwd()
   }
 
-  // Watch the project comment store so any write — whether from this server's
-  // own API handlers or from an external agent editing comments.json directly —
-  // pushes a `comments` event to every connected client in real time. This is
-  // the bidirectional user<->agent channel: one file, one broadcast trigger.
-  // Skipped when a comment store is injected (e.g. the in-memory store in
-  // tests) since there is no backing file to watch.
-  if (!commentStore) {
+  // Watch the project storage dir so any write — whether from this server's own
+  // API handlers or from an external agent editing comments.json / plans.json
+  // directly — pushes the matching event (`comments` or `plans`) to every
+  // connected client in real time. This is the bidirectional user<->agent
+  // channel: one file, one broadcast trigger. Skipped when stores are injected
+  // (e.g. the in-memory stores in tests) since there is no backing file to watch.
+  if (!commentStore && !planStore) {
     try {
       const storageDir = getProjectStorageDir()
       mkdirSync(storageDir, { recursive: true })
       let commentsDebounce: NodeJS.Timeout | null = null
-      const commentsWatcher = watch(storageDir, (_eventType, filename) => {
-        if (filename && !filename.startsWith('comments.json')) return
-        if (commentsDebounce) clearTimeout(commentsDebounce)
-        commentsDebounce = setTimeout(() => broadcast('comments', Date.now().toString()), 120)
+      let plansDebounce: NodeJS.Timeout | null = null
+      const storageWatcher = watch(storageDir, (_eventType, filename) => {
+        if (!filename) return
+        if (filename.startsWith('comments.json')) {
+          if (commentsDebounce) clearTimeout(commentsDebounce)
+          commentsDebounce = setTimeout(() => broadcast('comments', Date.now().toString()), 120)
+        } else if (filename.startsWith('plans.json')) {
+          if (plansDebounce) clearTimeout(plansDebounce)
+          plansDebounce = setTimeout(() => broadcast('plans', Date.now().toString()), 120)
+        }
       })
-      commentsWatcher.unref()
+      storageWatcher.unref()
     } catch (err) {
-      console.warn('Failed to initialize comment store watcher:', err)
+      console.warn('Failed to initialize storage watcher:', err)
     }
   }
 
@@ -573,6 +596,182 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
 
   app.get('/api/review/status', (c) => {
     return c.json(reviewSession.snapshot())
+  })
+
+  // ── Plan review ───────────────────────────────────────────────────────────
+  // The same shape as the comment review, but for markdown plans an agent
+  // submits before doing work. Reads/writes go through the plan store (backed by
+  // plans.json, watched for live broadcasts), and the verdict is handed off via
+  // the PlanReviewSession.
+  app.get('/api/plans', async (c) => {
+    return c.json(await plans.getAll())
+  })
+
+  app.get('/api/plans/:id', async (c) => {
+    const plan = await plans.get(c.req.param('id'))
+    if (!plan) return c.json({ error: 'Plan not found' }, 404)
+    return c.json(plan)
+  })
+
+  app.post('/api/plans', async (c) => {
+    const body = await c.req.json().catch(() => ({}) as Record<string, unknown>)
+    if (typeof body.body !== 'string' || !body.body.trim()) {
+      return c.json({ error: 'A plan body (markdown) is required' }, 400)
+    }
+    const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'Untitled plan'
+    const plan = await plans.upsert({
+      id: typeof body.id === 'string' && body.id ? body.id : undefined,
+      title,
+      body: body.body,
+      source: typeof body.source === 'string' ? body.source : undefined,
+      model: typeof body.model === 'string' ? body.model : undefined,
+    })
+    return c.json(plan, 201)
+  })
+
+  app.put('/api/plans/:id', async (c) => {
+    const id = c.req.param('id')
+    const { title, body, source, model } = await c.req.json().catch(() => ({}) as Record<string, unknown>)
+    const updated = await plans.update(id, {
+      title: typeof title === 'string' ? title : undefined,
+      body: typeof body === 'string' ? body : undefined,
+      source: typeof source === 'string' ? source : undefined,
+      model: typeof model === 'string' ? model : undefined,
+    })
+    if (!updated) return c.json({ error: 'Plan not found' }, 404)
+    return c.json(updated)
+  })
+
+  app.delete('/api/plans/:id', async (c) => {
+    const removed = await plans.remove(c.req.param('id'))
+    if (!removed) return c.json({ error: 'Plan not found' }, 404)
+    return c.json({ ok: true })
+  })
+
+  app.post('/api/plans/:id/comments', async (c) => {
+    const planId = c.req.param('id')
+    const plan = await plans.get(planId)
+    if (!plan) return c.json({ error: 'Plan not found' }, 404)
+    const body = await c.req.json()
+    const lineNumber = Number.isFinite(body.lineNumber) ? Number(body.lineNumber) : 0
+    const startLineNumber = Number.isFinite(body.startLineNumber) ? Number(body.startLineNumber) : undefined
+    const anchorStart = startLineNumber ?? lineNumber
+    const lineContent =
+      typeof body.lineContent === 'string' && body.lineContent
+        ? body.lineContent
+        : lineNumber > 0
+          ? extractPlanLines(plan.body, anchorStart, lineNumber)
+          : ''
+    const sectionTitle =
+      typeof body.sectionTitle === 'string' && body.sectionTitle
+        ? body.sectionTitle
+        : lineNumber > 0
+          ? sectionTitleForLine(plan.body, anchorStart)
+          : undefined
+    const comment = {
+      id: crypto.randomUUID(),
+      lineNumber,
+      startLineNumber,
+      lineContent,
+      sectionTitle,
+      body: body.body,
+      status: 'open' as const,
+      createdAt: Date.now(),
+      replies: [],
+    }
+    const updated = await plans.addComment(planId, comment)
+    if (!updated) return c.json({ error: 'Plan not found' }, 404)
+    return c.json(updated, 201)
+  })
+
+  app.put('/api/plans/:id/comments/:commentId', async (c) => {
+    const { body, status } = await c.req.json()
+    const updated = await plans.updateComment(c.req.param('id'), c.req.param('commentId'), { body, status })
+    if (!updated) return c.json({ error: 'Plan or comment not found' }, 404)
+    return c.json(updated)
+  })
+
+  app.delete('/api/plans/:id/comments/:commentId', async (c) => {
+    const updated = await plans.removeComment(c.req.param('id'), c.req.param('commentId'))
+    if (!updated) return c.json({ error: 'Plan or comment not found' }, 404)
+    return c.json(updated)
+  })
+
+  app.post('/api/plans/:id/comments/:commentId/replies', async (c) => {
+    const { body, role, model } = await c.req.json()
+    const reply = {
+      id: crypto.randomUUID(),
+      body,
+      createdAt: Date.now(),
+      role: role || (model ? 'agent' : 'user'),
+      model: model || undefined,
+    }
+    const updated = await plans.addReply(c.req.param('id'), c.req.param('commentId'), reply)
+    if (!updated) return c.json({ error: 'Plan or comment not found' }, 404)
+    return c.json(updated)
+  })
+
+  app.put('/api/plans/:id/comments/:commentId/replies/:replyId', async (c) => {
+    const { body } = await c.req.json()
+    if (!body) return c.json({ error: 'Body is required' }, 400)
+    const updated = await plans.updateReply(c.req.param('id'), c.req.param('commentId'), c.req.param('replyId'), body)
+    if (!updated) return c.json({ error: 'Plan, comment, or reply not found' }, 404)
+    return c.json(updated)
+  })
+
+  app.delete('/api/plans/:id/comments/:commentId/replies/:replyId', async (c) => {
+    const updated = await plans.removeReply(c.req.param('id'), c.req.param('commentId'), c.req.param('replyId'))
+    if (!updated) return c.json({ error: 'Plan, comment, or reply not found' }, 404)
+    return c.json(updated)
+  })
+
+  // The human's verdict. Persists the decision on the plan AND releases every
+  // agent blocked on /api/plan-review/await with the full review payload.
+  app.post('/api/plans/:id/decision', async (c) => {
+    const planId = c.req.param('id')
+    const body = await c.req.json().catch(() => ({}) as Record<string, unknown>)
+    const decision = body.decision as PlanDecision
+    if (decision !== 'approved' && decision !== 'rejected' && decision !== 'changes-requested') {
+      return c.json({ error: 'decision must be one of: approved, rejected, changes-requested' }, 400)
+    }
+    const decisionComment = typeof body.decisionComment === 'string' ? body.decisionComment : undefined
+    const plan = await plans.setDecision(planId, decision, decisionComment)
+    if (!plan) return c.json({ error: 'Plan not found' }, 404)
+
+    const openCommentCount = (plan.comments ?? []).filter((x) => x.status === 'open').length
+    const payload = planReviewSession.decide({
+      sentAt: Date.now(),
+      planId,
+      decision,
+      decisionComment: plan.decisionComment,
+      reviewXml: formatPlanReview(plan),
+      openCommentCount,
+      plan,
+    })
+    return c.json({
+      ok: true,
+      round: payload.round,
+      decision,
+      openCommentCount,
+      waiters: planReviewSession.snapshot().waiters,
+    })
+  })
+
+  app.get('/api/plan-review/await', async (c) => {
+    const sinceRaw = c.req.query('sinceRound')
+    const sinceRound = sinceRaw !== undefined && sinceRaw !== '' ? Number(sinceRaw) : undefined
+    const requested = Number(c.req.query('timeoutMs')) || 25000
+    const timeoutMs = Math.min(Math.max(requested, 1000), 50000)
+    const result = await planReviewSession.await({
+      sinceRound: Number.isNaN(sinceRound as number) ? undefined : sinceRound,
+      timeoutMs,
+      signal: c.req.raw.signal,
+    })
+    return c.json(result)
+  })
+
+  app.get('/api/plan-review/status', (c) => {
+    return c.json(planReviewSession.snapshot())
   })
 
   app.post('/api/attachments', async (c) => {

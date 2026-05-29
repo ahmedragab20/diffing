@@ -9,6 +9,10 @@
  *   - `agent-status` an agent connected to / disconnected from the review
  *                 handoff, or a new round was sent → update the "Send to agent"
  *                 button state
+ *   - `plans`     the plan store changed (a plan was submitted/revised, or a
+ *                 plan comment added / replied / resolved) → re-read plans
+ *   - `plan-review-status` an agent connected to / disconnected from the plan
+ *                 handoff, or a decision was sent → update plan-review UI state
  *   - `heartbeat` keep-alive, ignored by subscribers
  *
  * One EventSource is shared across the whole app (lazily opened on first
@@ -16,7 +20,13 @@
  * each hold their own socket.
  */
 
-export type LiveEvent = 'change' | 'comments' | 'agent-status' | 'heartbeat'
+export type LiveEvent =
+  | 'change'
+  | 'comments'
+  | 'agent-status'
+  | 'plans'
+  | 'plan-review-status'
+  | 'heartbeat'
 
 type Handler = (data: string) => void
 

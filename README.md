@@ -1,6 +1,6 @@
 # diffing
 
-A local-first code review tool and double-sided bridge designed for the modern AI coding agent workflow. Review AI-generated changes in a high-fidelity, GitHub-like web UI, leave inline comments, and hand them back to your coding agent to fix in real time.
+A local-first code review tool and double-sided bridge designed for the modern AI coding agent workflow. Review AI-generated changes in a high-fidelity, GitHub-like web UI, leave inline comments, and hand them back to your coding agent to fix in real time — and review the agent's **plan** the same way *before* it writes any code, approving, rejecting, or requesting changes on specific lines and sections.
 
 <img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/767d42ed-a497-4b21-aca7-35be8b9a7006" />
 
@@ -189,6 +189,14 @@ diffing comments [--open] [--json]   # One-shot query of the comments database
 diffing reply <id> --body "..."     # Post an agent response or explanation
 diffing resolve <id>                 # Mark a comment resolved, updating the UI live
 diffing url                          # Retrieve the active server base URL
+
+# Plan review (review a markdown plan before any code is written)
+diffing plan submit <file> [--title T] [--model M] [--id <id>] [--wait]   # Submit/resubmit a plan; prints its id
+diffing plan await [--timeout N]     # Block until the human approves/rejects/requests-changes; outputs the verdict XML
+diffing plan list [--json]           # List submitted plans with their verdicts
+diffing plan show [<id>] [--json]    # Show one plan as <plan-review> XML (latest if omitted)
+diffing plan reply <commentId> --body "..."   # Reply to an inline plan comment
+diffing plan resolve <commentId>     # Mark a plan comment resolved
 ```
 
 ### B. Model Context Protocol (MCP) Server
@@ -204,17 +212,18 @@ If your agent supports MCP (such as Cursor, Claude Desktop, or Gemini), configur
   }
 }
 ```
-Exposes four powerful tools directly to your agent: `await_review`, `list_comments`, `reply_to_comment`, and `resolve_comment`.
+Exposes tools directly to your agent for both review flows — diff review: `await_review`, `list_comments`, `reply_to_comment`, `resolve_comment`; and plan review: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `reply_to_plan_comment`, `resolve_plan_comment`.
 
 ### C. Agent Skills
 You can install diffing skills directly into your AI coding assistant:
 ```bash
 npx skills add ahmedragab20/diffing
 ```
-Provides three primary commands to coordinate reviews:
+Provides commands to coordinate reviews:
 1. **`/diffing-start-review`** — Launches the review server.
 2. **`/diffing-finish-review`** — Blocks the agent using `await-review` until comments are sent, then applies requested edits.
 3. **`/diffing-review`** — Combined launch-and-wait flow.
+4. **`/diffing-plan-review`** — Submit a markdown plan, block until the human approves/rejects/requests changes, then proceed or revise.
 
 ### Send Review Popover
 A GitHub-style "finish your review" popover with inline editing of each comment, an optional general/overall comment, and a visual indicator when an agent is waiting. The **"Copy comments"** toolbar button serializes all comments to the XML spec and copies them to the clipboard.
@@ -224,6 +233,67 @@ A per-repo lockfile (`server.json`) in `~/.diffing/<repo-hash>/` enables all sub
 
 ### Monotonic Round Sequencing
 A `ReviewSession` class with a monotonic `round` counter and race-guard logic ensures that if a "Send to agent" lands between polling intervals, the cached payload is delivered immediately. Multiple agents can block on the same review session simultaneously—all are released together on send.
+
+---
+
+## Plan Review
+
+Review **any agent plan** — not just code. When an AI agent produces a plan
+(an implementation outline, a design proposal, a migration strategy), `diffing`
+renders the markdown line-by-line so you can comment on specific lines or
+sections and **approve**, **request changes**, or **reject** it — then hands the
+structured verdict back to the waiting agent. It's the "agent waits, human
+releases" handoff, applied *before* any code is written.
+
+```text
+1. The agent submits a markdown plan and blocks (diffing plan submit … --wait).
+2. You open the "Plans" tab, read the plan, and comment on lines/sections.
+3. You click Approve / Request changes / Reject (with an optional overall note).
+4. The agent wakes instantly, receives the verdict + comments as <plan-review> XML,
+   and proceeds, revises-and-resubmits, or stops accordingly.
+```
+
+- **Renders any markdown plan** — the plan body is shown via `@pierre/diffs` with
+  full syntax highlighting and line numbers, so it's addressable like a diff.
+- **Line, range & section comments** — hover the gutter `+` or select a line range
+  to comment; each comment auto-captures its enclosing markdown heading (section)
+  and the exact anchored text for the agent.
+- **General comments** — attach notes scoped to the whole plan.
+- **Three-way verdict** — Approve / Request changes / Reject, GitHub-style, with
+  an optional overall comment. Resubmitting a revised plan (same id) bumps the
+  version and re-opens it for review.
+- **Live "Plans" badge** — the diff toolbar shows a badge counting plans awaiting
+  your review, with a green dot when an agent is connected and waiting.
+- **Same channels everywhere** — drive it from the CLI (`diffing plan …`), the
+  MCP tools (`submit_plan`, `await_plan_review`, …), or the HTTP API
+  (`POST /api/plans`, `POST /api/plans/:id/decision`, `GET /api/plan-review/await`).
+
+### Plan Review XML Specification
+
+When a plan verdict is handed to a waiting agent, it is serialized into a
+self-documenting `<plan-review>` envelope:
+
+```xml
+<plan-review>
+  <instructions>…how to act on the verdict; how to reply/resolve/resubmit…</instructions>
+  <plan id="…" title="…" version="2" decision="changes-requested" decided-at="2026-05-29T18:52:56.053Z">
+    <decision-summary><![CDATA[The reviewer REQUESTED CHANGES. Revise the plan…]]></decision-summary>
+    <decision-comment><![CDATA[Tighten the Phase 2 scope.]]></decision-comment>
+    <plan-body><![CDATA[# My Plan
+## Phase 1
+…full markdown of the plan being reviewed…]]></plan-body>
+    <comments>
+      <comment id="c1" line="4" section="Phase 1" status="open" created-at="2026-05-29T18:52:29.557Z">
+        <context><![CDATA[Do the first thing]]></context>
+        <body><![CDATA[Clarify what "the first thing" is.]]></body>
+        <replies>
+          <reply id="r1" created-at="…" role="agent" model="claude-opus-4-8"><![CDATA[Will do — splitting into 1a/1b.]]></reply>
+        </replies>
+      </comment>
+    </comments>
+  </plan>
+</plan-review>
+```
 
 ---
 
