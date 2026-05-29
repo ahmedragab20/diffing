@@ -2,7 +2,8 @@
 
 A local-first code review tool and double-sided bridge designed for the modern AI coding agent workflow. Review AI-generated changes in a high-fidelity, GitHub-like web UI, leave inline comments, and hand them back to your coding agent to fix in real time.
 
-![screenshot](https://raw.githubusercontent.com/ahmedragab20/diffing/main/screenshot.png)
+<img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/767d42ed-a497-4b21-aca7-35be8b9a7006" />
+
 
 ---
 
@@ -60,6 +61,9 @@ A local Hono-powered review server delivers a full-featured GitHub-like code rev
 - **Instant Switching** — CSS transitions suppressed during theme changes for a snappy, lag-free experience.
 - **Persistent Setting** — Theme choice saved to `~/.config/diffing/settings.json` and restored on next launch.
 
+<img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/d4905604-e156-4c9b-998e-9015a7c36019" />
+
+
 ---
 
 ## Rust-Powered Code Search (powered by fff)
@@ -75,6 +79,9 @@ Blazing-fast, native fuzzy code search integrated directly into the sidebar sear
 - **Git Status Chips** — Search results display git status indicators (modified, untracked, added, deleted, renamed).
 - **Graceful Degradation** — If the native Rust binary is unavailable, search reports as unavailable without crashing the server.
 - **Auto-Indexing** — The Rust engine maintains its own file system watcher for real-time index updates as the working tree changes.
+
+<img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/0830b770-3c7f-44a1-b8ff-a70b2b34144a" />
+
 
 ---
 
@@ -111,6 +118,9 @@ Full keyboard-driven navigation with vim-like motions and a modal status bar:
 | `?` | Show shortcuts help modal |
 
 A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), file path, and a help button. Multi-key sequences use an 800ms key buffer.
+
+<img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/d230d020-4fb2-475a-a8a0-0ae11bb271ff" />
+
 
 ---
 
