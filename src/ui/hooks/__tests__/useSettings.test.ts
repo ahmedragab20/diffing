@@ -30,6 +30,7 @@ const defaultSettings = {
   collapsedContextThreshold: 10,
   expansionLineCount: 20,
   haptics: true,
+  sounds: true,
 }
 
 describe('useSettings', () => {
@@ -82,10 +83,14 @@ describe('useSettings', () => {
     expect(result.current.settings.defaultTabSize).toBe(8)
     expect(result.current.settings.untracked).toBe(true)
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...apiSettings, staged: false, defaultTabSize: 8 }),
-    })
+    // Persistence is debounced and runs out of the state updater, so the PUT
+    // lands shortly after the state change rather than synchronously.
+    await waitFor(() =>
+      expect(mockFetch).toHaveBeenCalledWith('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...apiSettings, staged: false, defaultTabSize: 8 }),
+      }),
+    )
   })
 })

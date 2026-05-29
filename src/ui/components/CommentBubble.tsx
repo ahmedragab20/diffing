@@ -4,7 +4,6 @@ import type { ReviewComment } from '../../lib/types'
 import { timeAgo, parseMarkdown } from '../utils'
 import { useComments } from '../hooks/useComments'
 import { CommentForm } from './CommentForm'
-import { getDraft, setDraft, saveDraftNow, clearDraft } from '../drafts'
 
 interface CommentBubbleProps {
   comment: ReviewComment
@@ -43,15 +42,11 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
   const { resolveComment, unresolveComment, addReply, removeReply, editReply, applySuggestion, editComment } = useComments()
   const isResolved = comment.status === 'resolved'
   const [collapsed, setCollapsed] = useState(isResolved)
-  const [replyBody, setReplyBody] = useState('')
   const [isReplying, setIsReplying] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [editingReplyId, setEditingReplyId] = useState<string | null>(null)
-  const [editReplyBody, setEditReplyBody] = useState('')
 
-  const replyTextareaRef = useRef<HTMLTextAreaElement>(null)
-  const editReplyTextareaRef = useRef<HTMLTextAreaElement>(null)
   const firstActionBtnRef = useRef<HTMLButtonElement>(null)
 
   const remainingBody = comment.body.replace(/```suggestion\n([\s\S]*?)```/g, '').trim()
@@ -66,91 +61,15 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
     return () => clearInterval(timer)
   }, [])
 
-  useEffect(() => {
-    if (isReplying) {
-      const draft = getDraft('reply', comment.id)
-      if (draft) setReplyBody(draft)
-      replyTextareaRef.current?.focus()
-    }
-  }, [isReplying, comment.id])
-
-  useEffect(() => {
-    if (isReplying) {
-      setDraft(replyBody, 'reply', comment.id)
-    }
-  }, [replyBody, isReplying, comment.id])
-
-  useEffect(() => {
-    if (editingReplyId) {
-      const draft = getDraft('reply-edit', comment.id, editingReplyId)
-      if (draft) setEditReplyBody(draft)
-      editReplyTextareaRef.current?.focus()
-    }
-  }, [editingReplyId, comment.id])
-
-  useEffect(() => {
-    if (editingReplyId) {
-      setDraft(editReplyBody, 'reply-edit', comment.id, editingReplyId)
-    }
-  }, [editReplyBody, editingReplyId, comment.id])
-
   const handleResolve = () => resolveComment(comment.id)
   const handleUnresolve = () => unresolveComment(comment.id)
 
-  const handleAddReply = () => {
-    const trimmed = replyBody.trim()
-    if (trimmed) {
-      clearDraft('reply', comment.id)
-      addReply(comment.id, trimmed)
-      setReplyBody('')
-      setIsReplying(false)
-    }
-  }
-
-  const handleStartEditReply = (replyId: string, body: string) => {
+  const handleStartEditReply = (replyId: string) => {
     setEditingReplyId(replyId)
-    setEditReplyBody(body)
-  }
-
-  const handleSaveEditReply = () => {
-    const trimmed = editReplyBody.trim()
-    if (trimmed && editingReplyId) {
-      clearDraft('reply-edit', comment.id, editingReplyId)
-      editReply(comment.id, editingReplyId, trimmed)
-      setEditingReplyId(null)
-      setEditReplyBody('')
-    }
   }
 
   const handleDeleteReply = (replyId: string) => {
     removeReply(comment.id, replyId)
-  }
-
-  const handleReplyKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault()
-      handleAddReply()
-    }
-    if (e.key === 'Escape') {
-      if (replyBody.includes('\n')) return
-      saveDraftNow(replyBody, 'reply', comment.id)
-      setIsReplying(false)
-      setReplyBody('')
-      firstActionBtnRef.current?.focus()
-    }
-  }
-
-  const handleEditReplyKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault()
-      handleSaveEditReply()
-    }
-    if (e.key === 'Escape') {
-      if (editReplyBody.includes('\n')) return
-      saveDraftNow(editReplyBody, 'reply-edit', comment.id, editingReplyId!)
-      setEditingReplyId(null)
-      setEditReplyBody('')
-    }
   }
 
   if (isResolved && collapsed) {
@@ -561,8 +480,8 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                       <div className="comment-node-actions">
                         <button
                           className="comment-node-btn"
-                          onClick={() => handleStartEditReply(reply.id, reply.body)}
-                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleStartEditReply(reply.id, reply.body) } }}
+                          onClick={() => handleStartEditReply(reply.id)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleStartEditReply(reply.id) } }}
                           title="Edit reply"
                           aria-label="Edit reply"
                           tabIndex={0}
@@ -584,45 +503,16 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                   </div>
 
                   {isEditingThis ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
-                      <textarea
-                        ref={editReplyTextareaRef}
-                        value={editReplyBody}
-                        onChange={(e) => setEditReplyBody(e.target.value)}
-                        onKeyDown={handleEditReplyKeyDown}
-                        rows={3}
-                        className="reply-edit-textarea"
-                        aria-label="Edit reply text"
-                        style={{
-                          width: '100%',
-                          padding: '8px 12px',
-                          fontSize: '13px',
-                          fontFamily: 'var(--font-sans)',
-                          border: '1px solid var(--border-focus)',
-                          borderRadius: 'var(--radius-sm)',
-                          background: 'var(--bg-primary)',
-                          color: 'var(--text-primary)',
-                          outline: 'none',
-                          resize: 'vertical'
+                    <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginTop: '6px' }}>
+                      <CommentForm
+                        draftKey={`reply-edit:${comment.id}:${reply.id}`}
+                        initialBody={reply.body}
+                        onSubmit={(body) => {
+                          editReply(comment.id, reply.id, body)
+                          setEditingReplyId(null)
                         }}
+                        onCancel={() => setEditingReplyId(null)}
                       />
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => { saveDraftNow(editReplyBody, 'reply-edit', comment.id, editingReplyId!); setEditingReplyId(null); setEditReplyBody('') }}
-                          style={{ fontSize: '11px', padding: '2px 8px' }}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          className="btn btn-primary btn-sm"
-                          onClick={handleSaveEditReply}
-                          disabled={!editReplyBody.trim()}
-                          style={{ fontSize: '11px', padding: '2px 8px' }}
-                        >
-                          Save
-                        </button>
-                      </div>
                     </div>
                   ) : (
                     <div className="comment-node-body markdown-body" dangerouslySetInnerHTML={{ __html: parseMarkdown(reply.body) }} />
@@ -673,46 +563,18 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
         )}
 
         {isReplying && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <textarea
-              ref={replyTextareaRef}
-              value={replyBody}
-              onChange={(e) => setReplyBody(e.target.value)}
-              onKeyDown={handleReplyKeyDown}
-              placeholder="Write a reply..."
-              rows={2}
-              aria-label="Reply text"
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                fontSize: '13px',
-                fontFamily: 'var(--font-sans)',
-                border: '1px solid var(--border-color)',
-                borderRadius: 'var(--radius-sm)',
-                background: 'var(--bg-primary)',
-                color: 'var(--text-primary)',
-                outline: 'none',
-                resize: 'vertical'
+          <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginTop: '4px' }}>
+            <CommentForm
+              draftKey={`reply:${comment.id}`}
+              onSubmit={(body) => {
+                addReply(comment.id, body)
+                setIsReplying(false)
+              }}
+              onCancel={() => {
+                setIsReplying(false)
+                firstActionBtnRef.current?.focus()
               }}
             />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => { saveDraftNow(replyBody, 'reply', comment.id); setIsReplying(false); setReplyBody('') }}
-                style={{ fontSize: '12px', padding: '4px 10px' }}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={handleAddReply}
-                disabled={!replyBody.trim()}
-                style={{ fontSize: '12px', padding: '4px 10px' }}
-                aria-label="Submit reply"
-              >
-                Reply
-              </button>
-            </div>
           </div>
         )}
       </div>

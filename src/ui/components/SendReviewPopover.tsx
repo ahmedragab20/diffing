@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { Bot, Pencil, Trash2, Check, X } from 'lucide-react'
+import { useFeedback } from '../hooks/useHaptics'
 import type { ReviewComment } from '../../lib/types'
 import { fileName } from '../utils'
 import { Popover } from '../primitives/Popover'
@@ -27,6 +28,7 @@ export function SendReviewPopover({
   sending,
   agentWaiting,
 }: SendReviewPopoverProps) {
+  const { haptic, sound } = useFeedback()
   const [open, setOpen] = useState(false)
   const [general, setGeneral] = useState('')
 
@@ -44,6 +46,8 @@ export function SendReviewPopover({
   }, [open, count])
 
   const handleSend = async () => {
+    haptic('heavy')
+    sound('send')
     await onSend(general)
     setGeneral('')
     setOpen(false)

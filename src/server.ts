@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
 import { getFileContent, isImageFile, getRepoRoot, getProjectStorageDir, getMergeStatus, gitAddFile, listRepoFiles, revertHunk } from './lib/git.js'
+import { searchFiles, searchContent, searchSymbols, searchAll, getSearchStatus, trackSelection } from './lib/search.js'
 import { loadSettings, saveSettings } from './lib/settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
 import type { CommentStore } from './lib/comments.js'
@@ -250,6 +251,54 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
     } catch (err: any) {
       return c.json({ error: err.message }, 500)
     }
+  })
+
+  // Unified, fff-powered code search. POST (not GET) so large diffs can pass
+  // their changed-path set in the body without hitting URL length limits.
+  app.post('/api/search', async (c) => {
+    const body = await c.req.json<{
+      scope?: 'all' | 'files' | 'text' | 'symbols'
+      query?: string
+      limit?: number
+      regex?: boolean
+      changedPaths?: string[]
+    }>().catch(() => ({}) as Record<string, never>)
+
+    const scope = body.scope ?? 'files'
+    const query = typeof body.query === 'string' ? body.query : ''
+    const limit = typeof body.limit === 'number' ? body.limit : undefined
+    // A non-null `changedPaths` array engages "Changed only" mode: results are
+    // restricted to exactly these (current-diff) paths.
+    const paths = Array.isArray(body.changedPaths) ? body.changedPaths : undefined
+
+    try {
+      if (scope === 'all') {
+        return c.json(await searchAll(query, { limit, regex: !!body.regex, paths }))
+      }
+      if (scope === 'text') {
+        return c.json(await searchContent(query, { limit, regex: !!body.regex, paths }))
+      }
+      if (scope === 'symbols') {
+        return c.json(await searchSymbols(query, { limit, paths }))
+      }
+      return c.json(await searchFiles(query, { limit, paths }))
+    } catch (err: any) {
+      return c.json({ scope, items: [], total: 0, indexing: false, error: err?.message ?? 'Search failed' }, 500)
+    }
+  })
+
+  app.get('/api/search/status', async (c) => {
+    return c.json(await getSearchStatus())
+  })
+
+  // Fire-and-forget: feeds fff's frecency ranking so frequently/recently opened
+  // files float to the top of future searches.
+  app.post('/api/search/track', async (c) => {
+    const { query, path } = await c.req
+      .json<{ query?: string; path?: string }>()
+      .catch(() => ({}) as Record<string, never>)
+    if (path) await trackSelection(query ?? '', path)
+    return c.json({ ok: true })
   })
 
   app.get('/api/merge-status', (c) => {

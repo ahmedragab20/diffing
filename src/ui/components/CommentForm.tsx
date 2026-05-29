@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { parseMarkdown } from '../utils'
 import { getDraft, setDraft, clearDraft } from '../drafts'
+import { useFeedback } from '../hooks/useHaptics'
 
 interface CommentFormProps {
   initialBody?: string
@@ -11,6 +12,7 @@ interface CommentFormProps {
 }
 
 export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCancel }: CommentFormProps) {
+  const { haptic, sound } = useFeedback()
   const [body, setBody] = useState(() => {
     if (draftKey) {
       const draft = getDraft(draftKey)
@@ -37,6 +39,8 @@ export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCa
     const trimmed = body.trim()
     if (trimmed) {
       if (draftKey) clearDraft(draftKey)
+      haptic('success')
+      sound('success')
       onSubmit(trimmed)
     }
   }
@@ -64,30 +68,34 @@ export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCa
       }
     }
 
-    if (imageFile) {
-      e.preventDefault()
+    if (!imageFile) return
+    e.preventDefault()
 
-      const textarea = textareaRef.current
-      if (!textarea) return
+    const textarea = textareaRef.current
+    if (!textarea) return
 
-      const start = textarea.selectionStart
-      const end = textarea.selectionEnd
-      const placeholder = '![Uploading image...]()'
-      const val = textarea.value
+    // Upload the image to the server and reference it by URL rather than
+    // inlining a huge base64 data URL into the comment body. A unique token in
+    // the placeholder lets multiple concurrent pastes resolve independently.
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    const token = Math.random().toString(36).slice(2, 8)
+    const placeholder = `![Uploading image… ${token}]()`
+    const val = textarea.value
+    setBody(val.slice(0, start) + placeholder + val.slice(end))
 
-      const nextValue = val.slice(0, start) + placeholder + val.slice(end)
-      setBody(nextValue)
-
-      const reader = new FileReader()
-      reader.onloadend = () => {
-        const base64data = reader.result as string
-        const markdownImage = `![Pasted Image](${base64data})`
-        setBody((prev) => prev.replace(placeholder, markdownImage))
-      }
-      reader.onerror = () => {
-        setBody(val.slice(0, start) + val.slice(end))
-      }
-      reader.readAsDataURL(imageFile)
+    try {
+      const form = new FormData()
+      form.append('file', imageFile, imageFile.name || `pasted-${token}.png`)
+      const res = await fetch('/api/attachments', { method: 'POST', body: form })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = (await res.json()) as { url?: string; error?: string }
+      if (!data.url) throw new Error(data.error || 'Upload failed')
+      const markdownImage = `![pasted image](${data.url})`
+      setBody((prev) => prev.replace(placeholder, markdownImage))
+    } catch (err) {
+      console.error('Image upload failed:', err)
+      setBody((prev) => prev.replace(placeholder, '![upload failed]()'))
     }
   }
 

@@ -1,4 +1,6 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useState, useMemo, useCallback } from 'react'
+import { useFeedback } from '../hooks/useHaptics'
+import { CommentForm } from './CommentForm'
 import {
   MessageSquare,
   Check,
@@ -11,7 +13,7 @@ import {
   X,
 } from 'lucide-react'
 import type { ReviewComment, CommentReply } from '../../lib/types'
-import { timeAgo, fileName, scrollToLine } from '../utils'
+import { timeAgo, fileName, scrollToLine, parseMarkdown } from '../utils'
 
 interface CommentTrackerProps {
   comments: ReviewComment[]
@@ -135,6 +137,7 @@ function CommentCard({
   const status = statusOf(comment)
   const resolved = comment.status === 'resolved'
   const replyCount = comment.replies?.length ?? 0
+  const { haptic, sound } = useFeedback()
 
   const [expanded, setExpanded] = useState(false)
   const [replying, setReplying] = useState(false)
@@ -169,10 +172,9 @@ function CommentCard({
       )}
 
       {editing ? (
-        <Composer
-          initial={comment.body}
-          placeholder="Edit comment…"
-          submitLabel="Save"
+        <CommentForm
+          draftKey={`tracker-edit:${comment.id}`}
+          initialBody={comment.body}
           onCancel={() => setEditing(false)}
           onSubmit={(body) => {
             editComment(comment.id, body)
@@ -180,7 +182,7 @@ function CommentCard({
           }}
         />
       ) : (
-        <p className="cmt-body">{comment.body}</p>
+        <div className="cmt-body markdown-body" dangerouslySetInnerHTML={{ __html: parseMarkdown(comment.body) }} />
       )}
 
       <div className="cmt-actions">
@@ -193,14 +195,22 @@ function CommentCard({
         </button>
         <button
           className={`cmt-act ${resolved ? 'cmt-act-resolved' : ''}`}
-          onClick={() => (resolved ? unresolveComment(comment.id) : resolveComment(comment.id))}
+          onClick={() => {
+            if (resolved) {
+              unresolveComment(comment.id)
+              haptic('light'); sound('toggle')
+            } else {
+              resolveComment(comment.id)
+              haptic('success'); sound('resolve')
+            }
+          }}
           title={resolved ? 'Reopen' : 'Resolve'}
         >
           {resolved ? <RotateCcw size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
         </button>
         {confirmDelete ? (
           <span className="cmt-confirm">
-            <button className="cmt-act cmt-act-danger" onClick={() => removeComment(comment.id)} title="Confirm delete">
+            <button className="cmt-act cmt-act-danger" onClick={() => { removeComment(comment.id); haptic('medium'); sound('remove') }} title="Confirm delete">
               Delete?
             </button>
             <button className="cmt-act" onClick={() => setConfirmDelete(false)} title="Cancel">
@@ -235,13 +245,12 @@ function CommentCard({
       )}
 
       {replying && (
-        <Composer
-          placeholder="Write a reply…"
-          submitLabel="Reply"
-          autoFocus
+        <CommentForm
+          draftKey={`reply:${comment.id}`}
           onCancel={() => setReplying(false)}
           onSubmit={(body) => {
             addReply(comment.id, body)
+            haptic('light'); sound('success')
             setReplying(false)
             setExpanded(true)
           }}
@@ -281,11 +290,9 @@ function ReplyRow({
         </button>
       </div>
       {editing ? (
-        <Composer
-          initial={reply.body}
-          submitLabel="Save"
-          placeholder="Edit reply…"
-          autoFocus
+        <CommentForm
+          draftKey={`tracker-reply-edit:${reply.id}`}
+          initialBody={reply.body}
           onCancel={() => setEditing(false)}
           onSubmit={(body) => {
             onEdit(body)
@@ -293,64 +300,9 @@ function ReplyRow({
           }}
         />
       ) : (
-        <p className="cmt-reply-body">{reply.body}</p>
+        <div className="cmt-reply-body markdown-body" dangerouslySetInnerHTML={{ __html: parseMarkdown(reply.body) }} />
       )}
     </li>
   )
 }
 
-function Composer({
-  initial = '',
-  placeholder,
-  submitLabel,
-  autoFocus,
-  onSubmit,
-  onCancel,
-}: {
-  initial?: string
-  placeholder?: string
-  submitLabel: string
-  autoFocus?: boolean
-  onSubmit: (body: string) => void
-  onCancel: () => void
-}) {
-  const [value, setValue] = useState(initial)
-  const ref = useRef<HTMLTextAreaElement>(null)
-
-  useEffect(() => {
-    if (autoFocus) ref.current?.focus()
-  }, [autoFocus])
-
-  const submit = () => {
-    const trimmed = value.trim()
-    if (trimmed) onSubmit(trimmed)
-  }
-
-  return (
-    <div className="cmt-composer">
-      <textarea
-        ref={ref}
-        className="cmt-composer-input"
-        value={value}
-        placeholder={placeholder}
-        rows={2}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault()
-            submit()
-          } else if (e.key === 'Escape') {
-            e.preventDefault()
-            onCancel()
-          }
-        }}
-      />
-      <div className="cmt-composer-actions">
-        <button className="cmt-act" onClick={onCancel}>Cancel</button>
-        <button className="cmt-act cmt-act-primary" onClick={submit} disabled={!value.trim()}>
-          {submitLabel}
-        </button>
-      </div>
-    </div>
-  )
-}

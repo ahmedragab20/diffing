@@ -100,6 +100,91 @@ function findElementInElOrShadow(root: Element | ShadowRoot, selector: string): 
   return elements
 }
 
+/**
+ * Apply a temporary gold flash to a mounted line element (or, when
+ * `highlightText` matches, to the specific child span). Inline styles bypass
+ * shadow-DOM encapsulation. Shared by the diff-view jump and the preview pane.
+ */
+function flashHighlight(found: HTMLElement, highlightText?: string) {
+  // Determine what specific element to highlight (symbol span vs whole line)
+  let highlightTarget: HTMLElement = found
+  if (highlightText && highlightText.trim()) {
+    const textToFind = highlightText.trim()
+    const children = found.querySelectorAll('span, code, pre')
+
+    // Try exact match first
+    for (const child of children) {
+      if (child.textContent?.trim() === textToFind) {
+        highlightTarget = child as HTMLElement
+        break
+      }
+    }
+
+    // Try substring match as fallback
+    if (highlightTarget === found) {
+      for (const child of children) {
+        if (child.textContent?.trim().includes(textToFind)) {
+          highlightTarget = child as HTMLElement
+          break
+        }
+      }
+    }
+  }
+
+  const originalBorderRadius = highlightTarget.style.borderRadius
+  const originalPadding = highlightTarget.style.padding
+
+  highlightTarget.style.setProperty('transition', 'none', 'important')
+  highlightTarget.style.setProperty('background-color', 'rgba(235, 186, 0, 0.55)', 'important')
+  highlightTarget.style.setProperty('box-shadow', '0 0 0 2.5px rgba(235, 186, 0, 0.85)', 'important')
+  highlightTarget.style.setProperty('border-radius', '4px', 'important')
+  if (highlightTarget !== found) {
+    highlightTarget.style.setProperty('padding', '1px 5px', 'important')
+  }
+
+  // Force DOM reflow to trigger transition
+  highlightTarget.offsetHeight
+
+  setTimeout(() => {
+    highlightTarget.style.setProperty('transition', 'background-color 2.5s ease-out, box-shadow 2.5s ease-out', 'important')
+    highlightTarget.style.removeProperty('background-color')
+    highlightTarget.style.removeProperty('box-shadow')
+
+    setTimeout(() => {
+      highlightTarget.style.removeProperty('transition')
+      if (!originalBorderRadius) highlightTarget.style.removeProperty('border-radius')
+      if (!originalPadding) highlightTarget.style.removeProperty('padding')
+    }, 2500)
+  }, 2000)
+}
+
+/**
+ * Scroll to and flash a line *within a specific container* (e.g. the search
+ * palette's file-preview pane), polling until the line mounts in the DOM /
+ * shadow DOM. Unlike {@link scrollToLine} this doesn't touch file-card "viewed"
+ * state — the preview always renders the whole file.
+ */
+export function highlightLineInElement(container: HTMLElement, lineNumber: number, highlightText?: string) {
+  const tryScroll = (attemptsRemaining: number) => {
+    const allLineEls = findElementInElOrShadow(container, '[data-line]')
+    let found: HTMLElement | null = null
+    for (const el of allLineEls) {
+      const elLine = el.getAttribute('data-line')
+      if (elLine && parseInt(elLine, 10) === lineNumber) {
+        found = el
+        break
+      }
+    }
+    if (found) {
+      found.scrollIntoView({ block: 'center', behavior: 'auto' })
+      flashHighlight(found, highlightText)
+    } else if (attemptsRemaining > 0) {
+      setTimeout(() => tryScroll(attemptsRemaining - 1), 50)
+    }
+  }
+  tryScroll(20)
+}
+
 export function scrollToLine(filePath: string, lineNumber: number, side: 'additions' | 'deletions' | 'addition' | 'deletion', highlightText?: string) {
   const fileEl = document.getElementById(`file-${filePath}`)
   if (!fileEl) return
@@ -148,57 +233,7 @@ export function scrollToLine(filePath: string, lineNumber: number, side: 'additi
     if (found) {
       // Scroll it into the center of the viewport instantly and cleanly
       found.scrollIntoView({ block: 'center', behavior: 'auto' })
-      
-      // Determine what specific element to highlight (symbol span vs whole line)
-      let highlightTarget: HTMLElement = found
-      if (highlightText && highlightText.trim()) {
-        const textToFind = highlightText.trim()
-        const children = found.querySelectorAll('span, code, pre')
-        
-        // Try exact match first
-        for (const child of children) {
-          if (child.textContent?.trim() === textToFind) {
-            highlightTarget = child as HTMLElement
-            break
-          }
-        }
-        
-        // Try substring match as fallback
-        if (highlightTarget === found) {
-          for (const child of children) {
-            if (child.textContent?.trim().includes(textToFind)) {
-              highlightTarget = child as HTMLElement
-              break
-            }
-          }
-        }
-      }
-
-      // Apply a gorgeous, theme-harmonious temporary inline style transition highlight (bypasses shadow DOM encapsulation)
-      const originalBg = highlightTarget.style.backgroundColor
-      const originalTransition = highlightTarget.style.transition
-      const originalBorderRadius = highlightTarget.style.borderRadius
-      const originalPadding = highlightTarget.style.padding
-      
-      highlightTarget.style.transition = 'none'
-      highlightTarget.style.backgroundColor = 'rgba(235, 186, 0, 0.45)'
-      highlightTarget.style.borderRadius = '4px'
-      if (highlightTarget !== found) {
-        highlightTarget.style.padding = '1px 5px'
-      }
-      
-      // Force DOM reflow to trigger transition
-      highlightTarget.offsetHeight
-      
-      highlightTarget.style.transition = 'background-color 1.5s ease-out'
-      highlightTarget.style.backgroundColor = originalBg || ''
-      
-      setTimeout(() => {
-        highlightTarget.style.transition = originalTransition
-        if (!originalBg) highlightTarget.style.removeProperty('background-color')
-        if (!originalBorderRadius) highlightTarget.style.removeProperty('border-radius')
-        if (!originalPadding) highlightTarget.style.removeProperty('padding')
-      }, 1500)
+      flashHighlight(found, highlightText)
     } else if (attemptsRemaining > 0) {
       // If the line is not found yet (card is still rendering), retry in 50ms
       setTimeout(() => tryScroll(attemptsRemaining - 1), 50)

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 export type LineDiffType = 'word' | 'word-alt' | 'char' | 'none'
 export type DiffIndicators = 'classic' | 'bars' | 'none'
@@ -25,6 +25,8 @@ export interface Settings {
   expansionLineCount: number
   /** Tactile feedback (web-haptics) on interaction. */
   haptics: boolean
+  /** Synthesized audio feedback on interaction. */
+  sounds: boolean
 }
 
 const DEFAULTS: Settings = {
@@ -45,32 +47,47 @@ const DEFAULTS: Settings = {
   collapsedContextThreshold: 10,
   expansionLineCount: 20,
   haptics: true,
+  sounds: true,
 }
 
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>(DEFAULTS)
   const [loaded, setLoaded] = useState(false)
 
+  // Skip persisting the very first state we hydrate from the server.
+  const skipPersistRef = useRef(true)
+
   useEffect(() => {
     fetch('/api/settings')
       .then((res) => res.json())
       .then((data) => {
+        skipPersistRef.current = true
         setSettings({ ...DEFAULTS, ...data })
         setLoaded(true)
       })
       .catch(() => setLoaded(true))
   }, [])
 
-  const updateSettings = useCallback((patch: Partial<Settings>) => {
-    setSettings((prev) => {
-      const next = { ...prev, ...patch }
+  // Persist settings whenever they change, debounced. Keeping the network
+  // write out of the state updater keeps the updater pure (no double PUT in
+  // StrictMode) and coalesces rapid changes (e.g. dragging font size).
+  useEffect(() => {
+    if (skipPersistRef.current) {
+      skipPersistRef.current = false
+      return
+    }
+    const id = setTimeout(() => {
       fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(next),
-      })
-      return next
-    })
+        body: JSON.stringify(settings),
+      }).catch(() => {})
+    }, 300)
+    return () => clearTimeout(id)
+  }, [settings])
+
+  const updateSettings = useCallback((patch: Partial<Settings>) => {
+    setSettings((prev) => ({ ...prev, ...patch }))
   }, [])
 
   return { settings, loaded, updateSettings }

@@ -1,4 +1,4 @@
-import { useState, memo, useRef, useEffect } from 'react'
+import { useState, memo, useRef, useEffect, useMemo } from 'react'
 import { FileDiff, MultiFileDiff } from '@pierre/diffs/react'
 import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide, SelectedLineRange } from '@pierre/diffs'
 import { ChevronDown, ChevronRight, Edit3, MessageSquare, Maximize2, Loader2, Undo2, AlertCircle } from 'lucide-react'
@@ -128,6 +128,11 @@ export const FileDiffCard = memo(function FileDiffCard({
 
 
   const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP.nord
+
+  // Stable across re-renders triggered by unrelated prop changes (e.g. toggling
+  // split/unified) so the diff renderer isn't handed a brand-new CSS string
+  // every time. Only tabSize/fontSize actually affect it.
+  const unsafeCSS = useMemo(() => buildUnsafeCSS(tabSize, fontSize), [tabSize, fontSize])
 
   const getLineContent = (side: AnnotationSide, lineNumber: number, startLineNumber?: number): string => {
     const startNum = startLineNumber && startLineNumber !== lineNumber ? startLineNumber : lineNumber
@@ -502,7 +507,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                   light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
                 },
                 themeType: shikiConfig.type,
-                unsafeCSS: buildUnsafeCSS(tabSize, fontSize),
+                unsafeCSS,
               }}
               selectedLines={selectedRange}
               lineAnnotations={allAnnotations}
@@ -562,47 +567,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
               },
               themeType: shikiConfig.type,
-              unsafeCSS: `
-                :host {
-                  --diffs-tab-size: ${tabSize} !important;
-                  --diffs-font-family: var(--font-mono) !important;
-                  --diffs-font-size: ${fontSize}px !important;
-                  --diffs-border: var(--border-normal) !important;
-                  --diffs-bg: var(--bg-secondary) !important;
-                  --diffs-line-height: ${Math.round(fontSize * 1.7)}px !important;
-                }
-                [data-column-number], [data-line] {
-                  font-family: var(--font-mono) !important;
-                  font-size: ${fontSize}px !important;
-                  font-variant-ligatures: common-ligatures !important;
-                  font-feature-settings: "liga" on, "calt" on !important;
-                }
-                /* Premium High-Contrast accessible Gutter Line Numbers */
-                [data-column-number] {
-                  color: var(--text-muted) !important;
-                  opacity: 0.65 !important;
-                  user-select: none !important;
-                  padding-right: 12px !important;
-                  cursor: pointer !important;
-                }
-                [data-line]:hover [data-column-number] {
-                  opacity: 1 !important;
-                  color: var(--primary) !important;
-                }
-                /* Premium Translucent Vercel-style Highlights */
-                [data-line][data-line-type="addition"] {
-                  background-color: var(--feedback-success-bg) !important;
-                  border-left: 3px solid var(--feedback-success-border) !important;
-                }
-                [data-line][data-line-type="deletion"] {
-                  background-color: var(--feedback-danger-bg) !important;
-                  border-left: 3px solid var(--feedback-danger-border) !important;
-                }
-                /* Selection high-contrast visual */
-                [data-line].selected-line {
-                  background-color: var(--accent-subtle) !important;
-                }
-              `,
+              unsafeCSS,
             }}
             selectedLines={selectedRange}
             lineAnnotations={allAnnotations}

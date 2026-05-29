@@ -23,17 +23,15 @@ import { useComments } from "./hooks/useComments";
 import { useMergeStatus } from "./hooks/useMergeStatus";
 import { useSettings } from "./hooks/useSettings";
 import { useViewed } from "./hooks/useViewed";
-import { HapticsProvider } from "./hooks/useHaptics";
-import { useSymbols } from "./hooks/useSymbols";
+import { HapticsProvider, playSound, fireFeedback } from "./hooks/useHaptics";
 import { useDiffSearch } from "./hooks/useDiffSearch";
 import { Toolbar } from "./components/Toolbar";
 import { DiffViewer } from "./components/DiffViewer";
 import { MergeConflictResolver } from "./components/MergeConflictResolver";
 import { FileTree } from "./components/FileTree";
 import { CommentTracker } from "./components/CommentTracker";
-import { SymbolModal } from "./components/SymbolModal";
-import { DiffSearchModal } from "./components/DiffSearchModal";
-import { FileViewerModal } from "./components/FileViewerModal";
+import { SearchPalette } from "./components/SearchPalette";
+import type { Scope } from "./lib/searchTypes";
 import { VimStatusBar } from "./components/VimStatusBar";
 import { ShortcutsHelpModal } from "./components/ShortcutsHelpModal";
 import { AgentActivityToast } from "./components/AgentActivityToast";
@@ -82,27 +80,63 @@ export function App() {
     });
     const sidebarWidthRef = useRef(sidebarWidth);
     sidebarWidthRef.current = sidebarWidth;
+    const appRef = useRef<HTMLDivElement>(null);
+    const sidebarRef = useRef<HTMLElement>(null);
+    const sidebarGuideRef = useRef<HTMLDivElement>(null);
 
     const SIDEBAR_MIN_WIDTH = 240;
     const SIDEBAR_MAX_WIDTH = 640;
 
+    // Resizing the sidebar live is not viable: every width change relayouts the
+    // diff content in <main> (the @pierre/diffs shadow DOM re-wraps every line),
+    // which measures at ~80-180ms per frame on a real diff — far too slow for a
+    // smooth 60fps drag. So instead of resizing the panel on each mousemove, we
+    // drag a lightweight guide line that tracks the cursor via a compositor-only
+    // `transform` (zero layout), and commit the real width exactly once on
+    // mouseup. The drag feels perfectly snappy and the expensive reflow happens
+    // a single time, on release.
     const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
         e.preventDefault();
         const startX = e.clientX;
         const startWidth = sidebarWidthRef.current;
+        const sidebarEl = sidebarRef.current;
+        const guideEl = sidebarGuideRef.current;
+        // The sidebar's left edge is fixed for the duration of the drag, so the
+        // guide's screen position is simply that edge plus the prospective width.
+        const sidebarLeft = sidebarEl
+            ? sidebarEl.getBoundingClientRect().left
+            : 0;
+        let latestWidth = startWidth;
+        let rafId = 0;
+
+        const flush = () => {
+            rafId = 0;
+            if (guideEl)
+                guideEl.style.transform = `translateX(${sidebarLeft + latestWidth}px)`;
+        };
+
+        if (guideEl) {
+            guideEl.style.transform = `translateX(${sidebarLeft + startWidth}px)`;
+            guideEl.classList.add("sidebar-resize-guide-active");
+        }
 
         const handleMove = (ev: MouseEvent) => {
             const delta = ev.clientX - startX;
-            const newWidth = Math.max(
+            latestWidth = Math.max(
                 SIDEBAR_MIN_WIDTH,
                 Math.min(SIDEBAR_MAX_WIDTH, startWidth + delta),
             );
-            setSidebarWidth(newWidth);
+            if (!rafId) rafId = requestAnimationFrame(flush);
         };
 
         const handleUp = () => {
+            if (rafId) cancelAnimationFrame(rafId);
+            if (guideEl)
+                guideEl.classList.remove("sidebar-resize-guide-active");
+            // Single, one-time width commit -> one reflow of the diff.
+            setSidebarWidth(latestWidth);
             try {
-                localStorage.setItem("diffit-sidebar-width", String(sidebarWidthRef.current));
+                localStorage.setItem("diffit-sidebar-width", String(latestWidth));
             } catch {}
             document.removeEventListener('mousemove', handleMove);
             document.removeEventListener('mouseup', handleUp);
@@ -116,9 +150,18 @@ export function App() {
         document.body.style.userSelect = 'none';
     }, []);
 
-    const [symbolModalOpen, setSymbolModalOpen] = useState(false);
-    const [diffSearchOpen, setDiffSearchOpen] = useState(false);
-    const [fileViewerOpen, setFileViewerOpen] = useState(false);
+    const [palette, setPalette] = useState<{ open: boolean; scope: Scope }>({
+        open: false,
+        scope: "files",
+    });
+    const openPalette = useCallback(
+        (scope: Scope) => setPalette({ open: true, scope }),
+        [],
+    );
+    const closePalette = useCallback(
+        () => setPalette((p) => ({ ...p, open: false })),
+        [],
+    );
     const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
     const [commentPanelHeight, setCommentPanelHeight] = useState(() => {
         try {
@@ -135,16 +178,26 @@ export function App() {
         e.preventDefault();
         const startY = e.clientY;
         const startHeight = commentPanelHeightRef.current;
+        const appEl = appRef.current;
+        let latestHeight = startHeight;
+        let rafId = 0;
+
+        const flush = () => {
+            rafId = 0;
+            appEl?.style.setProperty("--comment-panel-height", `${latestHeight}px`);
+        };
 
         const handleMove = (ev: MouseEvent) => {
             const delta = startY - ev.clientY;
-            const newHeight = Math.max(100, Math.min(600, startHeight + delta));
-            setCommentPanelHeight(newHeight);
+            latestHeight = Math.max(100, Math.min(600, startHeight + delta));
+            if (!rafId) rafId = requestAnimationFrame(flush);
         };
 
         const handleUp = () => {
+            if (rafId) cancelAnimationFrame(rafId);
+            setCommentPanelHeight(latestHeight);
             try {
-                localStorage.setItem("diffit-comment-panel-height", String(commentPanelHeightRef.current));
+                localStorage.setItem("diffit-comment-panel-height", String(latestHeight));
             } catch {}
             document.removeEventListener('mousemove', handleMove);
             document.removeEventListener('mouseup', handleUp);
@@ -166,13 +219,22 @@ export function App() {
     const { viewedFiles, setViewed } = useViewed();
     const diffViewerRef = useRef<HTMLDivElement>(null);
 
-    useHotkeySequence(['G', 'S'], () => {
-        setSymbolModalOpen((o) => !o);
-    });
+    useHotkeySequence(['G', 'S'], () => openPalette('symbols'));
+    useHotkeySequence(['G', 'F'], () => openPalette('all'));
+    useHotkeySequence(['G', 'V'], () => openPalette('files'));
 
-    useHotkeySequence(['G', 'F'], () => {
-        setDiffSearchOpen((o) => !o);
-    });
+    // Cmd/Ctrl+K opens the search palette from anywhere (including text fields),
+    // matching the universal command-palette convention.
+    useEffect(() => {
+        const onKeyDown = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+                e.preventDefault();
+                setPalette((p) => (p.open ? { ...p, open: false } : { open: true, scope: 'all' }));
+            }
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, []);
 
     useEffect(() => {
         try {
@@ -247,7 +309,6 @@ export function App() {
         }
     }, [patch, binaryFiles]);
 
-    const symbols = useSymbols(files);
     const diffSearchEntries = useDiffSearch(files);
 
     const diffStats = useMemo(() => {
@@ -501,6 +562,13 @@ export function App() {
         [updateSettings],
     );
 
+    const handleSoundsChange = useCallback(
+        (v: boolean) => {
+            updateSettings({ sounds: v });
+        },
+        [updateSettings],
+    );
+
     const toggleLineWrap = useCallback(() => {
         handleLineWrapChange(!settings.lineWrap);
     }, [settings.lineWrap, handleLineWrapChange]);
@@ -573,6 +641,7 @@ export function App() {
     useEffect(() => {
         let keyBuffer = '';
         let bufferTimeout: NodeJS.Timeout;
+        let lastNavSound = 0;
 
         const handleGlobalKeyDown = (e: KeyboardEvent) => {
             const active = document.activeElement;
@@ -594,10 +663,12 @@ export function App() {
                 if (key === 'd') {
                     e.preventDefault();
                     window.scrollBy({ top: window.innerHeight / 2, behavior: 'auto' });
+                    fireFeedback('selection', 'navigate');
                     keyBuffer = '';
                 } else if (key === 'u') {
                     e.preventDefault();
                     window.scrollBy({ top: -window.innerHeight / 2, behavior: 'auto' });
+                    fireFeedback('selection', 'navigate');
                     keyBuffer = '';
                 }
                 return;
@@ -613,14 +684,19 @@ export function App() {
             if (keyBuffer === 'j') {
                 e.preventDefault();
                 window.scrollBy({ top: 100, behavior: 'auto' });
+                const now = Date.now();
+                if (now - lastNavSound > 80) { playSound('navigate'); lastNavSound = now; }
                 keyBuffer = '';
             } else if (keyBuffer === 'k') {
                 e.preventDefault();
                 window.scrollBy({ top: -100, behavior: 'auto' });
+                const now = Date.now();
+                if (now - lastNavSound > 80) { playSound('navigate'); lastNavSound = now; }
                 keyBuffer = '';
             } else if (keyBuffer === 'gg') {
                 e.preventDefault();
                 window.scrollTo({ top: 0, behavior: 'auto' });
+                fireFeedback('selection', 'navigate');
                 keyBuffer = '';
             } else if (keyBuffer === 'G') {
                 e.preventDefault();
@@ -628,62 +704,77 @@ export function App() {
                     top: document.documentElement.scrollHeight,
                     behavior: 'auto',
                 });
+                fireFeedback('selection', 'navigate');
                 keyBuffer = '';
             } else if (keyBuffer === 'J') {
                 e.preventDefault();
                 navigateFile('next');
+                fireFeedback('selection', 'navigate');
                 keyBuffer = '';
             } else if (keyBuffer === 'K') {
                 e.preventDefault();
                 navigateFile('prev');
+                fireFeedback('selection', 'navigate');
                 keyBuffer = '';
             } else if (keyBuffer === 'v') {
                 e.preventDefault();
                 toggleActiveFileViewed();
+                fireFeedback('selection', 'toggle');
                 keyBuffer = '';
             } else if (keyBuffer === 'm') {
                 e.preventDefault();
                 toggleDiffStyle();
+                fireFeedback('selection', 'toggle');
                 keyBuffer = '';
             } else if (keyBuffer === 't') {
                 e.preventDefault();
                 cycleTabSize();
+                fireFeedback('selection', 'toggle');
                 keyBuffer = '';
             } else if (keyBuffer === 'b') {
                 e.preventDefault();
                 toggleSidebar();
+                fireFeedback('selection', 'toggle');
                 keyBuffer = '';
             } else if (keyBuffer === 'w') {
                 e.preventDefault();
                 toggleLineWrap();
+                fireFeedback('selection', 'toggle');
                 keyBuffer = '';
             } else if (keyBuffer === 'n') {
                 e.preventDefault();
                 toggleLineNumbers();
+                fireFeedback('selection', 'toggle');
                 keyBuffer = '';
             } else if (keyBuffer === 'i') {
                 e.preventDefault();
                 cycleDiffIndicators();
+                fireFeedback('selection', 'toggle');
                 keyBuffer = '';
             } else if (keyBuffer === 'I') {
                 e.preventDefault();
                 cycleLineDiffType();
+                fireFeedback('selection', 'toggle');
                 keyBuffer = '';
             } else if (keyBuffer === '/') {
                 e.preventDefault();
-                setDiffSearchOpen(true);
+                openPalette('text');
+                fireFeedback('medium', 'open');
                 keyBuffer = '';
-            } else if (keyBuffer === 'gs' || keyBuffer === 's') {
+            } else if (keyBuffer === 's') {
                 e.preventDefault();
-                setSymbolModalOpen(true);
+                openPalette('symbols');
+                fireFeedback('medium', 'open');
                 keyBuffer = '';
             } else if (keyBuffer === 'gv') {
                 e.preventDefault();
-                setFileViewerOpen(true);
+                openPalette('files');
+                fireFeedback('medium', 'open');
                 keyBuffer = '';
             } else if (keyBuffer === '?') {
                 e.preventDefault();
                 setShortcutsHelpOpen(true);
+                fireFeedback('medium', 'open');
                 keyBuffer = '';
             } else if (keyBuffer.length >= 2) {
                 keyBuffer = '';
@@ -723,7 +814,18 @@ export function App() {
 
     useEffect(() => {
         const activeTheme = settings.theme || "nord";
-        document.documentElement.setAttribute("data-theme", activeTheme);
+        const root = document.documentElement;
+        // Suppress the global color/border/box-shadow transitions while the
+        // theme attribute flips. Otherwise every card, button and row animates
+        // its color change simultaneously, which is what made switching themes
+        // feel laggy. We re-enable transitions on the next frame, after the new
+        // palette has painted instantly.
+        root.classList.add("theme-switching");
+        root.setAttribute("data-theme", activeTheme);
+        const id = requestAnimationFrame(() => {
+            requestAnimationFrame(() => root.classList.remove("theme-switching"));
+        });
+        return () => cancelAnimationFrame(id);
     }, [settings.theme]);
 
     const shikiConfig = useMemo(() => {
@@ -843,9 +945,23 @@ export function App() {
     }
 
     return (
-        <HapticsProvider enabled={settings.haptics ?? true}>
-        <div className="app">
+        <HapticsProvider enabled={settings.haptics ?? true} soundsEnabled={settings.sounds ?? true}>
+        <div
+            className="app"
+            ref={appRef}
+            style={
+                {
+                    "--sidebar-width": `${sidebarWidth}px`,
+                    "--comment-panel-height": `${commentPanelHeight}px`,
+                } as React.CSSProperties
+            }
+        >
             {refreshing && <div className="refresh-bar" role="status" aria-label="Refreshing diff" />}
+            <div
+                className="sidebar-resize-guide"
+                ref={sidebarGuideRef}
+                aria-hidden="true"
+            />
             <Toolbar
                 repoName={repoName}
                 branch={branch}
@@ -868,6 +984,7 @@ export function App() {
                 lineHoverHighlight={settings.lineHoverHighlight}
                 fontSize={settings.fontSize}
                 haptics={settings.haptics ?? true}
+                sounds={settings.sounds ?? true}
                 onDiffStyleChange={handleDiffStyleChange}
                 onDiffOptionsChange={handleDiffOptionsChange}
                 onDefaultTabSizeChange={handleDefaultTabSizeChange}
@@ -882,6 +999,8 @@ export function App() {
                 onLineHoverHighlightChange={handleLineHoverHighlightChange}
                 onFontSizeChange={handleFontSizeChange}
                 onHapticsChange={handleHapticsChange}
+                onSoundsChange={handleSoundsChange}
+                onOpenSearch={() => openPalette('all')}
                 onCopyComments={copyAllComments}
                 onSendToAgent={sendToAgent}
                 agentWaiting={agentWaiting}
@@ -892,12 +1011,8 @@ export function App() {
             />
             <div className="app-body">
                 <aside
+                    ref={sidebarRef}
                     className={`sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
-                    style={
-                        sidebarCollapsed
-                            ? undefined
-                            : { width: sidebarWidth, minWidth: sidebarWidth }
-                    }
                 >
                     <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                         <FileTree
@@ -923,7 +1038,7 @@ export function App() {
                             />
                             <div
                                 className="ct-wrapper"
-                                style={{ height: commentPanelHeight, flexShrink: 0 }}
+                                style={{ flexShrink: 0 }}
                             >
                                 <CommentTracker
                                     comments={comments}
@@ -1002,25 +1117,18 @@ export function App() {
                     />
                 </main>
             </div>
-            <SymbolModal
-                symbols={symbols}
-                isOpen={symbolModalOpen}
-                onClose={() => setSymbolModalOpen(false)}
-            />
-            <DiffSearchModal
+            <SearchPalette
+                isOpen={palette.open}
+                onClose={closePalette}
+                initialScope={palette.scope}
                 files={files}
-                entries={diffSearchEntries}
-                symbols={symbols}
-                isOpen={diffSearchOpen}
-                onClose={() => setDiffSearchOpen(false)}
-            />
-            <FileViewerModal
-                isOpen={fileViewerOpen}
-                onClose={() => setFileViewerOpen(false)}
+                changedEntries={diffSearchEntries}
+                customMode={customMode}
+                staged={settings.staged}
+                onNavigateFile={handleFileClick}
                 theme={settings.theme || "nord"}
                 fontSize={settings.fontSize}
                 defaultTabSize={settings.defaultTabSize}
-                lineDiffType={settings.lineDiffType}
                 lineWrap={settings.lineWrap}
                 showLineNumbers={settings.showLineNumbers}
                 lineHoverHighlight={settings.lineHoverHighlight}

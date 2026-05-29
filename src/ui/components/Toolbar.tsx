@@ -1,5 +1,5 @@
-import { useState, memo } from 'react'
-import { GitBranch, Settings, Palette } from 'lucide-react'
+import { useState, useEffect, memo } from 'react'
+import { GitBranch, Settings, Palette, Search } from 'lucide-react'
 import type { DiffOptions } from '../hooks/useDiff'
 import type {
   LineDiffType,
@@ -34,6 +34,7 @@ interface ToolbarProps {
   lineHoverHighlight: LineHoverHighlight
   fontSize: number
   haptics: boolean
+  sounds: boolean
   onDiffStyleChange: (style: 'split' | 'unified') => void
   onDiffOptionsChange: (options: DiffOptions) => void
   onDefaultTabSizeChange: (size: number) => void
@@ -48,6 +49,8 @@ interface ToolbarProps {
   onLineHoverHighlightChange: (v: LineHoverHighlight) => void
   onFontSizeChange: (v: number) => void
   onHapticsChange: (v: boolean) => void
+  onSoundsChange: (v: boolean) => void
+  onOpenSearch: () => void
   onCopyComments: () => Promise<void>
   onSendToAgent: (generalComment?: string) => Promise<unknown>
   agentWaiting: boolean
@@ -142,6 +145,7 @@ export const Toolbar = memo(function Toolbar({
   lineHoverHighlight,
   fontSize,
   haptics,
+  sounds,
   onDiffStyleChange,
   onDiffOptionsChange,
   onDefaultTabSizeChange,
@@ -156,6 +160,8 @@ export const Toolbar = memo(function Toolbar({
   onLineHoverHighlightChange,
   onFontSizeChange,
   onHapticsChange,
+  onSoundsChange,
+  onOpenSearch,
   onCopyComments,
   onSendToAgent,
   agentWaiting,
@@ -167,6 +173,19 @@ export const Toolbar = memo(function Toolbar({
   const [copied, setCopied] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themeOpen, setThemeOpen] = useState(false)
+
+  // Cmd/Ctrl+, opens the settings panel, matching the platform convention for
+  // preferences. Works regardless of focus (including inside text fields).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+        e.preventDefault()
+        setSettingsOpen((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const handleCopy = async () => {
     await onCopyComments()
@@ -191,6 +210,11 @@ export const Toolbar = memo(function Toolbar({
         </span>
       </div>
       <div className="toolbar-right">
+        <button className="btn btn-sm toolbar-search-btn" onClick={onOpenSearch} title="Search (⌘K)">
+          <Search size={14} style={{ marginRight: '6px' }} />
+          <span>Search</span>
+          <kbd className="toolbar-search-kbd">⌘K</kbd>
+        </button>
         <div className="toolbar-toggle">
           <button
             className={`btn btn-sm ${diffStyle === 'split' ? 'btn-active' : ''}`}
@@ -213,7 +237,7 @@ export const Toolbar = memo(function Toolbar({
           ariaLabel="Switch theme"
           className="theme-popover"
           trigger={
-            <button className={`btn btn-sm settings-btn ${themeOpen ? 'btn-active' : ''}`} title="Switch Theme">
+            <button className={`btn btn-sm settings-btn flex-1 ${themeOpen ? 'btn-active' : ''}`} title="Switch Theme">
               <Palette size={14} style={{ marginRight: '6px' }} />
               <span>Theme</span>
             </button>
@@ -248,7 +272,7 @@ export const Toolbar = memo(function Toolbar({
           ariaLabel="Settings"
           className="settings-popover"
           trigger={
-            <button className={`btn btn-sm settings-btn icon-only ${settingsOpen ? 'btn-active' : ''}`} title="Settings">
+            <button className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`} title="Settings">
               <Settings size={14} />
             </button>
           }
@@ -369,6 +393,14 @@ export const Toolbar = memo(function Toolbar({
                 onChange={(e) => onHapticsChange(e.target.checked)}
               />
               Haptic feedback
+            </label>
+            <label className="settings-item">
+              <input
+                type="checkbox"
+                checked={sounds}
+                onChange={(e) => onSoundsChange(e.target.checked)}
+              />
+              Sound effects
             </label>
           </div>
         </Popover>
