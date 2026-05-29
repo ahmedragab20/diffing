@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { getFileContent, isImageFile, getRepoRoot, getProjectStorageDir, getMergeStatus, gitAddFile, listRepoFiles, revertHunk } from './lib/git.js'
+import { getFileContent, isImageFile, getRepoRoot, getProjectStorageDir, getMergeStatus, gitAddFile, listRepoFiles, revertHunk, getHunkHistory } from './lib/git.js'
 import { searchFiles, searchContent, searchSymbols, searchAll, getSearchStatus, trackSelection } from './lib/search.js'
 import { loadSettings, saveSettings } from './lib/settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
@@ -336,6 +336,28 @@ export function createApp(clientDir: string, diffOpts: DiffOptions = DEFAULTS, c
         { error: stderr || err?.message || 'Failed to revert hunk' },
         500,
       )
+    }
+  })
+
+  app.get('/api/hunk-history', async (c) => {
+    const filePath = c.req.query('filePath')
+    const deletionStart = Number(c.req.query('deletionStart'))
+    const deletionCount = Number(c.req.query('deletionCount'))
+
+    if (!filePath || Number.isNaN(deletionStart) || Number.isNaN(deletionCount)) {
+      return c.json({ error: 'Missing or invalid parameters' }, 400)
+    }
+
+    try {
+      const root = getRepoRoot()
+      if (!isSafePath(filePath, root)) {
+        return c.json({ error: 'Forbidden file path' }, 403)
+      }
+      const revision = diffOpts.revisions[0] || 'HEAD'
+      const history = getHunkHistory(filePath, deletionStart, deletionCount, revision)
+      return c.json(history)
+    } catch (err: any) {
+      return c.json({ error: err.message || 'Failed to fetch hunk history' }, 500)
     }
   })
 

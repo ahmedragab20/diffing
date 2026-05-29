@@ -54,6 +54,7 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
         { keys: ['g', 'f'], description: 'Search files (Files scope)' },
         { keys: ['s'], description: 'Search symbols (or "g s")' },
         { keys: ['g', 'v'], description: 'Browse any file in the repo' },
+        { keys: ['g', 't'], description: 'Open Theme Selection Modal' },
         { keys: ['Tab'], description: 'Cycle search scope while open' },
         { keys: ['⌘', '↵'], description: 'Peek a result in the preview pane' },
         { keys: ['?'], description: 'Toggle Keyboard Shortcuts Guide' },

@@ -35,6 +35,7 @@ import type { Scope } from "./lib/searchTypes";
 import { VimStatusBar } from "./components/VimStatusBar";
 import { ShortcutsHelpModal } from "./components/ShortcutsHelpModal";
 import { AgentActivityToast } from "./components/AgentActivityToast";
+import { ThemeModal } from "./components/ThemeModal";
 
 
 export function App() {
@@ -163,6 +164,7 @@ export function App() {
         [],
     );
     const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
+    const [themeModalOpen, setThemeModalOpen] = useState(false);
     const [commentPanelHeight, setCommentPanelHeight] = useState(() => {
         try {
             const stored = localStorage.getItem("diffit-comment-panel-height");
@@ -771,6 +773,11 @@ export function App() {
                 openPalette('files');
                 fireFeedback('medium', 'open');
                 keyBuffer = '';
+            } else if (keyBuffer === 'gt') {
+                e.preventDefault();
+                setThemeModalOpen(true);
+                fireFeedback('medium', 'open');
+                keyBuffer = '';
             } else if (keyBuffer === '?') {
                 e.preventDefault();
                 setShortcutsHelpOpen(true);
@@ -801,6 +808,7 @@ export function App() {
         toggleLineNumbers,
         cycleDiffIndicators,
         cycleLineDiffType,
+        setThemeModalOpen,
     ]);
 
 
@@ -989,7 +997,7 @@ export function App() {
                 onDiffOptionsChange={handleDiffOptionsChange}
                 onDefaultTabSizeChange={handleDefaultTabSizeChange}
                 onBrowserChange={handleBrowserChange}
-                onThemeChange={handleThemeChange}
+                onOpenThemeModal={() => setThemeModalOpen(true)}
                 onEditorIDEChange={handleEditorIDEChange}
                 onLineDiffTypeChange={handleLineDiffTypeChange}
                 onLineWrapChange={handleLineWrapChange}
@@ -1140,6 +1148,12 @@ export function App() {
             <ShortcutsHelpModal
                 isOpen={shortcutsHelpOpen}
                 onClose={() => setShortcutsHelpOpen(false)}
+            />
+            <ThemeModal
+                open={themeModalOpen}
+                activeTheme={settings.theme || "nord"}
+                onThemeChange={handleThemeChange}
+                onClose={() => setThemeModalOpen(false)}
             />
             <AgentActivityToast
                 activity={agentActivity}

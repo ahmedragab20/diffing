@@ -39,7 +39,7 @@ interface ToolbarProps {
   onDiffOptionsChange: (options: DiffOptions) => void
   onDefaultTabSizeChange: (size: number) => void
   onBrowserChange: (browser: string) => void
-  onThemeChange: (theme: string) => void
+  onOpenThemeModal: () => void
   onEditorIDEChange: (editor: string) => void
   onLineDiffTypeChange: (v: LineDiffType) => void
   onLineWrapChange: (v: boolean) => void
@@ -60,28 +60,7 @@ interface ToolbarProps {
   onDeleteComment: (id: string) => void
 }
 
-interface ThemeOption {
-  id: string
-  name: string
-  type: 'dark' | 'light'
-  colors: { bg: string; secondary: string; accent: string }
-}
 
-const THEMES: ThemeOption[] = [
-  { id: 'nord', name: 'Nord (Main)', type: 'dark', colors: { bg: '#2e3440', secondary: '#242933', accent: '#88c0d0' } },
-  { id: 'github-dark', name: 'GitHub Dark', type: 'dark', colors: { bg: '#0d1117', secondary: '#161b22', accent: '#58a6ff' } },
-  { id: 'github-light', name: 'GitHub Light', type: 'light', colors: { bg: '#ffffff', secondary: '#f6f8fa', accent: '#0969da' } },
-  { id: 'dracula', name: 'Dracula', type: 'dark', colors: { bg: '#282a36', secondary: '#1e1f29', accent: '#bd93f9' } },
-  { id: 'one-dark', name: 'One Dark', type: 'dark', colors: { bg: '#282c34', secondary: '#21252b', accent: '#61afef' } },
-  { id: 'synthwave-84', name: 'Synthwave \'84', type: 'dark', colors: { bg: '#2b213a', secondary: '#241b2f', accent: '#f92aad' } },
-  { id: 'tokyo-night', name: 'Tokyo Night', type: 'dark', colors: { bg: '#1a1b26', secondary: '#16161e', accent: '#7aa2f7' } },
-  { id: 'catppuccin-mocha', name: 'Catppuccin Mocha', type: 'dark', colors: { bg: '#1e1e2e', secondary: '#181825', accent: '#cba6f7' } },
-  { id: 'catppuccin-latte', name: 'Catppuccin Latte', type: 'light', colors: { bg: '#eff1f5', secondary: '#e6e9ef', accent: '#8839ef' } },
-  { id: 'solarized-dark', name: 'Solarized Dark', type: 'dark', colors: { bg: '#002b36', secondary: '#073642', accent: '#268bd2' } },
-  { id: 'solarized-light', name: 'Solarized Light', type: 'light', colors: { bg: '#fdf6e3', secondary: '#eee8d5', accent: '#268bd2' } },
-  { id: 'monokai', name: 'Monokai', type: 'dark', colors: { bg: '#272822', secondary: '#1d1e19', accent: '#f92672' } },
-  { id: 'ayu-dark', name: 'Ayu Dark', type: 'dark', colors: { bg: '#0a0e14', secondary: '#0d1117', accent: '#e6b450' } },
-]
 
 const INLINE_DIFF_OPTS = [
   { value: 'word', label: 'Word' },
@@ -150,7 +129,7 @@ export const Toolbar = memo(function Toolbar({
   onDiffOptionsChange,
   onDefaultTabSizeChange,
   onBrowserChange,
-  onThemeChange,
+  onOpenThemeModal,
   onEditorIDEChange,
   onLineDiffTypeChange,
   onLineWrapChange,
@@ -172,7 +151,6 @@ export const Toolbar = memo(function Toolbar({
 }: ToolbarProps) {
   const [copied, setCopied] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [themeOpen, setThemeOpen] = useState(false)
 
   // Cmd/Ctrl+, opens the settings panel, matching the platform convention for
   // preferences. Works regardless of focus (including inside text fields).
@@ -231,39 +209,14 @@ export const Toolbar = memo(function Toolbar({
         </div>
 
         {/* Theme picker */}
-        <Popover
-          open={themeOpen}
-          onOpenChange={setThemeOpen}
-          ariaLabel="Switch theme"
-          className="theme-popover"
-          trigger={
-            <button className={`btn btn-sm settings-btn flex-1 ${themeOpen ? 'btn-active' : ''}`} title="Switch Theme">
-              <Palette size={14} style={{ marginRight: '6px' }} />
-              <span>Theme</span>
-            </button>
-          }
+        <button
+          className="btn btn-sm settings-btn flex-1"
+          title="Switch Theme"
+          onClick={onOpenThemeModal}
         >
-          <div className="popover-scroll">
-            {THEMES.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={`theme-item ${theme === t.id ? 'theme-item-active' : ''}`}
-                onClick={() => {
-                  onThemeChange(t.id)
-                  setThemeOpen(false)
-                }}
-              >
-                <span className="theme-item-name">{t.name}</span>
-                <span className="theme-swatches">
-                  <span className="theme-swatch" style={{ background: t.colors.bg }} />
-                  <span className="theme-swatch" style={{ background: t.colors.secondary }} />
-                  <span className="theme-swatch" style={{ background: t.colors.accent }} />
-                </span>
-              </button>
-            ))}
-          </div>
-        </Popover>
+          <Palette size={14} style={{ marginRight: '6px' }} />
+          <span>Theme</span>
+        </button>
 
         {/* Settings */}
         <Popover

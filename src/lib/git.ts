@@ -473,3 +473,137 @@ export function getProjectStorageDir(customRepoRoot?: string): string {
   const repoName = basename(root)
   return join(homedir(), '.diffit', `${repoName}-${hash}`)
 }
+
+export interface BlameEntry {
+  commit: string
+  author: string
+  date: string
+  line: number
+  content: string
+  summary: string
+}
+
+export interface RecentCommit {
+  hash: string
+  author: string
+  date: string
+  summary: string
+}
+
+export interface HunkHistory {
+  blame: BlameEntry[]
+  recentCommits: RecentCommit[]
+}
+
+/**
+ * Retrieves git blame for deleted lines and recent log history for the file,
+ * providing context on what commit introduced the deleted code.
+ */
+export function getHunkHistory(
+  filePath: string,
+  deletionStart: number,
+  deletionCount: number,
+  revision = 'HEAD'
+): HunkHistory {
+  const root = getRepoRoot()
+  if (!isSafePath(filePath, root)) {
+    throw new Error('Forbidden file path')
+  }
+
+  const blame: BlameEntry[] = []
+
+  if (deletionCount > 0) {
+    try {
+      const blameOut = execFileSync(
+        'git',
+        [
+          'blame',
+          '--date=format:%Y-%m-%d',
+          '-L',
+          `${deletionStart},+${deletionCount}`,
+          revision,
+          '--',
+          filePath,
+        ],
+        { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
+      )
+
+      const lines = blameOut.split('\n')
+      const commitHashes = new Set<string>()
+
+      for (const line of lines) {
+        if (!line.trim()) continue
+        const match = line.match(/^(\^?[0-9a-fA-F]+) \((.*?) (\d{4}-\d{2}-\d{2}) (\d+)\)(?: (.*))?$/)
+        if (match) {
+          const [_, commit, author, date, lineNum, content] = match
+          const cleanCommit = commit.startsWith('^') ? commit.slice(1) : commit
+          blame.push({
+            commit: cleanCommit,
+            author: author.trim(),
+            date,
+            line: parseInt(lineNum, 10),
+            content: content || '',
+            summary: '', // filled below
+          })
+          commitHashes.add(cleanCommit)
+        }
+      }
+
+      // Fetch commit summaries
+      const commitSummaries: Record<string, string> = {}
+      for (const hash of commitHashes) {
+        try {
+          const summary = execFileSync(
+            'git',
+            ['show', '-s', '--format=%s', hash],
+            { encoding: 'utf-8' }
+          ).trim()
+          commitSummaries[hash] = summary
+        } catch {
+          commitSummaries[hash] = 'Unknown commit'
+        }
+      }
+
+      for (const entry of blame) {
+        entry.summary = commitSummaries[entry.commit] || 'Unknown commit'
+      }
+    } catch (err: any) {
+      console.warn('Failed to get git blame for hunk history:', err.message)
+    }
+  }
+
+  const recentCommits: RecentCommit[] = []
+  try {
+    const logOut = execFileSync(
+      'git',
+      [
+        'log',
+        '-n',
+        '5',
+        '--date=format:%Y-%m-%d',
+        '--format=%h|%an|%ad|%s',
+        '--',
+        filePath,
+      ],
+      { encoding: 'utf-8' }
+    )
+
+    for (const line of logOut.split('\n')) {
+      if (!line.trim()) continue
+      const [hash, author, date, summary] = line.split('|')
+      if (hash && author && date && summary) {
+        recentCommits.push({
+          hash,
+          author: author.trim(),
+          date,
+          summary: summary.trim(),
+        })
+      }
+    }
+  } catch (err: any) {
+    console.warn('Failed to get git log for hunk history:', err.message)
+  }
+
+  return { blame, recentCommits }
+}
+

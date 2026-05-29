@@ -1,7 +1,9 @@
 import { useState, memo, useRef, useEffect, useMemo } from 'react'
 import { FileDiff, MultiFileDiff } from '@pierre/diffs/react'
 import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide, SelectedLineRange } from '@pierre/diffs'
-import { ChevronDown, ChevronRight, Edit3, MessageSquare, Maximize2, Loader2, Undo2, AlertCircle } from 'lucide-react'
+import { ChevronDown, ChevronRight, Edit3, MessageSquare, Maximize2, Loader2, Undo2, AlertCircle, X, HelpCircle, GitCommit, Clock, User } from 'lucide-react'
+import { Modal } from '../primitives/Modal'
+import { Tooltip } from '../primitives/Tooltip'
 import { useFileContents } from '../hooks/useFileContents'
 import type { ReviewComment } from '../../lib/types'
 import type {
@@ -79,11 +81,13 @@ export const FileDiffCard = memo(function FileDiffCard({
   const [contextExpanded, setContextExpanded] = useState(expandContextByDefault)
   const [revertingHunk, setRevertingHunk] = useState<number | null>(null)
   const [revertError, setRevertError] = useState<string | null>(null)
+  const [previewHunkIndex, setPreviewHunkIndex] = useState<number | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
 
-  const handleRevertHunk = async (hunkIndex: number) => {
+  const handleRevertHunk = async (hunkIndex: number, skipConfirm = false) => {
     if (revertingHunk !== null) return
     if (
+      !skipConfirm &&
       typeof window !== 'undefined' &&
       !window.confirm(
         `Revert hunk #${hunkIndex + 1} in ${filePath}? This rewrites the file via "git apply --reverse".`,
@@ -366,25 +370,32 @@ export const FileDiffCard = memo(function FileDiffCard({
 
       {!collapsed && fileDiff.hunks.length > 0 && (
         <div className="file-diff-hunk-actions" onClick={(e) => e.stopPropagation()}>
-          <span className="file-diff-hunk-actions-label">
-            Hunks · {fileDiff.hunks.length}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span className="file-diff-hunk-actions-label" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              Selective Revert
+            </span>
+            <Tooltip content="Selective Revert lets you preview and undo specific blocks of changes (hunks) in this file using 'git apply --reverse'." side="top">
+              <HelpCircle size={12} style={{ color: 'var(--text-muted)', cursor: 'help' }} />
+            </Tooltip>
+            <span style={{ color: 'var(--text-muted)', fontSize: '11px', margin: '0 4px' }}>·</span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>{fileDiff.hunks.length} block{fileDiff.hunks.length !== 1 ? 's' : ''} available</span>
+          </div>
           <div className="file-diff-hunk-actions-buttons">
             {fileDiff.hunks.map((h, i) => (
               <button
                 key={i}
                 type="button"
                 className="file-diff-hunk-revert-btn"
-                onClick={() => handleRevertHunk(i)}
+                onClick={() => setPreviewHunkIndex(i)}
                 disabled={revertingHunk !== null}
-                title={`Revert hunk #${i + 1} (lines @${h.additionStart}+${h.additionLines}) via git apply --reverse`}
+                title={`Preview and revert hunk #${i + 1} (lines @${h.additionStart}+${h.additionLines ?? h.additionCount})`}
               >
                 {revertingHunk === i ? (
                   <Loader2 size={10} className="spin" />
                 ) : (
                   <Undo2 size={10} />
                 )}
-                <span>#{i + 1}</span>
+                <span>Hunk #{i + 1}</span>
               </button>
             ))}
           </div>
@@ -396,6 +407,92 @@ export const FileDiffCard = memo(function FileDiffCard({
           )}
         </div>
       )}
+
+      {/* Selective Revert Hunk Preview Modal */}
+      {previewHunkIndex !== null && (() => {
+        const previewHunk = fileDiff.hunks[previewHunkIndex]
+        if (!previewHunk) return null
+        const previewDeletedLines = fileDiff.deletionLines.slice(
+          previewHunk.deletionLineIndex,
+          previewHunk.deletionLineIndex + (previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0)
+        )
+        const previewAddedLines = fileDiff.additionLines.slice(
+          previewHunk.additionLineIndex,
+          previewHunk.additionLineIndex + (previewHunk.additionStart !== undefined && previewHunk.additionLines !== undefined ? previewHunk.additionLines : (previewHunk.additionCount ?? 0))
+        )
+        return (
+          <Modal
+            open={previewHunkIndex !== null}
+            onClose={() => setPreviewHunkIndex(null)}
+            className="hunk-revert-modal"
+            ariaLabel={`Selective Revert Preview Hunk #${previewHunkIndex + 1}`}
+          >
+            <div className="shortcuts-header">
+              <div className="shortcuts-header-title">
+                <Undo2 size={18} className="shortcuts-icon" />
+                <h2>Revert Hunk #{previewHunkIndex + 1}</h2>
+              </div>
+              <button className="shortcuts-close-btn" onClick={() => setPreviewHunkIndex(null)} aria-label="Close dialog">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="shortcuts-body">
+              <div className="hunk-preview-intro">
+                Reverting this hunk will restore the deleted (<span style={{ color: 'var(--feedback-danger-text)', fontWeight: 600 }}>red</span>) lines and remove the added (<span style={{ color: 'var(--feedback-success-text)', fontWeight: 600 }}>green</span>) lines from <strong>{filePath.split('/').pop()}</strong>.
+              </div>
+
+              <div className="hunk-preview-container">
+                <div className="hunk-preview-header">
+                  <span>{filePath}</span>
+                  <span>Lines: @-{previewHunk.deletionStart},{previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0} @+{previewHunk.additionStart},{previewHunk.additionLines ?? previewHunk.additionCount ?? 0}</span>
+                </div>
+                <div className="hunk-preview-code">
+                  {previewDeletedLines.map((line, idx) => (
+                    <div key={`del-${idx}`} className="hunk-preview-line hunk-preview-line-deletion">
+                      <span className="hunk-preview-sign">-</span>
+                      <span className="hunk-preview-text">{line}</span>
+                    </div>
+                  ))}
+                  {previewAddedLines.map((line, idx) => (
+                    <div key={`add-${idx}`} className="hunk-preview-line hunk-preview-line-addition">
+                      <span className="hunk-preview-sign">+</span>
+                      <span className="hunk-preview-text">{line}</span>
+                    </div>
+                  ))}
+                  {previewDeletedLines.length === 0 && previewAddedLines.length === 0 && (
+                    <div className="hunk-preview-line" style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>
+                      No changes in this hunk.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <HunkHistorySection
+                filePath={filePath}
+                deletionStart={previewHunk.deletionStart}
+                deletionCount={previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0}
+              />
+            </div>
+
+            <div className="modal-footer">
+              <button className="hunk-revert-btn-secondary" onClick={() => setPreviewHunkIndex(null)}>
+                Cancel
+              </button>
+              <button
+                className="hunk-revert-btn-primary"
+                onClick={async () => {
+                  const idx = previewHunkIndex
+                  setPreviewHunkIndex(null)
+                  await handleRevertHunk(idx, true)
+                }}
+              >
+                Revert Changes
+              </button>
+            </div>
+          </Modal>
+        )
+      })()}
       {!collapsed && (
         <div className="file-diff-card-body">
           {/* File-level comments section */}
@@ -619,6 +716,125 @@ export const FileDiffCard = memo(function FileDiffCard({
     </div>
   )
 })
+
+function HunkHistorySection({
+  filePath,
+  deletionStart,
+  deletionCount,
+}: {
+  filePath: string
+  deletionStart: number
+  deletionCount: number
+}) {
+  const [data, setData] = useState<HunkHistoryData | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    const fetchData = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const queryParams = new URLSearchParams({
+          filePath,
+          deletionStart: String(deletionStart),
+          deletionCount: String(deletionCount),
+        })
+        const res = await fetch(`/api/hunk-history?${queryParams}`)
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`)
+        }
+        const json = await res.json()
+        if (active) {
+          setData(json)
+        }
+      } catch (err: any) {
+        if (active) {
+          setError(err.message || 'Failed to fetch hunk history')
+        }
+      } finally {
+        if (active) {
+          setLoading(false)
+        }
+      }
+    }
+
+    fetchData()
+    return () => {
+      active = false
+    }
+  }, [filePath, deletionStart, deletionCount])
+
+  if (loading) {
+    return (
+      <div className="hunk-history-loading">
+        <Loader2 size={14} className="spin" style={{ marginRight: '8px' }} />
+        <span>Loading git history & origin blame…</span>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="hunk-history-error">
+        <AlertCircle size={14} style={{ color: 'var(--feedback-danger-text)', marginRight: '8px' }} />
+        <span>Failed to load git history: {error}</span>
+      </div>
+    )
+  }
+
+  if (!data) return null
+
+  // Get unique commits from blame
+  const uniqueBlames = Array.from(
+    new Map(data.blame.map((item) => [item.commit, item])).values()
+  )
+
+  return (
+    <div className="hunk-history-section">
+      {uniqueBlames.length > 0 && (
+        <div className="hunk-history-block">
+          <h3 className="hunk-history-title">Commit(s) introducing deleted lines</h3>
+          <div className="hunk-history-commits">
+            {uniqueBlames.map((entry) => (
+              <div key={entry.commit} className="hunk-history-commit-card">
+                <div className="hunk-history-commit-header">
+                  <span className="hunk-history-commit-hash">{entry.commit}</span>
+                  <span className="hunk-history-commit-author">
+                    <User size={11} />
+                    <span>{entry.author}</span>
+                  </span>
+                  <span className="hunk-history-commit-date">
+                    <Clock size={11} />
+                    <span>{entry.date}</span>
+                  </span>
+                </div>
+                <div className="hunk-history-commit-msg">{entry.summary}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {data.recentCommits.length > 0 && (
+        <div className="hunk-history-block">
+          <h3 className="hunk-history-title">Recent File Modification History</h3>
+          <div className="hunk-history-log">
+            {data.recentCommits.map((c) => (
+              <div key={c.hash} className="hunk-history-log-row">
+                <span className="hunk-history-log-hash">{c.hash}</span>
+                <span className="hunk-history-log-msg" title={c.summary}>{c.summary}</span>
+                <span className="hunk-history-log-author">{c.author}</span>
+                <span className="hunk-history-log-date">{c.date}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function buildUnsafeCSS(tabSize: number, fontSize: number): string {
   return `
