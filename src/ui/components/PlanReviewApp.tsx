@@ -38,7 +38,7 @@ export function PlanReviewApp() {
   const poolManager = useWorkerPool()
   const { settings, loaded, updateSettings } = useSettings()
   useApplyFonts(loaded, settings.uiFont, settings.monoFont)
-  const { plans, getPlan, removePlan, agentActivity, clearAgentActivity, submitDecision, submitting, agentWaiting } = usePlans()
+  const { plans, getPlan, removePlan, agentActivity, clearAgentActivity, submitDecision, submitting, agentWaiting, isLoading } = usePlans()
   const path = useRoutePath()
   const [themeModalOpen, setThemeModalOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -370,6 +370,69 @@ export function PlanReviewApp() {
     if (!activePlan) return 0
     return (activePlan.comments ?? []).filter((c) => c.status === 'open').length
   }, [activePlan])
+
+  if (isLoading || !loaded) {
+    return (
+      <div
+        className="app plan-app skeleton-app"
+        style={
+          {
+            "--sidebar-width": `${sidebarWidth}px`,
+          } as React.CSSProperties
+        }
+      >
+        <header className="skeleton-toolbar">
+          <div className="skeleton-item skeleton-logo" style={{ width: '140px' }}></div>
+          <div className="skeleton-item skeleton-stats" style={{ width: '80px', marginLeft: '20px' }}></div>
+          <div className="skeleton-item skeleton-actions" style={{ width: '220px' }}></div>
+        </header>
+
+        <div className="app-body">
+          <aside
+            className={`sidebar plan-sidebar skeleton-sidebar ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}
+          >
+            {!sidebarCollapsed && (
+              <>
+                <div className="skeleton-search" style={{ height: '32px', margin: '0 16px 16px 16px' }}></div>
+                <div className="skeleton-tree-nodes">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div
+                      key={i}
+                      className="skeleton-tree-node"
+                      style={{ paddingLeft: '16px', height: '40px', borderBottom: '1px solid var(--border-weak)' }}
+                    >
+                      <div className="skeleton-node-icon" style={{ width: '20px', height: '20px', borderRadius: '50%' }}></div>
+                      <div className="skeleton-node-text" style={{ width: `${80 + ((i * 30) % 90)}px`, height: '14px' }}></div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </aside>
+          {!sidebarCollapsed && (
+            <div className="sidebar-resize-handle" style={{ cursor: 'default' }} />
+          )}
+
+          <main className="main plan-main skeleton-main">
+            <div className="file-diff-card skeleton-card" style={{ border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+              <div className="skeleton-card-header" style={{ padding: '16px 20px' }}>
+                <div className="skeleton-card-title" style={{ width: '250px', height: '20px' }}></div>
+                <div className="skeleton-card-badge" style={{ width: '100px', height: '24px' }}></div>
+              </div>
+              <div className="skeleton-card-body" style={{ padding: '24px', background: 'var(--bg-secondary)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="skeleton-code-line" style={{ width: '90%', height: '16px' }}></div>
+                <div className="skeleton-code-line" style={{ width: '75%', height: '16px' }}></div>
+                <div className="skeleton-code-line" style={{ width: '85%', height: '16px' }}></div>
+                <div className="skeleton-code-line" style={{ width: '40%', height: '16px' }}></div>
+                <div className="skeleton-code-line" style={{ width: '60%', height: '16px' }}></div>
+                <div className="skeleton-code-line" style={{ width: '80%', height: '16px' }}></div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <HapticsProvider enabled={settings.haptics ?? true} soundsEnabled={settings.sounds ?? true}>

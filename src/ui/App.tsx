@@ -910,35 +910,50 @@ export function App() {
 
     if (loading) {
         return (
-            <div className="app skeleton-app">
+            <div
+                className="app skeleton-app"
+                style={
+                    {
+                        "--sidebar-width": `${sidebarWidth}px`,
+                        "--comment-panel-height": `${commentPanelHeight}px`,
+                    } as React.CSSProperties
+                }
+            >
                 <header className="skeleton-toolbar">
                     <div className="skeleton-item skeleton-logo"></div>
                     <div className="skeleton-item skeleton-stats"></div>
                     <div className="skeleton-item skeleton-actions"></div>
                 </header>
                 <div className="app-body">
-                    <aside className="sidebar skeleton-sidebar">
-                        <div className="skeleton-search"></div>
-                        <div className="skeleton-tree-nodes">
-                            {Array.from({ length: 8 }).map((_, i) => (
-                                <div
-                                    key={i}
-                                    className="skeleton-tree-node"
-                                    style={{
-                                        paddingLeft: `${(i % 3) * 16 + 16}px`,
-                                    }}
-                                >
-                                    <div className="skeleton-node-icon"></div>
-                                    <div
-                                        className="skeleton-node-text"
-                                        style={{
-                                            width: `${60 + ((i * 12) % 60)}px`,
-                                        }}
-                                    ></div>
+                    <aside className={`sidebar skeleton-sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+                        {!sidebarCollapsed && (
+                            <>
+                                <div className="skeleton-search"></div>
+                                <div className="skeleton-tree-nodes">
+                                    {Array.from({ length: 8 }).map((_, i) => (
+                                        <div
+                                            key={i}
+                                            className="skeleton-tree-node"
+                                            style={{
+                                                paddingLeft: `${(i % 3) * 16 + 16}px`,
+                                            }}
+                                        >
+                                            <div className="skeleton-node-icon"></div>
+                                            <div
+                                                className="skeleton-node-text"
+                                                style={{
+                                                    width: `${60 + ((i * 12) % 60)}px`,
+                                                }}
+                                            ></div>
+                                        </div>
+                                    ))}
                                 </div>
-                            ))}
-                        </div>
+                            </>
+                        )}
                     </aside>
+                    {!sidebarCollapsed && (
+                        <div className="sidebar-resize-handle" style={{ cursor: "default" }} />
+                    )}
                     <main className="main skeleton-main">
                         <div className="diff-viewer">
                             {Array.from({ length: 3 }).map((_, i) => (

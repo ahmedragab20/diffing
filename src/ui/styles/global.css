@@ -6537,7 +6537,7 @@ file-tree,
 }
 .plan-review-head {
     position: sticky;
-    top: 0;
+    top: var(--toolbar-height);
     z-index: 5;
     display: flex;
     align-items: flex-start;

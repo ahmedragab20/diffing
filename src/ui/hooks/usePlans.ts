@@ -42,7 +42,7 @@ interface AddCommentParams {
  */
 export function usePlans() {
   const queryClient = useQueryClient()
-  const { data: plans = [] } = useQuery({ queryKey: PLANS_KEY, queryFn: fetchPlans })
+  const { data: plans = [], isLoading } = useQuery({ queryKey: PLANS_KEY, queryFn: fetchPlans })
 
   // Realtime: the server pushes a `plans` event whenever the store changes
   // (a human or agent submitted / commented / replied / resolved).
@@ -247,5 +247,6 @@ export function usePlans() {
     agentWaiting: agentStatus.waiters > 0,
     agentActivity,
     clearAgentActivity: useCallback(() => setAgentActivity(null), []),
+    isLoading,
   }
 }
