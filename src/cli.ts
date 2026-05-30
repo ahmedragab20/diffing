@@ -9,6 +9,7 @@ import { startServer } from './server.js'
 import { loadSettings } from './lib/settings.js'
 import { writeServerLock, removeServerLock } from './lib/server-lock.js'
 import { getRepoRoot } from './lib/git.js'
+import { playStartupDisplay } from './lib/startup-display.js'
 import type { DiffOptions } from './lib/diff-options.js'
 
 const args = process.argv.slice(2)
@@ -94,6 +95,7 @@ try {
 }
 
 console.log(`diffing server running at ${localUrl}`)
+void playStartupDisplay()
 
 if (!opts.noOpen) {
   const settings = loadSettings()
