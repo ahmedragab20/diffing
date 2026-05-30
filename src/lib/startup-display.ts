@@ -1,22 +1,41 @@
 import { stdout } from 'node:process'
 
-// ── ANSI ─────────────────────────────────────────────────────────────
+// ── ANSI primitives ───────────────────────────────────────────────────
 const R    = '\x1b[0m'
 const B    = '\x1b[1m'
-const DM   = '\x1b[2m'
-const CY   = '\x1b[36m'
-const MG   = '\x1b[35m'
-const YL   = '\x1b[33m'
-const GR   = '\x1b[32m'
-const WH   = '\x1b[97m'
 const HIDE = '\x1b[?25l'
 const SHOW = '\x1b[?25h'
 const CLR  = '\x1b[2K\r'
-const GLITCH_CHARS = '░▒▓█▄▀■□'
-const PALETTES = [CY, MG, YL, GR]
+const GLITCH_CHARS = '░▒▓█▄▀■□▸▹◆◇'
+
+const c = (n: number) => `\x1b[38;5;${n}m`   // 256-color fg
 
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const up    = (n: number) => `\x1b[${n}A`
+
+// ── Color palettes — monochromatic shades per hue ─────────────────────
+interface Palette {
+  base:  string   // borders & structure
+  text:  string   // quote body
+  faint: string   // author / secondary
+  glow:  string   // bold accent for pulse effects
+  rain:  string   // matrix rain char colour
+}
+
+const PALETTES: Palette[] = [
+  // Cyan
+  { base: c(51),  text: c(159), faint: c(30),  glow: B + c(87),  rain: c(37)  },
+  // Green
+  { base: c(82),  text: c(155), faint: c(22),  glow: B + c(118), rain: c(34)  },
+  // Magenta / Pink
+  { base: c(207), text: c(219), faint: c(96),  glow: B + c(213), rain: c(128) },
+  // Yellow / Gold
+  { base: c(220), text: c(229), faint: c(136), glow: B + c(226), rain: c(178) },
+  // Sky Blue
+  { base: c(75),  text: c(153), faint: c(25),  glow: B + c(81),  rain: c(39)  },
+  // Orange
+  { base: c(214), text: c(223), faint: c(130), glow: B + c(208), rain: c(172) },
+]
 
 // ── Quotes ────────────────────────────────────────────────────────────
 interface Quote { text: string; author: string }
@@ -60,10 +79,10 @@ const QUOTES: Quote[] = [
 
 // ── Box builder ───────────────────────────────────────────────────────
 interface Box {
-  textLines: string[]
-  authorStr: string
+  textLines:  string[]
+  authorStr:  string
   innerWidth: number
-  color: string
+  pal:        Palette
 }
 
 function wrapText(text: string, width: number): string[] {
@@ -79,7 +98,7 @@ function wrapText(text: string, width: number): string[] {
   return lines
 }
 
-function makeBox(quote: Quote, color: string): Box {
+function makeBox(quote: Quote, pal: Palette): Box {
   const termWidth = stdout.columns ?? 80
   const maxContent = Math.min(64, termWidth - 8)
   const fullText = `"${quote.text}"`
@@ -90,25 +109,31 @@ function makeBox(quote: Quote, color: string): Box {
     authorStr.length,
     28,
   ) + 4
-  return { textLines, authorStr, innerWidth, color }
+  return { textLines, authorStr, innerWidth, pal }
 }
 
-function topBorder(b: Box): string {
-  return `${b.color}╭${'─'.repeat(b.innerWidth)}╮${R}`
+// ── Box line renderers ────────────────────────────────────────────────
+function topBorder(b: Box, borderCol = b.pal.base): string {
+  return `${borderCol}╭${'─'.repeat(b.innerWidth)}╮${R}`
 }
-function bottomBorder(b: Box): string {
-  return `${b.color}╰${'─'.repeat(b.innerWidth)}╯${R}`
+function bottomBorder(b: Box, borderCol = b.pal.base): string {
+  return `${borderCol}╰${'─'.repeat(b.innerWidth)}╯${R}`
 }
-function contentRow(b: Box, text: string): string {
+function contentRow(b: Box, text: string, borderCol = b.pal.base, textCol = b.pal.text): string {
   const fill = ' '.repeat(b.innerWidth - 4 - text.length)
-  return `${b.color}│${R}  ${WH}${text}${R}${fill}  ${b.color}│${R}`
+  return `${borderCol}│${R}  ${textCol}${text}${R}${fill}  ${borderCol}│${R}`
 }
-function authorRow(b: Box): string {
+function authorRow(b: Box, borderCol = b.pal.base): string {
   const leading = ' '.repeat(b.innerWidth - 4 - b.authorStr.length)
-  return `${b.color}│${R}  ${DM}${leading}${b.authorStr}${R}  ${b.color}│${R}`
+  return `${borderCol}│${R}  ${b.pal.faint}${leading}${b.authorStr}${R}  ${borderCol}│${R}`
 }
-function allLines(b: Box): string[] {
-  return [topBorder(b), ...b.textLines.map(l => contentRow(b, l)), authorRow(b), bottomBorder(b)]
+function allLines(b: Box, borderCol = b.pal.base): string[] {
+  return [
+    topBorder(b, borderCol),
+    ...b.textLines.map(l => contentRow(b, l, borderCol)),
+    authorRow(b, borderCol),
+    bottomBorder(b, borderCol),
+  ]
 }
 function printBox(b: Box): void {
   for (const line of allLines(b)) stdout.write(line + '\n')
@@ -117,60 +142,65 @@ function printBox(b: Box): void {
 // ── Animations ────────────────────────────────────────────────────────
 type Anim = (b: Box) => Promise<void>
 
+// 1. Typewriter — quote types out char-by-char in the text colour
 const animTypewriter: Anim = async (b) => {
   stdout.write(topBorder(b) + '\n')
   for (const line of b.textLines) {
-    stdout.write(`${b.color}│${R}  `)
+    stdout.write(`${b.pal.base}│${R}  `)
     for (const ch of line) {
-      stdout.write(`${WH}${ch}${R}`)
-      await sleep(22)
+      stdout.write(`${b.pal.text}${ch}${R}`)
+      await sleep(25)
     }
-    stdout.write(' '.repeat(b.innerWidth - 4 - line.length) + `  ${b.color}│${R}\n`)
+    stdout.write(' '.repeat(b.innerWidth - 4 - line.length) + `  ${b.pal.base}│${R}\n`)
   }
   stdout.write(authorRow(b) + '\n')
   stdout.write(bottomBorder(b) + '\n')
 }
 
+// 2. Wave reveal — each line appears in two stages (first half → full)
 const animWaveReveal: Anim = async (b) => {
   stdout.write(topBorder(b) + '\n')
   for (const line of b.textLines) {
     const half = Math.ceil(line.length / 2)
-    stdout.write(contentRow(b, line.slice(0, half).padEnd(line.length)) + '\n')
-    await sleep(100)
+    stdout.write(contentRow(b, line.slice(0, half).padEnd(line.length), b.pal.base, b.pal.faint) + '\n')
+    await sleep(130)
     stdout.write(up(1) + CLR + contentRow(b, line) + '\n')
-    await sleep(50)
+    await sleep(60)
   }
   stdout.write(authorRow(b) + '\n')
   stdout.write(bottomBorder(b) + '\n')
 }
 
+// 3. Slide — box slides in from the left across 5 frames
 const animSlide: Anim = async (b) => {
   const lines = allLines(b)
   for (let i = 0; i < lines.length; i++) stdout.write('\n')
   stdout.write(up(lines.length))
   for (let step = 0; step < 5; step++) {
-    const pad = ' '.repeat(Math.floor(10 * (1 - step / 4)))
+    const pad = ' '.repeat(Math.floor(12 * (1 - step / 4)))
     for (const line of lines) stdout.write(CLR + pad + line + '\n')
-    if (step < 4) { stdout.write(up(lines.length)); await sleep(70) }
+    if (step < 4) { stdout.write(up(lines.length)); await sleep(80) }
   }
 }
 
+// 4. Pulse border — border cycles dim → base → glow → base
 const animPulseBorder: Anim = async (b) => {
   const stages = [
-    allLines({ ...b, color: DM }),
-    allLines(b),
-    allLines({ ...b, color: B + b.color }),
-    allLines(b),
+    allLines(b, b.pal.faint),
+    allLines(b, b.pal.base),
+    allLines(b, b.pal.glow),
+    allLines(b, b.pal.base),
   ]
   for (let s = 0; s < stages.length; s++) {
     if (s > 0) stdout.write(up(stages[0].length))
     for (const line of stages[s]) stdout.write((s > 0 ? CLR : '') + line + '\n')
-    if (s < stages.length - 1) await sleep(160)
+    if (s < stages.length - 1) await sleep(180)
   }
 }
 
+// 5. Glitch — noise chars in base colour fade to clean text
 const animGlitch: Anim = async (b) => {
-  const noiseRates = [0.20, 0.10, 0.04, 0]
+  const noiseRates = [0.25, 0.12, 0.04, 0]
   const totalLines = b.textLines.length + 3
   for (let f = 0; f < noiseRates.length; f++) {
     if (f > 0) stdout.write(up(totalLines))
@@ -178,29 +208,36 @@ const animGlitch: Anim = async (b) => {
     const clr = f > 0 ? CLR : ''
     stdout.write(clr + topBorder(b) + '\n')
     for (const line of b.textLines) {
-      const noisy = rate === 0
-        ? line
-        : line.split('').map(ch =>
-            Math.random() < rate
-              ? GLITCH_CHARS[Math.floor(Math.random() * GLITCH_CHARS.length)]
-              : ch,
-          ).join('')
-      stdout.write(clr + contentRow(b, noisy) + '\n')
+      if (rate === 0) {
+        stdout.write(clr + contentRow(b, line) + '\n')
+      } else {
+        let inner = ''
+        for (const ch of line) {
+          if (Math.random() < rate) {
+            inner += `${b.pal.base}${GLITCH_CHARS[Math.floor(Math.random() * GLITCH_CHARS.length)]}${b.pal.text}`
+          } else {
+            inner += ch
+          }
+        }
+        const fill = ' '.repeat(b.innerWidth - 4 - line.length)
+        stdout.write(clr + `${b.pal.base}│${R}  ${b.pal.text}${inner}${R}${fill}  ${b.pal.base}│${R}\n`)
+      }
     }
     stdout.write(clr + authorRow(b) + '\n')
     stdout.write(clr + bottomBorder(b) + '\n')
-    if (f < noiseRates.length - 1) await sleep(110)
+    if (f < noiseRates.length - 1) await sleep(120)
   }
 }
 
+// 6. Matrix rain — rain uses palette's rain colour, then box appears
 const animMatrixRain: Anim = async (b) => {
   const width = b.innerWidth + 2
-  const RAIN = 4
+  const RAIN = 5
   for (let r = 0; r < RAIN; r++) {
-    let line = DM + GR
-    for (let c = 0; c < width; c++) line += Math.random() > 0.5 ? '1' : '0'
+    let line = b.pal.rain
+    for (let col = 0; col < width; col++) line += Math.random() > 0.5 ? '1' : '0'
     stdout.write(line + R + '\n')
-    await sleep(60)
+    await sleep(70)
   }
   stdout.write(up(RAIN))
   for (let r = 0; r < RAIN; r++) stdout.write(CLR + '\n')
@@ -223,9 +260,9 @@ export function playStartupDisplay(): void {
   void (async () => {
     try {
       const quote = QUOTES[Math.floor(Math.random() * QUOTES.length)]
-      const color = PALETTES[Math.floor(Math.random() * PALETTES.length)]
-      const b = makeBox(quote, color)
-      const anim = ANIMS[Math.floor(Math.random() * ANIMS.length)]
+      const pal   = PALETTES[Math.floor(Math.random() * PALETTES.length)]
+      const b     = makeBox(quote, pal)
+      const anim  = ANIMS[Math.floor(Math.random() * ANIMS.length)]
       stdout.write('\n' + HIDE)
       await anim(b)
       stdout.write(SHOW)
