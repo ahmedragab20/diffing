@@ -146,7 +146,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
             <div className="comment-node-header">
               <span className="comment-node-author">User</span>
               <span className="comment-node-badge comment-node-badge-user">User</span>
-              <span className="comment-node-time" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="comment-node-time" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 {timeAgo(comment.createdAt)}
                 {comment.lineNumber === 0 && (
                   <span
@@ -217,7 +217,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
           <div className="comment-node-header">
             <span className="comment-node-author">User</span>
             <span className="comment-node-badge comment-node-badge-user">User</span>
-            <span className="comment-node-time" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span className="comment-node-time" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               {timeAgo(comment.createdAt)}
               {comment.lineNumber === 0 && (
                 <span

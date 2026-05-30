@@ -2469,7 +2469,7 @@ body {
 /* Unified conversation card */
 .comment-bubble-canvas {
     width: calc(100% - 40px);
-    max-width: 720px;
+    max-width: min(720px, calc(100% - 40px));
     margin: 14px 20px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-normal);
@@ -2478,6 +2478,7 @@ body {
     box-sizing: border-box;
     overflow: hidden;
     scroll-margin-top: 110px;
+    min-width: 0; /* Flexbox safety */
 }
 
 /* Individual message row inside canvas */
@@ -2543,8 +2544,10 @@ body {
 .comment-node-header {
     display: flex;
     align-items: center;
+    flex-wrap: wrap; /* Wrap metadata chips when space is limited */
     gap: 8px;
     font-size: 13px;
+    min-width: 0;
 }
 
 .comment-node-author {
@@ -2622,6 +2625,9 @@ body {
     font-size: 13.5px;
     line-height: 1.6;
     color: var(--text-secondary);
+    word-break: break-word;
+    overflow-wrap: break-word;
+    min-width: 0;
 }
 
 .comment-resolved-line {

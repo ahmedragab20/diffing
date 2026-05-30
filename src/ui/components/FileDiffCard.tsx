@@ -874,5 +874,30 @@ function buildUnsafeCSS(tabSize: number, fontSize: number): string {
     [data-line].selected-line {
       background-color: var(--accent-subtle) !important;
     }
+    .comment-bubble-canvas {
+      width: calc(100% - 40px) !important;
+      max-width: min(720px, calc(100% - 40px)) !important;
+      margin: 14px 20px !important;
+      min-width: 0 !important;
+      box-sizing: border-box !important;
+    }
+    .comment-replies {
+      min-width: 0 !important;
+    }
+    .comment-node {
+      min-width: 0 !important;
+    }
+    .comment-content-col {
+      min-width: 0 !important;
+    }
+    .comment-node-header {
+      flex-wrap: wrap !important;
+      min-width: 0 !important;
+    }
+    .comment-node-body {
+      word-break: break-word !important;
+      overflow-wrap: break-word !important;
+      min-width: 0 !important;
+    }
   `
 }
