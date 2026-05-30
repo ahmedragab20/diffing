@@ -31,6 +31,7 @@ interface SearchPaletteProps {
   // Preview-pane render settings (mirror the main diff view).
   theme: string
   fontSize: number
+  monoFontFamily: string
   defaultTabSize: number
   lineWrap: boolean
   showLineNumbers: boolean
@@ -156,6 +157,7 @@ export function SearchPalette({
   onNavigateFile,
   theme,
   fontSize,
+  monoFontFamily,
   defaultTabSize,
   lineWrap,
   showLineNumbers,
@@ -561,6 +563,7 @@ export function SearchPalette({
             preview={preview}
             theme={theme}
             fontSize={fontSize}
+            monoFontFamily={monoFontFamily}
             defaultTabSize={defaultTabSize}
             lineWrap={lineWrap}
             showLineNumbers={showLineNumbers}
@@ -828,6 +831,7 @@ function PreviewPane({
   preview,
   theme,
   fontSize,
+  monoFontFamily,
   defaultTabSize,
   lineWrap,
   showLineNumbers,
@@ -839,6 +843,7 @@ function PreviewPane({
   preview: PreviewState
   theme: string
   fontSize: number
+  monoFontFamily: string
   defaultTabSize: number
   lineWrap: boolean
   showLineNumbers: boolean
@@ -917,9 +922,15 @@ function PreviewPane({
               unsafeCSS: `
                 :host {
                   --diffs-tab-size: ${defaultTabSize} !important;
-                  --diffs-font-family: var(--font-mono) !important;
+                  --diffs-font-family: ${monoFontFamily} !important;
                   --diffs-font-size: ${fontSize}px !important;
                   --diffs-line-height: ${Math.round(fontSize * 1.7)}px !important;
+                }
+                [data-column-number], [data-line], [data-line] * {
+                  font-family: ${monoFontFamily} !important;
+                  font-size: ${fontSize}px !important;
+                  font-variant-ligatures: common-ligatures !important;
+                  font-feature-settings: "liga" on, "calt" on !important;
                 }
               `,
             }}

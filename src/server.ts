@@ -10,9 +10,11 @@ import { searchFiles, searchContent, searchSymbols, searchAll, getSearchStatus, 
 import { loadSettings, saveSettings } from './lib/settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
 import type { CommentStore } from './lib/comments.js'
+import type { ReviewDecision } from './lib/types.js'
 import { FilePlanStore } from './lib/plans.js'
 import type { PlanStore } from './lib/plans.js'
-import { isSafePath } from './lib/path.js'
+import { FileUiStateStore } from './lib/state.js'
+import { isSafePath, toSafeRelativePath } from './lib/path.js'
 import { ReviewSession } from './lib/review-session.js'
 import { PlanReviewSession } from './lib/plan-review-session.js'
 import { formatComments } from './lib/comment-format.js'
@@ -52,6 +54,7 @@ export function createApp(
   const customMode = isCustomMode(diffOpts)
   const store = commentStore ?? new FileCommentStore()
   const plans = planStore ?? new FilePlanStore()
+  const uiStateStore = new FileUiStateStore()
   const viewedFiles = new Set<string>()
 
   const activeClients = new Set<(event: string, data: string) => void>()
@@ -244,10 +247,11 @@ export function createApp(
 
     try {
       const root = getRepoRoot()
-      if (!isSafePath(filePath, root)) {
+      const relPath = toSafeRelativePath(filePath, root)
+      if (!relPath) {
         return c.json({ error: 'Forbidden file path' }, 403)
       }
-      const absolutePath = resolve(root, filePath)
+      const absolutePath = resolve(root, relPath)
       const { exec } = await import('node:child_process')
 
       if (editor === 'vscode') {
@@ -343,10 +347,11 @@ export function createApp(
     }
     try {
       const root = getRepoRoot()
-      if (!isSafePath(filePath, root)) {
+      const relPath = toSafeRelativePath(filePath, root)
+      if (!relPath) {
         return c.json({ error: 'Forbidden file path' }, 403)
       }
-      revertHunk(filePath, hunkIndex)
+      revertHunk(relPath, hunkIndex)
       return c.json({ ok: true })
     } catch (err: any) {
       const stderr =
@@ -373,11 +378,12 @@ export function createApp(
 
     try {
       const root = getRepoRoot()
-      if (!isSafePath(filePath, root)) {
+      const relPath = toSafeRelativePath(filePath, root)
+      if (!relPath) {
         return c.json({ error: 'Forbidden file path' }, 403)
       }
       const revision = diffOpts.revisions[0] || 'HEAD'
-      const history = getHunkHistory(filePath, deletionStart, deletionCount, revision)
+      const history = getHunkHistory(relPath, deletionStart, deletionCount, revision)
       return c.json(history)
     } catch (err: any) {
       return c.json({ error: err.message || 'Failed to fetch hunk history' }, 500)
@@ -395,14 +401,15 @@ export function createApp(
     }
     try {
       const root = getRepoRoot()
-      if (!isSafePath(filePath, root)) {
+      const relPath = toSafeRelativePath(filePath, root)
+      if (!relPath) {
         return c.json({ error: 'Forbidden file path' }, 403)
       }
-      const absolutePath = resolve(root, filePath)
+      const absolutePath = resolve(root, relPath)
       await writeFile(absolutePath, content, 'utf-8')
       if (gitAdd) {
         try {
-          gitAddFile(filePath)
+          gitAddFile(relPath)
         } catch (err: any) {
           return c.json({ ok: true, gitAddError: err.message })
         }
@@ -421,6 +428,23 @@ export function createApp(
     const body = await c.req.json()
     const settings = saveSettings(body)
     return c.json(settings)
+  })
+
+  app.get('/api/ui-state', async (c) => {
+    return c.json(await uiStateStore.getAll())
+  })
+
+  app.put('/api/ui-state', async (c) => {
+    const body = await c.req.json()
+    const current = await uiStateStore.getAll()
+    const merged = { ...current, ...body }
+    for (const key of Object.keys(body)) {
+      if (body[key] === null || body[key] === undefined) {
+        delete merged[key]
+      }
+    }
+    await uiStateStore.setAll(merged)
+    return c.json(merged)
   })
 
   app.get('/api/viewed', (c) => {
@@ -524,10 +548,11 @@ export function createApp(
 
     try {
       const root = getRepoRoot()
-      if (!isSafePath(comment.filePath, root)) {
+      const relPath = toSafeRelativePath(comment.filePath, root)
+      if (!relPath) {
         return c.json({ error: 'Forbidden file path' }, 403)
       }
-      const absolutePath = resolve(root, comment.filePath)
+      const absolutePath = resolve(root, relPath)
       const content = await readFile(absolutePath, 'utf-8')
       const lines = content.split(/\r?\n/)
 
@@ -562,18 +587,24 @@ export function createApp(
     const body = await c.req.json().catch(() => ({}) as Record<string, unknown>)
     const generalComment =
       typeof body?.generalComment === 'string' ? body.generalComment : undefined
+    const decision =
+      body?.decision === 'approved' || body?.decision === 'changes-requested' || body?.decision === 'rejected'
+        ? (body.decision as ReviewDecision)
+        : undefined
     const all = await store.getAll()
     const openCount = all.filter((x) => x.status === 'open').length
     const payload = reviewSession.send({
       sentAt: Date.now(),
-      commentXml: formatComments(all, generalComment),
+      commentXml: formatComments(all, generalComment, decision),
       openCount,
       comments: all,
+      decision,
     })
     return c.json({
       ok: true,
       round: payload.round,
       openCount: payload.openCount,
+      decision: payload.decision,
       waiters: reviewSession.snapshot().waiters,
     })
   })
@@ -851,6 +882,46 @@ export function createApp(
   return app
 }
 
+/**
+ * Newest mtime (epoch ms) across everything that counts as project activity:
+ * comments.json, plans.json, and any attachment (media) file. Plans and media
+ * extend a project's life exactly like comments do, so retention is uniform
+ * across all three. Returns null when none of them exist yet.
+ */
+async function newestActivityMs(projectDir: string): Promise<number | null> {
+  const candidates: number[] = []
+  const safeStat = async (p: string): Promise<number | null> => {
+    try {
+      return (await stat(p)).mtimeMs
+    } catch {
+      return null
+    }
+  }
+
+  for (const name of ['comments.json', 'plans.json']) {
+    const file = join(projectDir, name)
+    if (!existsSync(file)) continue
+    const m = await safeStat(file)
+    if (m !== null) candidates.push(m)
+  }
+
+  const attachmentsDir = join(projectDir, 'attachments')
+  if (existsSync(attachmentsDir)) {
+    const dirM = await safeStat(attachmentsDir)
+    if (dirM !== null) candidates.push(dirM)
+    try {
+      for (const file of await readdir(attachmentsDir)) {
+        const m = await safeStat(join(attachmentsDir, file))
+        if (m !== null) candidates.push(m)
+      }
+    } catch {
+      // unreadable attachments dir — fall back to whatever we already have
+    }
+  }
+
+  return candidates.length ? Math.max(...candidates) : null
+}
+
 export async function cleanupStaleProjects(): Promise<void> {
   const baseDir = join(homedir(), '.diffing')
   if (!existsSync(baseDir)) return
@@ -864,10 +935,10 @@ export async function cleanupStaleProjects(): Promise<void> {
       if (entry.isDirectory()) {
         const projectDir = join(baseDir, entry.name)
         const repoPathFile = join(projectDir, 'repo_path.txt')
-        const commentsFile = join(projectDir, 'comments.json')
 
         let shouldDelete = false
 
+        // Dead project: the repository it mirrored no longer exists on disk.
         if (existsSync(repoPathFile)) {
           try {
             const repoPath = (await readFile(repoPathFile, 'utf-8')).trim()
@@ -879,14 +950,13 @@ export async function cleanupStaleProjects(): Promise<void> {
           }
         }
 
-        if (!shouldDelete && existsSync(commentsFile)) {
-          try {
-            const stats = await stat(commentsFile)
-            if (now - stats.mtimeMs > STALE_TIME) {
-              shouldDelete = true
-            }
-          } catch {
-            // ignore
+        // Stale project: nothing — comments, plans, or media — has been
+        // touched within STALE_TIME. Plans live for the same span as comments
+        // and attachments, so the freshest of the three keeps the dir alive.
+        if (!shouldDelete) {
+          const newest = await newestActivityMs(projectDir)
+          if (newest !== null && now - newest > STALE_TIME) {
+            shouldDelete = true
           }
         }
 

@@ -27,6 +27,7 @@ interface DiffViewerProps {
   hunkSeparators: HunkSeparatorStyle
   lineHoverHighlight: LineHoverHighlight
   fontSize: number
+  monoFontFamily: string
   expandContextByDefault: boolean
   collapsedContextThreshold: number
   expansionLineCount: number
@@ -54,6 +55,7 @@ export const DiffViewer = memo(function DiffViewer({
   hunkSeparators,
   lineHoverHighlight,
   fontSize,
+  monoFontFamily,
   expandContextByDefault,
   collapsedContextThreshold,
   expansionLineCount,
@@ -121,6 +123,7 @@ export const DiffViewer = memo(function DiffViewer({
             hunkSeparators={hunkSeparators}
             lineHoverHighlight={lineHoverHighlight}
             fontSize={fontSize}
+            monoFontFamily={monoFontFamily}
             expandContextByDefault={expandContextByDefault}
             collapsedContextThreshold={collapsedContextThreshold}
             expansionLineCount={expansionLineCount}

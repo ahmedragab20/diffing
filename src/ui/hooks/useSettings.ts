@@ -27,6 +27,10 @@ export interface Settings {
   haptics: boolean
   /** Synthesized audio feedback on interaction. */
   sounds: boolean
+  /** UI font family override. null/undefined = default (Geist Mono from CDN). */
+  uiFont?: string | null
+  /** Code/diff/plans font family override. null/undefined = default (JetBrains Mono from CDN). */
+  monoFont?: string | null
 }
 
 const DEFAULTS: Settings = {
@@ -48,6 +52,17 @@ const DEFAULTS: Settings = {
   expansionLineCount: 20,
   haptics: true,
   sounds: true,
+  uiFont: null,
+  monoFont: null,
+}
+
+const MONO_FALLBACK = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace'
+
+/** Returns the fully-resolved font-family CSS value for code/diff rendering. */
+export function resolveMonoFont(monoFont?: string | null): string {
+  return monoFont
+    ? `"${monoFont}", ${MONO_FALLBACK}`
+    : `"JetBrains Mono", ${MONO_FALLBACK}`
 }
 
 export function useSettings() {

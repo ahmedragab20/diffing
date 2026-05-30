@@ -5,6 +5,7 @@ const mockExecFileSync = vi.fn()
 const mockReadFileSync = vi.fn()
 const mockIsSafePath = vi.fn()
 const mockParseEditorConfig = vi.fn()
+const mockToSafeRelativePath = vi.fn((filePath) => mockIsSafePath(filePath) ? filePath : null)
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
@@ -16,7 +17,10 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, readFileSync: mockReadFileSync }
 })
 
-vi.mock('../lib/path.js', () => ({ isSafePath: mockIsSafePath }))
+vi.mock('../lib/path.js', () => ({
+  isSafePath: mockIsSafePath,
+  toSafeRelativePath: mockToSafeRelativePath,
+}))
 vi.mock('editorconfig', () => ({ parseSync: mockParseEditorConfig }))
 
 describe('git', () => {

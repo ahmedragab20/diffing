@@ -39,6 +39,7 @@ interface FileDiffCardProps {
   hunkSeparators: HunkSeparatorStyle
   lineHoverHighlight: LineHoverHighlight
   fontSize: number
+  monoFontFamily: string
   expandContextByDefault: boolean
   collapsedContextThreshold: number
   expansionLineCount: number
@@ -64,6 +65,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   hunkSeparators,
   lineHoverHighlight,
   fontSize,
+  monoFontFamily,
   expandContextByDefault,
   collapsedContextThreshold,
   expansionLineCount,
@@ -136,7 +138,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   // Stable across re-renders triggered by unrelated prop changes (e.g. toggling
   // split/unified) so the diff renderer isn't handed a brand-new CSS string
   // every time. Only tabSize/fontSize actually affect it.
-  const unsafeCSS = useMemo(() => buildUnsafeCSS(tabSize, fontSize), [tabSize, fontSize])
+  const unsafeCSS = useMemo(() => buildUnsafeCSS(tabSize, fontSize, monoFontFamily), [tabSize, fontSize, monoFontFamily])
 
   const getLineContent = (side: AnnotationSide, lineNumber: number, startLineNumber?: number): string => {
     const startNum = startLineNumber && startLineNumber !== lineNumber ? startLineNumber : lineNumber
@@ -836,18 +838,18 @@ function HunkHistorySection({
   )
 }
 
-function buildUnsafeCSS(tabSize: number, fontSize: number): string {
+function buildUnsafeCSS(tabSize: number, fontSize: number, fontFamily: string): string {
   return `
     :host {
       --diffs-tab-size: ${tabSize} !important;
-      --diffs-font-family: var(--font-mono) !important;
+      --diffs-font-family: ${fontFamily} !important;
       --diffs-font-size: ${fontSize}px !important;
       --diffs-border: var(--border-normal) !important;
       --diffs-bg: var(--bg-secondary) !important;
       --diffs-line-height: ${Math.round(fontSize * 1.7)}px !important;
     }
-    [data-column-number], [data-line] {
-      font-family: var(--font-mono) !important;
+    [data-column-number], [data-line], [data-line] * {
+      font-family: ${fontFamily} !important;
       font-size: ${fontSize}px !important;
       font-variant-ligatures: common-ligatures !important;
       font-feature-settings: "liga" on, "calt" on !important;

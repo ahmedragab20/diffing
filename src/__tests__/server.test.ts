@@ -13,6 +13,7 @@ const mockGetUntrackedFilePaths = vi.fn()
 const mockLoadSettings = vi.fn()
 const mockSaveSettings = vi.fn()
 const mockIsSafePath = vi.fn()
+const mockToSafeRelativePath = vi.fn((filePath) => mockIsSafePath(filePath) ? filePath : null)
 const mockGetRepoRoot = vi.fn()
 const mockGetProjectStorageDir = vi.fn()
 
@@ -46,6 +47,7 @@ vi.mock('../lib/settings.js', () => ({
 
 vi.mock('../lib/path.js', () => ({
   isSafePath: mockIsSafePath,
+  toSafeRelativePath: mockToSafeRelativePath,
 }))
 
 const mockReadFile = vi.fn()
@@ -238,6 +240,35 @@ describe('server', () => {
       })
     })
 
+    describe('UI State API', () => {
+      it('GET /api/ui-state returns state from file', async () => {
+        mockReadFile.mockResolvedValueOnce(JSON.stringify({ 'sidebar-width': 350 }))
+        const res = await app.fetch(new Request('http://localhost/api/ui-state'))
+        expect(res.status).toBe(200)
+        expect(await res.json()).toEqual({ 'sidebar-width': 350 })
+      })
+
+      it('PUT /api/ui-state merges and saves state', async () => {
+        mockReadFile.mockResolvedValueOnce(JSON.stringify({ 'sidebar-width': 350 }))
+        mockWriteFile.mockResolvedValue(undefined)
+        mockMkdir.mockResolvedValue(undefined)
+
+        const res = await app.fetch(new Request('http://localhost/api/ui-state', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 'sidebar-collapsed': true, 'sidebar-width': null }),
+        }))
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body).toEqual({ 'sidebar-collapsed': true })
+        expect(mockWriteFile).toHaveBeenCalledWith(
+          expect.stringContaining('ui-state.json'),
+          JSON.stringify({ 'sidebar-collapsed': true }, null, 2),
+          'utf-8'
+        )
+      })
+    })
+
     describe('viewed files', () => {
       it('starts empty', async () => {
         expect(await (await app.fetch(new Request('http://localhost/api/viewed'))).json()).toEqual([])
@@ -359,6 +390,33 @@ describe('server', () => {
         expect(result.status).toBe('released')
         expect(result.payload.round).toBe(1)
         expect(result.payload.commentXml).toContain('<comment id="c1"')
+      })
+
+      it('forwards the chosen verdict into the handoff payload and XML', async () => {
+        await mockStore.add({ id: 'c1', filePath: 'src/x.ts', side: 'additions', lineNumber: 3, lineContent: 'z', body: 'rename', status: 'open', createdAt: 0, replies: [] })
+
+        const pending = app.fetch(new Request('http://localhost/api/review/await?timeoutMs=5000'))
+        await new Promise((r) => setTimeout(r, 10))
+        const sendRes = await (await app.fetch(new Request('http://localhost/api/review/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decision: 'approved' }),
+        }))).json()
+        expect(sendRes.decision).toBe('approved')
+
+        const result = await (await pending).json()
+        expect(result.payload.decision).toBe('approved')
+        expect(result.payload.commentXml).toContain('decision="approved"')
+        expect(result.payload.commentXml).toContain('<decision-summary>')
+      })
+
+      it('lets a review be sent with a verdict but no comments', async () => {
+        const sendRes = await (await app.fetch(new Request('http://localhost/api/review/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decision: 'approved' }),
+        }))).json()
+        expect(sendRes).toMatchObject({ ok: true, openCount: 0, decision: 'approved' })
       })
     })
 
@@ -578,6 +636,69 @@ describe('server', () => {
       await cleanupStaleProjects()
 
       expect(mockRm).not.toHaveBeenCalled()
+    })
+
+    it('keeps a project alive on fresh plans alone, even without comments', async () => {
+      const { cleanupStaleProjects } = await import('../server.js')
+
+      mockRm.mockClear()
+
+      mockExistsSync.mockImplementation((p: string) => {
+        if (p.endsWith('.diffing')) return true
+        if (p.endsWith('repo_path.txt')) return true
+        if (p.endsWith('plans.json')) return true
+        if (p === '/tmp/active-repo') return true
+        return false // comments.json + attachments dir absent
+      })
+
+      mockReaddir.mockResolvedValue([
+        { name: 'plans-only-hash', isDirectory: () => true },
+      ] as any)
+
+      mockReadFile.mockImplementation(async (p: string) => {
+        if (p.endsWith('repo_path.txt')) return '/tmp/active-repo'
+        throw new Error('ENOENT')
+      })
+
+      mockStat.mockResolvedValue({ mtimeMs: Date.now() } as any)
+
+      await cleanupStaleProjects()
+
+      expect(mockRm).not.toHaveBeenCalled()
+    })
+
+    it('deletes a project when plans are the only data and have gone stale', async () => {
+      const { cleanupStaleProjects } = await import('../server.js')
+
+      mockRm.mockClear()
+
+      mockExistsSync.mockImplementation((p: string) => {
+        if (p.endsWith('.diffing')) return true
+        if (p.endsWith('repo_path.txt')) return true
+        if (p.endsWith('plans.json')) return true
+        if (p === '/tmp/active-repo') return true
+        return false
+      })
+
+      mockReaddir.mockResolvedValue([
+        { name: 'stale-plans-hash', isDirectory: () => true },
+      ] as any)
+
+      mockReadFile.mockImplementation(async (p: string) => {
+        if (p.endsWith('repo_path.txt')) return '/tmp/active-repo'
+        throw new Error('ENOENT')
+      })
+
+      mockStat.mockResolvedValue({
+        mtimeMs: Date.now() - 15 * 24 * 60 * 60 * 1000,
+      } as any)
+
+      await cleanupStaleProjects()
+
+      expect(mockRm).toHaveBeenCalledWith(expect.stringContaining('stale-plans-hash'), {
+        recursive: true,
+        force: true,
+      })
     })
   })
 })

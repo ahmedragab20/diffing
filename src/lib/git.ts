@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
-import { isSafePath } from './path.js'
+import { isSafePath, toSafeRelativePath } from './path.js'
 import { parseSync as parseEditorConfig, type ProcessedFileConfig } from 'editorconfig'
 
 const execFileAsync = promisify(execFile)
@@ -34,10 +34,11 @@ function isBinaryFile(absolutePath: string): boolean {
 
 export function getFileContent(filePath: string, version: 'old' | 'new'): Buffer | null {
   const root = getRepoRoot()
-  if (!isSafePath(filePath, root)) {
+  const relPath = toSafeRelativePath(filePath, root)
+  if (!relPath) {
     return null
   }
-  const resolved = resolve(root, filePath)
+  const resolved = resolve(root, relPath)
   if (version === 'new') {
     try {
       return readFileSync(resolved)
@@ -47,7 +48,7 @@ export function getFileContent(filePath: string, version: 'old' | 'new'): Buffer
   }
   // old version: try staged first, then HEAD
   try {
-    return execFileSync('git', ['show', `HEAD:${filePath}`], { stdio: 'pipe', maxBuffer: 50 * 1024 * 1024 })
+    return execFileSync('git', ['show', `HEAD:${relPath}`], { stdio: 'pipe', maxBuffer: 50 * 1024 * 1024 })
   } catch {
     return null
   }

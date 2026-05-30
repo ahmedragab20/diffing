@@ -71,6 +71,7 @@ export async function startMcpServer(): Promise<void> {
           return textResult(result.payload.commentXml, {
             round: result.payload.round,
             openCount: result.payload.openCount,
+            decision: result.payload.decision,
             comments: result.payload.comments,
           })
         }

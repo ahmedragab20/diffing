@@ -1,13 +1,35 @@
-import type { ReviewComment } from './types.js'
+import type { ReviewComment, ReviewDecision } from './types.js'
+
+/** Plain-language guidance the agent should act on, derived from the verdict. */
+export function reviewDecisionSummary(decision: ReviewDecision): string {
+  switch (decision) {
+    case 'approved':
+      return 'The reviewer APPROVED these changes. Address any open comments below, then proceed — the overall direction is good.'
+    case 'changes-requested':
+      return 'The reviewer REQUESTED EDITS. Address every open comment below and apply the requested changes before considering this review done.'
+    case 'rejected':
+      return 'The reviewer REJECTED these changes. Do NOT keep building on this approach; reconsider it in light of the comments below before continuing.'
+  }
+}
 
 /**
  * Render review comments as the `<code-review-comments>` XML envelope used to
  * hand a review to an AI agent. Shared by the UI clipboard button
  * (`useComments.formatAllComments`), the server's `/api/review/send` handoff,
  * and the `diffing` CLI/MCP so every channel emits byte-identical output.
+ *
+ * A review may carry a headline `decision` (approve / request edits / reject)
+ * and/or an overall comment, so the envelope is emitted even with zero inline
+ * comments — letting a reviewer submit a verdict without annotating any line.
  */
-export function formatComments(comments: ReviewComment[], generalComment?: string): string {
-  if (comments.length === 0) return ''
+export function formatComments(
+  comments: ReviewComment[],
+  generalComment?: string,
+  decision?: ReviewDecision,
+): string {
+  const trimmedGeneral = generalComment?.trim()
+  // Nothing to hand off: no inline comments, no verdict, no overall note.
+  if (comments.length === 0 && !decision && !trimmedGeneral) return ''
 
   const grouped = new Map<string, ReviewComment[]>()
   for (const comment of comments) {
@@ -17,10 +39,14 @@ export function formatComments(comments: ReviewComment[], generalComment?: strin
   }
 
   const lines: string[] = []
-  lines.push('<code-review-comments>')
+  lines.push(decision ? `<code-review-comments decision="${decision}">` : '<code-review-comments>')
   lines.push('  <instructions>')
   lines.push('    You are an AI coding assistant. You are receiving a structured list of code review comments to address in the repository.')
   lines.push('    For each file, review the inline comments and apply the changes requested.')
+  if (decision) {
+    lines.push('    - The "decision" attribute on the root element is the reviewer\'s headline verdict: "approved", "changes-requested", or "rejected".')
+    lines.push('    - <decision-summary> tells you, in plain language, what to do next based on that verdict.')
+  }
   lines.push('    - Target lines are specified by the "line" attribute (e.g. line="10" or line="10-15").')
   lines.push('    - "side" indicates whether the comment is on "additions" (added/modified lines) or "deletions" (deleted/old lines).')
   lines.push('    - "status" indicates whether the comment is "open" or "resolved". Only address comments with status="open".')
@@ -49,7 +75,10 @@ export function formatComments(comments: ReviewComment[], generalComment?: strin
   lines.push('      </comment-replies>')
   lines.push('  </instructions>')
 
-  const trimmedGeneral = generalComment?.trim()
+  if (decision) {
+    lines.push(`  <decision-summary><![CDATA[${reviewDecisionSummary(decision)}]]></decision-summary>`)
+  }
+
   if (trimmedGeneral) {
     lines.push('  <general-comment>')
     lines.push(`    <![CDATA[${trimmedGeneral}]]>`)

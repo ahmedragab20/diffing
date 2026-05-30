@@ -1,24 +1,57 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { Bot, Pencil, Trash2, Check, X } from 'lucide-react'
+import { Bot, Pencil, Trash2, Check, X, MessageSquareWarning } from 'lucide-react'
 import { useFeedback } from '../hooks/useHaptics'
-import type { ReviewComment } from '../../lib/types'
+import type { ReviewComment, ReviewDecision } from '../../lib/types'
 import { fileName } from '../utils'
 import { Popover } from '../primitives/Popover'
+import { MarkdownField } from './MarkdownField'
 
 interface SendReviewPopoverProps {
   comments: ReviewComment[]
   onEditComment: (id: string, body: string) => void
   onDeleteComment: (id: string) => void
-  onSend: (generalComment?: string) => Promise<unknown>
+  onSend: (decision: ReviewDecision, generalComment?: string) => Promise<unknown>
   sending: boolean
   agentWaiting: boolean
+  onCopyComments?: () => Promise<void>
 }
+
+const VERDICT_OPTIONS: {
+  value: ReviewDecision
+  label: string
+  description: string
+  icon: typeof Check
+  className: string
+}[] = [
+  {
+    value: 'approved',
+    label: 'Approve',
+    description: 'The changes look good — the agent can proceed.',
+    icon: Check,
+    className: 'plan-verdict-approve',
+  },
+  {
+    value: 'changes-requested',
+    label: 'Request edits',
+    description: 'The agent should address the comments and apply edits.',
+    icon: MessageSquareWarning,
+    className: 'plan-verdict-changes',
+  },
+  {
+    value: 'rejected',
+    label: 'Reject',
+    description: "Don't keep building on this — the approach needs rethinking.",
+    icon: X,
+    className: 'plan-verdict-reject',
+  },
+]
 
 /**
  * GitHub-style "finish your review" flow. Clicking "Send to agent" opens a
- * popover that previews every comment that will be handed off — each one can be
- * edited inline or removed — plus an optional overall comment that applies to
- * the whole review. Submitting sends the batch to the waiting agent.
+ * popover where you pick a verdict (approve / request edits / reject) — mirroring
+ * the plan-review submission UI — preview every inline comment that will be
+ * handed off (each editable or removable), and optionally add an overall note.
+ * A verdict can be submitted on its own, so a review needs no inline comments.
  */
 export function SendReviewPopover({
   comments,
@@ -27,10 +60,21 @@ export function SendReviewPopover({
   onSend,
   sending,
   agentWaiting,
+  onCopyComments,
 }: SendReviewPopoverProps) {
   const { haptic, sound } = useFeedback()
   const [open, setOpen] = useState(false)
   const [general, setGeneral] = useState('')
+  const [verdict, setVerdict] = useState<ReviewDecision | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    if (onCopyComments) {
+      await onCopyComments()
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }
 
   const count = comments.length
 
@@ -39,17 +83,13 @@ export function SendReviewPopover({
     [comments],
   )
 
-  // The popover can stay open while comments mutate from elsewhere; if every
-  // comment is removed there is nothing left to send, so close it.
-  useEffect(() => {
-    if (open && count === 0) setOpen(false)
-  }, [open, count])
-
   const handleSend = async () => {
+    if (!verdict) return
     haptic('heavy')
     sound('send')
-    await onSend(general)
+    await onSend(verdict, general)
     setGeneral('')
+    setVerdict(null)
     setOpen(false)
   }
 
@@ -57,16 +97,18 @@ export function SendReviewPopover({
     <Popover
       open={open}
       onOpenChange={setOpen}
-      ariaLabel="Review comments before sending to agent"
+      ariaLabel="Submit your review to the agent"
       className="send-review-popover"
       trigger={
         <button
           className="btn btn-primary btn-sm"
-          disabled={count === 0 || sending}
-          title={agentWaiting ? 'An agent is connected and waiting' : 'Review and send comments to a waiting agent'}
+          disabled={sending}
+          title={agentWaiting ? 'An agent is connected and waiting' : 'Submit your review to a waiting agent'}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
           {agentWaiting && <span className="agent-waiting-dot" aria-hidden="true" />}
-          {sending ? 'Sending…' : `Send to agent (${count})`}
+          <Bot size={14} />
+          <span>{sending ? 'Sending…' : count > 0 ? `Send to agent (${count})` : 'Send to agent'}</span>
         </button>
       }
     >
@@ -77,47 +119,83 @@ export function SendReviewPopover({
           <span className="srp-count">{count} comment{count === 1 ? '' : 's'}</span>
         </div>
 
-        <ul className="srp-list" aria-label="Comments to send">
-          {sorted.map((c) => (
-            <SendReviewItem
-              key={c.id}
-              comment={c}
-              onEdit={onEditComment}
-              onDelete={onDeleteComment}
-            />
-          ))}
-        </ul>
+        <div className="plan-verdict-options" role="radiogroup" aria-label="Verdict">
+          {VERDICT_OPTIONS.map((opt) => {
+            const Icon = opt.icon
+            const selected = verdict === opt.value
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                className={`plan-verdict-option ${opt.className} ${selected ? 'plan-verdict-option-selected' : ''}`}
+                onClick={() => setVerdict(opt.value)}
+              >
+                <span className="plan-verdict-icon">
+                  <Icon size={15} aria-hidden="true" />
+                </span>
+                <span className="plan-verdict-text">
+                  <span className="plan-verdict-label">{opt.label}</span>
+                  <span className="plan-verdict-desc">{opt.description}</span>
+                </span>
+                <span className="plan-verdict-radio" aria-hidden="true" />
+              </button>
+            )
+          })}
+        </div>
+
+        {count > 0 ? (
+          <ul className="srp-list" aria-label="Comments to send">
+            {sorted.map((c) => (
+              <SendReviewItem
+                key={c.id}
+                comment={c}
+                onEdit={onEditComment}
+                onDelete={onDeleteComment}
+              />
+            ))}
+          </ul>
+        ) : (
+          <p className="srp-empty">No inline comments — your verdict and overall note will be sent on their own.</p>
+        )}
 
         <div className="srp-general">
           <label className="srp-general-label" htmlFor="srp-general-input">
-            Overall comment <span className="srp-optional">(optional)</span>
+            Overall comment <span className="srp-optional">(optional · Markdown)</span>
           </label>
-          <textarea
+          <MarkdownField
             id="srp-general-input"
-            className="srp-general-input"
             value={general}
+            onChange={setGeneral}
+            textareaClassName="srp-general-input"
             placeholder="Add an overall note for the agent that applies to the whole review…"
             rows={3}
-            onChange={(e) => setGeneral(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault()
-                handleSend()
-              }
-            }}
+            ariaLabel="Overall review comment"
+            onSubmitShortcut={handleSend}
           />
         </div>
 
         <div className="srp-footer">
+          {onCopyComments && (
+            <button
+              className="btn btn-sm"
+              onClick={handleCopy}
+              disabled={count === 0}
+              style={{ marginRight: 'auto' }}
+            >
+              {copied ? 'Copied!' : 'Copy comments'}
+            </button>
+          )}
           <button className="btn btn-sm" onClick={() => setOpen(false)} disabled={sending}>
             Cancel
           </button>
           <button
             className="btn btn-primary btn-sm"
             onClick={handleSend}
-            disabled={count === 0 || sending}
+            disabled={!verdict || sending}
           >
-            {sending ? 'Sending…' : `Send ${count} comment${count === 1 ? '' : 's'}`}
+            {sending ? 'Sending…' : 'Send review'}
           </button>
         </div>
       </div>

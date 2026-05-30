@@ -189,12 +189,15 @@ export class FilePlanStore implements PlanStore {
   private dirPath: string
   private filePath: string
 
-  constructor(customRepoRoot?: string) {
-    if (customRepoRoot) {
-      this.dirPath = join(customRepoRoot, '.diffing')
-    } else {
-      this.dirPath = getProjectStorageDir()
-    }
+  /**
+   * @param storageDir Absolute directory to persist `plans.json` in. Defaults
+   *   to the per-repo storage dir under `~/.diffing`, the same place comments
+   *   and media live — plans are NEVER written inside the reviewed (consumer)
+   *   repo, so a consumer project stays free of any diffing-specific artifacts.
+   *   The override exists only so tests can point at a throwaway temp dir.
+   */
+  constructor(storageDir?: string) {
+    this.dirPath = storageDir ?? getProjectStorageDir()
     this.filePath = join(this.dirPath, 'plans.json')
   }
 

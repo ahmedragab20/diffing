@@ -34,6 +34,9 @@ const DEFAULTS = {
   collapsedContextThreshold: 10,
   expansionLineCount: 20,
   haptics: true,
+  sounds: true,
+  uiFont: null,
+  monoFont: null,
 }
 
 describe('settings', () => {

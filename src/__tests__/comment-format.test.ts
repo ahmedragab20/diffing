@@ -60,6 +60,39 @@ describe('formatComments', () => {
     expect(out).toContain('- a()\n- b()')
   })
 
+  it('stamps the root element with a decision and emits a decision summary', () => {
+    const out = formatComments([base], undefined, 'changes-requested')
+    expect(out).toContain('<code-review-comments decision="changes-requested">')
+    expect(out).toContain('<decision-summary><![CDATA[')
+    expect(out).toContain('REQUESTED EDITS')
+  })
+
+  it('omits the decision attribute and summary when no verdict is given', () => {
+    const out = formatComments([base])
+    expect(out).toContain('<code-review-comments>')
+    expect(out).not.toContain('decision=')
+    expect(out).not.toContain('<decision-summary>')
+  })
+
+  it('emits the envelope for a verdict with zero inline comments', () => {
+    const out = formatComments([], undefined, 'approved')
+    expect(out).toContain('<code-review-comments decision="approved">')
+    expect(out).toContain('<decision-summary><![CDATA[')
+    expect(out).not.toContain('<file ')
+  })
+
+  it('emits the envelope for an overall comment with no inline comments or verdict', () => {
+    const out = formatComments([], 'Ship it once CI is green')
+    expect(out).toContain('<code-review-comments>')
+    expect(out).toContain('<![CDATA[Ship it once CI is green]]>')
+    expect(out).not.toContain('<file ')
+  })
+
+  it('still returns an empty string with no comments, verdict, or overall note', () => {
+    expect(formatComments([])).toBe('')
+    expect(formatComments([], '   ')).toBe('')
+  })
+
   it('renders replies with and without a model', () => {
     const out = formatComments([
       {

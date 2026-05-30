@@ -1,4 +1,4 @@
-import { resolve, isAbsolute } from 'node:path'
+import { resolve, isAbsolute, relative } from 'node:path'
 
 function decodeAndNormalize(p: string): string {
   // Decode URL-encoded characters (e.g. %2e -> ., %2f -> /, %5c -> \)
@@ -12,11 +12,20 @@ function decodeAndNormalize(p: string): string {
   return decoded.replace(/\\/g, '/')
 }
 
-export function isSafePath(relativePath: string, baseDir: string): boolean {
-  const normalized = decodeAndNormalize(relativePath)
-  if (normalized.includes('..') || normalized.includes('\0') || isAbsolute(normalized)) {
-    return false
+export function toSafeRelativePath(filePath: string, baseDir: string): string | null {
+  const normalized = decodeAndNormalize(filePath)
+  if (normalized.includes('..') || normalized.includes('\0')) {
+    return null
   }
   const resolved = resolve(baseDir, normalized)
-  return resolved.startsWith(resolve(baseDir) + '/') || resolved === resolve(baseDir)
+  const resolvedBase = resolve(baseDir)
+  const isSafe = resolved.startsWith(resolvedBase + '/') || resolved === resolvedBase
+  if (!isSafe) {
+    return null
+  }
+  return relative(resolvedBase, resolved)
+}
+
+export function isSafePath(relativePath: string, baseDir: string): boolean {
+  return toSafeRelativePath(relativePath, baseDir) !== null
 }

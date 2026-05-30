@@ -1,5 +1,5 @@
 import { useState, useEffect, memo } from 'react'
-import { GitBranch, Settings, Palette, Search, ClipboardList } from 'lucide-react'
+import { GitBranch, Settings, Palette, Search, ClipboardList, Type } from 'lucide-react'
 import type { DiffOptions } from '../hooks/useDiff'
 import type {
   LineDiffType,
@@ -10,7 +10,7 @@ import type {
 import { Popover } from '../primitives/Popover'
 import { Select } from '../primitives/Select'
 import { SendReviewPopover } from '../components/SendReviewPopover'
-import type { ReviewComment } from '../../lib/types'
+import type { ReviewComment, ReviewDecision } from '../../lib/types'
 
 interface ToolbarProps {
   repoName: string
@@ -38,6 +38,8 @@ interface ToolbarProps {
   fontSize: number
   haptics: boolean
   sounds: boolean
+  uiFont?: string | null
+  monoFont?: string | null
   onDiffStyleChange: (style: 'split' | 'unified') => void
   onDiffOptionsChange: (options: DiffOptions) => void
   onDefaultTabSizeChange: (size: number) => void
@@ -53,9 +55,11 @@ interface ToolbarProps {
   onFontSizeChange: (v: number) => void
   onHapticsChange: (v: boolean) => void
   onSoundsChange: (v: boolean) => void
+  onOpenUiFontModal: () => void
+  onOpenMonoFontModal: () => void
   onOpenSearch: () => void
   onCopyComments: () => Promise<void>
-  onSendToAgent: (generalComment?: string) => Promise<unknown>
+  onSendToAgent: (decision: ReviewDecision, generalComment?: string) => Promise<unknown>
   agentWaiting: boolean
   sending: boolean
   comments: ReviewComment[]
@@ -131,6 +135,8 @@ export const Toolbar = memo(function Toolbar({
   fontSize,
   haptics,
   sounds,
+  uiFont,
+  monoFont,
   onDiffStyleChange,
   onDiffOptionsChange,
   onDefaultTabSizeChange,
@@ -146,6 +152,8 @@ export const Toolbar = memo(function Toolbar({
   onFontSizeChange,
   onHapticsChange,
   onSoundsChange,
+  onOpenUiFontModal,
+  onOpenMonoFontModal,
   onOpenSearch,
   onCopyComments,
   onSendToAgent,
@@ -155,27 +163,18 @@ export const Toolbar = memo(function Toolbar({
   onEditComment,
   onDeleteComment,
 }: ToolbarProps) {
-  const [copied, setCopied] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  // Cmd/Ctrl+, opens the settings panel, matching the platform convention for
-  // preferences. Works regardless of focus (including inside text fields).
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+      if ((e.metaKey || e.ctrlKey) && (e.key === ',' || e.code === 'Comma')) {
         e.preventDefault()
         setSettingsOpen((open) => !open)
       }
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [])
-
-  const handleCopy = async () => {
-    await onCopyComments()
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
 
   return (
     <div className="toolbar">
@@ -215,30 +214,7 @@ export const Toolbar = memo(function Toolbar({
             {pendingPlanCount > 0 && <span className="toolbar-plans-badge">{pendingPlanCount}</span>}
           </button>
         )}
-        <div className="toolbar-toggle">
-          <button
-            className={`btn btn-sm ${diffStyle === 'split' ? 'btn-active' : ''}`}
-            onClick={() => onDiffStyleChange('split')}
-          >
-            Split
-          </button>
-          <button
-            className={`btn btn-sm ${diffStyle === 'unified' ? 'btn-active' : ''}`}
-            onClick={() => onDiffStyleChange('unified')}
-          >
-            Unified
-          </button>
-        </div>
 
-        {/* Theme picker */}
-        <button
-          className="btn btn-sm settings-btn flex-1"
-          title="Switch Theme"
-          onClick={onOpenThemeModal}
-        >
-          <Palette size={14} style={{ marginRight: '6px' }} />
-          <span>Theme</span>
-        </button>
 
         {/* Settings */}
         <Popover
@@ -248,7 +224,7 @@ export const Toolbar = memo(function Toolbar({
           className="settings-popover"
           trigger={
             <button className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`} title="Settings">
-              <Settings size={14} />
+              <Settings size={14} /> Settings
             </button>
           }
         >
@@ -341,6 +317,34 @@ export const Toolbar = memo(function Toolbar({
                 ariaLabel="Default tab size"
               />
             </div>
+            <div className="settings-item settings-item-spaced">
+              <span>UI font</span>
+              <button
+                className="btn btn-sm settings-btn"
+                onClick={() => { setSettingsOpen(false); onOpenUiFontModal() }}
+                style={{ display: 'inline-flex', alignItems: 'center' }}
+                title={uiFont ?? 'Default (Geist Mono)'}
+              >
+                <Type size={13} style={{ marginRight: '4px' }} />
+                <span style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {uiFont ?? 'Default…'}
+                </span>
+              </button>
+            </div>
+            <div className="settings-item settings-item-spaced">
+              <span>Code font</span>
+              <button
+                className="btn btn-sm settings-btn"
+                onClick={() => { setSettingsOpen(false); onOpenMonoFontModal() }}
+                style={{ display: 'inline-flex', alignItems: 'center' }}
+                title={monoFont ?? 'Default (JetBrains Mono)'}
+              >
+                <Type size={13} style={{ marginRight: '4px' }} />
+                <span style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {monoFont ?? 'Default…'}
+                </span>
+              </button>
+            </div>
             <div className="settings-section-label">External tools</div>
             <div className="settings-item settings-item-spaced">
               <span>Browser</span>
@@ -359,6 +363,33 @@ export const Toolbar = memo(function Toolbar({
                 options={IDE_OPTS}
                 ariaLabel="Preferred IDE"
               />
+            </div>
+            <div className="settings-section-label">Review Options</div>
+            <div className="settings-item settings-item-spaced">
+              <span>Diff style</span>
+              <Select
+                value={diffStyle}
+                onValueChange={(v) => onDiffStyleChange(v as 'split' | 'unified')}
+                options={[
+                  { value: 'split', label: 'Split' },
+                  { value: 'unified', label: 'Unified' },
+                ]}
+                ariaLabel="Diff style"
+              />
+            </div>
+            <div className="settings-item settings-item-spaced">
+              <span>Theme</span>
+              <button
+                className="btn btn-sm settings-btn"
+                onClick={() => {
+                  setSettingsOpen(false)
+                  onOpenThemeModal()
+                }}
+                style={{ display: 'inline-flex', alignItems: 'center' }}
+              >
+                <Palette size={14} style={{ marginRight: '4px' }} />
+                <span>Switch Theme...</span>
+              </button>
             </div>
             <div className="settings-section-label">Feedback</div>
             <label className="settings-item">
@@ -379,9 +410,6 @@ export const Toolbar = memo(function Toolbar({
             </label>
           </div>
         </Popover>
-        <button className="btn btn-sm" onClick={handleCopy} disabled={commentCount === 0}>
-          {copied ? 'Copied!' : `Copy comments (${commentCount})`}
-        </button>
         <SendReviewPopover
           comments={comments}
           onEditComment={onEditComment}
@@ -389,6 +417,7 @@ export const Toolbar = memo(function Toolbar({
           onSend={onSendToAgent}
           sending={sending}
           agentWaiting={agentWaiting}
+          onCopyComments={onCopyComments}
         />
       </div>
     </div>

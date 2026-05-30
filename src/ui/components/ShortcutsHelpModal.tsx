@@ -5,6 +5,7 @@ import { Modal } from '../primitives/Modal'
 interface ShortcutsHelpModalProps {
   isOpen: boolean
   onClose: () => void
+  mode?: 'diff' | 'plan'
 }
 
 interface ShortcutItem {
@@ -21,8 +22,9 @@ interface ShortcutCategory {
 export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
   isOpen,
   onClose,
+  mode = 'diff',
 }: ShortcutsHelpModalProps) {
-  const categories: ShortcutCategory[] = [
+  const diffCategories: ShortcutCategory[] = [
     {
       title: 'Scrolling & Diffs',
       icon: <Navigation size={15} />,
@@ -75,53 +77,98 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
     },
   ]
 
+  const planCategories: ShortcutCategory[] = [
+    {
+      title: 'Scrolling & Content',
+      icon: <Navigation size={15} />,
+      items: [
+        { keys: ['j'], description: 'Scroll Down slightly' },
+        { keys: ['k'], description: 'Scroll Up slightly' },
+        { keys: ['Ctrl', 'd'], description: 'Scroll Down half page' },
+        { keys: ['Ctrl', 'u'], description: 'Scroll Up half page' },
+        { keys: ['g', 'g'], description: 'Scroll to Top of plan' },
+        { keys: ['G'], description: 'Scroll to Bottom of plan' },
+      ],
+    },
+    {
+      title: 'Plan Navigation',
+      icon: <Keyboard size={15} />,
+      items: [
+        { keys: ['J'], description: 'Jump to Next Plan in list' },
+        { keys: ['K'], description: 'Jump to Previous Plan in list' },
+        { keys: ['b'], description: 'Toggle Plans Sidebar Panel collapse' },
+      ],
+    },
+    {
+      title: 'Search & Dialogs',
+      icon: <Eye size={15} />,
+      items: [
+        { keys: ['g', 't'], description: 'Open Theme Selection Modal' },
+        { keys: ['?'], description: 'Toggle Keyboard Shortcuts Guide' },
+        { keys: ['Esc'], description: 'Close preview / dialog' },
+      ],
+    },
+    {
+      title: 'Views & Formatting',
+      icon: <MessageSquare size={15} />,
+      items: [
+        { keys: ['m'], description: 'Toggle View Mode (Source / Rendered)' },
+        { keys: ['t'], description: 'Cycle Tab Indentation Size (2 → 4 → 8)' },
+        { keys: ['w'], description: 'Toggle Soft-Wrap Long Lines' },
+        { keys: ['n'], description: 'Toggle Line Numbers' },
+      ],
+    },
+  ]
+
+  const categories = mode === 'plan' ? planCategories : diffCategories
+
   return (
     <Modal open={isOpen} onClose={onClose} className="shortcuts-modal" ariaLabel="Keyboard shortcuts">
-        <div className="shortcuts-header">
-          <div className="shortcuts-header-title">
-            <Keyboard size={18} className="shortcuts-icon" />
-            <h2>Developer Keyboard Shortcuts</h2>
-          </div>
-          <button className="shortcuts-close-btn" onClick={onClose} aria-label="Close dialog">
-            <X size={16} />
-          </button>
+      <div className="shortcuts-header">
+        <div className="shortcuts-header-title">
+          <Keyboard size={18} className="shortcuts-icon" />
+          <h2>Developer Keyboard Shortcuts</h2>
         </div>
+        <button className="shortcuts-close-btn" onClick={onClose} aria-label="Close dialog">
+          <X size={16} />
+        </button>
+      </div>
 
-        <div className="shortcuts-body">
-          <div className="shortcuts-intro">
-            Vim-style keybindings are enabled! Hover, select, and review code entirely from your home keys.
-          </div>
-          
-          <div className="shortcuts-grid">
-            {categories.map((cat, ci) => (
-              <div key={ci} className="shortcuts-section">
-                <h3 className="shortcuts-section-title">
-                  {cat.icon}
-                  <span>{cat.title}</span>
-                </h3>
-                <div className="shortcuts-list">
-                  {cat.items.map((item, ii) => (
-                    <div key={ii} className="shortcuts-row">
-                      <span className="shortcuts-desc">{item.description}</span>
-                      <div className="shortcuts-keys">
-                        {item.keys.map((k, ki) => (
-                          <span key={ki}>
-                            <kbd className="vim-kbd">{k}</kbd>
-                            {ki < item.keys.length - 1 && <span className="kbd-plus">+</span>}
-                          </span>
-                        ))}
-                      </div>
+      <div className="shortcuts-body">
+        <div className="shortcuts-intro">
+          Vim-style keybindings are enabled! Navigate and review plans entirely from your home keys.
+        </div>
+        
+        <div className="shortcuts-grid">
+          {categories.map((cat, ci) => (
+            <div key={ci} className="shortcuts-section">
+              <h3 className="shortcuts-section-title">
+                {cat.icon}
+                <span>{cat.title}</span>
+              </h3>
+              <div className="shortcuts-list">
+                {cat.items.map((item, ii) => (
+                  <div key={ii} className="shortcuts-row">
+                    <span className="shortcuts-desc">{item.description}</span>
+                    <div className="shortcuts-keys">
+                      {item.keys.map((k, ki) => (
+                        <span key={ki}>
+                          <kbd className="vim-kbd">{k}</kbd>
+                          {ki < item.keys.length - 1 && <span className="kbd-plus">+</span>}
+                        </span>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
+      </div>
 
-        <div className="shortcuts-footer">
-          Press <kbd className="vim-kbd-small">?</kbd> to dismiss this menu at any time.
-        </div>
+      <div className="shortcuts-footer">
+        Press <kbd className="vim-kbd-small">?</kbd> to dismiss this menu at any time.
+      </div>
     </Modal>
   )
 })

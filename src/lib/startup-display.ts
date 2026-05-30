@@ -41,7 +41,6 @@ const PALETTES: Palette[] = [
 interface Quote { text: string; author: string }
 
 const QUOTES: Quote[] = [
-  // Motivational
   { text: 'The best code is no code at all.', author: 'Jeff Atwood' },
   { text: 'Programs must be written for people to read, and only incidentally for machines to execute.', author: 'Abelson & Sussman' },
   { text: 'Make it work, make it right, make it fast.', author: 'Kent Beck' },
@@ -54,7 +53,6 @@ const QUOTES: Quote[] = [
   { text: 'The most dangerous phrase is "we\'ve always done it this way".', author: 'Grace Hopper' },
   { text: 'Architecture is the decisions you wish you could get right early in a project.', author: 'Martin Fowler' },
   { text: 'The best error message is the one that never shows up.', author: 'Thomas Fuchs' },
-  // Funny
   { text: 'It works on my machine.', author: 'Every developer, always' },
   { text: 'git blame yourself.', author: 'The terminal' },
   { text: 'There are only two hard things in CS: cache invalidation, naming things, and off-by-one errors.', author: 'Unknown' },
@@ -64,7 +62,6 @@ const QUOTES: Quote[] = [
   { text: "I don't always test my code, but when I do, I do it in production.", author: 'Unknown' },
   { text: 'A QA engineer walks into a bar. Orders 0 beers. Orders 999999 beers. Orders NULL beers. Walks in through the window.', author: 'Unknown' },
   { text: 'To understand recursion, you must first understand recursion.', author: 'Unknown' },
-  // Redpill
   { text: 'The code review is the product.', author: 'diffing' },
   { text: "Your abstractions are just someone else's bugs.", author: 'Unknown' },
   { text: "Every rewrite is a confession that you didn't understand the problem the first time.", author: 'Unknown' },

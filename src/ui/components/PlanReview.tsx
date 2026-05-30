@@ -10,15 +10,18 @@ import { usePlans } from '../hooks/usePlans'
 import { CommentForm } from './CommentForm'
 import { PlanCommentBubble } from './PlanCommentBubble'
 import { SubmitPlanReviewPopover } from './SubmitPlanReviewPopover'
+import { FilePreviewModal } from './FilePreviewModal'
 
 interface PlanReviewProps {
   plan: Plan
   theme: string
   fontSize: number
+  monoFontFamily: string
   defaultTabSize: number
   lineWrap: boolean
   showLineNumbers: boolean
   lineHoverHighlight: LineHoverHighlight
+  viewMode: 'source' | 'rendered'
 }
 
 interface PendingComment {
@@ -39,10 +42,12 @@ export function PlanReview({
   plan,
   theme,
   fontSize,
+  monoFontFamily,
   defaultTabSize,
   lineWrap,
   showLineNumbers,
   lineHoverHighlight,
+  viewMode,
 }: PlanReviewProps) {
   const {
     addPlanComment,
@@ -58,14 +63,26 @@ export function PlanReview({
     agentWaiting,
   } = usePlans()
 
-  const [viewMode, setViewMode] = useState<'source' | 'rendered'>('source')
   const [pending, setPending] = useState<PendingComment | null>(null)
   const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
   const [liveSelectionCount, setLiveSelectionCount] = useState(0)
-  const [showGeneralForm, setShowGeneralForm] = useState(false)
+  const [previewFilePath, setPreviewFilePath] = useState<string | null>(null)
+
+  const handleMarkdownClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement
+    const anchor = target.closest('a')
+    if (anchor) {
+      const href = anchor.getAttribute('href')
+      if (href && href.startsWith('file:///')) {
+        e.preventDefault()
+        const absolutePath = href.replace('file://', '')
+        setPreviewFilePath(absolutePath)
+      }
+    }
+  }
 
   const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP.nord
-  const unsafeCSS = useMemo(() => buildPlanCSS(defaultTabSize, fontSize), [defaultTabSize, fontSize])
+  const unsafeCSS = useMemo(() => buildPlanCSS(defaultTabSize, fontSize, monoFontFamily), [defaultTabSize, fontSize, monoFontFamily])
 
   const comments = plan.comments ?? []
   const lineComments = comments.filter((c) => c.lineNumber > 0)
@@ -165,37 +182,7 @@ export function PlanReview({
             )}
           </div>
         </div>
-        <div className="plan-review-head-actions">
-          <div className="plan-view-toggle">
-            <button
-              className={`btn btn-sm ${viewMode === 'source' ? 'btn-active' : ''}`}
-              onClick={() => setViewMode('source')}
-              title="Source view — comment on specific lines"
-            >
-              <Code2 size={13} style={{ marginRight: '4px' }} />
-              Source
-            </button>
-            <button
-              className={`btn btn-sm ${viewMode === 'rendered' ? 'btn-active' : ''}`}
-              onClick={() => setViewMode('rendered')}
-              title="Rendered markdown preview"
-            >
-              <FileText size={13} style={{ marginRight: '4px' }} />
-              Rendered
-            </button>
-          </div>
-          <button className="btn btn-sm" onClick={() => setShowGeneralForm((v) => !v)} title="Comment on the whole plan">
-            <MessageSquarePlus size={13} style={{ marginRight: '4px' }} />
-            General comment
-          </button>
-          <SubmitPlanReviewPopover
-            openCommentCount={openCount}
-            onSubmit={(verdict, comment) => submitDecision(plan.id, verdict, comment)}
-            submitting={submitting}
-            agentWaiting={agentWaiting}
-            currentDecision={plan.decision}
-          />
-        </div>
+
       </div>
 
       {plan.decision !== 'pending' && (
@@ -203,12 +190,17 @@ export function PlanReview({
           <DecisionIcon size={15} aria-hidden="true" />
           <div className="plan-decision-banner-text">
             <strong>{decision.label}</strong>
-            {plan.decisionComment && <span className="plan-decision-banner-note">{plan.decisionComment}</span>}
+            {plan.decisionComment && (
+              <span
+                className="plan-decision-banner-note markdown-body"
+                dangerouslySetInnerHTML={{ __html: parseMarkdown(plan.decisionComment) }}
+              />
+            )}
           </div>
         </div>
       )}
 
-      {(generalComments.length > 0 || showGeneralForm) && (
+      {generalComments.length > 0 && (
         <div className="plan-general-section">
           <div className="plan-general-header">
             <MessageSquarePlus size={14} />
@@ -227,24 +219,15 @@ export function PlanReview({
               onDeleteReply={(replyId) => removePlanReply(plan.id, c.id, replyId)}
             />
           ))}
-          {showGeneralForm && (
-            <div className="plan-general-form">
-              <CommentForm
-                draftKey={`plan-general:${plan.id}`}
-                lineContent=""
-                onSubmit={(body) => {
-                  addPlanComment({ planId: plan.id, lineNumber: 0, lineContent: '', body })
-                  setShowGeneralForm(false)
-                }}
-                onCancel={() => setShowGeneralForm(false)}
-              />
-            </div>
-          )}
         </div>
       )}
 
       {viewMode === 'rendered' ? (
-        <div className="markdown-body plan-rendered" dangerouslySetInnerHTML={{ __html: parseMarkdown(plan.body) }} />
+        <div
+          className="markdown-body plan-rendered"
+          dangerouslySetInnerHTML={{ __html: parseMarkdown(plan.body) }}
+          onClick={handleMarkdownClick}
+        />
       ) : (
         <div className="plan-file">
           <DiffsFile<PlanAnnotationMeta>
@@ -294,22 +277,27 @@ export function PlanReview({
           />
         </div>
       )}
+      <FilePreviewModal
+        isOpen={!!previewFilePath}
+        filePath={previewFilePath}
+        onClose={() => setPreviewFilePath(null)}
+      />
     </div>
   )
 }
 
-function buildPlanCSS(tabSize: number, fontSize: number): string {
+function buildPlanCSS(tabSize: number, fontSize: number, fontFamily: string): string {
   return `
     :host {
       --diffs-tab-size: ${tabSize} !important;
-      --diffs-font-family: var(--font-mono) !important;
+      --diffs-font-family: ${fontFamily} !important;
       --diffs-font-size: ${fontSize}px !important;
       --diffs-border: var(--border-normal) !important;
       --diffs-bg: var(--bg-secondary) !important;
       --diffs-line-height: ${Math.round(fontSize * 1.7)}px !important;
     }
-    [data-column-number], [data-line] {
-      font-family: var(--font-mono) !important;
+    [data-column-number], [data-line], [data-line] * {
+      font-family: ${fontFamily} !important;
       font-size: ${fontSize}px !important;
       font-variant-ligatures: common-ligatures !important;
       font-feature-settings: "liga" on, "calt" on !important;

@@ -1,16 +1,32 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { preloadHighlighter } from '@pierre/diffs'
 import { useWorkerPool } from '@pierre/diffs/react'
-import { ArrowLeft, Palette, ClipboardList } from 'lucide-react'
-import { useSettings } from '../hooks/useSettings'
+import { ArrowLeft, Palette, ClipboardList, Settings, Code2, FileText } from 'lucide-react'
+import { useSettings, resolveMonoFont } from '../hooks/useSettings'
+import { useApplyFonts } from '../hooks/useApplyFonts'
 import { usePlans } from '../hooks/usePlans'
 import { useRoutePath, navigate } from '../router'
 import { SHIKI_THEME_MAP } from '../utils'
-import { HapticsProvider } from '../hooks/useHaptics'
+import { HapticsProvider, playSound, fireFeedback } from '../hooks/useHaptics'
+import { getUiStateItem, setUiStateItem } from "../utils/uiState"
 import { PlanReview } from './PlanReview'
 import { PlanList } from './PlanList'
 import { ThemeModal } from './ThemeModal'
 import { AgentActivityToast } from './AgentActivityToast'
+import { Popover } from '../primitives/Popover'
+import { Select } from '../primitives/Select'
+import { SubmitPlanReviewPopover } from './SubmitPlanReviewPopover'
+import { VimStatusBar } from './VimStatusBar'
+import { ShortcutsHelpModal } from './ShortcutsHelpModal'
+
+const FONT_SIZE_OPTS = [11, 12, 13, 14, 15, 16].map((n) => ({ value: String(n), label: `${n}px` }))
+const TAB_SIZE_OPTS = [2, 4, 8].map((n) => ({ value: String(n), label: String(n) }))
+const HOVER_OPTS = [
+  { value: 'both', label: 'Both' },
+  { value: 'line', label: 'Line only' },
+  { value: 'number', label: 'Number only' },
+  { value: 'disabled', label: 'Disabled' },
+]
 
 /**
  * Top-level surface for the `/plan` route. The plan-review twin of {@link App}:
@@ -20,10 +36,41 @@ import { AgentActivityToast } from './AgentActivityToast'
  */
 export function PlanReviewApp() {
   const poolManager = useWorkerPool()
-  const { settings, updateSettings } = useSettings()
-  const { plans, getPlan, removePlan, agentActivity, clearAgentActivity } = usePlans()
+  const { settings, loaded, updateSettings } = useSettings()
+  useApplyFonts(loaded, settings.uiFont, settings.monoFont)
+  const { plans, getPlan, removePlan, agentActivity, clearAgentActivity, submitDecision, submitting, agentWaiting } = usePlans()
   const path = useRoutePath()
   const [themeModalOpen, setThemeModalOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === ',' || e.code === 'Comma')) {
+        e.preventDefault()
+        setSettingsOpen((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [])
+
+  // Persisted viewMode state: source or rendered
+  const [viewMode, setViewMode] = useState<'source' | 'rendered'>(() => {
+    try {
+      const stored = getUiStateItem("diffing-plan-view-mode")
+      return stored === 'rendered' ? 'rendered' : 'source'
+    } catch {
+      return 'source'
+    }
+  })
+
+  const handleViewModeChange = useCallback((mode: 'source' | 'rendered') => {
+    setViewMode(mode)
+    try {
+      setUiStateItem("diffing-plan-view-mode", mode)
+    } catch {}
+  }, [])
 
   const routeId = useMemo(() => {
     const m = /^\/plan\/([^/]+)/.exec(path)
@@ -73,9 +120,274 @@ export function PlanReviewApp() {
     preloadHighlighter({ themes: Array.from(new Set([dark, light])), langs: [] }).catch(() => {})
   }, [shikiConfig])
 
+  // Collapsible plans sidebar states matching App.tsx
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return getUiStateItem("diffing-sidebar-collapsed") === "true"
+    } catch {
+      return false
+    }
+  })
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const stored = getUiStateItem("diffing-sidebar-width")
+      return stored ? Number(stored) : 320
+    } catch {
+      return 320
+    }
+  })
+
+  useEffect(() => {
+    try {
+      setUiStateItem("diffing-sidebar-collapsed", String(sidebarCollapsed))
+    } catch {}
+  }, [sidebarCollapsed])
+
+  const sidebarWidthRef = useRef(sidebarWidth)
+  sidebarWidthRef.current = sidebarWidth
+  const appRef = useRef<HTMLDivElement>(null)
+  const sidebarRef = useRef<HTMLElement>(null)
+  const sidebarGuideRef = useRef<HTMLDivElement>(null)
+
+  const SIDEBAR_MIN_WIDTH = 240
+  const SIDEBAR_MAX_WIDTH = 640
+
+  const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = sidebarWidthRef.current
+    const sidebarEl = sidebarRef.current
+    const guideEl = sidebarGuideRef.current
+    const sidebarLeft = sidebarEl ? sidebarEl.getBoundingClientRect().left : 0
+    let latestWidth = startWidth
+    let rafId = 0
+
+    const flush = () => {
+      rafId = 0
+      if (guideEl) guideEl.style.transform = `translateX(${sidebarLeft + latestWidth}px)`
+    }
+
+    if (guideEl) {
+      guideEl.style.transform = `translateX(${sidebarLeft + startWidth}px)`
+      guideEl.classList.add("sidebar-resize-guide-active")
+    }
+
+    const handleMove = (ev: MouseEvent) => {
+      const delta = ev.clientX - startX
+      latestWidth = Math.max(
+        SIDEBAR_MIN_WIDTH,
+        Math.min(SIDEBAR_MAX_WIDTH, startWidth + delta),
+      )
+      if (!rafId) rafId = requestAnimationFrame(flush)
+    }
+
+    const handleUp = () => {
+      if (rafId) cancelAnimationFrame(rafId)
+      if (guideEl) guideEl.classList.remove("sidebar-resize-guide-active")
+      setSidebarWidth(latestWidth)
+      try {
+        setUiStateItem("diffing-sidebar-width", String(latestWidth))
+      } catch {}
+      document.removeEventListener('mousemove', handleMove)
+      document.removeEventListener('mouseup', handleUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    document.addEventListener('mousemove', handleMove)
+    document.addEventListener('mouseup', handleUp)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [])
+
+  // Vim keyboard shortcuts
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed(c => !c)
+  }, [])
+
+  const toggleLineWrap = useCallback(() => {
+    updateSettings({ lineWrap: !settings.lineWrap })
+  }, [settings.lineWrap, updateSettings])
+
+  const toggleLineNumbers = useCallback(() => {
+    updateSettings({ showLineNumbers: !settings.showLineNumbers })
+  }, [settings.showLineNumbers, updateSettings])
+
+  const toggleViewMode = useCallback(() => {
+    handleViewModeChange(viewMode === 'source' ? 'rendered' : 'source')
+  }, [viewMode, handleViewModeChange])
+
+  const cycleTabSize = useCallback(() => {
+    const sizes = [2, 4, 8]
+    const current = settings.defaultTabSize || 4
+    const nextIndex = (sizes.indexOf(current) + 1) % sizes.length
+    updateSettings({ defaultTabSize: sizes[nextIndex] })
+  }, [settings.defaultTabSize, updateSettings])
+
+  const navigatePlan = useCallback((direction: 'next' | 'prev') => {
+    if (plans.length === 0) return
+    const sorted = [...plans].sort((a, b) => b.createdAt - a.createdAt)
+    let nextIndex = 0
+    if (activePlan) {
+      const currentIndex = sorted.findIndex(p => p.id === activePlan.id)
+      if (currentIndex !== -1) {
+        if (direction === 'next') {
+          nextIndex = Math.min(currentIndex + 1, sorted.length - 1)
+        } else {
+          nextIndex = Math.max(currentIndex - 1, 0)
+        }
+      }
+    }
+    const nextPlan = sorted[nextIndex]
+    navigate(`/plan/${nextPlan.id}`)
+  }, [plans, activePlan])
+
+  useEffect(() => {
+    let keyBuffer = ''
+    let bufferTimeout: NodeJS.Timeout
+    let lastNavSound = 0
+
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const active = document.activeElement
+      if (active) {
+        const tag = active.tagName.toLowerCase()
+        if (
+          tag === 'input' ||
+          tag === 'textarea' ||
+          active.hasAttribute('contenteditable')
+        ) {
+          return
+        }
+      }
+
+      clearTimeout(bufferTimeout)
+      const key = e.key
+
+      if (e.ctrlKey) {
+        if (key === 'd') {
+          e.preventDefault()
+          window.scrollBy({ top: window.innerHeight / 2, behavior: 'auto' })
+          fireFeedback('selection', 'navigate')
+          keyBuffer = ''
+        } else if (key === 'u') {
+          e.preventDefault()
+          window.scrollBy({ top: -window.innerHeight / 2, behavior: 'auto' })
+          fireFeedback('selection', 'navigate')
+          keyBuffer = ''
+        }
+        return
+      }
+
+      if (key.length > 1 && key !== 'Escape' && key !== 'Enter') return
+
+      keyBuffer += key
+      bufferTimeout = setTimeout(() => {
+        keyBuffer = ''
+      }, 800)
+
+      if (keyBuffer === 'j') {
+        e.preventDefault()
+        window.scrollBy({ top: 100, behavior: 'auto' })
+        const now = Date.now()
+        if (now - lastNavSound > 80) { playSound('navigate'); lastNavSound = now; }
+        keyBuffer = ''
+      } else if (keyBuffer === 'k') {
+        e.preventDefault()
+        window.scrollBy({ top: -100, behavior: 'auto' })
+        const now = Date.now()
+        if (now - lastNavSound > 80) { playSound('navigate'); lastNavSound = now; }
+        keyBuffer = ''
+      } else if (keyBuffer === 'gg') {
+        e.preventDefault()
+        window.scrollTo({ top: 0, behavior: 'auto' })
+        fireFeedback('selection', 'navigate')
+        keyBuffer = ''
+      } else if (keyBuffer === 'G') {
+        e.preventDefault()
+        window.scrollTo({
+          top: document.documentElement.scrollHeight,
+          behavior: 'auto',
+        })
+        fireFeedback('selection', 'navigate')
+        keyBuffer = ''
+      } else if (keyBuffer === 'J') {
+        e.preventDefault()
+        navigatePlan('next')
+        fireFeedback('selection', 'navigate')
+        keyBuffer = ''
+      } else if (keyBuffer === 'K') {
+        e.preventDefault()
+        navigatePlan('prev')
+        fireFeedback('selection', 'navigate')
+        keyBuffer = ''
+      } else if (keyBuffer === 'm') {
+        e.preventDefault()
+        toggleViewMode()
+        fireFeedback('selection', 'toggle')
+        keyBuffer = ''
+      } else if (keyBuffer === 't') {
+        e.preventDefault()
+        cycleTabSize()
+        fireFeedback('selection', 'toggle')
+        keyBuffer = ''
+      } else if (keyBuffer === 'b') {
+        e.preventDefault()
+        toggleSidebar()
+        fireFeedback('selection', 'toggle')
+        keyBuffer = ''
+      } else if (keyBuffer === 'w') {
+        e.preventDefault()
+        toggleLineWrap()
+        fireFeedback('selection', 'toggle')
+        keyBuffer = ''
+      } else if (keyBuffer === 'n') {
+        e.preventDefault()
+        toggleLineNumbers()
+        fireFeedback('selection', 'toggle')
+        keyBuffer = ''
+      } else if (keyBuffer === 'gt') {
+        e.preventDefault()
+        setThemeModalOpen(true)
+        fireFeedback('medium', 'open')
+        keyBuffer = ''
+      } else if (keyBuffer === '?') {
+        e.preventDefault()
+        setShortcutsHelpOpen(true)
+        fireFeedback('medium', 'open')
+        keyBuffer = ''
+      } else if (keyBuffer.length >= 2) {
+        keyBuffer = ''
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown)
+    }
+  }, [toggleSidebar, toggleLineWrap, toggleLineNumbers, toggleViewMode, cycleTabSize, navigatePlan])
+
+  const openCommentCount = useMemo(() => {
+    if (!activePlan) return 0
+    return (activePlan.comments ?? []).filter((c) => c.status === 'open').length
+  }, [activePlan])
+
   return (
     <HapticsProvider enabled={settings.haptics ?? true} soundsEnabled={settings.sounds ?? true}>
-      <div className="app plan-app">
+      <div
+        className="app plan-app"
+        ref={appRef}
+        style={
+          {
+            "--sidebar-width": `${sidebarWidth}px`,
+          } as React.CSSProperties
+        }
+      >
+        <div
+          className="sidebar-resize-guide"
+          ref={sidebarGuideRef}
+          aria-hidden="true"
+        />
+
         <div className="toolbar plan-app-toolbar">
           <div className="toolbar-left">
             <button className="btn btn-sm" onClick={() => navigate('/')} title="Back to the diff review">
@@ -91,25 +403,136 @@ export function PlanReviewApp() {
             </span>
           </div>
           <div className="toolbar-right">
-            <button className="btn btn-sm settings-btn" title="Switch theme" onClick={() => setThemeModalOpen(true)}>
-              <Palette size={14} style={{ marginRight: '6px' }} />
-              <span>Theme</span>
-            </button>
+            {/* Settings Popover for Plans page */}
+            <Popover
+              open={settingsOpen}
+              onOpenChange={setSettingsOpen}
+              ariaLabel="Settings"
+              className="settings-popover"
+              trigger={
+                <button className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`} title="Settings">
+                  <Settings size={14} /> Settings
+                </button>
+              }
+            >
+              <div className="popover-scroll settings-panel">
+                <div className="settings-section-label">Review Options</div>
+                <div className="settings-item settings-item-spaced">
+                  <span>View mode</span>
+                  <Select
+                    value={viewMode}
+                    onValueChange={(v) => handleViewModeChange(v as 'source' | 'rendered')}
+                    options={[
+                      { value: 'source', label: 'Source (commentable)' },
+                      { value: 'rendered', label: 'Rendered (markdown)' },
+                    ]}
+                    ariaLabel="Plan view mode"
+                  />
+                </div>
+                <div className="settings-item settings-item-spaced">
+                  <span>Theme</span>
+                  <button
+                    className="btn btn-sm settings-btn"
+                    onClick={() => {
+                      setSettingsOpen(false)
+                      setThemeModalOpen(true)
+                    }}
+                    style={{ display: 'inline-flex', alignItems: 'center' }}
+                  >
+                    <Palette size={14} style={{ marginRight: '4px' }} />
+                    <span>Switch Theme...</span>
+                  </button>
+                </div>
+
+                <div className="settings-section-label">Display</div>
+                <label className="settings-item">
+                  <input
+                    type="checkbox"
+                    checked={settings.lineWrap}
+                    onChange={(e) => updateSettings({ lineWrap: e.target.checked })}
+                  />
+                  Wrap long lines
+                </label>
+                <label className="settings-item">
+                  <input
+                    type="checkbox"
+                    checked={settings.showLineNumbers}
+                    onChange={(e) => updateSettings({ showLineNumbers: e.target.checked })}
+                  />
+                  Show line numbers
+                </label>
+                <div className="settings-item settings-item-spaced">
+                  <span>Hover highlight</span>
+                  <Select
+                    value={settings.lineHoverHighlight}
+                    onValueChange={(v) => updateSettings({ lineHoverHighlight: v as any })}
+                    options={HOVER_OPTS}
+                    ariaLabel="Hover highlight"
+                  />
+                </div>
+                <div className="settings-item settings-item-spaced">
+                  <span>Font size</span>
+                  <Select
+                    value={String(settings.fontSize)}
+                    onValueChange={(v) => updateSettings({ fontSize: Number(v) })}
+                    options={FONT_SIZE_OPTS}
+                    ariaLabel="Font size"
+                  />
+                </div>
+                <div className="settings-item settings-item-spaced">
+                  <span>Default tab size</span>
+                  <Select
+                    value={String(settings.defaultTabSize)}
+                    onValueChange={(v) => updateSettings({ defaultTabSize: Number(v) })}
+                    options={TAB_SIZE_OPTS}
+                    ariaLabel="Default tab size"
+                  />
+                </div>
+              </div>
+            </Popover>
+
+            {activePlan && (
+              <SubmitPlanReviewPopover
+                openCommentCount={openCommentCount}
+                onSubmit={(verdict, comment) => submitDecision(activePlan.id, verdict, comment)}
+                submitting={submitting}
+                agentWaiting={agentWaiting}
+                currentDecision={activePlan.decision}
+              />
+            )}
           </div>
         </div>
 
         <div className="app-body">
-          <aside className="sidebar plan-sidebar">
-            <PlanList
-              plans={plans}
-              activeId={activePlan?.id ?? null}
-              onSelect={(id) => navigate(`/plan/${id}`)}
-              onDelete={(id) => {
-                removePlan(id)
-                if (activePlan?.id === id) navigate('/plan')
-              }}
-            />
+          <aside
+            ref={sidebarRef}
+            className={`sidebar plan-sidebar ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}
+          >
+            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <PlanList
+                plans={plans}
+                activeId={activePlan?.id ?? null}
+                onSelect={(id) => navigate(`/plan/${id}`)}
+                onDelete={(id) => {
+                  removePlan(id)
+                  if (activePlan?.id === id) navigate('/plan')
+                }}
+                collapsed={sidebarCollapsed}
+                onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+              />
+            </div>
           </aside>
+          {!sidebarCollapsed && (
+            <div
+              className="sidebar-resize-handle"
+              onMouseDown={handleSidebarResizeStart}
+              role="separator"
+              aria-label="Resize sidebar"
+              aria-orientation="vertical"
+              tabIndex={0}
+            />
+          )}
+
           <main className="main plan-main">
             {activePlan ? (
               <PlanReview
@@ -117,10 +540,12 @@ export function PlanReviewApp() {
                 plan={activePlan}
                 theme={settings.theme || 'nord'}
                 fontSize={settings.fontSize}
+                monoFontFamily={resolveMonoFont(settings.monoFont)}
                 defaultTabSize={settings.defaultTabSize}
                 lineWrap={settings.lineWrap}
                 showLineNumbers={settings.showLineNumbers}
                 lineHoverHighlight={settings.lineHoverHighlight}
+                viewMode={viewMode}
               />
             ) : (
               <PlanEmptyState hasPlans={plans.length > 0} notFound={!!routeId} />
@@ -144,6 +569,16 @@ export function PlanReviewApp() {
           onJump={() => {
             if (agentActivity) navigate(`/plan/${agentActivity.planId}`)
           }}
+        />
+        <VimStatusBar
+          activeFile={activePlan ? activePlan.title : null}
+          onShowHelp={() => setShortcutsHelpOpen(true)}
+          placeholder="No active plan (J/K to jump)"
+        />
+        <ShortcutsHelpModal
+          isOpen={shortcutsHelpOpen}
+          onClose={() => setShortcutsHelpOpen(false)}
+          mode="plan"
         />
       </div>
     </HapticsProvider>

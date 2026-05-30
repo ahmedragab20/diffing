@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isSafePath } from '../lib/path.js'
+import { isSafePath, toSafeRelativePath } from '../lib/path.js'
 
 describe('isSafePath', () => {
   const baseDir = '/home/user/project'
@@ -24,8 +24,12 @@ describe('isSafePath', () => {
     expect(isSafePath('src/\0malicious', baseDir)).toBe(false)
   })
 
-  it('rejects an absolute path', () => {
+  it('rejects an absolute path outside baseDir', () => {
     expect(isSafePath('/etc/passwd', baseDir)).toBe(false)
+  })
+
+  it('allows an absolute path inside the baseDir', () => {
+    expect(isSafePath('/home/user/project/src/index.ts', baseDir)).toBe(true)
   })
 
   it('rejects URL-encoded path traversal (%2e%2e)', () => {
@@ -55,5 +59,23 @@ describe('isSafePath', () => {
   it('returns false for baseDir mismatch', () => {
     const result = isSafePath('src/../../other', baseDir)
     expect(result).toBe(false)
+  })
+
+  describe('toSafeRelativePath', () => {
+    it('resolves a safe relative path to itself', () => {
+      expect(toSafeRelativePath('src/index.ts', baseDir)).toBe('src/index.ts')
+    })
+
+    it('resolves a safe absolute path to a relative path', () => {
+      expect(toSafeRelativePath('/home/user/project/src/index.ts', baseDir)).toBe('src/index.ts')
+    })
+
+    it('returns null for an absolute path outside baseDir', () => {
+      expect(toSafeRelativePath('/etc/passwd', baseDir)).toBeNull()
+    })
+
+    it('returns null for parent directory traversal', () => {
+      expect(toSafeRelativePath('../etc/passwd', baseDir)).toBeNull()
+    })
   })
 })

@@ -31,6 +31,8 @@ const defaultSettings = {
   expansionLineCount: 20,
   haptics: true,
   sounds: true,
+  uiFont: null,
+  monoFont: null,
 }
 
 describe('useSettings', () => {

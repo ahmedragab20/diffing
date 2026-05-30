@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Check, MessageSquareWarning, X, ClipboardCheck } from 'lucide-react'
+import { Check, MessageSquareWarning, X, ClipboardCheck, RefreshCw } from 'lucide-react'
 import type { PlanDecision } from '../../lib/plan-types'
 import { useFeedback } from '../hooks/useHaptics'
 import { Popover } from '../primitives/Popover'
+import { MarkdownField } from './MarkdownField'
 
 interface SubmitPlanReviewPopoverProps {
   openCommentCount: number
@@ -79,16 +80,26 @@ export function SubmitPlanReviewPopover({
           className="btn btn-primary btn-sm"
           disabled={submitting}
           title={agentWaiting ? 'An agent is connected and waiting for your verdict' : 'Submit your verdict on this plan'}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
           {agentWaiting && <span className="agent-waiting-dot" aria-hidden="true" />}
-          {submitting ? 'Submitting…' : alreadyDecided ? 'Update review' : 'Submit review'}
+          {alreadyDecided ? (
+            <RefreshCw size={14} />
+          ) : (
+            <ClipboardCheck size={14} />
+          )}
+          <span>{submitting ? 'Submitting…' : alreadyDecided ? 'Update review' : 'Submit review'}</span>
         </button>
       }
     >
       <div className="srp">
         <div className="srp-head">
-          <ClipboardCheck size={15} aria-hidden="true" />
-          <span className="srp-title">Submit plan review</span>
+          {alreadyDecided ? (
+            <RefreshCw size={15} aria-hidden="true" />
+          ) : (
+            <ClipboardCheck size={15} aria-hidden="true" />
+          )}
+          <span className="srp-title">{alreadyDecided ? 'Update plan review' : 'Submit plan review'}</span>
           {openCommentCount > 0 && (
             <span className="srp-count">
               {openCommentCount} open comment{openCommentCount === 1 ? '' : 's'}
@@ -124,21 +135,17 @@ export function SubmitPlanReviewPopover({
 
         <div className="srp-general">
           <label className="srp-general-label" htmlFor="plan-decision-comment">
-            Overall comment <span className="srp-optional">(optional)</span>
+            Overall comment <span className="srp-optional">(optional · Markdown)</span>
           </label>
-          <textarea
+          <MarkdownField
             id="plan-decision-comment"
-            className="srp-general-input"
             value={comment}
+            onChange={setComment}
+            textareaClassName="srp-general-input"
             placeholder="Add an overall note for the agent that applies to the whole plan…"
             rows={3}
-            onChange={(e) => setComment(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault()
-                handleSubmit()
-              }
-            }}
+            ariaLabel="Overall plan review comment"
+            onSubmitShortcut={handleSubmit}
           />
         </div>
 

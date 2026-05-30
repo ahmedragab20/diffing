@@ -23,9 +23,11 @@ import { useComments } from "./hooks/useComments";
 import { usePlans } from "./hooks/usePlans";
 import { navigate } from "./router";
 import { useMergeStatus } from "./hooks/useMergeStatus";
-import { useSettings } from "./hooks/useSettings";
+import { useSettings, resolveMonoFont } from "./hooks/useSettings";
+import { useApplyFonts } from "./hooks/useApplyFonts";
 import { useViewed } from "./hooks/useViewed";
 import { HapticsProvider, playSound, fireFeedback } from "./hooks/useHaptics";
+import { getUiStateItem, setUiStateItem } from "./utils/uiState";
 import { useDiffSearch } from "./hooks/useDiffSearch";
 import { Toolbar } from "./components/Toolbar";
 import { DiffViewer } from "./components/DiffViewer";
@@ -37,7 +39,8 @@ import type { Scope } from "./lib/searchTypes";
 import { VimStatusBar } from "./components/VimStatusBar";
 import { ShortcutsHelpModal } from "./components/ShortcutsHelpModal";
 import { AgentActivityToast } from "./components/AgentActivityToast";
-import { ThemeModal } from "./components/ThemeModal";
+import { ThemeModal } from "./components/ThemeModal"
+import { FontPickerModal } from "./components/FontPickerModal";
 
 
 export function App() {
@@ -73,14 +76,14 @@ export function App() {
     const [activeFile, setActiveFile] = useState<string | null>(null);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
         try {
-            return localStorage.getItem("diffing-sidebar-collapsed") === "true";
+            return getUiStateItem("diffing-sidebar-collapsed") === "true";
         } catch {
             return false;
         }
     });
     const [sidebarWidth, setSidebarWidth] = useState(() => {
         try {
-            const stored = localStorage.getItem("diffing-sidebar-width");
+            const stored = getUiStateItem("diffing-sidebar-width");
             return stored ? Number(stored) : 320;
         } catch {
             return 320;
@@ -144,7 +147,7 @@ export function App() {
             // Single, one-time width commit -> one reflow of the diff.
             setSidebarWidth(latestWidth);
             try {
-                localStorage.setItem("diffing-sidebar-width", String(latestWidth));
+                setUiStateItem("diffing-sidebar-width", String(latestWidth));
             } catch {}
             document.removeEventListener('mousemove', handleMove);
             document.removeEventListener('mouseup', handleUp);
@@ -172,9 +175,11 @@ export function App() {
     );
     const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
     const [themeModalOpen, setThemeModalOpen] = useState(false);
+    const [uiFontModalOpen, setUiFontModalOpen] = useState(false);
+    const [monoFontModalOpen, setMonoFontModalOpen] = useState(false);
     const [commentPanelHeight, setCommentPanelHeight] = useState(() => {
         try {
-            const stored = localStorage.getItem("diffing-comment-panel-height");
+            const stored = getUiStateItem("diffing-comment-panel-height");
             return stored ? Number(stored) : 220;
         } catch {
             return 220;
@@ -206,7 +211,7 @@ export function App() {
             if (rafId) cancelAnimationFrame(rafId);
             setCommentPanelHeight(latestHeight);
             try {
-                localStorage.setItem("diffing-comment-panel-height", String(latestHeight));
+                setUiStateItem("diffing-comment-panel-height", String(latestHeight));
             } catch {}
             document.removeEventListener('mousemove', handleMove);
             document.removeEventListener('mouseup', handleUp);
@@ -222,7 +227,7 @@ export function App() {
 
     useEffect(() => {
         try {
-            localStorage.setItem("diffing-comment-panel-height", String(commentPanelHeight));
+            setUiStateItem("diffing-comment-panel-height", String(commentPanelHeight));
         } catch {}
     }, [commentPanelHeight]);
     const { viewedFiles, setViewed } = useViewed();
@@ -247,7 +252,7 @@ export function App() {
 
     useEffect(() => {
         try {
-            localStorage.setItem(
+            setUiStateItem(
                 "diffing-sidebar-collapsed",
                 String(sidebarCollapsed),
             );
@@ -578,6 +583,20 @@ export function App() {
         [updateSettings],
     );
 
+    const handleUiFontChange = useCallback(
+        (font: string | null) => {
+            updateSettings({ uiFont: font });
+        },
+        [updateSettings],
+    );
+
+    const handleMonoFontChange = useCallback(
+        (font: string | null) => {
+            updateSettings({ monoFont: font });
+        },
+        [updateSettings],
+    );
+
     const toggleLineWrap = useCallback(() => {
         handleLineWrapChange(!settings.lineWrap);
     }, [settings.lineWrap, handleLineWrapChange]);
@@ -843,6 +862,13 @@ export function App() {
         return () => cancelAnimationFrame(id);
     }, [settings.theme]);
 
+    useApplyFonts(loaded, settings.uiFont, settings.monoFont);
+
+    const monoFontFamily = useMemo(
+        () => resolveMonoFont(settings.monoFont),
+        [settings.monoFont],
+    );
+
     const shikiConfig = useMemo(() => {
         const activeTheme = settings.theme || "nord";
         return SHIKI_THEME_MAP[activeTheme] || SHIKI_THEME_MAP.nord;
@@ -1003,6 +1029,8 @@ export function App() {
                 fontSize={settings.fontSize}
                 haptics={settings.haptics ?? true}
                 sounds={settings.sounds ?? true}
+                uiFont={settings.uiFont}
+                monoFont={settings.monoFont}
                 onDiffStyleChange={handleDiffStyleChange}
                 onDiffOptionsChange={handleDiffOptionsChange}
                 onDefaultTabSizeChange={handleDefaultTabSizeChange}
@@ -1018,6 +1046,8 @@ export function App() {
                 onFontSizeChange={handleFontSizeChange}
                 onHapticsChange={handleHapticsChange}
                 onSoundsChange={handleSoundsChange}
+                onOpenUiFontModal={() => setUiFontModalOpen(true)}
+                onOpenMonoFontModal={() => setMonoFontModalOpen(true)}
                 onOpenSearch={() => openPalette('all')}
                 onCopyComments={copyAllComments}
                 onSendToAgent={sendToAgent}
@@ -1101,6 +1131,7 @@ export function App() {
                             filePath={conflictPath}
                             theme={settings.theme || "nord"}
                             fontSize={settings.fontSize}
+                            monoFontFamily={monoFontFamily}
                             tabSize={
                                 tabSizeMap[conflictPath] ?? settings.defaultTabSize
                             }
@@ -1125,6 +1156,7 @@ export function App() {
                         hunkSeparators={settings.hunkSeparators}
                         lineHoverHighlight={settings.lineHoverHighlight}
                         fontSize={settings.fontSize}
+                        monoFontFamily={monoFontFamily}
                         expandContextByDefault={settings.expandContextByDefault}
                         collapsedContextThreshold={settings.collapsedContextThreshold}
                         expansionLineCount={settings.expansionLineCount}
@@ -1146,6 +1178,7 @@ export function App() {
                 onNavigateFile={handleFileClick}
                 theme={settings.theme || "nord"}
                 fontSize={settings.fontSize}
+                monoFontFamily={monoFontFamily}
                 defaultTabSize={settings.defaultTabSize}
                 lineWrap={settings.lineWrap}
                 showLineNumbers={settings.showLineNumbers}
@@ -1164,6 +1197,22 @@ export function App() {
                 activeTheme={settings.theme || "nord"}
                 onThemeChange={handleThemeChange}
                 onClose={() => setThemeModalOpen(false)}
+            />
+            <FontPickerModal
+                open={uiFontModalOpen}
+                title="Select UI Font"
+                defaultLabel="Default (Geist Mono, from CDN)"
+                activeFont={settings.uiFont}
+                onFontChange={handleUiFontChange}
+                onClose={() => setUiFontModalOpen(false)}
+            />
+            <FontPickerModal
+                open={monoFontModalOpen}
+                title="Select Code Font"
+                defaultLabel="Default (JetBrains Mono, from CDN)"
+                activeFont={settings.monoFont}
+                onFontChange={handleMonoFontChange}
+                onClose={() => setMonoFontModalOpen(false)}
             />
             <AgentActivityToast
                 activity={agentActivity}

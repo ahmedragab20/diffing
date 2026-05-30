@@ -11,6 +11,7 @@ interface MergeConflictResolverProps {
   filePath: string
   theme: string
   fontSize: number
+  monoFontFamily: string
   tabSize: number
   /** Refetch the diff once the user saves a resolution. */
   onSaved: () => void
@@ -35,6 +36,7 @@ export const MergeConflictResolver = memo(function MergeConflictResolver({
   filePath,
   theme,
   fontSize,
+  monoFontFamily,
   tabSize,
   onSaved,
 }: MergeConflictResolverProps) {
@@ -195,9 +197,15 @@ export const MergeConflictResolver = memo(function MergeConflictResolver({
           unsafeCSS: `
             :host {
               --diffs-tab-size: ${tabSize} !important;
-              --diffs-font-family: var(--font-mono) !important;
+              --diffs-font-family: ${monoFontFamily} !important;
               --diffs-font-size: ${fontSize}px !important;
               --diffs-line-height: ${Math.round(fontSize * 1.7)}px !important;
+            }
+            [data-column-number], [data-line], [data-line] * {
+              font-family: ${monoFontFamily} !important;
+              font-size: ${fontSize}px !important;
+              font-variant-ligatures: common-ligatures !important;
+              font-feature-settings: "liga" on, "calt" on !important;
             }
           `,
         }}

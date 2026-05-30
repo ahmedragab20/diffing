@@ -33,7 +33,7 @@ A local Hono-powered review server delivers a full-featured GitHub-like code rev
 - **Interactive File Tree** — Hierarchical file navigation sidebar with collapsible folders, viewed/unviewed tracking, and change-type indicators (added, modified, deleted).
 - **Status Dashboard (Comment Tracker)** — Bottom panel tracking open, replied, and resolved comments with filter tabs and click-to-navigate references to the relevant file and line.
 - **Git Diff Stats** — Toolbar displays repo name, branch, file count, and additions/deletions (`+X/-Y`) computed from the patch.
-- **Resizable Panels** — Drag-to-resize sidebar (240px–640px) and comment tracker panel (100px–600px). Widths and heights persist in localStorage.
+- **Resizable Panels** — Drag-to-resize sidebar (240px–640px) and comment tracker panel (100px–600px). Widths and heights are persisted inside the project's global `.diffing` folder, completely offline and out of browser storage.
 - **Skeleton Loading Screen** — Full shimmer placeholder UI for toolbar, sidebar, search, tree nodes, and file diffs during initial load.
 - **Image Diff Previews** — Visual side-by-side comparison for added, changed, and deleted image files (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, AVIF).
 
@@ -307,7 +307,7 @@ Rich, real-time comment threads directly on diff lines:
 - **Inline Threads** — Hover and click the `+` button on any addition or deletion line to start a thread. Supports markdown (GFM + line breaks) with syntax-highlighted fenced code blocks.
 - **Multi-Line Comments** — Select a line range to comment on an entire block of code.
 - **File-Level Comments** — Add general comments scoped to the entire file without targeting a specific line.
-- **Comment Drafts** — LocalStorage-based draft system (`diffing-draft-*` keys) with 7-day TTL, so drafts survive page refreshes.
+- **Comment Drafts** — Draft system (`diffing-draft-*` keys) with 7-day TTL, stored in the global `.diffing` folder so drafts survive page refreshes without any browser storage footprint.
 - **Agent Attribution** — Replies carry `role` (`user`/`agent`) and the agent's `model` name for clear attribution.
 - **Suggestion Application** — Parse `` ```suggestion `` code blocks from comment bodies and apply them to the file in one click via `POST /api/comments/:id/apply-suggestion`.
 - **Full CRUD API** — REST endpoints for creating, reading, updating, and deleting comments and replies.

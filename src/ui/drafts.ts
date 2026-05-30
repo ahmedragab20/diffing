@@ -1,3 +1,5 @@
+import { getUiStateItem, setUiStateItem, removeUiStateItem } from './utils/uiState'
+
 interface DraftEntry {
   body: string
   timestamp: number
@@ -12,11 +14,11 @@ function makeKey(...parts: string[]): string {
 
 export function getDraft(...parts: string[]): string | null {
   try {
-    const raw = localStorage.getItem(makeKey(...parts))
+    const raw = getUiStateItem(makeKey(...parts))
     if (!raw) return null
     const entry: DraftEntry = JSON.parse(raw)
     if (Date.now() - entry.timestamp > TTL_MS) {
-      localStorage.removeItem(makeKey(...parts))
+      removeUiStateItem(makeKey(...parts))
       return null
     }
     return entry.body
@@ -40,19 +42,20 @@ export function saveDraftNow(body: string, ...parts: string[]): void {
   const key = makeKey(...parts)
   try {
     if (body.trim()) {
-      localStorage.setItem(key, JSON.stringify({ body, timestamp: Date.now() }))
+      setUiStateItem(key, JSON.stringify({ body, timestamp: Date.now() }))
     } else {
-      localStorage.removeItem(key)
+      removeUiStateItem(key)
     }
   } catch {
-    /* quota exceeded, ignore */
+    /* ignore */
   }
 }
 
 export function clearDraft(...parts: string[]): void {
   try {
-    localStorage.removeItem(makeKey(...parts))
+    removeUiStateItem(makeKey(...parts))
   } catch {
     /* ignore */
   }
 }
+
