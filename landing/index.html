@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="en" data-theme="nord">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>diffing — git diff, reimagined as a review workspace</title>
+        <meta
+            name="description"
+            content="diffing is a local-first, drop-in replacement for `git diff` that opens your changes in an interactive browser UI — review, comment, and hand off to your AI agent without leaving the terminal. MIT, no account, no cloud."
+        />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap"
+            rel="stylesheet"
+        />
+        <link rel="stylesheet" href="styles.css" />
+    </head>
+    <body>
+        <!-- ─── STATUS STRIP (fixed top) ─────────────────────────────────────── -->
+        <header class="status-strip" role="banner">
+            <div class="status-left">
+                <span class="brand-badge">▰ DIFFING</span>
+                <span class="sep">│</span>
+                <span class="status-version">v0.2.1</span>
+                <span class="sep">│</span>
+                <span
+                    class="status-host"
+                    title="Demo placeholder. The real CLI binds 127.0.0.1 on a random free port (or --port)."
+                    >127.0.0.1:4317<span class="demo-tag">(demo)</span></span
+                >
+                <span class="sep hide-sm">│</span>
+                <span class="status-tagline hide-sm"
+                    >LOCAL-FIRST AI COLLABORATION REVIEW WORKSPACE</span
+                >
+            </div>
+            <div class="status-right">
+                <button
+                    type="button"
+                    id="audio-toggle"
+                    class="status-toggle"
+                    aria-pressed="true"
+                    title="Toggle UI sounds"
+                >
+                    [ AUDIO <span class="dot dot-on" aria-hidden="true">●</span
+                    ><span class="toggle-state">ON</span> ]
+                </button>
+                <button
+                    type="button"
+                    id="haptics-toggle"
+                    class="status-toggle"
+                    aria-pressed="true"
+                    title="Toggle haptics (vibration)"
+                >
+                    [ HAPTICS
+                    <span class="dot dot-on" aria-hidden="true">●</span
+                    ><span class="toggle-state">ON</span> ]
+                </button>
+                <a
+                    class="status-toggle"
+                    href="https://github.com/ahmedragab20/diffing"
+                    target="_blank"
+                    rel="noopener"
+                    >[ ⭷ GitHub ]</a
+                >
+            </div>
+        </header>
+
+        <main id="top">
+            <!-- ─── HERO ──────────────────────────────────────────────────────── -->
+            <section class="hero panel" aria-labelledby="hero-headline">
+                <div class="panel-bar">
+                    <span class="panel-title">┤ HERO ├</span
+                    ><span class="panel-meta">~/repo · git diff → diffing</span>
+                </div>
+                <div class="hero-grid">
+                    <div class="hero-copy">
+                        <p class="eyebrow">
+                            LOCAL-FIRST · NO ACCOUNT · NO CLOUD · MIT
+                        </p>
+                        <h1 id="hero-headline" class="headline">
+                            git diff, reimagined as a review workspace.
+                        </h1>
+                        <p class="subhead">
+                            <code>diffing</code> is a drop-in replacement for
+                            <code>git diff</code> that opens your changes in an
+                            interactive, local-first browser UI — review,
+                            comment, and hand off to your AI agent without
+                            leaving the terminal.
+                        </p>
+                        <div class="cta-row">
+                            <button
+                                type="button"
+                                class="copy-btn cta-primary"
+                                data-copy="npm install -g diffing"
+                            >
+                                <span class="copy-prompt">$</span> npm install
+                                -g diffing
+                                <span class="copy-hint" aria-hidden="true"
+                                    >⧉ copy</span
+                                >
+                            </button>
+                            <button
+                                type="button"
+                                class="cta-secondary"
+                                data-scroll-to="shell-panel"
+                            >
+                                ▷ Try the shell below
+                            </button>
+                        </div>
+                        <p class="micro-line">
+                            Auto-detects your terminal: TTY → opens the web UI ·
+                            pipe/redirect → prints a unified patch.
+                        </p>
+                    </div>
+                    <div class="hero-boot">
+                        <pre
+                            id="boot-screen"
+                            class="boot-screen"
+                            aria-label="terminal boot sequence"
+                            aria-live="off"
+                        ></pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ─── TWO-COLUMN WORKSPACE ──────────────────────────────────────── -->
+            <div class="workspace">
+                <!-- LEFT COLUMN -->
+                <div class="col col-left">
+                    <!-- A. WORKSPACE GUIDE (carousel) -->
+                    <section class="panel" aria-labelledby="guide-title">
+                        <div class="panel-bar">
+                            <span class="panel-title" id="guide-title"
+                                >┤ WORKSPACE GUIDE ├</span
+                            ><span class="panel-meta">guided tour</span>
+                        </div>
+                        <div
+                            class="carousel"
+                            id="carousel"
+                            tabindex="0"
+                            aria-roledescription="carousel"
+                            aria-label="Guided tour of diffing"
+                        >
+                            <div
+                                class="carousel-track"
+                                id="carousel-track"
+                                aria-live="polite"
+                            ></div>
+                            <div class="carousel-controls">
+                                <button
+                                    type="button"
+                                    class="car-btn"
+                                    id="car-prev"
+                                    aria-label="Previous slide"
+                                >
+                                    ‹ prev
+                                </button>
+                                <div
+                                    class="car-dots"
+                                    id="car-dots"
+                                    role="tablist"
+                                    aria-label="Slide selector"
+                                ></div>
+                                <button
+                                    type="button"
+                                    class="car-btn"
+                                    id="car-next"
+                                    aria-label="Next slide"
+                                >
+                                    next ›
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- B. SPEC PROFILE (facts panel) -->
+                    <section class="panel" aria-labelledby="spec-title">
+                        <div class="panel-bar">
+                            <span class="panel-title" id="spec-title"
+                                >┤ SPEC PROFILE ├</span
+                            ><span class="panel-meta">verified facts</span>
+                        </div>
+                        <dl class="ledger">
+                            <div class="ledger-row">
+                                <dt>package</dt>
+                                <dd>diffing</dd>
+                            </div>
+                            <div class="ledger-row">
+                                <dt>version</dt>
+                                <dd>0.2.1</dd>
+                            </div>
+                            <div class="ledger-row">
+                                <dt>license</dt>
+                                <dd>MIT</dd>
+                            </div>
+                            <div class="ledger-row">
+                                <dt>bin</dt>
+                                <dd>diffing → ./dist/cli.mjs</dd>
+                            </div>
+                            <div class="ledger-row">
+                                <dt>default theme</dt>
+                                <dd>nord</dd>
+                            </div>
+                            <div class="ledger-row">
+                                <dt>ui font</dt>
+                                <dd>Geist Mono</dd>
+                            </div>
+                            <div class="ledger-row">
+                                <dt>code font</dt>
+                                <dd>JetBrains Mono</dd>
+                            </div>
+                            <div class="ledger-row">
+                                <dt>themes</dt>
+                                <dd>52</dd>
+                            </div>
+                            <div class="ledger-row">
+                                <dt>mcp tools</dt>
+                                <dd>10</dd>
+                            </div>
+                            <div class="ledger-row">
+                                <dt>git flags</dt>
+                                <dd>60+ / 12 categories</dd>
+                            </div>
+                            <div class="ledger-row">
+                                <dt>default host</dt>
+                                <dd>127.0.0.1</dd>
+                            </div>
+                            <div class="ledger-row">
+                                <dt>quotes</dt>
+                                <dd>31</dd>
+                            </div>
+                        </dl>
+                    </section>
+
+                    <!-- C. THE FEEL (sound/haptic lab) -->
+                    <section class="panel" aria-labelledby="feel-title">
+                        <div class="panel-bar">
+                            <span class="panel-title" id="feel-title"
+                                >┤ THE FEEL — SOUND / HAPTIC LAB ├</span
+                            ><span class="panel-meta"
+                                >11 sounds · 10 haptics</span
+                            >
+                        </div>
+                        <p class="panel-lead">
+                            It feels like a tool, not a webpage. Every
+                            interaction is scored: 11 synthesized Web-Audio
+                            cues, 10 haptic presets, a terminal startup
+                            animation, and a vim status bar. Toggle AUDIO and
+                            HAPTICS in the status strip.
+                        </p>
+                        <p class="sublabel">
+                            Sound presets — exact synth from
+                            <code>useHaptics.tsx</code>
+                        </p>
+                        <div class="sound-grid" id="sound-grid"></div>
+                        <p class="sublabel">
+                            Haptic presets — <code>navigator.vibrate</code>
+                        </p>
+                        <div class="haptic-chips" id="haptic-chips"></div>
+                        <p class="quote-ribbon">
+                            One of 31 curated developer quotes greets you on
+                            launch.
+                        </p>
+                    </section>
+                </div>
+
+                <!-- RIGHT COLUMN -->
+                <div class="col col-right">
+                    <!-- D. INTERACTIVE SHELL -->
+                    <section
+                        class="panel"
+                        id="shell-panel"
+                        aria-labelledby="shell-title"
+                    >
+                        <div class="panel-bar">
+                            <span class="panel-title" id="shell-title"
+                                >┤ INTERACTIVE SHELL ├</span
+                            ><span class="panel-meta"
+                                >type a command + Enter</span
+                            >
+                        </div>
+                        <div class="shell" id="shell" tabindex="-1">
+                            <div
+                                class="shell-output"
+                                id="shell-output"
+                                aria-live="polite"
+                            ></div>
+                            <div class="shell-inputline">
+                                <span class="shell-prompt"
+                                    >~/repo on
+                                    <span class="branch"> main</span> ❯</span
+                                >
+                                <input
+                                    type="text"
+                                    id="shell-input"
+                                    class="shell-input"
+                                    autocomplete="off"
+                                    autocorrect="off"
+                                    autocapitalize="off"
+                                    spellcheck="false"
+                                    aria-label="diffing shell command input"
+                                />
+                            </div>
+                        </div>
+                        <p class="shell-hint">
+                            try: <code>diffing</code> ·
+                            <code>diffing --help</code> ·
+                            <code>diffing await-review</code> ·
+                            <code>diffing plan submit</code> ·
+                            <code>diffing mcp</code> ·
+                            <code>diffing update</code> &nbsp;(<kbd>↑</kbd>/<kbd
+                                >↓</kbd
+                            >
+                            history · <kbd>Tab</kbd> complete ·
+                            <code>clear</code>)
+                        </p>
+                    </section>
+
+                    <!-- E. LIVE DIFF SHOWCASE BOARD -->
+                    <section
+                        class="panel"
+                        id="diff-panel"
+                        aria-labelledby="diff-title"
+                    >
+                        <div class="panel-bar">
+                            <span class="panel-title" id="diff-title"
+                                >┤ LIVE DIFF SHOWCASE ├</span
+                            ><span class="panel-meta"
+                                >click a +/- line to comment</span
+                            >
+                        </div>
+                        <div class="diff-toolbar">
+                            <span class="diff-mode-label"
+                                >view: <span id="diff-mode">split</span>
+                                <span class="dim">(press m)</span></span
+                            >
+                            <div class="send-agent">
+                                <button
+                                    type="button"
+                                    class="send-agent-btn"
+                                    id="send-agent-btn"
+                                >
+                                    <span
+                                        class="pulse-dot"
+                                        aria-hidden="true"
+                                    ></span>
+                                    Send to agent
+                                </button>
+                                <div
+                                    class="verdict-popover"
+                                    id="verdict-popover"
+                                    role="menu"
+                                    hidden
+                                >
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        data-verdict="Approve"
+                                    >
+                                        Approve
+                                    </button>
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        data-verdict="Request Edits"
+                                    >
+                                        Request Edits
+                                    </button>
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        data-verdict="Reject"
+                                    >
+                                        Reject
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="diff-board" id="diff-board"></div>
+                    </section>
+
+                    <!-- F. THEME SELECTOR -->
+                    <section class="panel" aria-labelledby="theme-title">
+                        <div class="panel-bar">
+                            <span class="panel-title" id="theme-title"
+                                >┤ THEMES (52 in the app · 5 previewed here)
+                                ├</span
+                            ><span class="panel-meta">press g t</span>
+                        </div>
+                        <p class="panel-lead">
+                            52 built-in themes with instant switching, live
+                            preview, and dark/light variants. Nord is the
+                            default. Press <kbd>g</kbd> <kbd>t</kbd> to open the
+                            theme picker in the app — search, filter by
+                            dark/light, arrow-key navigate, Enter to apply, Esc
+                            to close.
+                        </p>
+                        <div
+                            class="theme-grid"
+                            id="theme-grid"
+                            role="listbox"
+                            aria-label="Theme preview selector"
+                        ></div>
+                    </section>
+                </div>
+            </div>
+
+            <!-- ─── FEATURE SECTIONS ──────────────────────────────────────────── -->
+            <!-- What it is -->
+            <section class="panel feature" aria-labelledby="what-title">
+                <div class="panel-bar">
+                    <span class="panel-title" id="what-title"
+                        >┤ WHAT IT IS ├</span
+                    >
+                </div>
+                <div class="three-up">
+                    <div class="value-prop">
+                        <h3>① Drop-in for <code>git diff</code></h3>
+                        <p>
+                            Same revisions, options, and pathspecs. 60+
+                            git-compatible flags across 12 categories. Swap
+                            <code>git diff</code> → <code>diffing</code> and
+                            review in the browser.
+                        </p>
+                    </div>
+                    <div class="value-prop">
+                        <h3>② Two output modes, auto-detected</h3>
+                        <p>
+                            TTY launches the local web server; a pipe or
+                            redirect prints a standard unified patch to stdout.
+                            Force either with <code>--web</code> or
+                            <code>--terminal</code>.
+                        </p>
+                    </div>
+                    <div class="value-prop">
+                        <h3>③ Built for human + agent review</h3>
+                        <p>
+                            Inline comments, plan review, and an AI handoff
+                            protocol over a local HTTP/SSE server and an MCP
+                            server — all on <code>127.0.0.1</code>, nothing
+                            leaves your machine.
+                        </p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Install / Run / Update -->
+            <section class="panel feature" aria-labelledby="install-title">
+                <div class="panel-bar">
+                    <span class="panel-title" id="install-title"
+                        >┤ INSTALL · RUN · UPDATE ├</span
+                    ><span class="panel-meta">click any line to copy</span>
+                </div>
+                <div class="cmd-list" id="cmd-list"></div>
+                <p class="footnote">
+                    <code>diffing update</code> self-upgrades via npm (or pnpm
+                    if present): <code>npm install -g diffing@latest</code>.
+                </p>
+                <p class="sublabel">Skills install (for AI assistants)</p>
+                <div class="cmd-list" id="cmd-list-skills"></div>
+            </section>
+
+            <!-- Web-UI features -->
+            <section class="panel feature" aria-labelledby="webui-title">
+                <div class="panel-bar">
+                    <span class="panel-title" id="webui-title"
+                        >┤ WEB-UI FEATURES ├</span
+                    >
+                </div>
+                <h3 class="feature-h">
+                    A GitHub-grade review UI, served from localhost.
+                </h3>
+                <ul class="feature-list">
+                    <li>
+                        Split and unified diff views (toggle with <kbd>m</kbd>);
+                        syntax highlighting via Shiki.
+                    </li>
+                    <li>
+                        Inline comments anchored to <code>+</code>/<code
+                            >-</code
+                        >
+                        lines or whole files, with threaded replies.
+                    </li>
+                    <li>
+                        "Apply suggestion" — pull a
+                        <code>```suggestion```</code> block straight into the
+                        file and auto-resolve the comment.
+                    </li>
+                    <li>
+                        Image diff previews for PNG, JPEG, GIF, WebP, SVG, BMP,
+                        ICO, AVIF.
+                    </li>
+                    <li>
+                        Per-file "viewed" tracking, hunk revert, and per-hunk
+                        git-blame history.
+                    </li>
+                    <li>
+                        Open any file in your editor (VS Code, Zed, Vim, Neovim,
+                        or system default).
+                    </li>
+                    <li>
+                        All session state (sidebar, active file, scroll, viewed
+                        flags) is reconstructed from the server — no
+                        localStorage in the real app.
+                    </li>
+                </ul>
+            </section>
+
+            <!-- G. Search -->
+            <section class="panel feature" aria-labelledby="search-title">
+                <div class="panel-bar">
+                    <span class="panel-title" id="search-title">┤ SEARCH ├</span
+                    ><span class="panel-meta">Rust-powered · fff</span>
+                </div>
+                <h3 class="feature-h">
+                    Native Rust-powered code search across four scopes.
+                </h3>
+                <ul class="feature-list">
+                    <li>
+                        <strong>Files</strong> (fuzzy),
+                        <strong>Text</strong> (grep, with regex),
+                        <strong>Symbols</strong> (17 patterns across JS/TS, Go,
+                        Rust, Python), <strong>All</strong> (unified).
+                    </li>
+                    <li>
+                        Symbol kinds detected: functions, classes, interfaces,
+                        types, enums, variables, structs, impl blocks, traits,
+                        methods.
+                    </li>
+                    <li>
+                        Frecency-ranked results backed by SQLite
+                        (<code>frecency.db</code>, <code>history.db</code>)
+                        under the per-repo storage dir; the engine keeps its own
+                        filesystem watcher so the index stays fresh during
+                        review.
+                    </li>
+                    <li>
+                        "Changed only" filter restricts results to files in the
+                        active diff.
+                    </li>
+                    <li>
+                        Graceful degradation: if the native binary isn't
+                        available on your platform, search reports unavailable —
+                        the server never crashes.
+                    </li>
+                </ul>
+                <p class="spec-chip">
+                    scopes: files · text · symbols · all &nbsp;·&nbsp; symbol
+                    patterns: 17 &nbsp;·&nbsp; default 60 results · max 200
+                </p>
+            </section>
+
+            <!-- H. Real-time / SSE -->
+            <section class="panel feature" aria-labelledby="sse-title">
+                <div class="panel-bar">
+                    <span class="panel-title" id="sse-title"
+                        >┤ REAL-TIME / SSE ├</span
+                    >
+                </div>
+                <h3 class="feature-h">Every browser tab updates live.</h3>
+                <p>
+                    Edit a file, drop a comment, or have your agent reply — the
+                    change streams to every open tab over Server-Sent Events,
+                    with a 15-second heartbeat keeping the connection warm.
+                </p>
+                <ul class="feature-list">
+                    <li>Single SSE endpoint: <code>GET /api/live</code>.</li>
+                    <li>
+                        Named events: <code>heartbeat</code> (every 15&nbsp;s),
+                        <code>change</code> (working-tree changes, 200&nbsp;ms
+                        debounce), <code>comments</code> (120&nbsp;ms debounce),
+                        <code>plans</code> (120&nbsp;ms debounce),
+                        <code>agent-status</code>,
+                        <code>plan-review-status</code>.
+                    </li>
+                    <li>
+                        Filesystem watcher on the repo root (recursive,
+                        200&nbsp;ms debounce; skips <code>.git</code>,
+                        <code>node_modules</code>, <code>dist</code>,
+                        <code>.changeset</code>) and on the storage dir for
+                        <code>comments.json</code> / <code>plans.json</code>.
+                    </li>
+                </ul>
+                <p class="spec-chip">
+                    heartbeat 15s · change 200ms · comments/plans 120ms
+                </p>
+            </section>
+
+            <!-- I. AI handoff / MCP / Skills -->
+            <section class="panel feature" aria-labelledby="ai-title">
+                <div class="panel-bar">
+                    <span class="panel-title" id="ai-title"
+                        >┤ AI HANDOFF · MCP · SKILLS ├</span
+                    >
+                </div>
+                <h3 class="feature-h">
+                    Hand the review to your AI agent — locally.
+                </h3>
+                <p>
+                    Click "Send to agent" in the UI with a verdict (Approve /
+                    Request Edits / Reject) and an optional note. Your agent —
+                    running in the same repo — picks up the comments, replies
+                    inline, applies fixes, and resolves threads. No port to
+                    configure: discovery is automatic via a per-repo lockfile.
+                </p>
+                <p class="sublabel">
+                    CLI subcommands (agent-facing, port-agnostic)
+                </p>
+                <ul class="feature-list">
+                    <li>
+                        <code>diffing await-review</code> ·
+                        <code
+                            >diffing reply &lt;id&gt; --body &lt;text&gt;</code
+                        >
+                        · <code>diffing resolve &lt;id&gt;</code> ·
+                        <code>diffing comments [--open] [--json]</code> ·
+                        <code>diffing url</code>
+                    </li>
+                    <li>
+                        <code>diffing await-review</code> long-polls until you
+                        send your comments (default timeout 570&nbsp;s).
+                    </li>
+                    <li>
+                        Exit codes: <code>0</code> ok ·
+                        <code>2</code> await-timeout · <code>3</code> no server
+                        · <code>4</code> not found · <code>5</code> usage.
+                    </li>
+                </ul>
+                <p class="sublabel">MCP server — <code>diffing mcp</code></p>
+                <pre
+                    class="code-block"
+                ><code>{ "mcpServers": { "diffing": { "command": "diffing", "args": ["mcp"] } } }</code></pre>
+                <p>
+                    Exposes <strong>10 tools</strong>:
+                    <code>await_review</code>, <code>list_comments</code>,
+                    <code>reply_to_comment</code>, <code>resolve_comment</code>,
+                    <code>submit_plan</code>, <code>await_plan_review</code>,
+                    <code>list_plans</code>, <code>get_plan</code>,
+                    <code>reply_to_plan_comment</code>,
+                    <code>resolve_plan_comment</code>.
+                </p>
+                <p class="sublabel">Skills</p>
+                <p>
+                    <code>npx skills add ahmedragab20/diffing</code> installs
+                    diffing skills into your AI coding assistant.
+                </p>
+                <p class="spec-chip">
+                    subcommands · 10 MCP tools · await default 570s · exit
+                    0/2/3/4/5
+                </p>
+            </section>
+
+            <!-- J. Plan review -->
+            <section class="panel feature" aria-labelledby="plan-title">
+                <div class="panel-bar">
+                    <span class="panel-title" id="plan-title"
+                        >┤ PLAN REVIEW ├</span
+                    >
+                </div>
+                <h3 class="feature-h">Get sign-off before you write code.</h3>
+                <p>
+                    Submit a markdown implementation plan and block until a
+                    human approves, rejects, or requests changes. Comment on
+                    specific plan lines or sections; the agent replies and
+                    resolves — then proceeds, revises and resubmits, or stops.
+                </p>
+                <ul class="feature-list">
+                    <li>
+                        <code
+                            >diffing plan submit &lt;file&gt; [--title T]
+                            [--wait]</code
+                        >
+                        · <code>diffing plan await</code> ·
+                        <code>diffing plan list</code> ·
+                        <code>diffing plan show [&lt;id&gt;]</code> ·
+                        <code
+                            >diffing plan reply &lt;id&gt; --body
+                            &lt;text&gt;</code
+                        >
+                        · <code>diffing plan resolve &lt;id&gt;</code>
+                    </li>
+                </ul>
+                <p class="spec-chip">
+                    verdicts: pending · approved · changes-requested · rejected
+                    &nbsp;·&nbsp; plan await default 570s
+                </p>
+            </section>
+
+            <!-- K. Security -->
+            <section class="panel feature" aria-labelledby="sec-title">
+                <div class="panel-bar">
+                    <span class="panel-title" id="sec-title"
+                        >┤ SECURITY & LOCAL-FIRST ├</span
+                    >
+                </div>
+                <h3 class="feature-h">Your code never leaves your machine.</h3>
+                <ul class="feature-list">
+                    <li>
+                        Binds to <strong>127.0.0.1</strong> by default (pass
+                        <code>0.0.0.0</code> only to expose to the LAN
+                        deliberately).
+                    </li>
+                    <li>
+                        Path-traversal protection: <code>..</code> and null
+                        bytes are rejected, paths are URL-decoded and validated
+                        to stay inside the repo root; escape attempts return
+                        <strong>403</strong>.
+                    </li>
+                    <li>
+                        Attachments are isolated to the per-repo
+                        <code>attachments/</code> directory.
+                    </li>
+                    <li>
+                        No account, no telemetry, no cloud. Project data lives
+                        under
+                        <code
+                            >~/.diffing/&lt;repo-name&gt;-&lt;8-char-hash&gt;/</code
+                        >; global settings at
+                        <code>~/.config/diffing/settings.json</code>. Projects
+                        inactive for 14+ days are auto-pruned.
+                    </li>
+                </ul>
+                <p class="spec-chip">
+                    bind 127.0.0.1 · 403 on traversal · auto-prune 14d
+                </p>
+            </section>
+
+            <!-- L. Keyboard shortcuts table -->
+            <section class="panel feature" aria-labelledby="keys-title">
+                <div class="panel-bar">
+                    <span class="panel-title" id="keys-title"
+                        >┤ KEYBOARD SHORTCUTS ├</span
+                    ><span class="panel-meta">press ? anytime</span>
+                </div>
+                <div class="keys-table-wrap">
+                    <table class="keys-table" id="keys-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">Key</th>
+                                <th scope="col">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                <p class="footnote">
+                    Multi-key sequences use an 800&nbsp;ms buffer. A vim-style
+                    status bar shows NORMAL / INSERT depending on whether a text
+                    field is focused; all shortcuts are disabled while typing in
+                    an input/textarea/contenteditable.
+                </p>
+            </section>
+        </main>
+
+        <!-- ─── FOOTER ────────────────────────────────────────────────────── -->
+        <footer class="footer">
+            <p class="footer-main">
+                diffing v0.2.1 · MIT ·
+                <a
+                    href="https://github.com/ahmedragab20/diffing"
+                    target="_blank"
+                    rel="noopener"
+                    >github.com/ahmedragab20/diffing</a
+                >
+                · <strong>Made for people who read diffs.</strong>
+            </p>
+            <p class="footer-fork">
+                Originally forked from
+                <a
+                    href="https://github.com/wong2/diffx"
+                    target="_blank"
+                    rel="noopener"
+                    >wong2/diffx</a
+                >.
+            </p>
+        </footer>
+
+        <!-- ─── FLOATING UI ───────────────────────────────────────────────── -->
+        <!-- Vim status bar -->
+        <div class="vim-bar" id="vim-bar" aria-hidden="true">
+            <span class="vim-mode" id="vim-mode">-- NORMAL --</span>
+            <span class="vim-sep">│</span>
+            <span class="vim-theme" id="vim-theme">nord</span>
+            <span class="vim-sep">│</span>
+            <span class="vim-tab" id="vim-tab">tab:4</span>
+        </div>
+
+        <!-- Agent-activity toast -->
+        <div
+            class="toast"
+            id="agent-toast"
+            role="status"
+            aria-live="polite"
+            hidden
+        >
+            <span class="toast-bot" aria-hidden="true">🤖</span>
+            <div class="toast-body">
+                <div class="toast-head">
+                    <span id="toast-title">Agent replied</span> ·
+                    <span class="toast-model" id="toast-model">claude</span>
+                </div>
+                <div class="toast-path" id="toast-path"></div>
+                <div class="toast-preview" id="toast-preview"></div>
+            </div>
+            <button
+                type="button"
+                class="toast-close"
+                id="toast-close"
+                aria-label="Dismiss"
+            >
+                ✕
+            </button>
+        </div>
+
+        <!-- Shortcuts help overlay -->
+        <div
+            class="overlay"
+            id="help-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="help-overlay-title"
+            hidden
+        >
+            <div class="overlay-box">
+                <div class="panel-bar">
+                    <span class="panel-title" id="help-overlay-title"
+                        >┤ KEYBOARD SHORTCUTS ├</span
+                    ><button
+                        type="button"
+                        class="overlay-close"
+                        id="help-close"
+                        aria-label="Close help"
+                    >
+                        Esc ✕
+                    </button>
+                </div>
+                <div class="keys-table-wrap">
+                    <table class="keys-table" id="help-keys-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">Key</th>
+                                <th scope="col">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                <p class="footnote">
+                    Multi-key sequences use an 800&nbsp;ms buffer. Single-key
+                    shortcuts are disabled while typing in a text field.
+                </p>
+            </div>
+        </div>
+
+        <script src="main.js"></script>
+    </body>
+</html>
