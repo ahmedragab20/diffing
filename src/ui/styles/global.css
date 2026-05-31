@@ -6822,3 +6822,223 @@ file-tree,
     border-color: var(--primary);
     background: radial-gradient(circle, var(--primary) 0 4px, transparent 5px);
 }
+
+/* ==========================================================================
+   Responsive Design
+   ========================================================================== */
+
+/* Mobile sidebar overlay backdrop */
+.sidebar-mobile-backdrop {
+    display: none;
+}
+
+.toolbar-mobile-toggle {
+    display: none;
+}
+
+/* Tablet and smaller adjustments */
+@media (max-width: 1024px) {
+    .main {
+        padding: 12px 16px;
+    }
+    .sidebar {
+        width: min(var(--sidebar-width, 280px), 35vw);
+        min-width: min(var(--sidebar-width, 280px), 35vw);
+    }
+}
+
+/* Mobile adjustments */
+@media (max-width: 768px) {
+    /* Backdrop for mobile sidebar overlay */
+    .sidebar-mobile-backdrop {
+        display: block;
+        position: fixed;
+        inset: var(--toolbar-height) 0 0 0;
+        background: rgba(0, 0, 0, 0.45);
+        z-index: 140;
+    }
+
+    /* Toolbar compact mode */
+    .toolbar {
+        padding: 0 12px;
+    }
+    .toolbar-left {
+        gap: 8px;
+        min-width: 0;
+    }
+    .toolbar-title {
+        font-size: 15px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 140px;
+    }
+    .toolbar-branch {
+        display: none;
+    }
+    .toolbar-stat {
+        display: none;
+    }
+    .toolbar-right {
+        gap: 6px;
+    }
+    .toolbar-search-btn > .btn-label,
+    .toolbar-search-kbd {
+        display: none;
+    }
+    .toolbar-plans-btn > .btn-label {
+        display: none;
+    }
+    .settings-btn > .btn-label {
+        display: none;
+    }
+    .send-review-btn > .btn-label {
+        display: none;
+    }
+    .settings-btn {
+        padding: 6px 8px;
+    }
+    .toolbar-mobile-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border: none;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+    .toolbar-mobile-toggle:hover {
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+    }
+
+    /* Sidebar overlay behavior */
+    .sidebar {
+        position: fixed;
+        top: var(--toolbar-height);
+        left: 0;
+        bottom: 0;
+        height: auto;
+        z-index: 150;
+        width: min(var(--sidebar-width, 280px), 85vw);
+        box-shadow: var(--shadow-overlay);
+        transform: translateX(0);
+        transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .sidebar-collapsed {
+        transform: translateX(-100%);
+        width: 0 !important;
+        min-width: 0 !important;
+        border: none;
+        overflow: hidden;
+    }
+    .sidebar-resize-handle {
+        display: none;
+    }
+
+    /* Main content */
+    .main {
+        padding: 8px 12px;
+    }
+    .diff-viewer {
+        gap: 12px;
+    }
+
+    /* File diff cards */
+    .file-diff-card {
+        border-radius: var(--radius-md);
+        contain-intrinsic-size: auto 320px;
+    }
+
+    /* Plan review page */
+    .plan-app-toolbar {
+        padding: 0 12px;
+    }
+    .plan-app-title {
+        font-size: 15px;
+    }
+    .plan-main {
+        padding: 0;
+    }
+    .plan-review-head {
+        padding: 12px 16px;
+        gap: 12px;
+    }
+    .plan-review-title {
+        font-size: 15px;
+    }
+    .plan-review-meta {
+        gap: 4px;
+    }
+    .plan-rendered {
+        margin: 12px;
+        padding: 16px;
+    }
+    .plan-file {
+        margin: 12px;
+    }
+    .plan-general-section {
+        margin: 12px;
+        padding: 12px;
+    }
+    .plan-decision-banner {
+        margin: 12px;
+    }
+    .plan-empty-state {
+        padding: 24px;
+    }
+
+    /* Popovers */
+    .ui-popover {
+        max-width: calc(100vw - 24px);
+    }
+
+    /* Modals */
+    .ui-modal-popup.theme-modal {
+        width: 100%;
+        max-width: calc(100vw - 16px);
+        max-height: 85vh;
+    }
+    .hunk-revert-modal {
+        width: 100%;
+        max-width: calc(100vw - 16px);
+    }
+
+    /* Touch targets */
+    .viewed-label {
+        min-height: 36px;
+    }
+    .gutter-add-btn {
+        min-width: 36px;
+        min-height: 36px;
+    }
+    .ft-row {
+        min-height: 36px;
+    }
+    .plan-list-item {
+        min-height: 44px;
+    }
+    .cmt-card {
+        padding: 12px;
+    }
+
+    /* Comment bubbles */
+    .comment-bubble-canvas {
+        max-width: 100%;
+    }
+
+    /* Keyboard help modal */
+    .ui-modal-popup {
+        max-width: calc(100vw - 16px);
+    }
+
+    /* Comment tracker resize handle hidden on touch */
+    .ct-resize-handle {
+        display: none;
+    }
+}
+

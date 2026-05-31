@@ -76,10 +76,10 @@ export function App() {
     const [activeFile, setActiveFile] = useState<string | null>(null);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
         try {
-            return getUiStateItem("diffing-sidebar-collapsed") === "true";
-        } catch {
-            return false;
-        }
+            const stored = getUiStateItem("diffing-sidebar-collapsed");
+            if (stored != null) return stored === "true";
+        } catch {}
+        return typeof window !== 'undefined' && window.innerWidth <= 768;
     });
     const [sidebarWidth, setSidebarWidth] = useState(() => {
         try {
@@ -1046,6 +1046,8 @@ export function App() {
                 sounds={settings.sounds ?? true}
                 uiFont={settings.uiFont}
                 monoFont={settings.monoFont}
+                sidebarCollapsed={sidebarCollapsed}
+                onToggleSidebar={handleToggleCollapse}
                 onDiffStyleChange={handleDiffStyleChange}
                 onDiffOptionsChange={handleDiffOptionsChange}
                 onDefaultTabSizeChange={handleDefaultTabSizeChange}
@@ -1072,6 +1074,13 @@ export function App() {
                 onEditComment={editComment}
                 onDeleteComment={removeComment}
             />
+            {!sidebarCollapsed && (
+                <div
+                    className="sidebar-mobile-backdrop"
+                    onClick={handleToggleCollapse}
+                    aria-hidden="true"
+                />
+            )}
             <div className="app-body">
                 <aside
                     ref={sidebarRef}

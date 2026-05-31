@@ -77,7 +77,7 @@ export function SubmitPlanReviewPopover({
       className="submit-plan-review-popover"
       trigger={
         <button
-          className="btn btn-primary btn-sm"
+          className="btn btn-primary btn-sm send-review-btn"
           disabled={submitting}
           title={agentWaiting ? 'An agent is connected and waiting for your verdict' : 'Submit your verdict on this plan'}
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
@@ -88,7 +88,7 @@ export function SubmitPlanReviewPopover({
           ) : (
             <ClipboardCheck size={14} />
           )}
-          <span>{submitting ? 'Submitting…' : alreadyDecided ? 'Update review' : 'Submit review'}</span>
+          <span className="btn-label">{submitting ? 'Submitting…' : alreadyDecided ? 'Update review' : 'Submit review'}</span>
         </button>
       }
     >

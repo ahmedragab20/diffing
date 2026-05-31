@@ -1,5 +1,5 @@
 import { useState, useEffect, memo } from 'react'
-import { GitBranch, Settings, Palette, Search, ClipboardList, Type } from 'lucide-react'
+import { GitBranch, Settings, Palette, Search, ClipboardList, Type, Menu } from 'lucide-react'
 import type { DiffOptions } from '../hooks/useDiff'
 import type {
   LineDiffType,
@@ -65,6 +65,8 @@ interface ToolbarProps {
   comments: ReviewComment[]
   onEditComment: (id: string, body: string) => void
   onDeleteComment: (id: string) => void
+  sidebarCollapsed?: boolean
+  onToggleSidebar?: () => void
 }
 
 
@@ -162,6 +164,8 @@ export const Toolbar = memo(function Toolbar({
   comments,
   onEditComment,
   onDeleteComment,
+  sidebarCollapsed,
+  onToggleSidebar,
 }: ToolbarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
 
@@ -179,6 +183,16 @@ export const Toolbar = memo(function Toolbar({
   return (
     <div className="toolbar">
       <div className="toolbar-left">
+        {onToggleSidebar && (
+          <button
+            className="toolbar-mobile-toggle"
+            onClick={onToggleSidebar}
+            aria-label="Toggle sidebar"
+            title={sidebarCollapsed ? 'Open sidebar' : 'Close sidebar'}
+          >
+            <Menu size={18} />
+          </button>
+        )}
         <h1 className="toolbar-title">{repoName}</h1>
         {branch && (
           <span className="toolbar-branch">
@@ -223,9 +237,9 @@ export const Toolbar = memo(function Toolbar({
           ariaLabel="Settings"
           className="settings-popover"
           trigger={
-            <button className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`} title="Settings">
-              <Settings size={14} /> Settings
-            </button>
+          <button className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`} title="Settings">
+            <Settings size={14} /> <span className="btn-label">Settings</span>
+          </button>
           }
         >
           <div className="popover-scroll settings-panel">

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { preloadHighlighter } from '@pierre/diffs'
 import { useWorkerPool } from '@pierre/diffs/react'
-import { ArrowLeft, Palette, ClipboardList, Settings, Code2, FileText } from 'lucide-react'
+import { ArrowLeft, Palette, ClipboardList, Settings, Code2, FileText, Menu } from 'lucide-react'
 import { useSettings, resolveMonoFont } from '../hooks/useSettings'
 import { useApplyFonts } from '../hooks/useApplyFonts'
 import { usePlans } from '../hooks/usePlans'
@@ -123,10 +123,10 @@ export function PlanReviewApp() {
   // Collapsible plans sidebar states matching App.tsx
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
-      return getUiStateItem("diffing-sidebar-collapsed") === "true"
-    } catch {
-      return false
-    }
+      const stored = getUiStateItem("diffing-sidebar-collapsed")
+      if (stored != null) return stored === "true"
+    } catch {}
+    return typeof window !== 'undefined' && window.innerWidth <= 768
   })
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
@@ -453,9 +453,17 @@ export function PlanReviewApp() {
 
         <div className="toolbar plan-app-toolbar">
           <div className="toolbar-left">
+            <button
+              className="toolbar-mobile-toggle"
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              aria-label="Toggle sidebar"
+              title={sidebarCollapsed ? 'Open sidebar' : 'Close sidebar'}
+            >
+              <Menu size={18} />
+            </button>
             <button className="btn btn-sm" onClick={() => navigate('/')} title="Back to the diff review">
               <ArrowLeft size={14} style={{ marginRight: '6px' }} />
-              Diff
+              <span className="btn-label">Diff</span>
             </button>
             <h1 className="toolbar-title plan-app-title">
               <ClipboardList size={16} style={{ marginRight: '6px' }} />
@@ -474,7 +482,7 @@ export function PlanReviewApp() {
               className="settings-popover"
               trigger={
                 <button className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`} title="Settings">
-                  <Settings size={14} /> Settings
+                  <Settings size={14} /> <span className="btn-label">Settings</span>
                 </button>
               }
             >
@@ -565,6 +573,14 @@ export function PlanReviewApp() {
             )}
           </div>
         </div>
+
+        {!sidebarCollapsed && (
+          <div
+            className="sidebar-mobile-backdrop"
+            onClick={() => setSidebarCollapsed(true)}
+            aria-hidden="true"
+          />
+        )}
 
         <div className="app-body">
           <aside

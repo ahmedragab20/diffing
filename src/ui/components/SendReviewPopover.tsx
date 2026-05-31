@@ -101,14 +101,14 @@ export function SendReviewPopover({
       className="send-review-popover"
       trigger={
         <button
-          className="btn btn-primary btn-sm"
+          className="btn btn-primary btn-sm send-review-btn"
           disabled={sending}
           title={agentWaiting ? 'An agent is connected and waiting' : 'Submit your review to a waiting agent'}
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
           {agentWaiting && <span className="agent-waiting-dot" aria-hidden="true" />}
           <Bot size={14} />
-          <span>{sending ? 'Sending…' : count > 0 ? `Send to agent (${count})` : 'Send to agent'}</span>
+          <span className="btn-label">{sending ? 'Sending…' : count > 0 ? `Send to agent (${count})` : 'Send to agent'}</span>
         </button>
       }
     >
