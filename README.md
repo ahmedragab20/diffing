@@ -40,7 +40,7 @@ A local Hono-powered review server delivers a full-featured GitHub-like code rev
 - **Status Dashboard (Comment Tracker)** — Bottom panel tracking open, replied, and resolved comments with filter tabs and click-to-navigate references to the relevant file and line.
 - **Git Diff Stats** — Toolbar displays repo name, branch, file count, and additions/deletions (`+X/-Y`) computed from the patch.
 - **Server-Side State & Drafts Persistence** — No browser storage is used. All settings, UI panels sizing, session states, and comment drafts are securely stored and persisted server-side in the project's global `.diffing` directory (and global settings inside `~/.config/diffing/settings.json`).
-- **Dynamic Font Customization** — Dynamically load, cache, and apply any Google Fonts or local system fonts for both UI typography and monospace code rendering, easily configurable via the settings font picker.
+- **Dynamic Font Customization** — Pick any [Google Fonts](https://fonts.google.com/) family or locally-installed system font for both UI typography and monospace code rendering, configurable via the settings font picker. Google-hosted families are fetched automatically as web fonts and render everywhere; local fonts are applied by name (see the [note on custom fonts](#a-note-on-custom-fonts)).
 - **Resizable Panels** — Drag-to-resize sidebar (240px–640px) and comment tracker panel (100px–600px). Panel states are instantly saved server-side for absolute consistency across browser sessions.
 - **Skeleton Loading Screen** — Full shimmer placeholder UI for toolbar, sidebar, search, tree nodes, and file diffs during initial load.
 - **Image Diff Previews** — Visual side-by-side comparison for added, changed, and deleted image files (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, AVIF).
@@ -353,6 +353,12 @@ Fine-grained control over how diffs are rendered:
 | **Haptic & Sound Feedback** | on / off | Tactile feedback via `web-haptics` and synthesized audio cues (click, toggle, navigate, open, close, resolve, send, error) |
 
 All settings persist to `~/.config/diffing/settings.json` and the UI updates are wrapped in `useTransition` for non-blocking responsiveness.
+
+#### A note on custom fonts
+
+Google-hosted families (e.g. `Fira Code`, `Source Code Pro`, `IBM Plex Mono`, `Roboto Mono`) are fetched automatically as web fonts and render in any browser. A **locally-installed** font — a Nerd Font, or a commercial font like `Dank Mono` — is applied by name and renders only if it is installed on your machine **and** your browser allows pages to use local fonts.
+
+Privacy-hardened browsers block this: **Brave**, with Shields / "Block fingerprinting" enabled (the default), refuses to render uncommon local fonts as an anti-fingerprinting measure, so the selection silently falls back to the default monospace even though it is installed. To use a local-only font there, either pick a Google-hosted equivalent, or open **Shields** for the diffing site, set fingerprinting to *Allow all*, and reload.
 
 ---
 
