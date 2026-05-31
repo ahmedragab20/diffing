@@ -2,7 +2,7 @@
 
 A local-first code review tool and double-sided bridge designed for the modern AI coding agent workflow. Review AI-generated changes in a high-fidelity, GitHub-like web UI, leave inline comments, and hand them back to your coding agent to fix in real time — and review the agent's **plan** the same way *before* it writes any code, approving, rejecting, or requesting changes on specific lines and sections.
 
-<img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/767d42ed-a497-4b21-aca7-35be8b9a7006" />
+<img width="1667" height="1087" alt="image" src="https://github.com/user-attachments/assets/52dcd2af-fc85-44ba-a679-4609e667c6f4" />
 
 
 ---
@@ -69,7 +69,8 @@ A local Hono-powered review server delivers a full-featured GitHub-like code rev
 - **Instant Switching** — CSS transitions suppressed during theme changes for a snappy, lag-free experience.
 - **Persistent Setting** — Theme choice saved to `~/.config/diffing/settings.json` and restored on next launch.
 
-<img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/d4905604-e156-4c9b-998e-9015a7c36019" />
+<img width="1667" height="1087" alt="image" src="https://github.com/user-attachments/assets/6e4a4552-fef2-4002-8b8f-b544c95c4c26" />
+
 
 
 ---
@@ -312,7 +313,8 @@ self-documenting `<plan-review>` envelope:
 </plan-review>
 ```
 
-<img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/992ef3e0-49ce-420a-9fdd-647c4bb41bc5" />
+<img width="1667" height="1087" alt="image" src="https://github.com/user-attachments/assets/00e884b5-4c90-4a9a-9e24-9ae57d80f3f2" />
+
 
 
 ---
