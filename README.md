@@ -502,6 +502,12 @@ For advanced features, internal API endpoints, sequence specifications, and conf
 
 ---
 
+## Landing Page
+
+<img width="1287" height="6579" alt="screencapture-localhost-3000-2026-05-31-20_57_04" src="https://github.com/user-attachments/assets/a163b00e-a85a-428f-b8d5-2a33ff9fa1eb" />
+
+---
+
 👉🏻 The project was intially forked from **wong2/diffx**
 
 ## License
