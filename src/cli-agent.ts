@@ -454,6 +454,9 @@ export async function runSubcommand(name: string, args: string[]): Promise<numbe
       return url()
     case 'plan':
       return plan(args)
+    case 'update':
+      const { runUpdateCommand } = await import('./lib/update-check.js')
+      return runUpdateCommand()
     default:
       console.error(`Unknown subcommand: ${name}`)
       return EXIT_USAGE

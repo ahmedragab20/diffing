@@ -17,7 +17,7 @@ const args = process.argv.slice(2)
 // ── Agent subcommands ───────────────────────────────────
 // A small reserved set of verbs drives the user→agent handoff. They're checked
 // before diff parsing so they never collide with `git diff` revisions.
-const SUBCOMMANDS = new Set(['await-review', 'reply', 'resolve', 'comments', 'url', 'mcp', 'plan'])
+const SUBCOMMANDS = new Set(['await-review', 'reply', 'resolve', 'comments', 'url', 'mcp', 'plan', 'update'])
 if (SUBCOMMANDS.has(args[0])) {
   if (args[0] === 'mcp') {
     const { startMcpServer } = await import('./mcp.js')
@@ -58,10 +58,21 @@ if (opts.outputMode === 'terminal') {
 }
 
 // ── Web mode: launch the review server ──────────────────
+const __pkgDir = dirname(fileURLToPath(import.meta.url))
+const currentVersion = JSON.parse(readFileSync(resolve(__pkgDir, '..', 'package.json'), 'utf-8')).version
+
+const updateCheckPromise = (async () => {
+  try {
+    const { checkForUpdates } = await import('./lib/update-check.js')
+    return await checkForUpdates(currentVersion)
+  } catch {
+    return null
+  }
+})()
+
 const port = await getPort(opts.port ? { port: opts.port } : undefined)
 const host = opts.host
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
 const clientDir = resolve(__dirname, 'client')
 const { existsSync } = await import('node:fs')
 const resolvedClientDir = existsSync(clientDir)
@@ -87,15 +98,23 @@ try {
   } catch {
     repoRoot = process.cwd()
   }
-  const __pkgDir = dirname(fileURLToPath(import.meta.url))
-  const version = JSON.parse(readFileSync(resolve(__pkgDir, '..', 'package.json'), 'utf-8')).version
-  writeServerLock({ port: actualPort, host, pid: process.pid, repoRoot, startedAt: Date.now(), version })
+  writeServerLock({ port: actualPort, host, pid: process.pid, repoRoot, startedAt: Date.now(), version: currentVersion })
 } catch {
   // discovery is optional
 }
 
 console.log(`diffing server running at ${localUrl}`)
-void playStartupDisplay()
+await playStartupDisplay()
+
+try {
+  const updateInfo = await updateCheckPromise
+  if (updateInfo?.hasUpdate) {
+    const { printUpdateDisclaimer } = await import('./lib/update-check.js')
+    printUpdateDisclaimer(currentVersion, updateInfo.latestVersion)
+  }
+} catch {
+  // best-effort update check
+}
 
 if (!opts.noOpen) {
   const settings = loadSettings()

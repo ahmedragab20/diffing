@@ -252,9 +252,9 @@ const ANIMS: Anim[] = [
 ]
 
 // ── Entry point ───────────────────────────────────────────────────────
-export function playStartupDisplay(): void {
-  if (!stdout.isTTY) return
-  void (async () => {
+export function playStartupDisplay(): Promise<void> {
+  if (!stdout.isTTY) return Promise.resolve()
+  return (async () => {
     try {
       const quote = QUOTES[Math.floor(Math.random() * QUOTES.length)]
       const pal   = PALETTES[Math.floor(Math.random() * PALETTES.length)]
