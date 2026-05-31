@@ -73,7 +73,7 @@ const updateCheckPromise = (async () => {
 const port = await getPort(opts.port ? { port: opts.port } : undefined)
 const host = opts.host
 
-const clientDir = resolve(__dirname, 'client')
+const clientDir = resolve(__pkgDir, 'client')
 const { existsSync } = await import('node:fs')
 const resolvedClientDir = existsSync(clientDir)
   ? clientDir

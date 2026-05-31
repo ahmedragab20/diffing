@@ -139,14 +139,23 @@ function printBox(b: Box): void {
 // ── Animations ────────────────────────────────────────────────────────
 type Anim = (b: Box) => Promise<void>
 
-// 1. Typewriter — quote types out char-by-char in the text colour
+// 1. Typewriter — quote types out char-by-char with a moving cursor
 const animTypewriter: Anim = async (b) => {
   stdout.write(topBorder(b) + '\n')
   for (const line of b.textLines) {
     stdout.write(`${b.pal.base}│${R}  `)
-    for (const ch of line) {
-      stdout.write(`${b.pal.text}${ch}${R}`)
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      stdout.write(`${b.pal.text}${ch}${b.pal.glow}█${R}`)
       await sleep(25)
+      stdout.write('\b \b')
+    }
+    // Blink cursor at the end of each line
+    for (let blink = 0; blink < 2; blink++) {
+      stdout.write(`${b.pal.glow}█${R}`)
+      await sleep(100)
+      stdout.write('\b \b')
+      await sleep(100)
     }
     stdout.write(' '.repeat(b.innerWidth - 4 - line.length) + `  ${b.pal.base}│${R}\n`)
   }
@@ -195,7 +204,7 @@ const animPulseBorder: Anim = async (b) => {
   }
 }
 
-// 5. Glitch — noise chars in base colour fade to clean text
+// 5. Glitch — noise chars fade to clean text with horizontal row jitter
 const animGlitch: Anim = async (b) => {
   const noiseRates = [0.25, 0.12, 0.04, 0]
   const totalLines = b.textLines.length + 3
@@ -203,7 +212,10 @@ const animGlitch: Anim = async (b) => {
     if (f > 0) stdout.write(up(totalLines))
     const rate = noiseRates[f]
     const clr = f > 0 ? CLR : ''
-    stdout.write(clr + topBorder(b) + '\n')
+    const jitter = rate > 0 ? Math.floor(Math.random() * 3) : 0 // Jitter offset
+    const pad = ' '.repeat(jitter)
+
+    stdout.write(clr + pad + topBorder(b) + '\n')
     for (const line of b.textLines) {
       if (rate === 0) {
         stdout.write(clr + contentRow(b, line) + '\n')
@@ -211,34 +223,66 @@ const animGlitch: Anim = async (b) => {
         let inner = ''
         for (const ch of line) {
           if (Math.random() < rate) {
-            inner += `${b.pal.base}${GLITCH_CHARS[Math.floor(Math.random() * GLITCH_CHARS.length)]}${b.pal.text}`
+            const charColor = Math.random() < 0.3 ? b.pal.glow : b.pal.base
+            inner += `${charColor}${GLITCH_CHARS[Math.floor(Math.random() * GLITCH_CHARS.length)]}${b.pal.text}`
           } else {
             inner += ch
           }
         }
         const fill = ' '.repeat(b.innerWidth - 4 - line.length)
-        stdout.write(clr + `${b.pal.base}│${R}  ${b.pal.text}${inner}${R}${fill}  ${b.pal.base}│${R}\n`)
+        stdout.write(clr + pad + `${b.pal.base}│${R}  ${b.pal.text}${inner}${R}${fill}  ${b.pal.base}│${R}\n`)
       }
     }
-    stdout.write(clr + authorRow(b) + '\n')
-    stdout.write(clr + bottomBorder(b) + '\n')
+    stdout.write(clr + pad + authorRow(b) + '\n')
+    stdout.write(clr + pad + bottomBorder(b) + '\n')
     if (f < noiseRates.length - 1) await sleep(120)
   }
 }
 
-// 6. Matrix rain — rain uses palette's rain colour, then box appears
+// 6. Matrix rain — cascading streams of fading Katakana, digits, and hex symbols
 const animMatrixRain: Anim = async (b) => {
   const width = b.innerWidth + 2
-  const RAIN = 5
-  for (let r = 0; r < RAIN; r++) {
-    let line = b.pal.rain
-    for (let col = 0; col < width; col++) line += Math.random() > 0.5 ? '1' : '0'
-    stdout.write(line + R + '\n')
-    await sleep(70)
+  const RAIN_HEIGHT = 6
+  const streams: Array<Array<{ char: string } | string>> = Array.from({ length: RAIN_HEIGHT }, () => Array(width).fill(' '))
+  const chars = '日ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ0123456789'
+
+  for (let frame = 0; frame < 9; frame++) {
+    // Shift streams down
+    for (let y = RAIN_HEIGHT - 1; y > 0; y--) {
+      streams[y] = [...streams[y - 1]]
+    }
+    // Generate new top row
+    streams[0] = Array(width).fill(' ').map(() => {
+      if (Math.random() < 0.25) {
+        const char = chars[Math.floor(Math.random() * chars.length)]
+        return { char }
+      }
+      return ' '
+    })
+
+    if (frame > 0) stdout.write(up(RAIN_HEIGHT))
+    for (let y = 0; y < RAIN_HEIGHT; y++) {
+      let line = ''
+      for (let x = 0; x < width; x++) {
+        const cell = streams[y][x]
+        if (cell === ' ') {
+          line += ' '
+        } else {
+          const typedCell = cell as { char: string }
+          // Fade color based on cascade depth
+          const color = y === 0 ? b.pal.glow : y <= 2 ? b.pal.text : y <= 4 ? b.pal.base : b.pal.faint
+          line += `${color}${typedCell.char}${R}`
+        }
+      }
+      stdout.write((frame > 0 ? CLR : '') + line + '\n')
+    }
+    await sleep(90)
   }
-  stdout.write(up(RAIN))
-  for (let r = 0; r < RAIN; r++) stdout.write(CLR + '\n')
-  stdout.write(up(RAIN))
+
+  // Clear rain rows
+  stdout.write(up(RAIN_HEIGHT))
+  for (let y = 0; y < RAIN_HEIGHT; y++) stdout.write(CLR + '\n')
+  stdout.write(up(RAIN_HEIGHT))
   printBox(b)
 }
 

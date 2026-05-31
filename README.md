@@ -22,6 +22,12 @@ diffing
 ```
 This instantly spins up a local server, establishes an active repository watcher, and opens your default browser to an interactive code review dashboard.
 
+### 3. Update
+Check if a new version is available on npm and upgrade instantly via the CLI:
+```bash
+diffing update
+```
+
 ---
 
 ## Web UI Review Dashboard
@@ -33,7 +39,9 @@ A local Hono-powered review server delivers a full-featured GitHub-like code rev
 - **Interactive File Tree** — Hierarchical file navigation sidebar with collapsible folders, viewed/unviewed tracking, and change-type indicators (added, modified, deleted).
 - **Status Dashboard (Comment Tracker)** — Bottom panel tracking open, replied, and resolved comments with filter tabs and click-to-navigate references to the relevant file and line.
 - **Git Diff Stats** — Toolbar displays repo name, branch, file count, and additions/deletions (`+X/-Y`) computed from the patch.
-- **Resizable Panels** — Drag-to-resize sidebar (240px–640px) and comment tracker panel (100px–600px). Widths and heights are persisted inside the project's global `.diffing` folder, completely offline and out of browser storage.
+- **Server-Side State & Drafts Persistence** — No browser storage is used. All settings, UI panels sizing, session states, and comment drafts are securely stored and persisted server-side in the project's global `.diffing` directory (and global settings inside `~/.config/diffing/settings.json`).
+- **Dynamic Font Customization** — Dynamically load, cache, and apply any Google Fonts or local system fonts for both UI typography and monospace code rendering, easily configurable via the settings font picker.
+- **Resizable Panels** — Drag-to-resize sidebar (240px–640px) and comment tracker panel (100px–600px). Panel states are instantly saved server-side for absolute consistency across browser sessions.
 - **Skeleton Loading Screen** — Full shimmer placeholder UI for toolbar, sidebar, search, tree nodes, and file diffs during initial load.
 - **Image Diff Previews** — Visual side-by-side comparison for added, changed, and deleted image files (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, AVIF).
 
@@ -121,6 +129,15 @@ A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), 
 
 <img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/d230d020-4fb2-475a-a8a0-0ae11bb271ff" />
 
+
+---
+
+## Console Startup Animations & Quotes
+
+Every time you launch `diffing` in the terminal, it serves a highly polished, interactive greeting before the browser opens:
+- **256-Color Monochromatic Palettes** — Beautifully rendered box outlines across 6 monochromatic themes (Cyan, Green, Magenta, Yellow, Blue, Orange) with custom faint, base, glow, and text hues.
+- **Dynamic Startup Animations** — Instantly runs one of 6 terminal-based micro-animations (Typewriter, Wave Reveal, Slide-In, Pulse Border, Glitch Noise, Matrix Rain) underneath the local server URL.
+- **Motivational Developer Quotes** — Settles to display one of 30 curated, funny, philosophical, or motivational developer quotes to kick off your review session.
 
 ---
 
@@ -327,6 +344,8 @@ Fine-grained control over how diffs are rendered:
 | **Hunk Separators** | `simple`, `metadata`, `line-info`, `line-info-basic` | Style of the separator bar between diff hunks |
 | **Line Hover Highlight** | `both`, `line`, `number`, `disabled` | Which element highlights on hover |
 | **Font Size** | 11px – 16px | Configure globally |
+| **UI Font** | Any system or Google font (default Geist Mono) | Customize typography for the Web UI layout |
+| **Mono Font** | Any system or Google font (default JetBrains Mono) | Customize typography for code/diff block displays |
 | **Tab Size** | 2 / 4 / 8 | Default tab width (overridden per-file by EditorConfig) |
 | **Expandable Context** | `expandContextByDefault`, `collapsedContextThreshold` (default 10 lines), `expansionLineCount` (default 20) | Control how collapsed context regions behave |
 | **Haptic & Sound Feedback** | on / off | Tactile feedback via `web-haptics` and synthesized audio cues (click, toggle, navigate, open, close, resolve, send, error) |
