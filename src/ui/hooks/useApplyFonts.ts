@@ -52,7 +52,9 @@ export function useApplyFonts(loaded: boolean, uiFont?: string | null, monoFont?
         link.rel = 'stylesheet'
         document.head.appendChild(link)
       }
-      if (link.href !== href) link.href = href
+      if (link.getAttribute('href') !== href) {
+        link.setAttribute('href', href)
+      }
     } else {
       document.getElementById(LINK_ID)?.remove()
       removePreconnect()
