@@ -330,11 +330,11 @@ diffing "gh pr 1234"
 diffing --gh-pr 1234
 
 # Full URL form:
-diffing "gh pr https://github.com/acme/widget/pull/1234"
-diffing --gh-pr https://github.com/acme/widget/pull/1234
+diffing "gh pr https://github.com/ahmedragab20/diffing/pull/1234"
+diffing --gh-pr https://github.com/ahmedragab20/diffing/pull/1234
 
 # owner/repo#N shorthand (skips the cwd-repo check):
-diffing "gh pr acme/widget#1234"
+diffing "gh pr ahmedragab20/diffing#1234"
 ```
 
 The PR diff loads in the existing `<DiffViewer>` / `<FileTree>` machinery.

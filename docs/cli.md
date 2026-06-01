@@ -51,7 +51,7 @@ The storage directory is computed by hashing the absolute path of the repository
   "startedAt": 1782782782782,
   "version": "0.1.0",
   "mode": "web" | "tui" | "gh-pr",
-  "prRef": "https://github.com/acme/widget/pull/1234"
+  "prRef": "https://github.com/ahmedragab20/diffing/pull/1234"
 }
 ```
 
@@ -270,11 +270,11 @@ diffing "gh pr 1234"
 diffing --gh-pr 1234
 
 # Full URL form:
-diffing "gh pr https://github.com/acme/widget/pull/1234"
-diffing --gh-pr https://github.com/acme/widget/pull/1234
+diffing "gh pr https://github.com/ahmedragab20/diffing/pull/1234"
+diffing --gh-pr https://github.com/ahmedragab20/diffing/pull/1234
 
 # owner/repo#N shorthand:
-diffing "gh pr acme/widget#1234"
+diffing "gh pr ahmedragab20/diffing#1234"
 ```
 
 The quoted form (`diffing "gh pr <ref>"`) is matched *before* git diff
@@ -410,14 +410,14 @@ unaffected.
 
 ```json
 {
-  "ref": "https://github.com/acme/widget/pull/1234",
+  "ref": "https://github.com/ahmedragab20/diffing/pull/1234",
   "owner": "acme",
   "repo": "widget",
   "pullNumber": 1234,
   "headSha": "abc123…",
   "baseSha": "def456…",
   "title": "Add the widget",
-  "url": "https://github.com/acme/widget/pull/1234",
+  "url": "https://github.com/ahmedragab20/diffing/pull/1234",
   "author": { "login": "octocat", "avatarUrl": "https://…" },
   "additions": 142,
   "deletions": 7,
@@ -441,7 +441,7 @@ unaffected.
   ],
   "submittedAt": 1782782782782,
   "submittedReviewId": 12345,
-  "submittedReviewUrl": "https://github.com/acme/widget/pull/1234#pullrequestreview-12345",
+  "submittedReviewUrl": "https://github.com/ahmedragab20/diffing/pull/1234#pullrequestreview-12345",
   "authSource": "gh"
 }
 ```
@@ -1075,14 +1075,14 @@ Returns the active `PrSession` (sans the large `diff` string) for client hydrati
   ```json
   {
     "prMode": true,
-    "ref": "https://github.com/acme/widget/pull/1234",
+    "ref": "https://github.com/ahmedragab20/diffing/pull/1234",
     "owner": "acme",
     "repo": "widget",
     "pullNumber": 1234,
     "baseSha": "def456…",
     "headSha": "abc123…",
     "title": "Add the widget",
-    "url": "https://github.com/acme/widget/pull/1234",
+    "url": "https://github.com/ahmedragab20/diffing/pull/1234",
     "author": { "login": "octocat" },
     "additions": 142,
     "deletions": 7,
@@ -1099,17 +1099,17 @@ Returns the active `PrSession` (sans the large `diff` string) for client hydrati
 Initialise a PR session from a `ref` (programmatic equivalent of `diffing --gh-pr <ref>`).
 - **Payload Schema**:
   ```json
-  { "ref": "https://github.com/acme/widget/pull/1234" }
+  { "ref": "https://github.com/ahmedragab20/diffing/pull/1234" }
   ```
 - **Response Schema** (200):
   ```json
   {
     "ok": true,
-    "ref": "https://github.com/acme/widget/pull/1234",
+    "ref": "https://github.com/ahmedragab20/diffing/pull/1234",
     "owner": "acme",
     "repo": "widget",
     "pullNumber": 1234,
-    "url": "https://github.com/acme/widget/pull/1234"
+    "url": "https://github.com/ahmedragab20/diffing/pull/1234"
   }
   ```
 - **Errors**: 400 if `ref` is missing; 500 on `gh` failure (with the GitHub error message).
@@ -1163,7 +1163,7 @@ session. This is the server-side equivalent of `diffing gh pr-review`.
   {
     "ok": true,
     "reviewId": 12345,
-    "reviewUrl": "https://github.com/acme/widget/pull/1234#pullrequestreview-12345",
+    "reviewUrl": "https://github.com/ahmedragab20/diffing/pull/1234#pullrequestreview-12345",
     "failedComments": 0,
     "authSource": "gh",
     "dryRun": false
@@ -1188,11 +1188,11 @@ flag plus PR metadata fields:
     "tabSizeMap": {},
     "untrackedFiles": [],
     "prMode": true,
-    "prRef": "https://github.com/acme/widget/pull/1234",
+    "prRef": "https://github.com/ahmedragab20/diffing/pull/1234",
     "prOwner": "acme",
     "prRepo": "widget",
     "prPullNumber": 1234,
-    "prUrl": "https://github.com/acme/widget/pull/1234",
+    "prUrl": "https://github.com/ahmedragab20/diffing/pull/1234",
     "prTitle": "Add the widget",
     "prAuthor": { "login": "octocat" },
     "prHeadSha": "abc123…",
@@ -1201,6 +1201,3 @@ flag plus PR metadata fields:
   ```
 In local mode, the response is byte-identical to the original (no `prMode`
 field), so the existing local review client is unaffected.
-
-
-
