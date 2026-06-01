@@ -16,6 +16,14 @@ export interface ServerLock {
   repoRoot: string
   startedAt: number
   version: string
+  /**
+   * Which surface owns the lock.
+   *  - `"web"` — Hono server (port is meaningful).
+   *  - `"tui"` — Rust binary in `crates/diffing-tui` (port is always 0).
+   * Optional for backward compat with writes made before this field existed;
+   * consumers should treat absent as `"web"`.
+   */
+  mode?: 'web' | 'tui'
 }
 
 export function lockPath(repoRoot?: string): string {

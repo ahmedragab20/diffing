@@ -18,7 +18,7 @@ export type DiffOutputFormat =
   | 'name-status'
   | 'dirstat'
 
-export type OutputMode = 'auto' | 'web' | 'terminal'
+export type OutputMode = 'auto' | 'web' | 'terminal' | 'tui'
 
 export interface DiffOptions {
   // ── Revisions ──────────────────────────────────────────
@@ -131,6 +131,11 @@ export interface DiffOptions {
   includeUnstaged: boolean
   /** Whether untracked files should be included (web mode default) */
   includeUntracked: boolean
+
+  /** Opt into the experimental native-Rust TUI. */
+  tui: boolean
+  /** Opt into the experimental GPU render backend (requires --tui). */
+  gpu: boolean
 }
 
 export const DEFAULTS: DiffOptions = {
@@ -169,6 +174,8 @@ export const DEFAULTS: DiffOptions = {
   version: false,
   includeUnstaged: true,
   includeUntracked: true,
+  tui: false,
+  gpu: false,
 }
 
 /**
@@ -273,6 +280,8 @@ export const DIFFING_OPTIONS = {
   'no-open': { type: 'boolean' as const, default: false },
   web: { type: 'boolean' as const, default: false },
   terminal: { type: 'boolean' as const, default: false },
+  tui: { type: 'boolean' as const, default: false },
+  gpu: { type: 'boolean' as const, default: false },
   help: { type: 'boolean' as const, short: 'h' },
   version: { type: 'boolean' as const },
 }
@@ -310,7 +319,11 @@ Output Modes:
   - Terminal mode: when output is a pipe, redirect, or non-TTY
   - Web mode:     when output is a TTY (interactive terminal)
 
-  Force a mode with --web or --terminal flags.
+  Force a mode with --web, --terminal, or --tui flags.
+  --tui is experimental and opt-in. It opens a native-Rust terminal
+  interface that mirrors the web dashboard. Falls back to git diff
+  output if the environment cannot support a TUI (piped stdin, CI,
+  missing binary).
 
 Examples:
   diffing                        Review uncommitted changes (web UI)
@@ -321,7 +334,8 @@ Examples:
   diffing -U10                   Diff with 10 context lines
   diffing --word-diff=color      Word-level diff in color
   diffing -b -w                  Ignore whitespace changes
-  diffing --host 0.0.0.0         Allow other machines on the LAN to review`)
+  diffing --host 0.0.0.0         Allow other machines on the LAN to review
+  diffing --tui                  Open the experimental TUI (native Rust)`)
 }
 
 function printGitDiffHelp(): void {
@@ -584,8 +598,12 @@ export function parseDiffOptions(rawArgs: string[]): DiffOptions {
   }
 
   // ── Determine output mode ─────────────────────────
-  // Explicit --web / --terminal flags win over auto-detection.
-  if (values.web) opts.outputMode = 'web'
+  // Explicit --tui / --web / --terminal flags win over auto-detection.
+  // `--tui` is checked first so it always wins against the other explicit
+  // flags (it's the most specific intent). Auto-detection never promotes
+  // to tui — it's strictly opt-in.
+  if (values.tui) opts.outputMode = 'tui'
+  else if (values.web) opts.outputMode = 'web'
   else if (values.terminal) opts.outputMode = 'terminal'
 
   // Default: auto (TTY → web, pipe → terminal)

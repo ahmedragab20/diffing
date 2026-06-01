@@ -2,3 +2,10 @@ node_modules
 dist
 .diffing
 .playwright-mcp
+# Rust TUI build artefacts (workspace lives in ./crates)
+target/
+# OS / editor noise
+.DS_Store
+*.swp
+.idea/
+.vscode/
