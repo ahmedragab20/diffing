@@ -15,10 +15,20 @@ import type { DiffOptions } from './lib/diff-options.js'
 
 const args = process.argv.slice(2)
 
+// ── GitHub PR mode (quoted `gh pr <ref>` or `--gh-pr <ref>`) ──────────────
+// `diffing "gh pr 1234"` opens the same web UI pointed at a GitHub PR. The
+// quoted form is checked *before* parseDiffOptions so it never collides with
+// `git diff` revisions. The `--gh-pr <ref>` flag form is parsed later by
+// parseDiffOptions and merged below.
+let prRef: string | null = null
+if (args.length >= 3 && args[0] === 'gh' && args[1] === 'pr') {
+  prRef = args.slice(2).join(' ')
+}
+
 // ── Agent subcommands ───────────────────────────────────
 // A small reserved set of verbs drives the user→agent handoff. They're checked
 // before diff parsing so they never collide with `git diff` revisions.
-const SUBCOMMANDS = new Set(['await-review', 'reply', 'resolve', 'comments', 'url', 'mcp', 'plan', 'update'])
+const SUBCOMMANDS = new Set(['await-review', 'reply', 'resolve', 'comments', 'url', 'mcp', 'plan', 'update', 'gh'])
 if (SUBCOMMANDS.has(args[0])) {
   if (args[0] === 'mcp') {
     const { startMcpServer } = await import('./mcp.js')
@@ -112,11 +122,12 @@ const resolvedClientDir = existsSync(clientDir)
   ? clientDir
   : resolve(process.cwd(), 'dist/client')
 
-const { port: actualPort } = await startServer({
+const { port: actualPort, prMode } = await startServer({
   port,
   host,
   clientDir: resolvedClientDir,
   diffOpts: opts,
+  prRef: prRef ?? undefined,
 })
 
 const localUrl = `http://${host}:${actualPort}`
@@ -131,7 +142,16 @@ try {
   } catch {
     repoRoot = process.cwd()
   }
-  writeServerLock({ port: actualPort, host, pid: process.pid, repoRoot, startedAt: Date.now(), version: currentVersion })
+  writeServerLock({
+    port: actualPort,
+    host,
+    pid: process.pid,
+    repoRoot,
+    startedAt: Date.now(),
+    version: currentVersion,
+    mode: prMode ? 'gh-pr' : 'web',
+    prRef: prMode ? prRef ?? undefined : undefined,
+  })
 } catch {
   // discovery is optional
 }

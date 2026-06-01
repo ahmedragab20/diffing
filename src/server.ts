@@ -10,7 +10,7 @@ import { searchFiles, searchContent, searchSymbols, searchAll, getSearchStatus, 
 import { loadSettings, saveSettings } from './lib/settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
 import type { CommentStore } from './lib/comments.js'
-import type { ReviewDecision } from './lib/types.js'
+import type { ReviewComment, ReviewDecision } from './lib/types.js'
 import { FilePlanStore } from './lib/plans.js'
 import type { PlanStore } from './lib/plans.js'
 import { FileUiStateStore } from './lib/state.js'
@@ -23,6 +23,15 @@ import type { PlanDecision } from './lib/plan-types.js'
 import { executeDiffWithMeta } from './lib/diff-engine.js'
 import type { DiffOptions } from './lib/diff-options.js'
 import { DEFAULTS } from './lib/diff-options.js'
+import { FilePrSessionStore, InMemoryPrSessionStore } from './lib/pr-session.js'
+import type { PrSessionStore, PrDecision } from './lib/pr-session.js'
+import {
+  buildPrSession,
+  refreshPrSession,
+  parsePrRef,
+  detectCwdRepo,
+  submitReview as githubSubmitReview,
+} from './lib/github.js'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -49,11 +58,13 @@ export function createApp(
   diffOpts: DiffOptions = DEFAULTS,
   commentStore?: CommentStore,
   planStore?: PlanStore,
+  prSessionStore?: PrSessionStore,
 ) {
   const app = new Hono()
   const customMode = isCustomMode(diffOpts)
   const store = commentStore ?? new FileCommentStore()
   const plans = planStore ?? new FilePlanStore()
+  const prStore = prSessionStore ?? new FilePrSessionStore()
   const uiStateStore = new FileUiStateStore()
   const viewedFiles = new Set<string>()
 
@@ -101,6 +112,7 @@ export function createApp(
       mkdirSync(storageDir, { recursive: true })
       let commentsDebounce: NodeJS.Timeout | null = null
       let plansDebounce: NodeJS.Timeout | null = null
+      let prSessionDebounce: NodeJS.Timeout | null = null
       const storageWatcher = watch(storageDir, (_eventType, filename) => {
         if (!filename) return
         if (filename.startsWith('comments.json')) {
@@ -109,6 +121,9 @@ export function createApp(
         } else if (filename.startsWith('plans.json')) {
           if (plansDebounce) clearTimeout(plansDebounce)
           plansDebounce = setTimeout(() => broadcast('plans', Date.now().toString()), 120)
+        } else if (filename.startsWith('pr-session.json')) {
+          if (prSessionDebounce) clearTimeout(prSessionDebounce)
+          prSessionDebounce = setTimeout(() => broadcast('pr-session', Date.now().toString()), 120)
         }
       })
       storageWatcher.unref()
@@ -181,6 +196,39 @@ export function createApp(
   app.get('/api/diff', async (c) => {
     const staged = c.req.query('staged') === 'true'
     const untracked = c.req.query('untracked') === 'true'
+
+    // PR mode: short-circuit and return the cached PR patch. The session
+    // lookup is cheap (a JSON read on startup) and avoids a wasteful
+    // `git diff` call.
+    const prSession = await prStore.get()
+    if (prSession) {
+      const binaryFiles: { path: string; type: 'added' | 'deleted' | 'changed' | 'untracked' }[] = []
+      // Best-effort tab size from the project's editorconfig.
+      const filePaths: string[] = []
+      for (const line of prSession.diff.split('\n')) {
+        const m = /^diff --git a\/.+ b\/(.+)$/.exec(line)
+        if (m) filePaths.push(m[1])
+      }
+      return c.json({
+        patch: prSession.diff,
+        repoName: prSession.repo,
+        branch: `#${prSession.pullNumber}`,
+        customMode: true,
+        binaryFiles,
+        tabSizeMap: {},
+        untrackedFiles: [],
+        prMode: true,
+        prRef: prSession.ref,
+        prOwner: prSession.owner,
+        prRepo: prSession.repo,
+        prPullNumber: prSession.pullNumber,
+        prUrl: prSession.url,
+        prTitle: prSession.title,
+        prAuthor: prSession.author,
+        prHeadSha: prSession.headSha,
+        prBaseSha: prSession.baseSha,
+      })
+    }
 
     const optsForDiff = customMode
       ? diffOpts
@@ -588,6 +636,200 @@ export function createApp(
     return c.json({ ok: true })
   })
 
+  // ── PR review session ─────────────────────────────────────────────────────
+  // All `/api/gh/*` routes are no-ops (404) when no `pr-session.json` exists,
+  // so the local flow is completely unaffected. The UI fetches `/api/gh/session`
+  // on mount to detect PR mode and switch to <PrReviewApp>.
+
+  /** Shared helper: 404 with a stable shape so the client knows "not in PR mode". */
+  const notInPrMode = (c: any) => c.json({ error: 'Not in PR review mode', prMode: false }, 404)
+
+  app.get('/api/gh/session', async (c) => {
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    return c.json({
+      prMode: true,
+      ref: session.ref,
+      owner: session.owner,
+      repo: session.repo,
+      pullNumber: session.pullNumber,
+      baseSha: session.baseSha,
+      headSha: session.headSha,
+      title: session.title,
+      url: session.url,
+      author: session.author,
+      additions: session.additions,
+      deletions: session.deletions,
+      changedFiles: session.changedFiles,
+      existingComments: session.existingComments,
+      submittedAt: session.submittedAt,
+      submittedReviewId: session.submittedReviewId,
+      submittedReviewUrl: session.submittedReviewUrl,
+      authSource: session.authSource,
+    })
+  })
+
+  /** Re-fetch PR metadata (head SHA, diff, existing comments) and persist. */
+  app.post('/api/gh/pr/refresh', async (c) => {
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    try {
+      const refreshed = await refreshPrSession(session)
+      await prStore.set(refreshed)
+      return c.json({ ok: true, headSha: refreshed.headSha })
+    } catch (err: any) {
+      return c.json({ error: err?.message ?? 'Refresh failed' }, 500)
+    }
+  })
+
+  /** Initialize a PR session from a ref like `1234`, `o/r#42`, or a GitHub URL. */
+  app.post('/api/gh/pr/init', async (c) => {
+    const body = await c.req.json().catch(() => ({}))
+    const ref = typeof body?.ref === 'string' ? body.ref : ''
+    if (!ref.trim()) {
+      return c.json({ error: 'ref is required' }, 400)
+    }
+    try {
+      const cwdRepo = await detectCwdRepo()
+      const resolved = parsePrRef(ref, cwdRepo ?? undefined)
+      // Build via gh.
+      const session = await buildPrSession(ref)
+      await prStore.set(session)
+      // Re-resolve in case the user wanted the current cwd's owner for a bare number
+      // (already done inside buildPrSession).
+      return c.json({
+        ok: true,
+        ref: session.ref,
+        owner: session.owner,
+        repo: session.repo,
+        pullNumber: session.pullNumber,
+        url: session.url,
+      })
+    } catch (err: any) {
+      return c.json({ error: err?.message ?? 'Failed to initialise PR session' }, 500)
+    }
+  })
+
+  // PR-mode comments live inside `pr-session.json`. The UI calls these instead
+  // of the `/api/comments` family when `prMode === true`.
+  app.get('/api/gh/pr-session/comments', async (c) => {
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    return c.json(session.comments ?? [])
+  })
+
+  app.post('/api/gh/pr-session/comments', async (c) => {
+    const body = await c.req.json()
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const comment: ReviewComment = {
+      id: crypto.randomUUID(),
+      filePath: body.filePath,
+      side: body.side,
+      lineNumber: body.lineNumber,
+      startLineNumber: body.startLineNumber,
+      lineContent: body.lineContent,
+      body: body.body,
+      status: 'open',
+      createdAt: Date.now(),
+      replies: [],
+    }
+    const next = { ...session, comments: [...(session.comments ?? []), comment] }
+    await prStore.set(next)
+    return c.json(comment, 201)
+  })
+
+  app.put('/api/gh/pr-session/comments/:id', async (c) => {
+    const id = c.req.param('id')
+    const { body, status } = await c.req.json()
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const comments = (session.comments ?? []).map((cm) =>
+      cm.id === id
+        ? { ...cm, body: body ?? cm.body, status: status ?? cm.status }
+        : cm,
+    )
+    await prStore.set({ ...session, comments })
+    const updated = comments.find((cm) => cm.id === id) ?? null
+    if (!updated) return c.json({ error: 'Comment not found' }, 404)
+    return c.json(updated)
+  })
+
+  app.delete('/api/gh/pr-session/comments/:id', async (c) => {
+    const id = c.req.param('id')
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const comments = (session.comments ?? []).filter((cm) => cm.id !== id)
+    await prStore.set({ ...session, comments })
+    return c.json({ ok: true })
+  })
+
+  app.post('/api/gh/pr-session/comments/:id/replies', async (c) => {
+    const id = c.req.param('id')
+    const { body, role, model } = await c.req.json()
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const comments = (session.comments ?? []).map((cm) => {
+      if (cm.id !== id) return cm
+      const reply = {
+        id: crypto.randomUUID(),
+        body,
+        createdAt: Date.now(),
+        role: role || (model ? 'agent' : 'user'),
+        model: model || undefined,
+      }
+      return { ...cm, replies: [...(cm.replies ?? []), reply] }
+    })
+    await prStore.set({ ...session, comments })
+    return c.json(comments.find((cm) => cm.id === id))
+  })
+
+  /** Submit the current PR session's review (new comments + verdict + body) to GitHub. */
+  app.post('/api/gh/submit', async (c) => {
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const decision = body.decision
+    if (decision !== 'approve' && decision !== 'comment' && decision !== 'request-changes') {
+      return c.json({ error: 'decision must be one of: approve, comment, request-changes' }, 400)
+    }
+    const generalBody = typeof body.body === 'string' ? body.body : ''
+    const dryRun = body.dryRun === true
+
+    const result = await githubSubmitReview({
+      resolved: {
+        owner: session.owner,
+        repo: session.repo,
+        pullNumber: session.pullNumber,
+        ref: session.ref,
+      },
+      decision: decision as PrDecision,
+      body: generalBody,
+      comments: session.comments ?? [],
+    })
+
+    if (result.ok && !dryRun) {
+      const next = {
+        ...session,
+        submittedAt: Date.now(),
+        submittedReviewId: result.reviewId,
+        submittedReviewUrl: result.reviewUrl,
+        authSource: result.authSource,
+      }
+      await prStore.set(next)
+    }
+
+    return c.json({
+      ok: result.ok,
+      reviewId: result.reviewId,
+      reviewUrl: result.reviewUrl,
+      failedComments: result.failedComments ?? 0,
+      authSource: result.authSource,
+      error: result.error,
+      dryRun,
+    })
+  })
+
   // ── Agent handoff: "agent waits, human releases" ──────────────────────────
   // The UI's "Send to agent" button POSTs here. We snapshot the current
   // comments, format them, and release every agent blocked on /api/review/await.
@@ -906,7 +1148,7 @@ async function newestActivityMs(projectDir: string): Promise<number | null> {
     }
   }
 
-  for (const name of ['comments.json', 'plans.json']) {
+  for (const name of ['comments.json', 'plans.json', 'pr-session.json']) {
     const file = join(projectDir, name)
     if (!existsSync(file)) continue
     const m = await safeStat(file)
@@ -983,10 +1225,34 @@ export function startServer(options: {
   host: string
   clientDir: string
   diffOpts?: DiffOptions
-}): Promise<{ port: number }> {
+  /**
+   * If set, the server builds a `pr-session.json` from this ref on startup so
+   * the web UI opens in PR mode. The session is persisted in the per-repo
+   * storage dir; if it already exists, the diff is NOT re-fetched (use the
+   * `POST /api/gh/pr/refresh` endpoint to re-fetch).
+   */
+  prRef?: string
+}): Promise<{ port: number; prMode: boolean }> {
   cleanupStaleProjects().catch((err) => {
     console.error('Failed to clean up stale projects:', err)
   })
+
+  let prMode = false
+  if (options.prRef) {
+    const store = new FilePrSessionStore()
+    void (async () => {
+      try {
+        const existing = await store.get()
+        if (!existing || existing.ref !== options.prRef) {
+          const session = await buildPrSession(options.prRef!)
+          await store.set(session)
+        }
+        prMode = true
+      } catch (err: any) {
+        console.error(`[pr-session] failed to build session for ${options.prRef}: ${err?.message ?? err}`)
+      }
+    })()
+  }
 
   const app = createApp(options.clientDir, options.diffOpts)
 
@@ -996,7 +1262,7 @@ export function startServer(options: {
       port: options.port,
       hostname: options.host,
     }, (info) => {
-      resolve({ port: info.port })
+      resolve({ port: info.port, prMode })
     })
   })
 }

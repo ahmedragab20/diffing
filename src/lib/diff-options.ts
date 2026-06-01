@@ -297,6 +297,7 @@ export const DIFFING_OPTIONS = {
   terminal: { type: 'boolean' as const, default: false },
   tui: { type: 'boolean' as const, default: false },
   gpu: { type: 'boolean' as const, default: false },
+  'gh-pr': { type: 'string' as const },
   help: { type: 'boolean' as const, short: 'h' },
   version: { type: 'boolean' as const },
 }

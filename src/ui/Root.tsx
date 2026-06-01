@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react'
 import { App } from './App'
 import { PlanReviewApp } from './components/PlanReviewApp'
+import { PrReviewApp } from './components/PrReviewApp'
 import { useRoutePath } from './router'
 import { initUiState } from './utils/uiState'
 
 /**
- * Top-level view switch. diffing has two surfaces — the diff review (`/`) and
- * the plan review (`/plan`, `/plan/:id`) — and only one mounts at a time, so the
- * inactive surface's hooks (and its data fetching) never run.
- * 
- * Also hydrates UI State asynchronously on initial mount with a polished loading surface.
+ * Top-level view switch. diffing has three surfaces — the local diff review
+ * (`/`), the plan review (`/plan`, `/plan/:id`), and the GitHub PR review
+ * (`/gh/pr`) — and only one mounts at a time, so the inactive surfaces'
+ * hooks (and their data fetching) never run.
+ *
+ * Also hydrates UI State asynchronously on initial mount with a polished
+ * loading surface.
  */
 export function Root() {
   const path = useRoutePath()
@@ -58,6 +61,9 @@ export function Root() {
 
   if (path === '/plan' || path.startsWith('/plan/')) {
     return <PlanReviewApp />
+  }
+  if (path === '/gh/pr' || path.startsWith('/gh/pr/')) {
+    return <PrReviewApp />
   }
   return <App />
 }

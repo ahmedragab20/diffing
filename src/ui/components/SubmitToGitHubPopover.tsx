@@ -1,0 +1,320 @@
+import { useState, useMemo, useRef, useEffect } from 'react'
+import { GitPullRequest, Pencil, Trash2, Check, X, MessageSquareWarning, AlertCircle, ExternalLink } from 'lucide-react'
+import type { ReviewComment } from '../../lib/types'
+import type { PrSession, PrDecision } from '../../lib/pr-session'
+import { fileName } from '../utils'
+import { Popover } from '../primitives/Popover'
+import { MarkdownField } from './MarkdownField'
+import { useSubmitPrReview } from '../hooks/usePrSession'
+import { useFeedback } from '../hooks/useHaptics'
+
+interface SubmitToGitHubPopoverProps {
+  session: PrSession
+  comments: ReviewComment[]
+  onEditComment: (id: string, body: string) => void
+  onDeleteComment: (id: string) => void
+}
+
+/**
+ * GitHub-style "finish your review" flow for PR mode. Same shape as
+ * {@link SendReviewPopover} but the action POSTs to `/api/gh/submit` and the
+ * success toast links to the just-created review on github.com.
+ */
+export function SubmitToGitHubPopover({
+  session,
+  comments,
+  onEditComment,
+  onDeleteComment,
+}: SubmitToGitHubPopoverProps) {
+  const { haptic, sound } = useFeedback()
+  const submitMutation = useSubmitPrReview()
+  const [open, setOpen] = useState(false)
+  const [verdict, setVerdict] = useState<PrDecision | null>(null)
+  const [general, setGeneral] = useState('')
+
+  const count = comments.length
+  const sorted = useMemo(
+    () => [...comments].sort((a, b) => a.createdAt - b.createdAt),
+    [comments],
+  )
+
+  const alreadySubmitted = !!session.submittedAt
+
+  const handleSubmit = async () => {
+    if (!verdict) return
+    haptic('heavy')
+    sound('send')
+    try {
+      await submitMutation.mutateAsync({ decision: verdict, body: general })
+      setGeneral('')
+      setVerdict(null)
+      setOpen(false)
+    } catch {
+      // surfaced via submitMutation.error
+    }
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={setOpen}
+      ariaLabel="Submit your review to GitHub"
+      className="srp"
+      trigger={
+        <button
+          className="btn btn-primary btn-sm send-review-btn"
+          disabled={submitMutation.isPending}
+          title={alreadySubmitted ? 'Already submitted' : 'Submit your review to the PR on GitHub'}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+        >
+          <GitPullRequest size={14} />
+          <span className="btn-label">
+            {submitMutation.isPending
+              ? 'Submitting…'
+              : alreadySubmitted
+                ? 'Submitted ✓'
+                : count > 0
+                  ? `Submit to GitHub (${count})`
+                  : 'Submit to GitHub'}
+          </span>
+        </button>
+      }
+    >
+      <div className="srp-inner">
+        <div className="srp-head">
+          <GitPullRequest size={15} aria-hidden="true" />
+          <span className="srp-title">Submit review to GitHub</span>
+          <span className="srp-count">
+            {count} comment{count === 1 ? '' : 's'}
+          </span>
+        </div>
+
+        {alreadySubmitted && (
+          <div className="srp-already-submitted">
+            <Check size={13} />
+            <span>
+              Already submitted as{' '}
+              {session.submittedReviewUrl ? (
+                <a href={session.submittedReviewUrl} target="_blank" rel="noreferrer">
+                  review #{session.submittedReviewId} <ExternalLink size={11} />
+                </a>
+              ) : (
+                `review #${session.submittedReviewId}`
+              )}
+              . Re-submitting will post a new review on the same PR.
+            </span>
+          </div>
+        )}
+
+        <div className="plan-verdict-options" role="radiogroup" aria-label="Verdict">
+          {VERDICT_OPTIONS.map((opt) => {
+            const Icon = opt.icon
+            const selected = verdict === opt.value
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                className={`plan-verdict-option ${opt.className} ${selected ? 'plan-verdict-option-selected' : ''}`}
+                onClick={() => setVerdict(opt.value)}
+              >
+                <span className="plan-verdict-icon">
+                  <Icon size={15} aria-hidden="true" />
+                </span>
+                <span className="plan-verdict-text">
+                  <span className="plan-verdict-label">{opt.label}</span>
+                  <span className="plan-verdict-desc">{opt.description}</span>
+                </span>
+                <span className="plan-verdict-radio" aria-hidden="true" />
+              </button>
+            )
+          })}
+        </div>
+
+        {count > 0 ? (
+          <ul className="srp-list" aria-label="Comments to send">
+            {sorted.map((c) => (
+              <CommentRow
+                key={c.id}
+                comment={c}
+                onEdit={onEditComment}
+                onDelete={onDeleteComment}
+              />
+            ))}
+          </ul>
+        ) : (
+          <p className="srp-empty">No inline comments — your verdict and overall note will be sent on their own.</p>
+        )}
+
+        <div className="srp-general">
+          <label className="srp-general-label" htmlFor="srp-gh-general-input">
+            Overall comment <span className="srp-optional">(optional · Markdown)</span>
+          </label>
+          <MarkdownField
+            id="srp-gh-general-input"
+            value={general}
+            onChange={setGeneral}
+            textareaClassName="srp-general-input"
+            placeholder="Add an overall note for the PR that applies to the whole review…"
+            rows={3}
+            ariaLabel="Overall PR review comment"
+            onSubmitShortcut={handleSubmit}
+          />
+        </div>
+
+        {submitMutation.isError && (
+          <div className="srp-error" role="alert">
+            <AlertCircle size={13} />
+            <span>{submitMutation.error?.message ?? 'Submit failed'}</span>
+          </div>
+        )}
+
+        <div className="srp-footer">
+          <button className="btn btn-sm" onClick={() => setOpen(false)} disabled={submitMutation.isPending}>
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={handleSubmit}
+            disabled={!verdict || submitMutation.isPending}
+          >
+            {submitMutation.isPending ? 'Submitting…' : 'Submit review'}
+          </button>
+        </div>
+      </div>
+    </Popover>
+  )
+}
+
+const VERDICT_OPTIONS: {
+  value: PrDecision
+  label: string
+  description: string
+  icon: typeof Check
+  className: string
+}[] = [
+  {
+    value: 'approve',
+    label: 'Approve',
+    description: 'The PR is good — submit an APPROVE review.',
+    icon: Check,
+    className: 'plan-verdict-approve',
+  },
+  {
+    value: 'comment',
+    label: 'Comment',
+    description: 'Leave neutral feedback (no approve / no request changes).',
+    icon: MessageSquareWarning,
+    className: 'plan-verdict-changes',
+  },
+  {
+    value: 'request-changes',
+    label: 'Request changes',
+    description: 'The author must address the comments before merging.',
+    icon: X,
+    className: 'plan-verdict-reject',
+  },
+]
+
+function CommentRow({
+  comment,
+  onEdit,
+  onDelete,
+}: {
+  comment: ReviewComment
+  onEdit: (id: string, body: string) => void
+  onDelete: (id: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(comment.body)
+  const ref = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    if (editing) {
+      ref.current?.focus()
+      ref.current?.select()
+    }
+  }, [editing])
+
+  const lineLabel =
+    comment.lineNumber > 0
+      ? comment.startLineNumber && comment.startLineNumber !== comment.lineNumber
+        ? `:${comment.startLineNumber}-${comment.lineNumber}`
+        : `:${comment.lineNumber}`
+      : ' · file'
+
+  const save = () => {
+    const trimmed = draft.trim()
+    if (trimmed && trimmed !== comment.body) onEdit(comment.id, trimmed)
+    setEditing(false)
+  }
+
+  return (
+    <li className="srp-item">
+      <div className="srp-item-top">
+        <span className="srp-item-loc">
+          <span className="srp-item-file">{fileName(comment.filePath)}</span>
+          <span className="srp-item-line">{lineLabel}</span>
+        </span>
+        {comment.status === 'resolved' && <span className="srp-item-resolved">resolved</span>}
+        <span className="srp-item-actions">
+          {editing ? (
+            <>
+              <button className="srp-icon-btn" onClick={save} title="Save edit">
+                <Check size={13} aria-hidden="true" />
+              </button>
+              <button
+                className="srp-icon-btn"
+                onClick={() => {
+                  setDraft(comment.body)
+                  setEditing(false)
+                }}
+                title="Cancel edit"
+              >
+                <X size={13} aria-hidden="true" />
+              </button>
+            </>
+          ) : (
+            <button className="srp-icon-btn" onClick={() => setEditing(true)} title="Edit comment">
+              <Pencil size={13} aria-hidden="true" />
+            </button>
+          )}
+          <button
+            className="srp-icon-btn srp-icon-btn-danger"
+            onClick={() => onDelete(comment.id)}
+            title="Remove from review"
+          >
+            <Trash2 size={13} aria-hidden="true" />
+          </button>
+        </span>
+      </div>
+
+      {comment.lineContent?.trim() && (
+        <code className="srp-item-code">{comment.lineContent.trim().slice(0, 160)}</code>
+      )}
+
+      {editing ? (
+        <textarea
+          ref={ref}
+          className="srp-item-edit"
+          value={draft}
+          rows={2}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault()
+              save()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              setDraft(comment.body)
+              setEditing(false)
+            }
+          }}
+        />
+      ) : (
+        <p className="srp-item-body">{comment.body}</p>
+      )}
+    </li>
+  )
+}

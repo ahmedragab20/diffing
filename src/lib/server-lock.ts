@@ -20,10 +20,18 @@ export interface ServerLock {
    * Which surface owns the lock.
    *  - `"web"` — Hono server (port is meaningful).
    *  - `"tui"` — Rust binary in `crates/diffing-tui` (port is always 0).
+   *  - `"gh-pr"` — Hono server opened on a GitHub PR (port is meaningful).
    * Optional for backward compat with writes made before this field existed;
    * consumers should treat absent as `"web"`.
    */
-  mode?: 'web' | 'tui'
+  mode?: 'web' | 'tui' | 'gh-pr'
+
+  /**
+   * When `mode === 'gh-pr'`, the original `gh pr <ref>` input. Used by
+   * `diffing gh …` subcommands to re-locate the PR session without
+   * re-parsing CLI args.
+   */
+  prRef?: string
 }
 
 export function lockPath(repoRoot?: string): string {

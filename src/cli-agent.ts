@@ -457,6 +457,9 @@ export async function runSubcommand(name: string, args: string[]): Promise<numbe
     case 'update':
       const { runUpdateCommand } = await import('./lib/update-check.js')
       return runUpdateCommand()
+    case 'gh':
+      const { runGhSubcommand } = await import('./cli-gh.js')
+      return runGhSubcommand(args)
     default:
       console.error(`Unknown subcommand: ${name}`)
       return EXIT_USAGE

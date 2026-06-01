@@ -315,7 +315,79 @@ self-documenting `<plan-review>` envelope:
 
 <img width="1667" height="1087" alt="image" src="https://github.com/user-attachments/assets/00e884b5-4c90-4a9a-9e24-9ae57d80f3f2" />
 
+---
 
+## Reviewing a GitHub PR
+
+`diffing` can open a GitHub PR in the same diff UI you use for the working
+tree, and push your review back to GitHub when you're done. The "Send to
+agent" handoff is **structurally absent** in PR mode — there's no way to
+accidentally route a PR review to a coding agent.
+
+```text
+# All of these open PR #1234 in the current repo:
+diffing "gh pr 1234"
+diffing --gh-pr 1234
+
+# Full URL form:
+diffing "gh pr https://github.com/acme/widget/pull/1234"
+diffing --gh-pr https://github.com/acme/widget/pull/1234
+
+# owner/repo#N shorthand (skips the cwd-repo check):
+diffing "gh pr acme/widget#1234"
+```
+
+The PR diff loads in the existing `<DiffViewer>` / `<FileTree>` machinery.
+Existing review comments on the PR are fetched and shown as a read-only
+summary strip below each file so you can see what was already said before
+adding your own. Comments you write are kept visually distinct.
+
+When you click **Submit to GitHub**, `diffing` builds a `POST
+/repos/{owner}/{repo}/pulls/{pull_number}/reviews` payload and POSTs it
+to GitHub. Multi-line comments are expanded to N single-line comments
+with a `[part N/M]` prefix. Existing comments are **never re-POSTed** —
+only the new ones you wrote in this session.
+
+### Headless subcommands
+
+For CI / agent use, the same flow is exposed as a `gh` subcommand with no
+UI:
+
+```text
+# Submit the current in-progress review to GitHub.
+diffing gh pr-review 1234 --decision request-changes --body "Please address the range"
+
+# Dump PR metadata (title, owner, head SHA, existing comments) as JSON.
+diffing gh pr-fetch 1234
+
+# List the PR-mode comments in this diffing session (mirrors `diffing comments`).
+diffing gh pr-list-comments
+
+# Show the active PR session (ref, owner/repo#n, comment count, submitted status).
+diffing gh status
+```
+
+### Authentication
+
+The submit path uses the same precedence as the rest of the GitHub
+ecosystem:
+
+1. **`gh` CLI** — preferred; uses your existing `gh auth login` session.
+2. **Token env var** — `$GH_TOKEN`, then `$GITHUB_TOKEN`, then
+   `$GITHUB_API_TOKEN` (any of the three).
+3. If neither is available, the submit fails with a clear one-line
+   message telling you to run `gh auth login` or set `$GITHUB_TOKEN`.
+
+The `gh` binary is **only** used for the submit and refresh steps; the
+diff itself is rendered locally, so PR review works offline once the
+session is open.
+
+### Storage
+
+PR-mode state lives in `pr-session.json` (in the per-repo
+`~/.diffing/<repo>-<hash>/` directory) — a separate file from
+`comments.json` and `plans.json`, so a local review and a PR review can
+coexist without colliding.
 
 ---
 
