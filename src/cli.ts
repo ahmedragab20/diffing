@@ -20,9 +20,31 @@ const args = process.argv.slice(2)
 // quoted form is checked *before* parseDiffOptions so it never collides with
 // `git diff` revisions. The `--gh-pr <ref>` flag form is parsed later by
 // parseDiffOptions and merged below.
+//
+// Two argv shapes are accepted:
+//   1. Quoted:   `diffing "gh pr 1234"`           → argv = ['gh pr 1234', ...]
+//   2. Unquoted: `diffing gh pr 1234`             → argv = ['gh', 'pr', '1234', ...]
+// Shape (1) is the natural way most users pass a multi-word PR ref, so we
+// re-split it. Only the leading `gh pr <ref>` tokens are consumed; trailing
+// args (e.g. `--no-open`) survive for parseDiffOptions.
 let prRef: string | null = null
-if (args.length >= 3 && args[0] === 'gh' && args[1] === 'pr') {
-  prRef = args.slice(2).join(' ')
+let ghPrConsumed = 0
+if (args[0]?.startsWith('gh pr ') === true) {
+  const rest = args[0].slice('gh pr '.length).trim()
+  if (rest) {
+    prRef = rest
+    ghPrConsumed = 1
+  }
+} else if (args[0] === 'gh' && args[1] === 'pr' && args[2] !== undefined) {
+  prRef = args[2]
+  ghPrConsumed = 3
+}
+if (ghPrConsumed > 0) {
+  // Remove only the `gh pr <ref>` tokens from `args` so the SUBCOMMANDS check
+  // below doesn't match the leading `gh` and route to the agent-side
+  // `diffing gh ...` verbs (status, pr-fetch, pr-review, pr-list-comments)
+  // instead of opening the web UI.
+  args.splice(0, ghPrConsumed)
 }
 
 // ── Agent subcommands ───────────────────────────────────

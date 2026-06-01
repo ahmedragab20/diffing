@@ -1238,31 +1238,39 @@ export function startServer(options: {
   })
 
   let prMode = false
-  if (options.prRef) {
-    const store = new FilePrSessionStore()
-    void (async () => {
-      try {
-        const existing = await store.get()
-        if (!existing || existing.ref !== options.prRef) {
-          const session = await buildPrSession(options.prRef!)
-          await store.set(session)
-        }
-        prMode = true
-      } catch (err: any) {
-        console.error(`[pr-session] failed to build session for ${options.prRef}: ${err?.message ?? err}`)
+  // Build the PR session BEFORE the server starts accepting connections.
+  // `buildPrSession` shells out to `gh` (auth + metadata + diff fetch) and
+  // takes a few seconds -- if we fire-and-forget like before, the port-bound
+  // callback resolves with `prMode = false` and the lockfile is written as
+  // `mode: "web"`. The UI then hits `/api/diff` before the session lands in
+  // the store, falls through to the local diff, and shows nothing.
+  const prReady = (async () => {
+    if (!options.prRef) return
+    console.error(`Building PR session for ${options.prRef}...`)
+    try {
+      const store = new FilePrSessionStore()
+      const existing = await store.get()
+      if (!existing || existing.ref !== options.prRef) {
+        const session = await buildPrSession(options.prRef!)
+        await store.set(session)
       }
-    })()
-  }
+      prMode = true
+    } catch (err: any) {
+      console.error(`[pr-session] failed to build session for ${options.prRef}: ${err?.message ?? err}`)
+    }
+  })()
 
   const app = createApp(options.clientDir, options.diffOpts)
 
   return new Promise((resolve) => {
-    const server = serve({
-      fetch: app.fetch,
-      port: options.port,
-      hostname: options.host,
-    }, (info) => {
-      resolve({ port: info.port, prMode })
+    prReady.then(() => {
+      serve({
+        fetch: app.fetch,
+        port: options.port,
+        hostname: options.host,
+      }, (info) => {
+        resolve({ port: info.port, prMode })
+      })
     })
   })
 }
