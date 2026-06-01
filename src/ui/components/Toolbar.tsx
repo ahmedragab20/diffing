@@ -29,6 +29,8 @@ interface ToolbarProps {
   theme: string
   editorIDE?: string
   customMode: boolean
+  showMode: boolean
+  showCommitCount: number
   lineDiffType: LineDiffType
   lineWrap: boolean
   diffIndicators: DiffIndicators
@@ -128,6 +130,8 @@ export const Toolbar = memo(function Toolbar({
   theme,
   editorIDE,
   customMode,
+  showMode,
+  showCommitCount,
   lineDiffType,
   lineWrap,
   diffIndicators,
@@ -201,9 +205,21 @@ export const Toolbar = memo(function Toolbar({
           </span>
         )}
         <span className="toolbar-stat">
-          {fileCount} file{fileCount !== 1 ? 's' : ''} changed
-          {additions > 0 && <span className="stat-additions"> +{additions}</span>}
-          {deletions > 0 && <span className="stat-deletions"> -{deletions}</span>}
+          {showMode ? (
+            <>
+              showing{' '}
+              <strong className="toolbar-stat-count">
+                {showCommitCount}
+              </strong>{' '}
+              commit{showCommitCount === 1 ? '' : 's'}
+            </>
+          ) : (
+            <>
+              {fileCount} file{fileCount !== 1 ? 's' : ''} changed
+              {additions > 0 && <span className="stat-additions"> +{additions}</span>}
+              {deletions > 0 && <span className="stat-deletions"> -{deletions}</span>}
+            </>
+          )}
         </span>
       </div>
       <div className="toolbar-right">

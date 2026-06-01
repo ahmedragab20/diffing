@@ -608,3 +608,321 @@ export function getHunkHistory(
   return { blame, recentCommits }
 }
 
+// ── `diffing show` support ─────────────────────────────────────────────
+// `parseGitShowRaw` is a pure, dependency-free parser for the output of
+//   git log --no-walk --reverse -p --pretty=raw --no-color --no-ext-diff <commits>
+// It tolerates: optional `parent` headers (root commits have none), multiple
+// parents (merge commits), `gpgsig` blocks of indented continuation lines,
+// commits with empty bodies, and commits where the diff is empty (path-filtered
+// out entirely). Keeping this in `lib/git.ts` colocates it with the producer
+// (`getShowDiff`) and the rest of the git glue.
+
+export interface CommitInfo {
+  /** 40-char commit SHA. */
+  sha: string
+  /** 7-char short SHA. */
+  shortSha: string
+  /** Parent SHAs; empty for root commits, 1 for normal, 2+ for merges. */
+  parents: string[]
+  /** First line of the commit message. */
+  subject: string
+  /** Remaining lines of the commit message (may be empty). */
+  body: string
+  authorName: string
+  authorEmail: string
+  /** ISO 8601 (`%aI`) — we convert from git's `%at %ai` to ISO inline. */
+  authorDate: string
+  committerName: string
+  committerEmail: string
+  committerDate: string
+  /** Unified diff for *this commit only*. Empty if path-filtered out. */
+  patch: string
+}
+
+/**
+ * Parse the output of `git log --pretty=raw -p` into `CommitInfo[]`.
+ *
+ * The `raw` format emits one record per commit:
+ *
+ *   commit <sha>
+ *   tree <sha>
+ *   parent <sha>            (zero or more; merges have ≥ 2)
+ *   author <name> <email> <unix-time> <tz>
+ *   committer <name> <email> <unix-time> <tz>
+ *   gpgsig -----BEGIN ...   (optional; continuation lines start with a single space)
+ *    <indented body>
+ *
+ *       <indented commit message — 4 spaces of indent>
+ *
+ *   diff --git a/... b/...  (the per-commit patch; may be empty)
+ *   ...
+ *
+ * Records are separated by blank lines but the unambiguous boundary is the
+ * next line beginning with `commit <40-hex>` at column 0.
+ */
+export function parseGitShowRaw(raw: string): CommitInfo[] {
+  if (!raw) return []
+
+  const out: CommitInfo[] = []
+  const lines = raw.split('\n')
+
+  // Find the start indices of each commit record.
+  const starts: number[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (/^commit [0-9a-f]{40}\b/.test(lines[i])) starts.push(i)
+  }
+  if (starts.length === 0) return []
+
+  for (let s = 0; s < starts.length; s++) {
+    const begin = starts[s]
+    const end = s + 1 < starts.length ? starts[s + 1] : lines.length
+    const slice = lines.slice(begin, end)
+    const info = parseSingleCommitRaw(slice)
+    if (info) out.push(info)
+  }
+  return out
+}
+
+function parseSingleCommitRaw(lines: string[]): CommitInfo | null {
+  const first = lines[0] ?? ''
+  const shaMatch = first.match(/^commit ([0-9a-f]{40})/)
+  if (!shaMatch) return null
+  const sha = shaMatch[1]
+
+  let i = 1
+  const parents: string[] = []
+  let authorName = ''
+  let authorEmail = ''
+  let authorDate = ''
+  let committerName = ''
+  let committerEmail = ''
+  let committerDate = ''
+
+  // Header section: every `key value` line at column 0, plus possible
+  // multi-line headers (`gpgsig` followed by indented continuation lines).
+  // The header section ends at the first blank line.
+  while (i < lines.length) {
+    const line = lines[i]
+    if (line === '') break
+
+    // Skip continuation lines for the previous multi-line header.
+    if (line.startsWith(' ')) {
+      i++
+      continue
+    }
+
+    const idx = line.indexOf(' ')
+    const key = idx === -1 ? line : line.slice(0, idx)
+    const value = idx === -1 ? '' : line.slice(idx + 1)
+
+    switch (key) {
+      case 'tree':
+        // ignored — we don't expose the tree SHA
+        break
+      case 'parent':
+        if (value) parents.push(value)
+        break
+      case 'author': {
+        const ident = parseIdent(value)
+        authorName = ident.name
+        authorEmail = ident.email
+        authorDate = ident.date
+        break
+      }
+      case 'committer': {
+        const ident = parseIdent(value)
+        committerName = ident.name
+        committerEmail = ident.email
+        committerDate = ident.date
+        break
+      }
+      // `gpgsig`, `mergetag`, `encoding`, etc. — accept and skip; their
+      // continuation lines are absorbed by the `startsWith(' ')` branch.
+      default:
+        break
+    }
+    i++
+  }
+
+  // Skip the blank line.
+  if (i < lines.length && lines[i] === '') i++
+
+  // Commit message: indented by 4 spaces. Subject is the first non-empty
+  // message line; body is everything after the first blank message line.
+  const msgLines: string[] = []
+  while (i < lines.length) {
+    const line = lines[i]
+    // The diff portion never starts with 4-space indent, so any line that
+    // doesn't start with `    ` AND isn't blank ends the message.
+    if (line.startsWith('    ')) {
+      msgLines.push(line.slice(4))
+      i++
+      continue
+    }
+    if (line === '') {
+      msgLines.push('')
+      i++
+      continue
+    }
+    break
+  }
+  const { subject, body } = splitMessage(msgLines)
+
+  // Everything from `diff --git` (or `Binary files ...`) onwards is the patch.
+  // Allow blank lines in between (git sometimes pads). Stop at EOF.
+  let patchStart = -1
+  for (let j = i; j < lines.length; j++) {
+    const line = lines[j]
+    if (line.startsWith('diff --git ') || line.startsWith('Binary files ')) {
+      patchStart = j
+      break
+    }
+    if (line === '') continue
+    // Any non-empty, non-diff line at this point is unexpected; bail.
+    break
+  }
+  const patch =
+    patchStart === -1 ? '' : lines.slice(patchStart).join('\n').replace(/\n+$/, '\n')
+
+  return {
+    sha,
+    shortSha: sha.slice(0, 7),
+    parents,
+    subject,
+    body,
+    authorName,
+    authorEmail,
+    authorDate,
+    committerName,
+    committerEmail,
+    committerDate,
+    patch,
+  }
+}
+
+/**
+ * Parse a `Name <email> <unix-seconds> <±HHMM>` ident line into structured
+ * fields. The email is bracketed; the timestamp is split out and converted to
+ * ISO 8601 for consumers.
+ */
+function parseIdent(value: string): { name: string; email: string; date: string } {
+  // Example: "Ahmed Ragab <a@b.com> 1780269243 +0300"
+  const match = value.match(/^(.*?)\s+<([^>]*)>\s+(\d+)\s+([+-]\d{4})$/)
+  if (!match) return { name: value, email: '', date: '' }
+  const [, name, email, secs, tz] = match
+  return { name, email, date: unixToIso(Number(secs), tz) }
+}
+
+function unixToIso(secs: number, tz: string): string {
+  if (!Number.isFinite(secs)) return ''
+  // Render in the commit's own timezone so reviewers see the time the author
+  // typed it. `Date#toISOString` is always UTC; we hand-roll the offset.
+  const sign = tz.startsWith('-') ? -1 : 1
+  const tzHours = Number(tz.slice(1, 3))
+  const tzMins = Number(tz.slice(3, 5))
+  const offsetMs = sign * (tzHours * 60 + tzMins) * 60_000
+  const d = new Date(secs * 1000 + offsetMs)
+  const pad = (n: number, w = 2) => String(n).padStart(w, '0')
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` +
+    `T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}` +
+    `${tz.slice(0, 3)}:${tz.slice(3)}`
+  )
+}
+
+function splitMessage(msgLines: string[]): { subject: string; body: string } {
+  if (msgLines.length === 0) return { subject: '', body: '' }
+  // Trim leading/trailing blank lines that git pads with.
+  let start = 0
+  while (start < msgLines.length && msgLines[start] === '') start++
+  let stop = msgLines.length
+  while (stop > start && msgLines[stop - 1] === '') stop--
+  if (start >= stop) return { subject: '', body: '' }
+  const subject = msgLines[start]
+  // Skip the blank line between subject and body (git's convention).
+  let bodyStart = start + 1
+  if (bodyStart < stop && msgLines[bodyStart] === '') bodyStart++
+  const body = msgLines.slice(bodyStart, stop).join('\n')
+  return { subject, body }
+}
+
+/**
+ * Resolve any combination of revspecs (single SHAs, ranges, tags) into an
+ * ordered, oldest-first list of commits, then fetch each commit's metadata
+ * + per-commit diff in a single `git log` invocation. Returns both the
+ * structured `commits[]` (for the UI's metadata banners) and a concatenated
+ * `patch` string (for the existing patch-parsing pipeline that powers the
+ * file tree and tab-size detection).
+ *
+ * Caps the resolved commit list at `MAX_SHOW_COMMITS` to keep the page snappy
+ * on large ranges; over-limit commits are dropped silently from the response
+ * but the count is preserved on the `truncated` field so the UI can warn.
+ */
+export const MAX_SHOW_COMMITS = 100
+
+export async function getShowDiff(
+  revspecs: string[],
+  pathspecs: string[] = [],
+): Promise<{ commits: CommitInfo[]; patch: string; truncated: number }> {
+  if (revspecs.length === 0) return { commits: [], patch: '', truncated: 0 }
+
+  // 1. Resolve revspecs to a flat, ordered commit list. `git rev-list` accepts
+  // every form we care about (single SHA, range, tag, `^X Y`); `--no-walk`
+  // makes bare revspecs resolve to *just that commit* (without it, `HEAD`
+  // would walk the entire history), while ranges still expand normally.
+  // `--reverse` gives oldest-first which matches reading order for a series
+  // review.
+  let shaList: string[]
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        'rev-list',
+        '--no-walk',
+        '--reverse',
+        ...revspecs,
+        ...(pathspecs.length ? ['--', ...pathspecs] : []),
+      ],
+      { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 },
+    )
+    shaList = stdout.split('\n').filter(Boolean)
+  } catch {
+    return { commits: [], patch: '', truncated: 0 }
+  }
+
+  if (shaList.length === 0) return { commits: [], patch: '', truncated: 0 }
+
+  // 2. Cap the list. Over-limit ranges still render the first N commits +
+  // a "truncated" badge in the UI rather than freezing the browser.
+  const truncated = Math.max(0, shaList.length - MAX_SHOW_COMMITS)
+  const trimmed = truncated === 0 ? shaList : shaList.slice(0, MAX_SHOW_COMMITS)
+
+  // 3. Fetch metadata + per-commit diff in one shot. `--no-walk` ensures only
+  // these exact commits are shown (no ancestor traversal); `--reverse` keeps
+  // the same oldest-first ordering as step 1.
+  let raw: string
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        'log',
+        '--no-walk',
+        '--reverse',
+        '-p',
+        '--pretty=raw',
+        ...DIFF_FLAGS,
+        ...trimmed,
+        ...(pathspecs.length ? ['--', ...pathspecs] : []),
+      ],
+      { encoding: 'utf-8', maxBuffer: 200 * 1024 * 1024 },
+    )
+    raw = stdout
+  } catch {
+    return { commits: [], patch: '', truncated: 0 }
+  }
+
+  const commits = parseGitShowRaw(raw)
+  const patch = commits.map((c) => c.patch).filter(Boolean).join('\n')
+  return { commits, patch, truncated }
+}
+

@@ -4877,6 +4877,229 @@ file-tree,
     }
 }
 
+/* `diffing show` commit metadata banner (Phase E) */
+.commit-banner {
+    margin: 12px 16px 0;
+    padding: 10px 14px 12px;
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-weak);
+    border-left: 3px solid var(--accent);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-family: var(--font-sans);
+    color: var(--text-primary, var(--text-muted));
+}
+
+.commit-banner + .commit-banner {
+    margin-top: 0;
+}
+
+.commit-banner-header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.commit-banner-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.commit-banner-icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.commit-banner-sha {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--border-weak);
+    border-radius: var(--radius-sm, 4px);
+    padding: 2px 6px;
+    color: var(--text-primary, var(--text-muted));
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 120ms ease, background 120ms ease;
+    flex-shrink: 0;
+}
+
+.commit-banner-sha:hover {
+    border-color: var(--border-focus);
+    background: var(--accent-subtle);
+}
+
+.commit-banner-sha-icon {
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+
+.commit-banner-sha:hover .commit-banner-sha-icon {
+    opacity: 1;
+}
+
+.commit-banner-merge-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: var(--radius-round, 999px);
+    background: var(--feedback-warning-bg);
+    color: var(--feedback-warning-text);
+    border: 1px solid var(--feedback-warning-border);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+}
+
+.commit-banner-subject {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary, var(--text-muted));
+    word-break: break-word;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.commit-banner-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.commit-banner-author {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+}
+
+.commit-banner-author-name {
+    color: var(--text-primary, var(--text-muted));
+    font-weight: 500;
+}
+
+.commit-banner-author-email {
+    color: var(--text-muted);
+    opacity: 0.7;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    word-break: break-all;
+}
+
+.commit-banner-date {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+}
+
+.commit-banner-committer {
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+
+.commit-banner-committer-label {
+    opacity: 0.7;
+}
+
+.commit-banner-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.commit-banner-body-toggle {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: var(--radius-sm, 4px);
+}
+
+.commit-banner-body-toggle:hover {
+    background: var(--accent-subtle);
+    color: var(--text-primary, var(--text-muted));
+}
+
+.commit-banner-body-pre {
+    margin: 0;
+    padding: 8px 10px;
+    background: var(--bg-elevated, rgba(0, 0, 0, 0.2));
+    border: 1px solid var(--border-weak);
+    border-radius: var(--radius-sm, 4px);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-primary, var(--text-muted));
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 320px;
+    overflow: auto;
+}
+
+@media (max-width: 1024px) {
+    .commit-banner {
+        margin: 10px 12px 0;
+        padding: 10px 12px 12px;
+    }
+}
+
+@media (max-width: 640px) {
+    .commit-banner {
+        margin: 8px 8px 0;
+        padding: 8px 10px 10px;
+    }
+    .commit-banner-meta {
+        gap: 8px;
+    }
+    .commit-banner-subject {
+        font-size: 13px;
+    }
+}
+
+.commit-banner-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    font-family: var(--font-sans);
+}
+
+.commit-banner-truncated {
+    margin: 4px 16px 0;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm, 4px);
+    background: var(--accent-subtle);
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+    font-family: var(--font-sans);
+}
+
+.toolbar-stat-count {
+    color: var(--text-primary, var(--text-muted));
+    font-weight: 600;
+}
+
+
 .spin {
     animation: diffing-spin 0.8s linear infinite;
 }

@@ -6,11 +6,29 @@ export interface BinaryFileInfo {
   type: 'added' | 'deleted' | 'changed' | 'untracked'
 }
 
+export interface CommitInfo {
+  sha: string
+  shortSha: string
+  parents: string[]
+  subject: string
+  body: string
+  authorName: string
+  authorEmail: string
+  authorDate: string
+  committerName: string
+  committerEmail: string
+  committerDate: string
+  patch: string
+}
+
 interface DiffData {
   patch: string
   repoName: string
   branch: string
   customMode: boolean
+  showMode?: boolean
+  commits?: CommitInfo[]
+  truncated?: number
   binaryFiles: BinaryFileInfo[]
   tabSizeMap: Record<string, number>
   untrackedFiles: string[]
@@ -23,6 +41,7 @@ export interface DiffOptions {
 
 const EMPTY_ARRAY: any[] = []
 const EMPTY_OBJECT: Record<string, number> = {}
+const EMPTY_COMMITS: CommitInfo[] = []
 
 export function useDiff(options: DiffOptions, enabled = true) {
   const [data, setData] = useState<DiffData | null>(null)
@@ -88,6 +107,9 @@ export function useDiff(options: DiffOptions, enabled = true) {
     repoName: data?.repoName ?? '',
     branch: data?.branch ?? '',
     customMode: data?.customMode ?? false,
+    showMode: data?.showMode ?? false,
+    commits: data?.commits ?? EMPTY_COMMITS,
+    truncated: data?.truncated ?? 0,
     binaryFiles: data?.binaryFiles ?? EMPTY_ARRAY,
     tabSizeMap: data?.tabSizeMap ?? EMPTY_OBJECT,
     untrackedFiles: data?.untrackedFiles ?? EMPTY_ARRAY,

@@ -30,6 +30,7 @@ import { HapticsProvider, playSound, fireFeedback } from "./hooks/useHaptics";
 import { getUiStateItem, setUiStateItem } from "./utils/uiState";
 import { useDiffSearch } from "./hooks/useDiffSearch";
 import { Toolbar } from "./components/Toolbar";
+import { CommitBanner } from "./components/CommitBanner";
 import { DiffViewer } from "./components/DiffViewer";
 import { MergeConflictResolver } from "./components/MergeConflictResolver";
 import { FileTree } from "./components/FileTree";
@@ -52,6 +53,9 @@ export function App() {
         repoName,
         branch,
         customMode,
+        showMode,
+        commits,
+        truncated,
         binaryFiles,
         tabSizeMap,
         untrackedFiles,
@@ -1035,6 +1039,8 @@ export function App() {
                 theme={settings.theme || "nord"}
                 editorIDE={settings.editorIDE}
                 customMode={customMode}
+                showMode={showMode}
+                showCommitCount={commits.length}
                 lineDiffType={settings.lineDiffType}
                 lineWrap={settings.lineWrap}
                 diffIndicators={settings.diffIndicators}
@@ -1138,6 +1144,23 @@ export function App() {
                     />
                 )}
                 <main className="main" ref={diffViewerRef}>
+                    {showMode && commits.length > 0 && (
+                        <div className="commit-banner-stack" role="list">
+                            {commits.map((commit, i) => (
+                                <CommitBanner
+                                    key={commit.sha}
+                                    commit={commit}
+                                    index={i}
+                                    total={commits.length}
+                                />
+                            ))}
+                            {truncated > 0 && (
+                                <div className="commit-banner-truncated" role="status">
+                                    + {truncated} more commit{truncated === 1 ? "" : "s"} not shown
+                                </div>
+                            )}
+                        </div>
+                    )}
                     {mergeStatus.inMerge && mergeStatus.conflicts.length > 0 && (
                         <div className="merge-conflict-banner">
                             <strong>Merge in progress</strong>

@@ -22,6 +22,7 @@ const mockGetCustomGitDiffAsync = vi.fn()
 const mockGetRepoRootAsync = vi.fn()
 const mockGetBranchNameAsync = vi.fn()
 const mockGetUntrackedFilePathsAsync = vi.fn()
+const mockGetShowDiff = vi.fn()
 
 vi.mock('../lib/git.js', () => ({
   getGitDiff: mockGetGitDiff,
@@ -38,6 +39,7 @@ vi.mock('../lib/git.js', () => ({
   getUntrackedFilePathsAsync: mockGetUntrackedFilePathsAsync,
   getRepoRoot: mockGetRepoRoot,
   getProjectStorageDir: mockGetProjectStorageDir,
+  getShowDiff: mockGetShowDiff,
 }))
 
 vi.mock('../lib/settings.js', () => ({
@@ -190,6 +192,88 @@ describe('server', () => {
         const body = await res.json()
         expect(body.customMode).toBe(true)
         expect(mockGetCustomGitDiffAsync).toHaveBeenCalledWith(['HEAD~3'])
+      })
+
+      describe('show mode', () => {
+        it('routes through getShowDiff and returns commits + showMode', async () => {
+          const { createApp } = await import('../server.js')
+          const diffOpts = {
+            ...DEFAULTS,
+            showMode: true,
+            showRevspecs: ['HEAD'],
+            // showMode mirrors customMode for the UI's toggle visibility
+            revisions: [],
+            pathspecs: [],
+          }
+          const showApp = createApp(clientDir, diffOpts, mockStore)
+          const fakePatch = 'diff --git a/foo.ts b/foo.ts\n@@ -1 +1 @@\n-a\n+b\n'
+          const fakeCommit = {
+            sha: '1'.repeat(40),
+            shortSha: '1111111',
+            parents: ['0'.repeat(40)],
+            subject: 'Hello',
+            body: '',
+            authorName: 'Alice',
+            authorEmail: 'alice@example.com',
+            authorDate: '2026-01-01T00:00:00+00:00',
+            committerName: 'Alice',
+            committerEmail: 'alice@example.com',
+            committerDate: '2026-01-01T00:00:00+00:00',
+            patch: fakePatch,
+          }
+          mockGetShowDiff.mockResolvedValue({ commits: [fakeCommit], patch: fakePatch, truncated: 0 })
+
+          const res = await showApp.fetch(new Request('http://localhost/api/diff'))
+          expect(res.status).toBe(200)
+          const body = await res.json()
+
+          expect(body.showMode).toBe(true)
+          expect(body.commits).toHaveLength(1)
+          expect(body.commits[0].shortSha).toBe('1111111')
+          expect(body.commits[0].subject).toBe('Hello')
+          expect(body.patch).toContain('diff --git a/foo.ts')
+          expect(body.customMode).toBe(true)
+          expect(mockGetShowDiff).toHaveBeenCalledWith(['HEAD'], [])
+          // Show mode bypasses the staged/untracked plumbing.
+          expect(mockGetGitDiffAsync).not.toHaveBeenCalled()
+          expect(mockGetCustomGitDiffAsync).not.toHaveBeenCalled()
+        })
+
+        it('surfaces truncated count when the commit cap is exceeded', async () => {
+          const { createApp } = await import('../server.js')
+          const diffOpts = { ...DEFAULTS, showMode: true, showRevspecs: ['HEAD~200..HEAD'] }
+          const showApp = createApp(clientDir, diffOpts, mockStore)
+          mockGetShowDiff.mockResolvedValue({ commits: [], patch: '', truncated: 100 })
+
+          const res = await showApp.fetch(new Request('http://localhost/api/diff'))
+          const body = await res.json()
+          expect(body.truncated).toBe(100)
+          expect(body.showMode).toBe(true)
+        })
+
+        it('forwards pathspecs to getShowDiff', async () => {
+          const { createApp } = await import('../server.js')
+          const diffOpts = {
+            ...DEFAULTS,
+            showMode: true,
+            showRevspecs: ['HEAD'],
+            pathspecs: ['src/'],
+          }
+          const showApp = createApp(clientDir, diffOpts, mockStore)
+          mockGetShowDiff.mockResolvedValue({ commits: [], patch: '', truncated: 0 })
+
+          await showApp.fetch(new Request('http://localhost/api/diff'))
+          expect(mockGetShowDiff).toHaveBeenCalledWith(['HEAD'], ['src/'])
+        })
+
+        it('omits showMode/commits/truncated from the response in non-show mode', async () => {
+          mockGetGitDiffAsync.mockResolvedValue('diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n')
+          const res = await app.fetch(new Request('http://localhost/api/diff'))
+          const body = await res.json()
+          expect(body.showMode).toBeUndefined()
+          expect(body.commits).toBeUndefined()
+          expect(body.truncated).toBeUndefined()
+        })
       })
 
       it('detects binary files in patch', async () => {

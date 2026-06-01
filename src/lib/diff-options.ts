@@ -136,6 +136,19 @@ export interface DiffOptions {
   tui: boolean
   /** Opt into the experimental GPU render backend (requires --tui). */
   gpu: boolean
+
+  /**
+   * `diffing show <revspec>...` — render the given commits with metadata
+   * banners in the UI. Strictly opt-in via the `show` subcommand; never
+   * inferred from `revisions`.
+   */
+  showMode: boolean
+  /**
+   * Raw revspecs as given to `show`. Forwarded to `git rev-list`/`git log`
+   * so any form (single SHA, multiple SHAs, ranges, tags) is handled by
+   * git itself.
+   */
+  showRevspecs: string[]
 }
 
 export const DEFAULTS: DiffOptions = {
@@ -176,6 +189,8 @@ export const DEFAULTS: DiffOptions = {
   includeUntracked: true,
   tui: false,
   gpu: false,
+  showMode: false,
+  showRevspecs: [],
 }
 
 /**
@@ -325,17 +340,31 @@ Output Modes:
   output if the environment cannot support a TUI (piped stdin, CI,
   missing binary).
 
+Subcommands:
+  show <revspec>...    Drop-in for 'git show'. Renders commit metadata
+                       (subject, author, date, message body) above the
+                       diff in the web UI. Accepts single commits,
+                       ranges (a..b, a...b), tags, and multiple SHAs.
+                       Use '--' to separate revspecs from pathspecs.
+
 Examples:
   diffing                        Review uncommitted changes (web UI)
   diffing --staged               Review staged changes
   diffing HEAD~3                 Review last 3 commits
   diffing main..feature          Compare branches
+  diffing show HEAD              Review a single commit's metadata + diff
+  diffing show HEAD~3..HEAD      Review the last 3 commits as a series
+  diffing show HEAD -- src/      Limit a commit review to a directory
   diffing --diff-algorithm=patience src/  Diff with patience algorithm
   diffing -U10                   Diff with 10 context lines
   diffing --word-diff=color      Word-level diff in color
   diffing -b -w                  Ignore whitespace changes
   diffing --host 0.0.0.0         Allow other machines on the LAN to review
-  diffing --tui                  Open the experimental TUI (native Rust)`)
+  diffing --tui                  Open the experimental TUI (native Rust)
+
+Note: 'diffing <sha>' runs 'git diff <sha>' (working tree vs <sha>); it
+is not the same as 'diffing show <sha>'. Use 'show' when you want to
+review a commit's changes.`)
 }
 
 function printGitDiffHelp(): void {
@@ -761,4 +790,20 @@ export function buildWebDiffArgs(opts: DiffOptions): string[] {
   if (!args.includes('--no-ext-diff')) args.unshift('--no-ext-diff')
 
   return args
+}
+
+/**
+ * Transform a `parseDiffOptions(...)` result into a "show mode" variant:
+ * moves any parsed revisions into `showRevspecs`, clears `revisions` (so the
+ * existing diff-engine path does not try to `git diff` them), and sets the
+ * `showMode` flag. Pathspecs and every other flag survive unchanged.
+ *
+ * Returns the same object for callsite ergonomics — the mutation is in-place
+ * because `parseDiffOptions` always returns a fresh object.
+ */
+export function intoShowMode(opts: DiffOptions): DiffOptions {
+  opts.showRevspecs = opts.revisions
+  opts.revisions = []
+  opts.showMode = true
+  return opts
 }

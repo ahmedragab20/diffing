@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve, isAbsolute } from 'node:path'
 import { readFileSync, existsSync } from 'node:fs'
 import getPort from 'get-port'
-import { parseDiffOptions, DEFAULTS, printHelp } from './lib/diff-options.js'
+import { parseDiffOptions, DEFAULTS, printHelp, intoShowMode } from './lib/diff-options.js'
 import { runTerminalDiff, validateEnvironment } from './lib/diff-engine.js'
 import { startServer } from './server.js'
 import { loadSettings } from './lib/settings.js'
@@ -32,7 +32,27 @@ if (SUBCOMMANDS.has(args[0])) {
   process.exit(await runSubcommand(args[0], args.slice(1)))
 }
 
+// ── `show` subcommand ──────────────────────────────────
+// `diffing show <revspec>...` is a drop-in for `git show`. Unlike the agent
+// subcommands above it is *not* a client-of-the-running-server — it just
+// rewrites the parsed options to "show mode" and falls through to the normal
+// web | terminal | tui flow. Strictly opt-in; `diffing <sha>` retains its
+// `git diff <sha>` semantics.
+let showSubcommand = false
+if (args[0] === 'show') {
+  showSubcommand = true
+  args.shift()
+}
+
 const opts = parseDiffOptions(args)
+
+if (showSubcommand) {
+  if (opts.revisions.length === 0 && !opts.help && !opts.version) {
+    console.error('Usage: diffing show <revspec>... [-- <pathspec>...]')
+    process.exit(5)
+  }
+  intoShowMode(opts)
+}
 
 if (opts.help) {
   printHelp()

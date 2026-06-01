@@ -41,7 +41,7 @@ const MIME_TYPES: Record<string, string> = {
 }
 
 function isCustomMode(opts: DiffOptions): boolean {
-  return opts.revisions.length > 0 || opts.pathspecs.length > 0
+  return opts.revisions.length > 0 || opts.pathspecs.length > 0 || opts.showMode
 }
 
 export function createApp(
@@ -196,6 +196,12 @@ export function createApp(
       binaryFiles: result.binaryFiles,
       tabSizeMap: result.tabSizeMap,
       untrackedFiles: result.untrackedFiles,
+      // Show mode signals the UI to render commit metadata banners. Both
+      // fields are absent in the normal flow so existing clients see the
+      // same payload they always did.
+      showMode: optsForDiff.showMode || undefined,
+      commits: result.commits,
+      truncated: result.truncated,
     })
   })
 
@@ -382,7 +388,9 @@ export function createApp(
       if (!relPath) {
         return c.json({ error: 'Forbidden file path' }, 403)
       }
-      const revision = diffOpts.revisions[0] || 'HEAD'
+      const revision = diffOpts.showMode
+        ? diffOpts.showRevspecs[diffOpts.showRevspecs.length - 1] || 'HEAD'
+        : diffOpts.revisions[0] || 'HEAD'
       const history = getHunkHistory(relPath, deletionStart, deletionCount, revision)
       return c.json(history)
     } catch (err: any) {

@@ -11,6 +11,8 @@ import {
   getCustomGitDiffAsync,
   getUntrackedFilePathsAsync,
   getTabSizeForFiles,
+  getShowDiff,
+  type CommitInfo,
 } from './git.js'
 
 const MAX_BUFFER = 50 * 1024 * 1024
@@ -21,6 +23,10 @@ export interface DiffResult {
   filePaths: string[]
   tabSizeMap: Record<string, number>
   untrackedFiles: string[]
+  /** Populated only when `opts.showMode` is true. */
+  commits?: CommitInfo[]
+  /** Number of commits dropped past the show-mode cap. */
+  truncated?: number
 }
 
 export interface DiffMeta {
@@ -38,10 +44,11 @@ export interface BinaryFileInfo {
  * or a "custom" mode (specific revisions / pathspecs).
  *
  * Custom mode is used when the user provides explicit revisions or pathspecs
- * beyond just toggling staged/untracked.
+ * beyond just toggling staged/untracked. `showMode` is *also* a custom mode
+ * — the "Show staged / Show untracked" toggles don't apply to a commit view.
  */
 function isCustomMode(opts: DiffOptions): boolean {
-  return opts.revisions.length > 0 || opts.pathspecs.length > 0
+  return opts.revisions.length > 0 || opts.pathspecs.length > 0 || opts.showMode
 }
 
 function parseFilePaths(patch: string): string[] {
@@ -110,11 +117,25 @@ export function executeDiff(opts: DiffOptions): { patch: string; args: string[] 
 
 /**
  * Execute a diff asynchronously — used by the server.
+ *
+ * Show mode bypasses the normal `git diff` path entirely: it resolves
+ * revspecs to a commit list and fetches per-commit metadata + patches in
+ * one `git log` call. The concatenated patch is returned in the same shape
+ * the existing UI pipeline expects (so file tree, binary detection, and
+ * tab-size detection all keep working unchanged); the per-commit data
+ * rides along on `commits` for the metadata banners.
  */
 export async function executeDiffAsync(opts: DiffOptions): Promise<{
   patch: string
   args: string[]
+  commits?: CommitInfo[]
+  truncated?: number
 }> {
+  if (opts.showMode) {
+    const { commits, patch, truncated } = await getShowDiff(opts.showRevspecs, opts.pathspecs)
+    return { patch, args: [], commits, truncated }
+  }
+
   if (isCustomMode(opts)) {
     const args = buildGitDiffArgs(opts)
     const patch = await getCustomGitDiffAsync(args)
@@ -132,11 +153,11 @@ export async function executeDiffAsync(opts: DiffOptions): Promise<{
  * Execute a diff and produce the full enriched result used by the web API.
  */
 export async function executeDiffWithMeta(opts: DiffOptions): Promise<DiffResult & DiffMeta> {
-  const { patch } = await executeDiffAsync(opts)
+  const { patch, commits, truncated } = await executeDiffAsync(opts)
 
   const repoName = getRepoName()
   const branch = getBranchName()
-  const untrackedFiles = opts.includeUntracked
+  const untrackedFiles = opts.includeUntracked && !opts.showMode
     ? await getUntrackedFilePathsAsync()
     : []
 
@@ -153,14 +174,22 @@ export async function executeDiffWithMeta(opts: DiffOptions): Promise<DiffResult
     untrackedFiles,
     repoName,
     branch,
+    ...(commits ? { commits } : {}),
+    ...(truncated ? { truncated } : {}),
   }
 }
 
 /**
  * Run the diff in terminal mode: forward to git diff with full flags,
- * output to stdout. Behaves identically to `git diff`.
+ * output to stdout. Behaves identically to `git diff`. In show mode this
+ * delegates to `git show` instead so `diffing show <rev>... --terminal`
+ * is a drop-in for `git show <rev>...`.
  */
 export function runTerminalDiff(opts: DiffOptions): number {
+  if (opts.showMode) {
+    return runTerminalShow(opts)
+  }
+
   const args = buildGitDiffArgs(opts)
 
   // --no-ext-diff and --no-color are currently always enforced to ensure
@@ -190,6 +219,25 @@ export function runTerminalDiff(opts: DiffOptions): number {
       return 1
     }
     // git diff writes to stderr on error; just propagate exit code
+    return err.status ?? 1
+  }
+}
+
+/**
+ * Terminal mode for `diffing show`: spawn `git show` with the user's revspecs
+ * and pathspecs, inherit stdio, propagate exit code. We pass `--no-ext-diff`
+ * so the output is a clean unified diff regardless of the user's git config
+ * (matches the web-mode pipeline), but otherwise hand everything to git.
+ */
+function runTerminalShow(opts: DiffOptions): number {
+  const args = ['show', '--no-ext-diff', ...opts.showRevspecs]
+  if (opts.pathspecs.length > 0) {
+    args.push('--', ...opts.pathspecs)
+  }
+  try {
+    execFileSync('git', args, { encoding: 'utf-8', maxBuffer: MAX_BUFFER, stdio: 'inherit' })
+    return 0
+  } catch (err: any) {
     return err.status ?? 1
   }
 }

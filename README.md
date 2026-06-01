@@ -416,6 +416,23 @@ To integrate flawlessly with your existing developer shell workflows, build pipe
 > [!TIP]
 > For a full list of all git option categories (algorithms, whitespace ignoring, context lines, word-level diffs, moved/copied detection, and path filtering) supported by `diffing`, see the [CLI Reference Manual](docs/cli.md).
 
+### `diffing show` — Review a Commit's Changes (Drop-in for `git show`)
+
+`diffing <sha>` runs `git diff <sha>`, which means "diff between `<sha>` and the working tree" — not the changes that commit introduced. If the working tree matches `<sha>`, the patch is empty and the file list renders blank.
+
+To review the changes **of** a commit, use the new `show` subcommand. It mirrors `git show` and surfaces each commit's metadata (subject, author, date, message body) above the diff in the web UI:
+
+```bash
+diffing show HEAD              # Review the tip commit's metadata + diff
+diffing show HEAD~3..HEAD      # Review the last 3 commits as a series
+diffing show v1.0              # The commit a tag points to
+diffing show abc123 def456     # Two specific commits, oldest-first
+diffing show HEAD -- src/      # Limit a commit review to a directory
+diffing show HEAD~2..HEAD --terminal   # Stream `git show` to your terminal
+```
+
+`show` accepts every form `git show` understands (single commit, range, tag, branch tip, multiple SHAs) and is strictly opt-in — `diffing <sha>` keeps its current `git diff <sha>` semantics so existing muscle memory and scripts are unaffected.
+
 ---
 
 ## Integration & Configuration
