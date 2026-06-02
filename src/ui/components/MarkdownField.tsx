@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { parseMarkdown } from '../utils'
+import { Markdown } from './Markdown'
 
 interface MarkdownFieldProps {
   id?: string
@@ -127,12 +127,13 @@ export function MarkdownField({
           className="md-field-preview markdown-body"
           role="tabpanel"
           aria-label="Markdown preview"
-          dangerouslySetInnerHTML={{
-            __html: value.trim()
-              ? parseMarkdown(value)
-              : '<span class="md-field-empty">Nothing to preview</span>',
-          }}
-        />
+        >
+          {value.trim() ? (
+            <Markdown content={value} />
+          ) : (
+            <span className="md-field-empty">Nothing to preview</span>
+          )}
+        </div>
       )}
     </div>
   )

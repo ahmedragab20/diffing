@@ -3783,6 +3783,58 @@ file-tree,
     display: flex;
     align-items: center;
 }
+.markdown-body li.task-list-item input {
+    margin-right: 6px;
+}
+
+/* GFM tables (GitHub style) — scrolls horizontally when wider than the body */
+.markdown-body table {
+    border-collapse: collapse;
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow: auto;
+    margin: 12px 0;
+    font-size: 13px;
+}
+.markdown-body table th,
+.markdown-body table td {
+    padding: 6px 13px;
+    border: 1px solid var(--border-color);
+    text-align: left;
+}
+.markdown-body table th {
+    background: var(--bg-secondary);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.markdown-body table tr {
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border-color);
+}
+.markdown-body table tr:nth-child(2n) {
+    background: var(--bg-secondary);
+}
+
+/* Mermaid diagrams */
+.markdown-body .mermaid {
+    display: flex;
+    justify-content: center;
+    margin: 12px 0;
+    overflow-x: auto;
+}
+.markdown-body .mermaid svg {
+    max-width: 100%;
+    height: auto;
+}
+.markdown-body .mermaid-error {
+    margin: 12px 0;
+}
+.markdown-body .mermaid-error-note {
+    margin-bottom: 4px;
+    font-size: 12px;
+    color: var(--feedback-danger-text, var(--warning));
+}
 
 /* Drag Selection Highlights (GitHub style) */
 [data-selected-line] {

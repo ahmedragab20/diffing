@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { CheckCircle2, Bot, User, Reply, Pencil, Trash2, AlertTriangle } from 'lucide-react'
 import type { ReviewComment } from '../../lib/types'
-import { timeAgo, parseMarkdown } from '../utils'
+import { timeAgo } from '../utils'
+import { Markdown } from './Markdown'
 import { useComments } from '../hooks/useComments'
 import { CommentForm } from './CommentForm'
 
@@ -327,7 +328,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
             )}
           </div>
           {hasBodyContent && (
-            <div className={`comment-node-body markdown-body ${isResolved ? 'comment-resolved-line' : ''}`} dangerouslySetInnerHTML={{ __html: parseMarkdown(comment.body) }} />
+            <Markdown content={comment.body} className={`comment-node-body markdown-body ${isResolved ? 'comment-resolved-line' : ''}`} />
           )}
 
           {/* Suggestion Card */}
@@ -490,7 +491,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                       />
                     </div>
                   ) : (
-                    <div className="comment-node-body markdown-body" dangerouslySetInnerHTML={{ __html: parseMarkdown(reply.body) }} />
+                    <Markdown content={reply.body} className="comment-node-body markdown-body" />
                   )}
                 </div>
               </div>

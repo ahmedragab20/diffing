@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { parseMarkdown } from '../utils'
+import { Markdown } from './Markdown'
 import { getDraft, setDraft, clearDraft } from '../drafts'
 import { useFeedback } from '../hooks/useHaptics'
 
@@ -170,10 +170,13 @@ export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCa
                   wordBreak: 'break-word',
                   overflowWrap: 'break-word'
                 }}
-                dangerouslySetInnerHTML={{ 
-                  __html: body.trim() ? parseMarkdown(body) : '<span style="color: var(--text-muted); font-style: italic;">Nothing to preview</span>' 
-                }}
-              />
+              >
+                {body.trim() ? (
+                  <Markdown content={body} />
+                ) : (
+                  <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Nothing to preview</span>
+                )}
+              </div>
             )
           })()}
           {(() => {

@@ -13,7 +13,8 @@ import {
   X,
 } from 'lucide-react'
 import type { ReviewComment, CommentReply } from '../../lib/types'
-import { timeAgo, fileName, scrollToLine, parseMarkdown } from '../utils'
+import { timeAgo, fileName, scrollToLine } from '../utils'
+import { Markdown } from './Markdown'
 
 interface CommentTrackerProps {
   comments: ReviewComment[]
@@ -182,7 +183,7 @@ function CommentCard({
           }}
         />
       ) : (
-        <div className="cmt-body markdown-body" dangerouslySetInnerHTML={{ __html: parseMarkdown(comment.body) }} />
+        <Markdown content={comment.body} className="cmt-body markdown-body" />
       )}
 
       <div className="cmt-actions">
@@ -300,7 +301,7 @@ function ReplyRow({
           }}
         />
       ) : (
-        <div className="cmt-reply-body markdown-body" dangerouslySetInnerHTML={{ __html: parseMarkdown(reply.body) }} />
+        <Markdown content={reply.body} className="cmt-reply-body markdown-body" />
       )}
     </li>
   )

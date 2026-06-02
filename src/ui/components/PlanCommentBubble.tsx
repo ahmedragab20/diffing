@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { CheckCircle2, Bot, User, Reply, Pencil, Trash2, AlertTriangle } from 'lucide-react'
 import type { PlanComment } from '../../lib/plan-types'
-import { timeAgo, parseMarkdown } from '../utils'
+import { timeAgo } from '../utils'
+import { Markdown } from './Markdown'
 import { CommentForm } from './CommentForm'
 
 interface PlanCommentBubbleProps {
@@ -181,9 +182,9 @@ export function PlanCommentBubble({
               />
             </div>
           ) : (
-            <div
+            <Markdown
+              content={comment.body}
               className={`comment-node-body markdown-body ${isResolved ? 'comment-resolved-line' : ''}`}
-              dangerouslySetInnerHTML={{ __html: parseMarkdown(comment.body) }}
             />
           )}
         </div>
@@ -240,7 +241,7 @@ export function PlanCommentBubble({
                       />
                     </div>
                   ) : (
-                    <div className="comment-node-body markdown-body" dangerouslySetInnerHTML={{ __html: parseMarkdown(reply.body) }} />
+                    <Markdown content={reply.body} className="comment-node-body markdown-body" />
                   )}
                 </div>
               </div>
