@@ -141,6 +141,16 @@ ordinary code blocks on GitHub (graceful). Suggestion fences are unchanged.
 
 - **Suggestion cards** (`CommentForm`) and **hidden suggestion blocks**
   elsewhere preserved.
+- **`file://` plan links:** react-markdown's default `urlTransform` and the
+  sanitize schema both strip `file:` URLs, which would have silently broken
+  `PlanReview.handleMarkdownClick` (it reads `file:///…` hrefs to open in-app
+  local-file previews). A custom `urlTransform` plus a sanitize-schema `href`
+  protocol keep `file://` links intact; all other protocols stay sanitized.
+- **GitHub line-break parity:** `remark-breaks` preserves the old
+  `breaks: true` single-newline → `<br>` rendering used by `marked`.
+- **`onClick` on the plan body** preserved by keeping the wrapper `<div>` and
+  nesting `<Markdown>`; `handleMarkdownClick` uses `target.closest('a')`, so the
+  extra wrapper element does not affect it.
 - **Clipboard-image upload** untouched (it edits the textarea source string).
 - **highlight.js** theming preserved (`.hljs-*` classes unchanged).
 - **GitHub submission** unaffected (raw markdown source unchanged).

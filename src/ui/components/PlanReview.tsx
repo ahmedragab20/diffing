@@ -4,7 +4,8 @@ import type { LineAnnotation, SelectedLineRange } from '@pierre/diffs'
 import { Bot, FileText, Code2, MessageSquarePlus, Check, X, MessageSquareWarning, Clock } from 'lucide-react'
 import type { Plan, PlanComment, PlanDecision } from '../../lib/plan-types'
 import { sectionTitleForLine, extractPlanLines } from '../../lib/plan-format'
-import { SHIKI_THEME_MAP, parseMarkdown, timeAgo } from '../utils'
+import { SHIKI_THEME_MAP, timeAgo } from '../utils'
+import { Markdown } from './Markdown'
 import type { LineHoverHighlight } from '../hooks/useSettings'
 import { usePlans } from '../hooks/usePlans'
 import { CommentForm } from './CommentForm'
@@ -191,9 +192,9 @@ export function PlanReview({
           <div className="plan-decision-banner-text">
             <strong>{decision.label}</strong>
             {plan.decisionComment && (
-              <span
+              <Markdown
+                content={plan.decisionComment}
                 className="plan-decision-banner-note markdown-body"
-                dangerouslySetInnerHTML={{ __html: parseMarkdown(plan.decisionComment) }}
               />
             )}
           </div>
@@ -225,9 +226,10 @@ export function PlanReview({
       {viewMode === 'rendered' ? (
         <div
           className="markdown-body plan-rendered"
-          dangerouslySetInnerHTML={{ __html: parseMarkdown(plan.body) }}
           onClick={handleMarkdownClick}
-        />
+        >
+          <Markdown content={plan.body} />
+        </div>
       ) : (
         <div className="plan-file">
           <DiffsFile<PlanAnnotationMeta>
