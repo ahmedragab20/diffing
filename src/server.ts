@@ -15,6 +15,7 @@ import { FilePlanStore } from './lib/plans.js'
 import type { PlanStore } from './lib/plans.js'
 import { FileUiStateStore } from './lib/state.js'
 import { isSafePath, toSafeRelativePath } from './lib/path.js'
+import { resolveEditorCommand, type EditorChoice } from './lib/editor-launcher.js'
 import { ReviewSession } from './lib/review-session.js'
 import { PlanReviewSession } from './lib/plan-review-session.js'
 import { formatComments } from './lib/comment-format.js'
@@ -306,20 +307,24 @@ export function createApp(
         return c.json({ error: 'Forbidden file path' }, 403)
       }
       const absolutePath = resolve(root, relPath)
-      const { exec } = await import('node:child_process')
 
-      if (editor === 'vscode') {
-        exec(`code "${absolutePath}"`)
-      } else if (editor === 'zed') {
-        exec(`zed "${absolutePath}"`)
-      } else if (editor === 'vim') {
-        exec(`osascript -e 'tell application "Terminal" to do script "vim \\"${absolutePath}\\""'`)
-      } else if (editor === 'neovim') {
-        exec(`osascript -e 'tell application "Terminal" to do script "nvim \\"${absolutePath}\\""'`)
-      } else {
-        const openModule = await import('open')
-        await openModule.default(absolutePath)
+      if (editor && editor !== 'default') {
+        const command = resolveEditorCommand(editor as EditorChoice, absolutePath)
+        if (command) {
+          const { execFile } = await import('node:child_process')
+          execFile(command.cmd, command.args, (err) => {
+            if (err) {
+              console.error(
+                `Failed to launch ${editor} for ${absolutePath}: ${err.message}`,
+              )
+            }
+          })
+          return c.json({ ok: true })
+        }
       }
+
+      const openModule = await import('open')
+      await openModule.default(absolutePath)
       return c.json({ ok: true })
     } catch (err: any) {
       return c.json({ error: `Failed to open file: ${err.message}` }, 500)

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { isSafePath, toSafeRelativePath } from '../lib/path.js'
 
 describe('isSafePath', () => {
@@ -77,5 +77,37 @@ describe('isSafePath', () => {
     it('returns null for parent directory traversal', () => {
       expect(toSafeRelativePath('../etc/passwd', baseDir)).toBeNull()
     })
+  })
+})
+
+describe('isSafePath on Windows-style paths', () => {
+  // Regression test for the bug where every static-file and git endpoint
+  // returned 403 on Windows because the safety check hard-coded '/' as the
+  // separator. We swap in `path/win32` to simulate Windows path semantics on
+  // any host platform.
+  it('accepts a child path under a Windows-style baseDir', async () => {
+    vi.resetModules()
+    vi.doMock('node:path', async () => await import('node:path/win32'))
+    try {
+      const { isSafePath: isSafeWin } = await import('../lib/path.js')
+      expect(isSafeWin('index.html', 'C:\\Users\\foo\\diffing\\client')).toBe(true)
+      expect(isSafeWin('assets/app.js', 'C:\\Users\\foo\\diffing\\client')).toBe(true)
+    } finally {
+      vi.doUnmock('node:path')
+      vi.resetModules()
+    }
+  })
+
+  it('still rejects traversal under a Windows-style baseDir', async () => {
+    vi.resetModules()
+    vi.doMock('node:path', async () => await import('node:path/win32'))
+    try {
+      const { isSafePath: isSafeWin } = await import('../lib/path.js')
+      expect(isSafeWin('..\\..\\Windows\\System32\\config\\sam', 'C:\\Users\\foo\\diffing\\client')).toBe(false)
+      expect(isSafeWin('C:\\Windows\\System32\\config\\sam', 'C:\\Users\\foo\\diffing\\client')).toBe(false)
+    } finally {
+      vi.doUnmock('node:path')
+      vi.resetModules()
+    }
   })
 })

@@ -51,20 +51,61 @@ pub fn remove_server_lock(repo_root: &str) -> Result<()> {
 
 /// True if the process named by the lock is still alive. Uses
 /// `kill(pid, 0)` on Unix (a no-op that returns 0 if the process exists)
-/// and a permissive fallback on other platforms.
+/// and `tasklist` on Windows. On unknown platforms we conservatively
+/// assume alive — a stale lock will be overwritten on the next write.
 pub fn is_lock_alive(lock: &ServerLock) -> bool {
     #[cfg(unix)]
     {
         // SAFETY: kill(pid, 0) is documented as safe when signal is 0.
         let result = unsafe { libc::kill(lock.pid as i32, 0) };
-        if result != 0 {
-            return false;
-        }
+        result == 0
     }
-    // On non-Unix we conservatively assume alive (a stale lock will be
-    // overwritten on the next write).
-    let _ = lock;
-    true
+    #[cfg(windows)]
+    {
+        is_pid_alive_windows(lock.pid)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = lock;
+        true
+    }
+}
+
+/// Windows process-liveness probe via `tasklist`. We avoid pulling in a
+/// `windows-sys` dependency for one syscall; `tasklist.exe` ships with every
+/// supported Windows release. Returns `true` only when tasklist actually
+/// lists a process row whose PID column matches.
+#[cfg(windows)]
+fn is_pid_alive_windows(pid: u32) -> bool {
+    use std::process::Command;
+    let output = Command::new("tasklist")
+        .args([
+            "/NH",
+            "/FO",
+            "CSV",
+            "/FI",
+            &format!("PID eq {}", pid),
+        ])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // tasklist prints `INFO: No tasks are running which match the
+            // specified criteria.` to stdout when nothing matches; a hit is
+            // a CSV row that quotes the PID as the second field.
+            stdout.contains(&format!("\"{}\"", pid))
+        }
+        // tasklist is missing or errored — conservatively assume alive so we
+        // don't blow away a legitimately running server's lock.
+        _ => true,
+    }
+}
+
+/// Hook so tests on non-Windows hosts can still exercise the parsing logic
+/// the Windows probe relies on. Exposed only inside the crate.
+#[cfg(test)]
+pub(crate) fn pid_appears_in_tasklist_csv(stdout: &str, pid: u32) -> bool {
+    stdout.contains(&format!("\"{}\"", pid))
 }
 
 #[cfg(test)]
@@ -127,5 +168,52 @@ mod tests {
         write_server_lock(repo, &sample_lock()).unwrap();
         remove_server_lock(repo).unwrap();
         remove_server_lock(repo).unwrap();
+    }
+
+    // ── Windows liveness probe ────────────────────────────────────────────
+    // These exercise the CSV-parsing rules `is_pid_alive_windows` relies on.
+    // We run them on every host because the parser is a plain string check
+    // and we want regressions to surface even when CI is macOS / Linux.
+
+    #[test]
+    fn tasklist_csv_hit_is_recognised() {
+        // Real `tasklist /NH /FO CSV /FI "PID eq 12345"` output for a live PID:
+        let stdout = "\"node.exe\",\"12345\",\"Services\",\"0\",\"2,148 K\"\r\n";
+        assert!(pid_appears_in_tasklist_csv(stdout, 12345));
+    }
+
+    #[test]
+    fn tasklist_csv_miss_is_recognised() {
+        // What tasklist prints when the PID is gone:
+        let stdout = "INFO: No tasks are running which match the specified criteria.\r\n";
+        assert!(!pid_appears_in_tasklist_csv(stdout, 12345));
+    }
+
+    #[test]
+    fn tasklist_csv_does_not_match_substring_in_unrelated_column() {
+        // The image name or memory column might contain the PID digits as a
+        // substring — but never wrapped in double-quotes by themselves, which
+        // is what CSV-with-`/NH` guarantees. Guard against a future
+        // sloppier match.
+        let stdout = "\"app12345.exe\",\"42\",\"Console\",\"1\",\"12,345 K\"\r\n";
+        assert!(!pid_appears_in_tasklist_csv(stdout, 12345));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unix_dead_pid_reports_dead() {
+        // PID 1 is always init/launchd → alive. PID 0 / extremely-high
+        // values are reliably unused. We use the latter to assert "dead".
+        let mut lock = sample_lock();
+        lock.pid = 999_999_999;
+        assert!(!is_lock_alive(&lock));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unix_self_pid_reports_alive() {
+        let mut lock = sample_lock();
+        lock.pid = std::process::id();
+        assert!(is_lock_alive(&lock));
     }
 }

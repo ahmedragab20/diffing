@@ -751,18 +751,22 @@ fn detect_agent_status(repo_root: &str) -> AgentStatus {
 fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    // Try pbcopy (macOS), then xclip (Linux), then wl-copy (Wayland). On
-    // failure we just don't copy — the user can grab it from the disk file.
-    for cmd in &["pbcopy", "xclip", "wl-copy"] {
-        let argv: &[&str] = match *cmd {
-            "pbcopy" => &["pbcopy"],
-            "xclip" => &["xclip", "-selection", "clipboard"],
-            "wl-copy" => &["wl-copy"],
-            _ => continue,
-        };
-        if let Ok(mut child) = Command::new(argv[0]).args(&argv[1..]).stdin(Stdio::piped()).spawn() {
+    for cmd in clipboard_candidates() {
+        let argv = cmd.argv();
+        if let Ok(mut child) = Command::new(argv[0])
+            .args(&argv[1..])
+            .stdin(Stdio::piped())
+            .spawn()
+        {
             if let Some(mut stdin) = child.stdin.take() {
-                if stdin.write_all(text.as_bytes()).is_ok() {
+                let payload = if cmd.want_crlf() {
+                    // `clip.exe` reads raw stdin; pasting into typical Windows
+                    // apps works best with CRLF endings.
+                    text.replace('\n', "\r\n")
+                } else {
+                    text.to_string()
+                };
+                if stdin.write_all(payload.as_bytes()).is_ok() {
                     let _ = stdin.flush();
                     drop(stdin);
                     if child.wait().map(|s| s.success()).unwrap_or(false) {
@@ -772,10 +776,134 @@ fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
             }
         }
     }
-        Err(std::io::Error::other(
-            "no clipboard tool found (pbcopy / xclip / wl-copy)",
-        ))
+    Err(std::io::Error::other(
+        "no clipboard tool found (tried pbcopy / wl-copy / xclip / xsel / clip / powershell)",
+    ))
+}
+
+/// One clipboard tool candidate. We model the `clip.exe` line-ending quirk
+/// explicitly so tests can verify it without spawning a real child process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ClipboardCandidate {
+    pub argv: &'static [&'static str],
+    pub crlf: bool,
+}
+
+impl ClipboardCandidate {
+    pub(crate) fn argv(&self) -> &'static [&'static str] {
+        self.argv
+    }
+    pub(crate) fn want_crlf(&self) -> bool {
+        self.crlf
+    }
+}
+
+/// Ordered list of clipboard tools to try. Order matters: the *first*
+/// successful spawn wins, so platform-native tools should come first.
+pub(crate) fn clipboard_candidates() -> &'static [ClipboardCandidate] {
+    #[cfg(target_os = "macos")]
+    {
+        const CANDS: &[ClipboardCandidate] = &[ClipboardCandidate {
+            argv: &["pbcopy"],
+            crlf: false,
+        }];
+        CANDS
+    }
+    #[cfg(target_os = "windows")]
+    {
+        const CANDS: &[ClipboardCandidate] = &[
+            ClipboardCandidate {
+                argv: &["clip"],
+                crlf: true,
+            },
+            ClipboardCandidate {
+                argv: &[
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "$input | Set-Clipboard",
+                ],
+                crlf: true,
+            },
+        ];
+        CANDS
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // Wayland first (modern desktops), then the two X11 tools. Either
+        // ordering of xclip/xsel is fine; xclip is more common.
+        const CANDS: &[ClipboardCandidate] = &[
+            ClipboardCandidate {
+                argv: &["wl-copy"],
+                crlf: false,
+            },
+            ClipboardCandidate {
+                argv: &["xclip", "-selection", "clipboard"],
+                crlf: false,
+            },
+            ClipboardCandidate {
+                argv: &["xsel", "--clipboard", "--input"],
+                crlf: false,
+            },
+        ];
+        CANDS
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+    {
+        const CANDS: &[ClipboardCandidate] = &[];
+        CANDS
+    }
 }
 
 #[allow(dead_code)]
 fn _quiet_duration(_: Duration) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Sanity-check that the platform-conditional candidate list never ships
+    // a binary that obviously doesn't belong on this OS. These tests are
+    // intentionally compiled per-platform so each host asserts only its own
+    // expected toolchain — if someone reshuffles the cfg blocks and breaks
+    // a platform, the test for that platform will fail.
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_clipboard_uses_pbcopy() {
+        let cands = clipboard_candidates();
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].argv(), ["pbcopy"]);
+        assert!(!cands[0].want_crlf());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_clipboard_prefers_clip_then_powershell() {
+        let cands = clipboard_candidates();
+        assert!(cands.len() >= 2);
+        assert_eq!(cands[0].argv()[0], "clip");
+        assert!(cands[0].want_crlf(), "clip.exe wants CRLF endings");
+        assert_eq!(cands[1].argv()[0], "powershell");
+        assert!(
+            cands[1].argv().iter().any(|a| a.contains("Set-Clipboard")),
+            "PowerShell fallback must use Set-Clipboard"
+        );
+    }
+
+    #[test]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn linux_clipboard_offers_wayland_and_x11() {
+        let cands = clipboard_candidates();
+        let names: Vec<&str> = cands.iter().map(|c| c.argv()[0]).collect();
+        assert!(names.contains(&"wl-copy"), "wl-copy missing: {:?}", names);
+        assert!(names.contains(&"xclip"), "xclip missing: {:?}", names);
+        // wl-copy must come before the X11 tools so Wayland-only sessions
+        // don't trip over an X11 fallback that silently writes to the wrong
+        // clipboard.
+        let wl = names.iter().position(|&n| n == "wl-copy").unwrap();
+        let xclip = names.iter().position(|&n| n == "xclip").unwrap();
+        assert!(wl < xclip, "wl-copy must be tried before xclip");
+        assert!(cands.iter().all(|c| !c.want_crlf()));
+    }
+}

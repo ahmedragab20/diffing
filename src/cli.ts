@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { dirname, resolve, isAbsolute } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { readFileSync, existsSync } from 'node:fs'
 import getPort from 'get-port'
 import { parseDiffOptions, DEFAULTS, printHelp, intoShowMode } from './lib/diff-options.js'
@@ -215,45 +215,15 @@ process.on('SIGTERM', shutdown)
 
 // ── TUI helpers ─────────────────────────────────────────
 
+import { findTuiBinary as _findTuiBinary } from './lib/find-tui-binary.js'
+
 /**
- * Locate the `diffing-tui` native binary. Looks, in order:
- *   1. Sibling of this bundled `cli.mjs` (`dist/diffing-tui[.exe]`).
- *   2. `bin/diffing-tui[.exe]` next to the package root.
- *   3. `target/release/diffing-tui[.exe]` next to the package root
- *      (handy for `cargo build` during development).
- *   4. `$PATH` lookup via `which` / `where`.
- * Returns the absolute path of the first match, or `null` if none are found.
+ * Wrapper around `findTuiBinary` that passes this script's `import.meta.url`
+ * so the search paths anchor to the bundled CLI's directory. The real
+ * implementation lives in `lib/find-tui-binary.ts` and is unit-tested there.
  */
 export function findTuiBinary(): string | null {
-  const ext = process.platform === 'win32' ? '.exe' : ''
-  const here = dirname(fileURLToPath(import.meta.url))
-  // `here` is `dist/` after the tsdown build, and the package root sits one
-  // level up. Allow either sibling-of-cli or sibling-of-package for the
-  // various build layouts.
-  const candidates: string[] = [
-    resolve(here, `diffing-tui${ext}`),
-    resolve(here, '..', 'bin', `diffing-tui${ext}`),
-    resolve(here, '..', 'target', 'release', `diffing-tui${ext}`),
-    resolve(here, '..', '..', 'target', 'release', `diffing-tui${ext}`),
-  ]
-  for (const c of candidates) {
-    if (existsSync(c)) return c
-  }
-  // Final fallback: $PATH lookup.
-  try {
-    const which = process.platform === 'win32' ? 'where' : 'which'
-    const out = execFileSync(which, ['diffing-tui'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
-    if (out) {
-      const first = out.split(/\r?\n/)[0]?.trim()
-      if (first && isAbsolute(first)) return first
-    }
-  } catch {
-    // not on $PATH — fall through
-  }
-  return null
+  return _findTuiBinary(import.meta.url)
 }
 
 /**

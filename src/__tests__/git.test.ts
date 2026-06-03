@@ -236,4 +236,91 @@ describe('git', () => {
       expect(dir).toContain('some-repo-')
     })
   })
+
+  describe('getFilePatch — CRLF handling', () => {
+    // The untracked-file synthesizer reads the file from disk and emits one
+    // `+line` per source line. Before the fix it split on a literal `'\n'`,
+    // which on Windows left a trailing `\r` on every line and inflated the
+    // hunk header's line count when the file ended in CRLF.
+
+    it('strips trailing CR from CRLF-terminated untracked file', async () => {
+      mockIsSafePath.mockReturnValue(true)
+      mockExecFileSync
+        .mockReturnValueOnce('') // `git diff` -> no output (untracked)
+        .mockReturnValueOnce('/repo\n') // getRepoRoot inside the untracked branch
+      mockReadFileSync.mockImplementation((p: string) =>
+        p === '/repo/new-windows-file.ts'
+          ? 'line one\r\nline two\r\nline three\r\n'
+          : Buffer.from(''),
+      )
+      const { getFilePatch } = await import('../lib/git.js')
+      const patch = getFilePatch('new-windows-file.ts')
+
+      // No stray \r at the end of any added line.
+      for (const line of patch.split('\n').filter(l => l.startsWith('+'))) {
+        expect(line.endsWith('\r')).toBe(false)
+      }
+
+      // The header should match the actual line count after CRLF-aware split:
+      // ["line one", "line two", "line three", ""] → 4 elements.
+      expect(patch).toContain('@@ -0,0 +1,4 @@')
+      expect(patch).toContain('+line one')
+      expect(patch).toContain('+line two')
+      expect(patch).toContain('+line three')
+    })
+
+    it('handles plain LF file unchanged', async () => {
+      mockIsSafePath.mockReturnValue(true)
+      mockExecFileSync
+        .mockReturnValueOnce('')
+        .mockReturnValueOnce('/repo\n')
+      mockReadFileSync.mockImplementation((p: string) =>
+        p === '/repo/posix-file.ts' ? 'a\nb\nc\n' : Buffer.from(''),
+      )
+      const { getFilePatch } = await import('../lib/git.js')
+      const patch = getFilePatch('posix-file.ts')
+
+      expect(patch).toContain('@@ -0,0 +1,4 @@')
+      expect(patch).toContain('+a\n+b\n+c\n+')
+    })
+
+    it('handles legacy CR-only line endings', async () => {
+      // Classic Mac line endings — vanishingly rare but legal, and a stray
+      // \r in the middle of the diff stream would corrupt the UI just like
+      // CRLF does.
+      mockIsSafePath.mockReturnValue(true)
+      mockExecFileSync
+        .mockReturnValueOnce('')
+        .mockReturnValueOnce('/repo\n')
+      mockReadFileSync.mockImplementation((p: string) =>
+        p === '/repo/classic-mac.txt' ? 'foo\rbar\rbaz' : Buffer.from(''),
+      )
+      const { getFilePatch } = await import('../lib/git.js')
+      const patch = getFilePatch('classic-mac.txt')
+
+      expect(patch).toContain('@@ -0,0 +1,3 @@')
+      expect(patch).toContain('+foo')
+      expect(patch).toContain('+bar')
+      expect(patch).toContain('+baz')
+      // No stray \r anywhere in the synthesized output.
+      expect(patch.includes('\r')).toBe(false)
+    })
+
+    it('handles mixed CRLF/LF in one file', async () => {
+      mockIsSafePath.mockReturnValue(true)
+      mockExecFileSync
+        .mockReturnValueOnce('')
+        .mockReturnValueOnce('/repo\n')
+      mockReadFileSync.mockImplementation((p: string) =>
+        p === '/repo/mixed.txt' ? 'win\r\nposix\nmac\r\n' : Buffer.from(''),
+      )
+      const { getFilePatch } = await import('../lib/git.js')
+      const patch = getFilePatch('mixed.txt')
+
+      expect(patch).toContain('+win')
+      expect(patch).toContain('+posix')
+      expect(patch).toContain('+mac')
+      expect(patch.includes('\r')).toBe(false)
+    })
+  })
 })

@@ -10,6 +10,15 @@ import { parseSync as parseEditorConfig, type ProcessedFileConfig } from 'editor
 
 const execFileAsync = promisify(execFile)
 
+// Files on disk may use LF, CRLF (typical on Windows) or even bare CR endings
+// (very rare, but legal). When we synthesise a unified diff for an untracked
+// file we want one diff line per source line *without* a trailing `\r` —
+// otherwise the diff viewer renders a stray carriage return on every added
+// line. Mirrors the `/\r?\n/` already used by the git-log parser below.
+function splitLines(content: string): string[] {
+  return content.split(/\r\n|\n|\r/)
+}
+
 const IMAGE_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif',
 ])
@@ -172,7 +181,7 @@ function getUntrackedFilesDiff(): string {
     } else {
       try {
         const content = readFileSync(absolutePath, 'utf-8')
-        const lines = content.split('\n')
+        const lines = splitLines(content)
         const diffLines = lines.map((l: string) => `+${l}`)
         const patch = [
           `diff --git a/${file} b/${file}`,
@@ -243,7 +252,7 @@ async function getUntrackedFilesDiffAsync(): Promise<string> {
     } else {
       try {
         const content = await readFile(absolutePath, 'utf-8')
-        const lines = content.split('\n')
+        const lines = splitLines(content)
         const diffLines = lines.map((l: string) => `+${l}`)
         return [
           `diff --git a/${file} b/${file}`,
@@ -402,7 +411,7 @@ export function getFilePatch(filePath: string): string {
     const absolutePath = join(root, filePath)
     if (isBinaryFile(absolutePath)) return ''
     const content = readFileSync(absolutePath, 'utf-8')
-    const lines = content.split('\n')
+    const lines = splitLines(content)
     return [
       `diff --git a/${filePath} b/${filePath}`,
       'new file mode 100644',

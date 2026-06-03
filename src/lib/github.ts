@@ -27,17 +27,21 @@ export async function detectGhCli(): Promise<GhCliInfo> {
     const { stdout } = await execFileAsync('gh', ['--version'], { encoding: 'utf-8' })
     const version = stdout.split('\n')[0]?.trim() || undefined
     try {
-      const { stdout: statusOut } = await execFileAsync('gh', ['auth', 'status'], {
+      // `gh auth status` is inconsistent about which stream the "Logged in to
+      // github.com as <user>" line lands on: older releases (and Windows
+      // builds) emit it on stderr, newer ones on stdout. We don't care — we
+      // search both, so the regex works regardless of where gh decided to
+      // put the line.
+      const result = await execFileAsync('gh', ['auth', 'status'], {
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'pipe'],
       })
-      // `gh auth status` writes the user on success. Output is "Logged in to github.com as <user> (oauth_token)".
-      const userMatch = /as\s+([^\s(]+)/.exec(statusOut)
+      const combined = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
+      const userMatch = parseGhAuthStatusUser(combined)
       return {
         available: true,
         authenticated: true,
         version,
-        user: userMatch?.[1],
+        user: userMatch,
       }
     } catch {
       return { available: true, authenticated: false, version }
@@ -45,6 +49,23 @@ export async function detectGhCli(): Promise<GhCliInfo> {
   } catch {
     return { available: false, authenticated: false }
   }
+}
+
+/**
+ * Extract the GitHub username from `gh auth status` output. Exported for
+ * unit tests — see `__tests__/github-auth.test.ts`.
+ *
+ * Real-world samples:
+ *   `✓ Logged in to github.com account octocat (keyring)`        (gh 2.40+)
+ *   `Logged in to github.com as octocat (oauth_token)`            (older gh)
+ *   `  ✓ Logged in to github.com as octocat (~/.config/gh/hosts.yml)`
+ */
+export function parseGhAuthStatusUser(output: string): string | undefined {
+  // Prefer the newer "account <user>" phrasing; fall back to "as <user>".
+  const account = /Logged in to [^\s]+ account\s+([^\s(]+)/.exec(output)
+  if (account) return account[1]
+  const as = /Logged in to [^\s]+ as\s+([^\s(]+)/.exec(output)
+  return as?.[1]
 }
 
 /** Read the most-preferred GitHub token from the env. */

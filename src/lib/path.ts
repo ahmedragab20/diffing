@@ -1,4 +1,4 @@
-import { resolve, isAbsolute, relative } from 'node:path'
+import { resolve, isAbsolute, relative, sep } from 'node:path'
 
 function decodeAndNormalize(p: string): string {
   // Decode URL-encoded characters (e.g. %2e -> ., %2f -> /, %5c -> \)
@@ -19,7 +19,10 @@ export function toSafeRelativePath(filePath: string, baseDir: string): string | 
   }
   const resolved = resolve(baseDir, normalized)
   const resolvedBase = resolve(baseDir)
-  const isSafe = resolved.startsWith(resolvedBase + '/') || resolved === resolvedBase
+  // Use the platform-specific separator: `resolve()` returns backslashes on
+  // Windows, so a hard-coded '/' here would reject every safe path and make
+  // the static file server (and every git endpoint) return 403 on Windows.
+  const isSafe = resolved === resolvedBase || resolved.startsWith(resolvedBase + sep)
   if (!isSafe) {
     return null
   }
