@@ -82,6 +82,7 @@ diffing [options] [<revision>...] [-- <path>...]
 - `--host <host>`: Host address to bind the server to (default: `127.0.0.1`). Pass `0.0.0.0` to expose the review dashboard to your local network.
 - `--no-open`: Prevents the CLI from automatically launching your browser when the server starts.
 - `--gh-pr <ref>`: Open a GitHub PR review session instead of a working-tree diff. The `<ref>` accepts the same forms as `gh pr <ref>` (bare number, `owner/repo#N`, or full GitHub URL). Equivalent to the quoted form `diffing "gh pr <ref>"`. See [§4c. GitHub PR Review Subcommands](#4c-github-pr-review-subcommands) for the full flow.
+- `--tui`: Open the opt-in native-Rust terminal UI instead of the web server. The same review flow (diff render, file tree, comments, agent handoff) in your terminal — no browser, no port. Strictly opt-in; without `--tui`, `diffing` behaves byte-identically to the previous releases. See [§4d. TUI Subcommands (Native Terminal UI)](#4d-tui-subcommands-native-terminal-ui) for the full flow.
 
 #### Git-Compatible Flags Supported
 - **Revisions / Range**: `--staged`, `--cached`, `--merge`
@@ -454,7 +455,166 @@ a manual refresh.
 
 ---
 
-## 5. Model Context Protocol (MCP) Server
+## 4d. TUI Subcommands (Native Terminal UI) — *Experimental*
+
+> [!WARNING]
+> The TUI is **experimental** in v0.3.0. The interface, keymap, and the
+> on-disk shape of `server.json` (`mode: "tui"`) may change in a minor
+> release before stabilisation. The web UI is the supported path for
+> production workflows; please open an issue before depending on the TUI
+> for CI / agent automation. The web review flow, plan review, and PR
+> review are unaffected by the experimental status of the TUI.
+
+`diffing --tui` opens the opt-in **native-Rust terminal UI** — a leaf renderer
+in `crates/diffing-tui/` that reads the same `~/.diffing/<repo>/*` state on
+disk and writes `server.json` with `mode: "tui"`. The Node CLI remains the
+single source of truth for arg parsing, lockfile discovery, and agent
+handoff; the TUI binary is a self-contained `ratatui` + `crossterm`
+renderer that watches the same `comments.json` and writes back through the
+same atomic file APIs.
+
+```bash
+diffing --tui                       # Open current working tree in the TUI
+diffing --tui --staged              # Review staged changes in the TUI
+diffing --tui HEAD~3                # Working tree vs. 3 commits ago
+diffing --tui main..feature         # Compare two branches
+diffing --tui -- -- src/           # Limit to a directory
+```
+
+### TUI launch semantics
+
+- The default `diffing` behaviour is **byte-identical** with and without
+  `--tui`. The flag is strictly opt-in.
+- If the env cannot support a TUI (piped stdin, CI, no raw mode) the CLI
+  prints one line to stderr (`diffing --tui requires a TTY; falling back
+  to git diff`) and runs the normal `git diff` output.
+- If the `diffing-tui` binary is missing or fails to start, the CLI prints
+  one line to stderr (`diffing-tui binary not found; build it with
+  pnpm build:tui; falling back to git diff`) and runs the normal `git
+  diff` output. The web mode is unaffected by the TUI build — the same
+  `diffing` install serves either.
+
+### Binary discovery
+
+The CLI searches for the `diffing-tui` binary in this order, anchoring on
+the bundled `dist/cli.mjs` directory:
+
+1. Sibling of the bundled CLI (`dist/diffing-tui[.exe]`)
+2. `bin/diffing-tui[.exe]` next to the package root
+3. `target/release/diffing-tui[.exe]` (release build)
+4. `target/debug/diffing-tui[.exe]` (debug build — a plain `cargo build`
+   is enough to use the TUI; no `--release` required)
+5. `$PATH` lookup via `where` (Windows) / `which` (POSIX)
+
+### Lockfile integration
+
+The TUI writes the same `server.json` lockfile the web server writes,
+with `mode: "tui"` instead of `mode: "web"`. The lockfile is therefore
+discoverable by every existing agent subcommand and MCP tool — the only
+visible difference is `mode: "tui"` in the JSON, which existing clients
+already accept (they treat it as "web-equivalent" for comment-store and
+harness purposes).
+
+Stale-lock detection uses `is_lock_alive`, which on Unix probes with
+`kill(pid, 0)` and on Windows probes with `tasklist /NH /FO CSV /FI
+"PID eq N"`. There is no platform-specific caveat for the user — a stale
+lock is detected and replaced on every supported host.
+
+### Keymap (vim-style)
+
+The TUI mirrors the web UI's vim-style motions and adds the comment
+shortcuts. The status bar at the bottom shows the current mode (NORMAL /
+INSERT), the active file path, and the agent-status dot.
+
+| Key | Action |
+|---|---|
+| `j` / `k` | Scroll down / up |
+| `gg` / `G` | Jump to top / bottom of diff |
+| `Ctrl+d` / `Ctrl+u` | Half-page down / up |
+| `J` / `K` | Next / previous file |
+| `Tab` | Toggle focus between file tree and diff |
+| `w` | Toggle line wrap |
+| `t` | Cycle tab size (2 → 4 → 8) |
+| `m` | Toggle split / unified view |
+| `/` | Open text search palette |
+| `?` | Open shortcuts help |
+| `c` | New comment on the current line |
+| `e` | Edit the current comment |
+| `r` | Reply to the current comment thread |
+| `x` | Resolve the current comment |
+| `]` / `[` | Jump to the next / previous open comment thread |
+| `Esc` | Exit insert / popover mode |
+| `q` | Quit |
+
+### Comment workflow
+
+The TUI implements full `ReviewComment` CRUD — it does not call back into
+the Node server for comment operations, but it shares the same
+`comments.json` file path and the same JSON shape as the web UI. The
+following operations are byte-identical between the two clients:
+
+- Creating a new inline / multi-line / file-level comment.
+- Editing a comment's `body` or `status` (`open` / `resolved`).
+- Appending a reply (`role: "user"` for the human, with the model
+  recorded if set).
+- Resolving a comment.
+- Deleting a comment or reply.
+
+The TUI watches `comments.json` (120ms debounce) and broadcasts every
+change through the same atomic-write protocol the web server uses, so a
+comment created in the TUI shows up in the browser instantly when both
+clients are open, and vice versa.
+
+### Send review & agent handoff
+
+The TUI's "send review" popover (verdict radios + general-comment field +
+live XML preview) calls the same `format_comments` Rust port that the web
+UI uses — the output is byte-identical to `<code-review-comments>`. On
+send it:
+
+1. Snapshots the current comment store.
+2. Writes `pending-review.xml` to `~/.diffing/<repo>-<hash>/` (mirroring
+   the web UI's handoff protocol).
+3. Copies the XML to the system clipboard using the platform's
+   preferred tool: `pbcopy` on macOS, `wl-copy` (Wayland) → `xclip` →
+   `xsel` (X11) on Linux, `clip.exe` (with CRLF endings) → PowerShell
+   `Set-Clipboard` on Windows.
+4. Increments the review-session `round` and refreshes `server.json`
+   with `mode: "tui"`.
+5. Updates the agent-status dot in the status bar.
+
+**Known limitation** — the TUI's "Send to agent" writes the review to
+disk + clipboard but does not actively unblock a long-polling `diffing
+await-review` (which would require a Node-side change in a follow-up).
+The web UI's send button remains the supported native handoff path. The
+`pending-review.xml` is still produced and the review session is still
+round-incremented — only the long-poll wake-up is missing.
+
+### Cross-platform notes
+
+- **macOS** — clipboard via `pbcopy`. The TUI binary links against the
+  system libc and requires no extra setup.
+- **Linux** — clipboard via `wl-copy` (Wayland), `xclip` (X11), `xsel`
+  (X11 fallback). The TUI prefers `wl-copy` on systems where both
+  Wayland and X11 tools are installed, so a Wayland-only session never
+  silently falls into an X11 tool.
+- **Windows** — clipboard via `clip.exe` (with `\n` → `\r\n` conversion
+  for proper pasting) or PowerShell `Set-Clipboard` as a fallback. The
+  liveness probe uses `tasklist /NH /FO CSV` so a stale lock is
+  detected and replaced automatically.
+
+### Building the TUI from source
+
+```bash
+pnpm build:tui               # debug → target/debug/diffing-tui
+pnpm build:tui --release     # release → target/release/diffing-tui
+```
+
+The `crates/diffing-tui/` crate is a member of the workspace at
+`Cargo.toml`. `cargo fmt` + `cargo clippy --all-targets -- -D warnings` +
+84 cargo tests all pass before release.
+
+---
 
 `diffing` bundles a full MCP-compliant server over standard I/O (stdio). This allows agents running in tools like Cursor, Claude Desktop, or Gemini to interact with the review session natively.
 

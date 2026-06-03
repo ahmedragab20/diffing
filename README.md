@@ -22,6 +22,16 @@ diffing
 ```
 This instantly spins up a local server, establishes an active repository watcher, and opens your default browser to an interactive code review dashboard.
 
+Prefer the terminal? Add `--tui` for a native-Rust terminal UI — same review flow, no browser:
+```bash
+diffing --tui
+```
+> [!WARNING]
+> The TUI is **experimental** in v0.3.0. The interface, keymap, and
+> `server.json` (`mode: "tui"`) on-disk format may change in a minor
+> release. The web UI is the supported path for production workflows.
+> See [Native Terminal UI (TUI)](#native-terminal-ui-tui) for the full feature set, keymap, and stability notes.
+
 ### 3. Update
 Check if a new version is available on npm and upgrade instantly via the CLI:
 ```bash
@@ -130,6 +140,52 @@ A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), 
 
 <img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/d230d020-4fb2-475a-a8a0-0ae11bb271ff" />
 
+
+---
+
+## Native Terminal UI (TUI) — *Experimental*
+
+> [!WARNING]
+> The TUI is **experimental** in v0.3.0. The interface, keymap, and on-disk
+> format of `server.json` (`mode: "tui"`) may change in a minor release
+> before stabilisation. The web UI is the supported path for production
+> workflows; please open an issue before depending on the TUI for CI / agent
+> automation. The web review flow, plan review, and PR review are unaffected.
+
+`diffing --tui` opens an **opt-in native-Rust terminal interface** that mirrors the web review dashboard — no browser, no Electron, no port. It's a leaf renderer in a new `crates/diffing-tui/` binary: the Node CLI is still the single source of truth for arg parsing, lockfile discovery, and agent handoff, and the TUI reads the same `~/.diffing/<repo>/*` state on disk and writes a `server.json` with `mode: "tui"`.
+
+The default `diffing` behaviour is **byte-identical** with and without `--tui` — the TUI is strictly opt-in. If the env cannot support a TUI (piped stdin, CI, no raw mode) or the binary is missing, you get a one-line stderr note and the normal `git diff` output. The web mode is also unaffected by the TUI build; the same `diffing` install serves either.
+
+```bash
+diffing --tui                       # Open the current working tree in the TUI
+diffing --tui --staged              # Review staged changes in the TUI
+diffing --tui HEAD~3                # Review working tree vs. 3 commits ago
+diffing --tui main..feature         # Compare two branches in the TUI
+diffing --tui -- -- src/            # Limit a TUI review to a directory
+```
+
+**Stack** — Rust 1.78+ workspace (`crates/diffing-core/` shared lib + `crates/diffing-tui/` binary), `ratatui` + `crossterm` for rendering, `syntect` for syntax highlighting, `notify-debouncer-full` for live updates.
+
+**Features**
+
+- **Unified diff render** with a virtualised file card, syntect highlighter, and the same 8 Shiki-compatible colour themes as the web UI.
+- **Vim-style file tree & keymap** — `j/k/gg/G/J/K/Tab/w/t/m/?/` motions, plus `c` (new comment), `e/r/x` (edit / reply / resolve), `]`/`[` (next / previous thread), `?` (help).
+- **Full comment CRUD** — mirrors `src/lib/comments.ts` byte-for-byte; the comment tracker at the bottom lists open / replied / resolved threads with click-to-jump navigation.
+- **Multi-line `tui-textarea` form** with markdown rendering in the preview pane.
+- **Live updates** via `notify` watcher on `comments.json` and the repo working tree — write a comment in another window and it appears immediately.
+- **Send review & agent handoff** — verdict radios + general-comment popover with a live XML preview. Submits via the same `format_comments` envelope as the web UI, copies to clipboard (`pbcopy` / `wl-copy` / `xclip` / `xsel` / `clip.exe`), and persists `pending-review.xml`. The agent-status indicator in the status bar mirrors the web UI's "Send to agent" connection dot.
+- **Cross-platform** — macOS, Linux, and Windows are all first-class. The TUI liveness probe uses `kill(pid, 0)` on Unix and `tasklist /NH /FO CSV` on Windows. Clipboard works on Wayland (`wl-copy`), X11 (`xclip` / `xsel`), macOS (`pbcopy`), and Windows (`clip.exe` / PowerShell `Set-Clipboard`).
+
+**Caveat** — the TUI's "Send to agent" writes the review to disk + clipboard but does not actively unblock a long-polling `diffing await-review`; that requires a Node-side change in a follow-up. The web UI's send button remains the supported native handoff path. The `pending-review.xml` is still produced and the review session is still round-incremented — only the long-poll wake-up is missing.
+
+**Building the binary locally**
+
+```bash
+pnpm build:tui               # debug build → target/debug/diffing-tui
+pnpm build:tui --release     # release build → target/release/diffing-tui
+```
+
+The CLI auto-discovers the binary in the following search order: sibling of `dist/cli.mjs`, `bin/`, `target/release/`, `target/debug/`, then `$PATH`. A `cargo build` (debug) workflow is supported out of the box; you don't need `--release` just to use the TUI.
 
 ---
 
