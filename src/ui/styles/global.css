@@ -4918,6 +4918,33 @@ file-tree,
     animation: badge-flash 200ms ease-out;
 }
 
+/* Copy file path button — sits inline after the path */
+.file-diff-copy-path-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.file-diff-copy-path-btn:hover {
+    background: var(--accent-subtle);
+    color: var(--primary);
+    border-color: var(--accent);
+}
+
+.file-diff-copy-path-btn:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
+
 @keyframes badge-flash {
     from {
         opacity: 0;

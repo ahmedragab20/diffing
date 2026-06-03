@@ -1,7 +1,7 @@
 import { useState, memo, useRef, useEffect, useMemo } from 'react'
 import { FileDiff, MultiFileDiff } from '@pierre/diffs/react'
 import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide, SelectedLineRange } from '@pierre/diffs'
-import { ChevronDown, ChevronRight, Edit3, MessageSquare, Maximize2, Loader2, Undo2, AlertCircle, X, HelpCircle, GitCommit, Clock, User } from 'lucide-react'
+import { ChevronDown, ChevronRight, Edit3, MessageSquare, Maximize2, Loader2, Undo2, AlertCircle, X, HelpCircle, GitCommit, Clock, User, Copy, Check } from 'lucide-react'
 import { Modal } from '../primitives/Modal'
 import { Tooltip } from '../primitives/Tooltip'
 import { useFileContents } from '../hooks/useFileContents'
@@ -77,6 +77,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
   const [liveSelectionCount, setLiveSelectionCount] = useState(0)
   const [permalinkFlash, setPermalinkFlash] = useState<string | null>(null)
+  const [pathCopyFlash, setPathCopyFlash] = useState(false)
   const [collapsed, setCollapsed] = useState(viewed)
   const [opening, setOpening] = useState(false)
   const [showFileCommentForm, setShowFileCommentForm] = useState(false)
@@ -85,6 +86,18 @@ export const FileDiffCard = memo(function FileDiffCard({
   const [revertError, setRevertError] = useState<string | null>(null)
   const [previewHunkIndex, setPreviewHunkIndex] = useState<number | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
+
+  const handleCopyPath = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (typeof navigator === 'undefined' || !navigator.clipboard) return
+    navigator.clipboard.writeText(filePath).then(
+      () => {
+        setPathCopyFlash(true)
+        window.setTimeout(() => setPathCopyFlash(false), 1500)
+      },
+      () => {},
+    )
+  }
 
   const handleRevertHunk = async (hunkIndex: number, skipConfirm = false) => {
     if (revertingHunk !== null) return
@@ -282,7 +295,7 @@ export const FileDiffCard = memo(function FileDiffCard({
       className={`file-diff-card ${viewed ? 'file-diff-viewed' : ''} ${collapsed ? 'file-diff-collapsed' : ''}`}
       id={id}
     >
-      <div 
+      <div
         className="file-diff-card-header"
         onClick={() => setCollapsed(!collapsed)}
       >
@@ -293,6 +306,14 @@ export const FileDiffCard = memo(function FileDiffCard({
           <span className="file-diff-name" title={filePath}>
             {filePath}
           </span>
+          <button
+            className="file-diff-copy-path-btn"
+            onClick={handleCopyPath}
+            title="Copy file path to clipboard"
+            aria-label="Copy file path to clipboard"
+          >
+            {pathCopyFlash ? <Check size={12} /> : <Copy size={12} />}
+          </button>
           {getStatusBadge()}
           {lineAnnotations.length > 0 && (
             <span
@@ -306,6 +327,11 @@ export const FileDiffCard = memo(function FileDiffCard({
           {liveSelectionCount > 0 && (
             <span className="file-diff-selection-badge" aria-live="polite">
               {liveSelectionCount} line{liveSelectionCount === 1 ? '' : 's'} selected
+            </span>
+          )}
+          {pathCopyFlash && (
+            <span className="file-diff-permalink-flash" role="status">
+              Copied path
             </span>
           )}
           {permalinkFlash && (
