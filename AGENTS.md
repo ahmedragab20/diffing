@@ -1,8 +1,14 @@
 # Agent Guidance
 
+## Keep the project clean
+
+Never add scratch files (plans, notes, drafts, temp scripts, etc.) to the project root or any tracked directory. All agent working files — **including implementation plans** — must live under `.diffing/`, which is untracked tooling state. If a file is not part of the shipped product, it does not belong in the user's source tree.
+
 ## Plan Review
 
 Before starting any non-trivial implementation, submit your plan for human review using the `diffing plan` subcommands. The human reviews it in a live UI, comments on specific lines or sections, and approves / requests changes / rejects. You block on a handoff and receive a structured verdict, then proceed or revise.
+
+**Plans must be written to `.diffing/plans/`** (e.g. `.diffing/plans/PLAN.md`). Never create plan files at the project root or anywhere outside `.diffing/`.
 
 ### Start the server (if not already running)
 
@@ -14,12 +20,12 @@ You never need the port — `diffing plan` subcommands discover the running serv
 
 ### Submit a plan
 
-Write your plan as a markdown file and submit it:
+Write your plan as a markdown file **inside `.diffing/plans/`** and submit it:
 
 ```bash
-diffing plan submit PLAN.md --title "Short description" --model "<your-model-name>"
+diffing plan submit .diffing/plans/PLAN.md --title "Short description" --model "<your-model-name>"
 # or from stdin:
-cat PLAN.md | diffing plan submit --model "<your-model-name>"
+cat .diffing/plans/PLAN.md | diffing plan submit --model "<your-model-name>"
 ```
 
 The plan id is printed on stdout; the review URL on stderr.
@@ -29,7 +35,7 @@ The plan id is printed on stdout; the review URL on stderr.
 ```bash
 diffing plan await        # exit 0 + <plan-review> XML when decided; exit 2 (timeout) → run again
 # or submit and wait in one step:
-diffing plan submit PLAN.md --wait --model "<your-model-name>"
+diffing plan submit .diffing/plans/PLAN.md --wait --model "<your-model-name>"
 ```
 
 The XML's `<plan decision="…">` attribute holds the verdict. `<decision-summary>` explains what to do next in plain English.
@@ -45,7 +51,7 @@ The XML's `<plan decision="…">` attribute holds the verdict. `<decision-summar
 To resubmit a revised version (keeps history and version count on one plan):
 
 ```bash
-diffing plan submit PLAN.md --id <plan-id>
+diffing plan submit .diffing/plans/PLAN.md --id <plan-id>
 diffing plan await
 ```
 
