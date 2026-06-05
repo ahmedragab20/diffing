@@ -4524,9 +4524,42 @@ file-tree,
 .vim-status-help-btn:hover {
     color: var(--primary);
     background: var(--accent-subtle);
-}
+  }
 
-/* Keyboard cheat sheet guide modal */
+  .vim-status-toggle {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .vim-status-toggle:hover {
+    color: var(--primary);
+    background: var(--accent-subtle);
+  }
+
+  .vim-status-bar.vim-status-collapsed {
+    padding: 6px 10px;
+    gap: 8px;
+  }
+
+  .vim-status-bar.vim-status-collapsed .vim-status-content,
+  .vim-status-bar.vim-status-collapsed .vim-status-help-btn {
+    display: none;
+  }
+
+  .vim-status-bar.vim-status-collapsed .vim-mode-badge {
+    font-size: 9px;
+    padding: 2px 8px;
+  }
+
+  /* Keyboard cheat sheet guide modal */
 .shortcuts-overlay {
     position: fixed;
     inset: 0;

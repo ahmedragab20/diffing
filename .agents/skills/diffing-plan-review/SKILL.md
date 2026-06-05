@@ -12,43 +12,33 @@ description: >
 user_invocable: true
 ---
 
-# diffing Plan Review — Agent Workflow
+# diffing Plan Review — Detailed Reference
 
-diffing can review **any markdown plan** an agent produces the same way it
-reviews a diff: the human reads it in a GitHub-like UI, comments on specific
-lines or sections, and approves / requests changes / rejects. The agent blocks
-on a handoff and receives the structured verdict, then proceeds or revises.
-
-This is the plan-side twin of `diffing-review`. The loop is:
-
-1. **Submit** your plan (markdown) → it opens for review in the diffing UI.
-2. **Await** the human's verdict (blocking handoff).
-3. **Act**: proceed if approved, revise-and-resubmit if changes requested, stop
-   if rejected — replying to and resolving inline comments along the way.
+> See AGENTS.md for the workflow overview. This file contains the complete CLI
+> reference, flags, and MCP tools.
 
 ---
 
-## 0. Prerequisites & discovery
+## Prerequisites
 
-The diffing server must be running for this repo. If not, start it (web mode):
+The diffing server must be running for this repo. If not:
 
 ```bash
-diffing                 # interactive terminal → launches the review server + UI
-diffing --web --no-open # force web mode without opening a browser (e.g. headless)
+diffing --web --no-open   # headless; omit --no-open to also open browser
 ```
 
-You never need the port. The `diffing plan` subcommands discover the running
-server via the per-repo lockfile. For raw HTTP, capture the base URL once:
+You never need the port — `diffing plan` subcommands discover the running
+server via the per-repo lockfile. For raw HTTP:
 
 ```bash
-DIFFING=$(diffing url)   # fails (exit 3) if no server is running for this repo
+DIFFING=$(diffing url)   # fails (exit 3) if no server for this repo
 ```
 
 ---
 
-## 1. Submit a plan
+## 1. Submit a Plan
 
-Write your plan to a markdown file (or pipe it via stdin) and submit it:
+Write your plan to a markdown file (or pipe via stdin) and submit:
 
 ```bash
 diffing plan submit PLAN.md --title "Refactor the parser" --model "<your-model-name>"
@@ -56,92 +46,100 @@ diffing plan submit PLAN.md --title "Refactor the parser" --model "<your-model-n
 cat PLAN.md | diffing plan submit --model "<your-model-name>"
 ```
 
-`plan submit` prints the new plan id on stdout and the review URL on stderr.
-Flags: `--title` (defaults to the first heading/line), `--source`, `--model`,
-`--id <existing>` (resubmit a revised version), `--wait` (submit then block for
-the verdict in one step).
+**Flags:**
+- `--title` — defaults to first heading/line
+- `--source` — optional source identifier
+- `--model` — **required** for attribution in UI
+- `--id <existing>` — resubmit a revised version (bumps version, keeps history)
+- `--wait` — submit then block for verdict in one step
+
+Prints plan ID on stdout, review URL on stderr.
 
 ---
 
-## 2. Wait for the verdict (handoff)
+## 2. Wait for Verdict (Handoff)
 
-Block until the human approves, rejects, or requests changes. On release, the
-verdict + inline comments are printed as `<plan-review>` XML:
+Block until human approves, rejects, or requests changes. On release, verdict +
+inline comments printed as `<plan-review>` XML:
 
 ```bash
 diffing plan await        # exit 0 + XML on decision; exit 2 (timeout) → run again
 # or combine submit + wait:
-diffing plan submit PLAN.md --wait
+diffing plan submit PLAN.md --wait --model "<model>"
 ```
 
-The XML's `<plan>` element has a `decision` attribute and a `<decision-summary>`
-telling you what to do. stderr also carries `DIFFING_PLAN_DECISION=<verdict>`.
+XML fields:
+- `<plan decision="approved|changes-requested|rejected|pending">`
+- `<decision-summary>` — plain English next step
+- `<decision-comment>` — reviewer's overall note (optional)
+- Each `<comment>` targets `line=N`, range `line=N-M`, or `line=plan`
+  - `section` — nearest heading
+  - `<context>` — anchored plan text
+  - `status="open|resolved"` — **only address `open`**
+
+stderr carries: `DIFFING_PLAN_DECISION=<verdict>`, `DIFFING_PLAN_ROUND=<n>`
 
 ---
 
-## 3. Act on the decision
+## 3. Act on Decision
 
-- **approved** → proceed with implementation as planned.
-- **changes-requested** → revise the plan to address every open comment, then
-  resubmit the *same* plan id for another review round:
-  ```bash
-  diffing plan submit PLAN.md --id <plan-id>   # bumps the version, re-opens review
-  diffing plan await                            # wait for the new verdict
-  ```
-- **rejected** → stop and rethink the approach; do not implement.
+| Decision | Action |
+|----------|--------|
+| `approved` | Proceed with implementation |
+| `changes-requested` | Revise plan, address every `status="open"` comment, resubmit with `--id <plan-id>`, `await` again |
+| `rejected` | Stop; do not implement |
 
-Each `<comment>` targets `line=N`, a range `line=N-M`, or the whole plan
-`line=plan`, with a `section` attribute naming the nearest heading and a
-`<context>` block quoting the anchored plan text. **Only address `status="open"`
-comments.**
-
----
-
-## 4. Reply to and resolve inline comments
-
-Answer questions or confirm changes on individual plan comments. The comment id
-is enough — diffing finds which plan it belongs to:
+Resubmit revised version (keeps history on one plan):
 
 ```bash
-diffing plan reply <comment-id> --body "Good catch — I'll split Phase 2 in two." --model "<your-model-name>"
-diffing plan resolve <comment-id>     # mark a comment addressed
+diffing plan submit PLAN.md --id <plan-id>
+diffing plan await
 ```
-
-Replies and resolutions appear in the human's UI in real time.
 
 ---
 
-## 5. Inspect plans
+## 4. Reply to and Resolve Inline Comments
+
+```bash
+diffing plan reply <comment-id> --body "Good catch — I'll split Phase 2." --model "<your-model-name>"
+diffing plan resolve <comment-id>     # mark addressed
+```
+
+Comment ID is enough — diffing finds which plan it belongs to. Replies/resolutions
+appear in human's UI in real time.
+
+---
+
+## 5. Inspect Plans
 
 ```bash
 diffing plan list            # id, decision, version, open-comment count, title
 diffing plan list --json     # raw JSON
-diffing plan show <id>       # the <plan-review> XML for one plan (latest if omitted)
+diffing plan show <id>       # <plan-review> XML for plan (latest if omitted)
 diffing plan show <id> --json
+diffing plan versions <id>   # version history
+diffing plan versions <id> --json
 ```
 
 ---
 
-## 6. MCP alternative
+## 6. MCP Alternative
 
-If you're configured with the diffing MCP server (`diffing mcp`) instead of a
-shell, the equivalent tools are `submit_plan`, `await_plan_review`,
-`list_plans`, `get_plan`, `reply_to_plan_comment`, and `resolve_plan_comment`.
+If configured with diffing MCP server (`diffing mcp`):
 
 ```json
 { "mcpServers": { "diffing": { "command": "diffing", "args": ["mcp"] } } }
 ```
 
+Tools: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`,
+`reply_to_plan_comment`, `resolve_plan_comment`.
+
 ---
 
 ## 7. Tips
 
-- **Submit a plan before non-trivial work** so the human can steer the approach
-  cheaply, before any code is written.
-- **Keep plans in clean markdown** with headings — each heading becomes a
-  commentable "section", and line numbers stay stable for anchoring.
-- **Resubmit with `--id`** rather than creating a new plan, so the review history
-  and version count stay on one plan.
-- **Don't start implementing on `changes-requested` or `rejected`** — revise or
-  stop. Only `approved` is a green light.
-- **Always pass `--model`** on replies so the UI attributes them to your agent.
+- **Submit before non-trivial work** — human steers approach cheaply
+- **Clean markdown with ATX headings (`##`)** — each heading = commentable section, stable line anchors
+- **Resubmit with `--id`** — not new plan, keeps history/version count
+- **Never implement on `changes-requested` or `rejected`** — only `approved` is green light
+- **Always pass `--model` on replies** — UI attributes to your agent
