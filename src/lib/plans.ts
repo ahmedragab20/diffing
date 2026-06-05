@@ -47,17 +47,49 @@ function newId(): string {
  * we synthesize sensible values so callers can always rely on the new fields.
  */
 function backfillPlan(plan: Plan): void {
-  if (!plan.versions || plan.versions.length === 0) {
-    plan.versions = [
-      {
-        version: plan.version ?? 1,
-        body: plan.body,
-        title: plan.title,
-        source: plan.source,
-        model: plan.model,
-        createdAt: plan.updatedAt ?? plan.createdAt ?? Date.now(),
-      },
-    ]
+  const currentVersion = plan.version ?? 1
+  const have = Array.isArray(plan.versions) ? plan.versions.length : 0
+  if (!plan.versions || have === 0 || have < currentVersion) {
+    // Synthesize one entry per recorded version, oldest-first. Three cases:
+    //   1. `versions` missing or empty (legacy pre-feature file).
+    //   2. `versions` shorter than `plan.version` (e.g. an earlier code path
+    //      backfilled a single entry but the plan has since been resubmitted
+    //      and the new version hasn't been persisted through the same path).
+    //   3. The plan was at v1 forever (single entry, no history to recover).
+    // For plans written before the versioning feature shipped, the only body
+    // we have on disk is the current one — the old code overwrote the past —
+    // so we synthesize one entry per recorded version, all carrying the
+    // current body. That keeps the version dropdown honest ("this plan has
+    // been revised N times") even when the historical bodies are unrecoverable.
+    // Once the user re-submits, the new code path appends a real entry for
+    // the new version and the synthetic v1 entry is replaced.
+    const createdAt = plan.updatedAt ?? plan.createdAt ?? Date.now()
+    // Preserve any genuine entries that are already present (e.g. a real v2
+    // entry recorded by the new submit path) and only fill in the missing
+    // leading versions with synthetic placeholders.
+    const haveEntries = Array.isArray(plan.versions) ? plan.versions : []
+    const present = new Set(haveEntries.map((v) => v.version))
+    const next: PlanVersion[] = []
+    for (let i = 1; i <= currentVersion; i++) {
+      const existing = haveEntries.find((v) => v.version === i)
+      if (existing) {
+        next.push(existing)
+      } else {
+        next.push({
+          version: i,
+          body: plan.body,
+          title: plan.title,
+          source: plan.source,
+          model: plan.model,
+          createdAt,
+        })
+      }
+    }
+    // Sanity: drop anything beyond currentVersion (shouldn't happen).
+    plan.versions = next.filter((v) => v.version >= 1 && v.version <= currentVersion)
+    if (have < currentVersion || !present.has(currentVersion)) {
+      markBackfilled(plan)
+    }
   }
   if (plan.comments) {
     for (const c of plan.comments) {
@@ -69,6 +101,23 @@ function backfillPlan(plan: Plan): void {
   if (!plan.comments) {
     plan.comments = []
   }
+}
+
+/**
+ * Returns true if the plan's `versions[]` was missing or empty on disk and we
+ * had to synthesize it from the current state. The file store uses this flag
+ * to decide whether to persist the backfill back to disk so legacy plans are
+ * only re-synthesized once.
+ */
+function backfilledVersions(plan: Plan): boolean {
+  // The discriminator: a backfilled plan has `version` entries, but the
+  // original on-disk record had none. We can't tell that from the in-memory
+  // plan alone — but we can store a marker on the object when we synthesize.
+  return (plan as Plan & { __backfilledVersions?: boolean }).__backfilledVersions === true
+}
+
+function markBackfilled(plan: Plan): void {
+  ;(plan as Plan & { __backfilledVersions?: boolean }).__backfilledVersions = true
 }
 
 /** Shared mutation helpers so both stores behave identically. */
@@ -309,7 +358,31 @@ export class FilePlanStore implements PlanStore {
     try {
       const data = await readFile(this.filePath, 'utf-8')
       const plans: Plan[] = JSON.parse(data)
-      for (const p of plans) backfillPlan(p)
+      let anyBackfilled = false
+      for (const p of plans) {
+        const before = Array.isArray(p.versions) ? p.versions.length : 0
+        const beforeValid = Array.isArray(p.versions) && p.versions.length > 0
+        backfillPlan(p)
+        const after = Array.isArray(p.versions) ? p.versions.length : 0
+        // Save back if the backfill *changed* anything: either the plan had
+        // no `versions[]` at all (legacy file) or it had a partial array
+        // (an older code path that only synthesized one entry at the time).
+        // We re-save in both cases so the on-disk state is healed once.
+        if ((!beforeValid || before < (p.version ?? 1)) && after > before) {
+          anyBackfilled = true
+        }
+      }
+      // Persist the backfill so legacy plans are only re-synthesized once
+      // per process lifetime. The save is best-effort: if it fails the
+      // in-memory backfill still keeps the feature working for the current
+      // session.
+      if (anyBackfilled) {
+        try {
+          await this.save(plans)
+        } catch {
+          // best-effort
+        }
+      }
       return plans
     } catch {
       return []
@@ -335,7 +408,14 @@ export class FilePlanStore implements PlanStore {
       } catch {
         // Ignore if outside git repo or in mock sandboxes
       }
-      await writeFile(this.filePath, JSON.stringify(plans, null, 2), 'utf-8')
+      // Strip the in-memory backfill marker before serializing; it's only a
+      // runtime hint for the load-time save-back path, never user-visible.
+      const clean = plans.map((p) => {
+        const copy = { ...p }
+        delete (copy as Plan & { __backfilledVersions?: boolean }).__backfilledVersions
+        return copy
+      })
+      await writeFile(this.filePath, JSON.stringify(clean, null, 2), 'utf-8')
     } catch (err) {
       console.error('Failed to save plans to file:', err)
     }

@@ -106,17 +106,45 @@ describe('plan version history', () => {
     expect(after?.versions[after.versions.length - 1].body).toBe('metadata edit')
   })
 
-  it('backfills a plan without versions[] on get', async () => {
+  it('backfills a legacy v1 plan with a single versions[] entry', async () => {
     const plan = await store.upsert({ title: 'P', body: 'a' })
     // Simulate a legacy persisted plan by stripping versions
     const raw = await store.getAll()
-    const legacy: Plan = { ...raw[0], versions: undefined as unknown as Plan['versions'] }
-    // Write back via the store; the next getAll applies the backfill
+    const legacy: Plan = { ...raw[0], version: 1, versions: undefined as unknown as Plan['versions'] }
     ;(store as unknown as { plans: Plan[] }).plans = [legacy]
     const reloaded = await store.get(plan.id)
     expect(reloaded?.versions).toHaveLength(1)
     expect(reloaded?.versions[0].body).toBe(legacy.body)
-    expect(reloaded?.versions[0].version).toBe(legacy.version)
+    expect(reloaded?.versions[0].version).toBe(1)
+  })
+
+  it('backfills a legacy multi-version plan with one entry per recorded version', async () => {
+    // Simulate a plan that was at v3 before the versioning feature shipped:
+    // version: 3, body: the current v3 body, no versions[] on disk. The old
+    // code overwrote the v1 and v2 bodies, so all three synthetic entries
+    // carry the current body. The point is that the version dropdown becomes
+    // visible (3 entries), not that the historical bodies are recovered.
+    const legacy: Plan = {
+      id: 'legacy-1',
+      title: 'Old plan',
+      body: '# v3 body',
+      createdAt: 1000,
+      updatedAt: 2000,
+      version: 3,
+      decision: 'pending',
+      comments: [],
+      versions: undefined as unknown as Plan['versions'],
+    }
+    ;(store as unknown as { plans: Plan[] }).plans = [legacy]
+    const reloaded = await store.get('legacy-1')
+    expect(reloaded?.versions).toHaveLength(3)
+    expect(reloaded?.versions.map((v) => v.version)).toEqual([1, 2, 3])
+    // The only body we have on disk is the v3 body; all synthetic entries
+    // mirror it. Switching to v1 in the UI will show the v3 body — that's
+    // the best we can do without historical on-disk state.
+    for (const v of reloaded!.versions) {
+      expect(v.body).toBe('# v3 body')
+    }
   })
 
   it('backfills a comment missing createdAtPlanVersion with the current plan version', async () => {
