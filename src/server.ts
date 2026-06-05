@@ -899,6 +899,39 @@ export function createApp(
     return c.json(plan)
   })
 
+  // List every historical version of a plan, oldest-first. Each entry
+  // carries the body+title snapshot that was live at that version, so a
+  // reviewer can browse what the agent submitted in v1, v2, …
+  app.get('/api/plans/:id/versions', async (c) => {
+    const plan = await plans.get(c.req.param('id'))
+    if (!plan) return c.json({ error: 'Plan not found' }, 404)
+    return c.json(plan.versions ?? [])
+  })
+
+  // Return a single historical version's body (and title). The current
+  // version is included — callers can pass `n = plan.version` and get the
+  // same payload as a "show current" call.
+  app.get('/api/plans/:id/versions/:n', async (c) => {
+    const id = c.req.param('id')
+    const n = Number(c.req.param('n'))
+    if (!Number.isFinite(n) || n < 1) {
+      return c.json({ error: 'version must be a positive integer' }, 400)
+    }
+    const plan = await plans.get(id)
+    if (!plan) return c.json({ error: 'Plan not found' }, 404)
+    const version = (plan.versions ?? []).find((v) => v.version === n)
+    if (!version) return c.json({ error: `Version ${n} not found` }, 404)
+    return c.json({
+      version,
+      plan: {
+        id: plan.id,
+        title: plan.title,
+        decision: plan.decision,
+        currentVersion: plan.version,
+      },
+    })
+  })
+
   app.post('/api/plans', async (c) => {
     const body = await c.req.json().catch(() => ({}) as Record<string, unknown>)
     if (typeof body.body !== 'string' || !body.body.trim()) {
@@ -954,6 +987,11 @@ export function createApp(
         : lineNumber > 0
           ? sectionTitleForLine(plan.body, anchorStart)
           : undefined
+    // Stamp the version the comment is anchored to. The client may pass an
+    // explicit value (e.g. when commenting on a historical version in the
+    // viewer), but the server's value is authoritative.
+    const createdAtPlanVersion =
+      Number.isFinite(body.createdAtPlanVersion) ? Number(body.createdAtPlanVersion) : plan.version
     const comment = {
       id: crypto.randomUUID(),
       lineNumber,
@@ -963,6 +1001,7 @@ export function createApp(
       body: body.body,
       status: 'open' as const,
       createdAt: Date.now(),
+      createdAtPlanVersion,
       replies: [],
     }
     const updated = await plans.addComment(planId, comment)

@@ -216,4 +216,69 @@ describe('plan endpoints', () => {
       expect(result.payload.reviewXml).toContain('decision="approved"')
     })
   })
+
+  describe('version history', () => {
+    it('GET /api/plans/:id/versions lists the submitted versions oldest-first', async () => {
+      const first = await (await postPlan(app, { title: 'v1 title', body: 'v1 body' })).json()
+      await postPlan(app, { id: first.id, title: 'v2 title', body: 'v2 body' })
+      await postPlan(app, { id: first.id, title: 'v3 title', body: 'v3 body' })
+
+      const res = await app.fetch(new Request(`http://localhost/api/plans/${first.id}/versions`))
+      expect(res.status).toBe(200)
+      const versions = await res.json()
+      expect(versions).toHaveLength(3)
+      expect(versions.map((v: any) => v.version)).toEqual([1, 2, 3])
+      expect(versions[0]).toMatchObject({ version: 1, title: 'v1 title', body: 'v1 body' })
+      expect(versions[2]).toMatchObject({ version: 3, title: 'v3 title', body: 'v3 body' })
+    })
+
+    it('GET /api/plans/:id/versions returns 404 for a missing plan', async () => {
+      const res = await app.fetch(new Request('http://localhost/api/plans/nope/versions'))
+      expect(res.status).toBe(404)
+    })
+
+    it('GET /api/plans/:id/versions/:n returns the historical body+title', async () => {
+      const first = await (await postPlan(app, { title: 'v1', body: 'v1 body' })).json()
+      await postPlan(app, { id: first.id, title: 'v2', body: 'v2 body' })
+
+      const res = await app.fetch(new Request(`http://localhost/api/plans/${first.id}/versions/1`))
+      expect(res.status).toBe(200)
+      const data = await res.json()
+      expect(data.version).toMatchObject({ version: 1, title: 'v1', body: 'v1 body' })
+      expect(data.plan).toMatchObject({ id: first.id, title: 'v2', currentVersion: 2 })
+    })
+
+    it('GET /api/plans/:id/versions/:n returns 404 when version is missing', async () => {
+      const plan = await (await postPlan(app, { title: 'P', body: PLAN_BODY })).json()
+      const res = await app.fetch(new Request(`http://localhost/api/plans/${plan.id}/versions/7`))
+      expect(res.status).toBe(404)
+    })
+
+    it('GET /api/plans/:id/versions/:n rejects a non-integer', async () => {
+      const plan = await (await postPlan(app, { title: 'P', body: PLAN_BODY })).json()
+      const res = await app.fetch(new Request(`http://localhost/api/plans/${plan.id}/versions/abc`))
+      expect(res.status).toBe(400)
+    })
+
+    it('POST /api/plans/:id/comments stamps createdAtPlanVersion from the request body when provided', async () => {
+      const plan = await (await postPlan(app, { title: 'P', body: PLAN_BODY })).json()
+      const res = await app.fetch(new Request(`http://localhost/api/plans/${plan.id}/comments`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lineNumber: 1, body: 'note', createdAtPlanVersion: 7 }),
+      }))
+      expect(res.status).toBe(201)
+      const updated = await res.json()
+      expect(updated.comments[0].createdAtPlanVersion).toBe(7)
+    })
+
+    it('POST /api/plans/:id/comments defaults createdAtPlanVersion to the current plan.version', async () => {
+      const plan = await (await postPlan(app, { title: 'P', body: PLAN_BODY })).json()
+      const res = await app.fetch(new Request(`http://localhost/api/plans/${plan.id}/comments`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lineNumber: 1, body: 'note' }),
+      }))
+      const updated = await res.json()
+      expect(updated.comments[0].createdAtPlanVersion).toBe(plan.version)
+    })
+  })
 })

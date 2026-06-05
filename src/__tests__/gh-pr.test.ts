@@ -61,26 +61,51 @@ class MockPlanStore implements PlanStore {
     async get() {
         return null;
     }
-    async create() {
-        throw new Error("not used");
+    async upsert(input: { id?: string; title: string; body: string; source?: string; model?: string }) {
+        return {
+            id: input.id || "p1",
+            title: input.title,
+            body: input.body,
+            source: input.source,
+            model: input.model,
+            createdAt: 0,
+            updatedAt: 0,
+            version: 1,
+            decision: "pending" as const,
+            comments: [],
+            versions: [{ version: 1, body: input.body, title: input.title, createdAt: 0 }],
+        };
     }
     async update() {
         return null;
     }
-    async decide() {
-        return null;
-    }
-    async reply() {
-        return null;
-    }
-    async resolveReply() {
-        return null;
-    }
-    async delete() {
+    async remove() {
         return false;
     }
-    async resolveAllReplies() {}
-    async clearAll() {}
+    async setDecision() {
+        return null;
+    }
+    async addComment() {
+        return null;
+    }
+    async updateComment() {
+        return null;
+    }
+    async removeComment() {
+        return null;
+    }
+    async addReply() {
+        return null;
+    }
+    async removeReply() {
+        return null;
+    }
+    async updateReply() {
+        return null;
+    }
+    async getVersion() {
+        return null;
+    }
 }
 
 const baseSession: PrSession = {

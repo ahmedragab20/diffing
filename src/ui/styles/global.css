@@ -6886,6 +6886,87 @@ file-tree,
     background: var(--accent-subtle);
     color: var(--primary);
 }
+.plan-review-chip-sub {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+.plan-review-title-historical {
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 0.85em;
+}
+.plan-review-version-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 6px 0 4px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+}
+.plan-review-version-switcher-icon {
+    color: var(--text-muted);
+}
+.plan-review-version-current-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--primary, #10b981);
+    margin-left: 2px;
+    flex-shrink: 0;
+}
+.plan-review-version-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.plan-review-version-back:hover {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+.plan-review-historical-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 20px 0;
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--warning, #d97706);
+    background: rgba(217, 119, 6, 0.08);
+    color: var(--warning, #d97706);
+    font-size: 12px;
+}
+.plan-review-historical-banner > span {
+    flex: 1;
+    color: var(--text-primary);
+}
+.plan-review-historical-banner > span strong {
+    color: var(--warning, #d97706);
+}
+.plan-review-historical-banner-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--warning, #d97706);
+    background: transparent;
+    color: var(--warning, #d97706);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.plan-review-historical-banner-back:hover {
+    background: rgba(217, 119, 6, 0.12);
+}
 .plan-review-head-actions {
     display: flex;
     align-items: center;

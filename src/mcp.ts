@@ -261,6 +261,61 @@ export async function startMcpServer(): Promise<void> {
     },
   )
 
+  server.registerTool(
+    'get_plan_versions',
+    {
+      title: 'List plan versions',
+      description:
+        'List every version of a plan the agent has submitted, oldest-first. The current version is marked with a `*`.',
+      inputSchema: { planId: z.string() },
+    },
+    async ({ planId }) => {
+      const res = await fetch(`${baseUrl()}/api/plans/${planId}/versions`)
+      if (res.status === 404) throw new Error(`Plan ${planId} not found.`)
+      if (!res.ok) throw new Error(`Failed to fetch versions: HTTP ${res.status}`)
+      const versions = (await res.json()) as Plan['versions']
+      const summary = versions
+        .map((v) => {
+          const date = new Date(v.createdAt).toISOString().slice(0, 16).replace('T', ' ')
+          return `v${v.version} — ${date} — ${v.title}`
+        })
+        .join('\n')
+      return textResult(summary || 'No versions recorded.', { versions })
+    },
+  )
+
+  server.registerTool(
+    'get_plan_version',
+    {
+      title: 'Get a specific plan version',
+      description:
+        'Fetch a single historical version of a plan as the <plan-review> XML, with comments filtered to those anchored to that version. Pass `version` to choose which version to read (omit for the current one).',
+      inputSchema: { planId: z.string(), version: z.number().int().positive().optional() },
+    },
+    async ({ planId, version }) => {
+      const base = baseUrl()
+      if (version === undefined) {
+        const res = await fetch(`${base}/api/plans/${planId}`)
+        if (res.status === 404) throw new Error(`Plan ${planId} not found.`)
+        if (!res.ok) throw new Error(`Failed to fetch plan: HTTP ${res.status}`)
+        const plan = (await res.json()) as Plan
+        return textResult(formatPlanReview(plan), { plan })
+      }
+      const res = await fetch(`${base}/api/plans/${planId}/versions/${version}`)
+      if (res.status === 404) throw new Error(`Plan ${planId} v${version} not found.`)
+      if (!res.ok) throw new Error(`Failed to fetch version: HTTP ${res.status}`)
+      const data = (await res.json()) as { version: Plan['versions'][number]; plan: { id: string; title: string; decision: Plan['decision']; currentVersion: number } }
+      const planRes = await fetch(`${base}/api/plans/${planId}`)
+      if (!planRes.ok) throw new Error(`Plan ${planId} not found.`)
+      const plan = (await planRes.json()) as Plan
+      return textResult(formatPlanReview(plan, { viewingVersion: data.version.version }), {
+        plan,
+        version: data.version,
+        currentVersion: data.plan.currentVersion,
+      })
+    },
+  )
+
   /** Resolve which plan owns a comment id, for the reply/resolve tools. */
   async function findPlanForComment(base: string, commentId: string): Promise<Plan | null> {
     const all: Plan[] = await fetch(`${base}/api/plans`).then((r) => r.json())

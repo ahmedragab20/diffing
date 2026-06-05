@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { getRepoRoot, getProjectStorageDir } from './git.js'
-import type { Plan, PlanComment, PlanDecision } from './plan-types.js'
+import type { Plan, PlanComment, PlanDecision, PlanVersion } from './plan-types.js'
 import type { CommentReply } from './types.js'
 
 /**
@@ -32,10 +32,43 @@ export interface PlanStore {
   addReply(planId: string, commentId: string, reply: CommentReply): Promise<Plan | null>
   removeReply(planId: string, commentId: string, replyId: string): Promise<Plan | null>
   updateReply(planId: string, commentId: string, replyId: string, body: string): Promise<Plan | null>
+
+  /** Returns the body/title snapshot of a specific historical version, or null if not found. */
+  getVersion(id: string, version: number): Promise<PlanVersion | null>
 }
 
 function newId(): string {
   return crypto.randomUUID()
+}
+
+/**
+ * Backfill / repair a plan loaded from disk so it matches the current schema.
+ * Older persisted plans may be missing `versions` and `createdAtPlanVersion`;
+ * we synthesize sensible values so callers can always rely on the new fields.
+ */
+function backfillPlan(plan: Plan): void {
+  if (!plan.versions || plan.versions.length === 0) {
+    plan.versions = [
+      {
+        version: plan.version ?? 1,
+        body: plan.body,
+        title: plan.title,
+        source: plan.source,
+        model: plan.model,
+        createdAt: plan.updatedAt ?? plan.createdAt ?? Date.now(),
+      },
+    ]
+  }
+  if (plan.comments) {
+    for (const c of plan.comments) {
+      if (typeof c.createdAtPlanVersion !== 'number') {
+        c.createdAtPlanVersion = plan.version ?? 1
+      }
+    }
+  }
+  if (!plan.comments) {
+    plan.comments = []
+  }
 }
 
 /** Shared mutation helpers so both stores behave identically. */
@@ -47,12 +80,25 @@ function applyUpsert(
   if (input.id) {
     const existing = plans.find((p) => p.id === input.id)
     if (existing) {
+      // Bump the version and mutate the current fields. The previous version
+      // is already captured as `versions[last]` (invariant: the tail of
+      // `versions[]` always equals the current state), so we just append the
+      // new current snapshot to keep the invariant.
       existing.title = input.title
       existing.body = input.body
       if (input.source !== undefined) existing.source = input.source
       if (input.model !== undefined) existing.model = input.model
       existing.version += 1
       existing.updatedAt = now
+      if (!existing.versions) existing.versions = []
+      existing.versions.push({
+        version: existing.version,
+        body: existing.body,
+        title: existing.title,
+        source: existing.source,
+        model: existing.model,
+        createdAt: now,
+      })
       // A revised body invalidates the previous verdict — re-open for review.
       existing.decision = 'pending'
       existing.decisionComment = undefined
@@ -71,6 +117,16 @@ function applyUpsert(
     version: 1,
     decision: 'pending',
     comments: [],
+    versions: [
+      {
+        version: 1,
+        body: input.body,
+        title: input.title,
+        source: input.source,
+        model: input.model,
+        createdAt: now,
+      },
+    ],
   }
   plans.push(plan)
   return plan
@@ -83,6 +139,33 @@ function applyComment<T>(plans: Plan[], planId: string, fn: (plan: Plan) => T | 
   return fn(plan)
 }
 
+/**
+ * Keep the most-recent `PlanVersion` snapshot in sync with the current `Plan`
+ * fields after a non-resubmit edit (PUT). Doesn't add a new entry — that only
+ * happens via `upsert` (the resubmit flow).
+ */
+function syncCurrentVersion(plan: Plan): void {
+  if (!plan.versions || plan.versions.length === 0) {
+    plan.versions = []
+  }
+  if (plan.versions.length === 0) {
+    plan.versions.push({
+      version: plan.version,
+      body: plan.body,
+      title: plan.title,
+      source: plan.source,
+      model: plan.model,
+      createdAt: plan.updatedAt,
+    })
+    return
+  }
+  const last = plan.versions[plan.versions.length - 1]
+  last.body = plan.body
+  last.title = plan.title
+  last.source = plan.source
+  last.model = plan.model
+}
+
 export class InMemoryPlanStore implements PlanStore {
   private plans: Plan[] = []
 
@@ -91,11 +174,22 @@ export class InMemoryPlanStore implements PlanStore {
   }
 
   async get(id: string): Promise<Plan | null> {
-    return this.plans.find((p) => p.id === id) ?? null
+    const plan = this.plans.find((p) => p.id === id) ?? null
+    if (plan) backfillPlan(plan)
+    return plan
+  }
+
+  async getVersion(id: string, version: number): Promise<PlanVersion | null> {
+    const plan = this.plans.find((p) => p.id === id)
+    if (!plan) return null
+    backfillPlan(plan)
+    return plan.versions.find((v) => v.version === version) ?? null
   }
 
   async upsert(input: { id?: string; title: string; body: string; source?: string; model?: string }): Promise<Plan> {
-    return applyUpsert(this.plans, input, Date.now())
+    const plan = applyUpsert(this.plans, input, Date.now())
+    backfillPlan(plan)
+    return plan
   }
 
   async update(id: string, fields: { title?: string; body?: string; source?: string; model?: string }): Promise<Plan | null> {
@@ -106,6 +200,8 @@ export class InMemoryPlanStore implements PlanStore {
     if (fields.source !== undefined) plan.source = fields.source
     if (fields.model !== undefined) plan.model = fields.model
     plan.updatedAt = Date.now()
+    syncCurrentVersion(plan)
+    backfillPlan(plan)
     return plan
   }
 
@@ -128,6 +224,9 @@ export class InMemoryPlanStore implements PlanStore {
 
   async addComment(planId: string, comment: PlanComment): Promise<Plan | null> {
     return applyComment(this.plans, planId, (plan) => {
+      if (typeof comment.createdAtPlanVersion !== 'number') {
+        comment.createdAtPlanVersion = plan.version ?? 1
+      }
       plan.comments.push(comment)
       return plan
     })
@@ -156,6 +255,11 @@ export class InMemoryPlanStore implements PlanStore {
     return applyComment(this.plans, planId, (plan) => {
       const c = plan.comments.find((x) => x.id === commentId)
       if (!c) return null
+      // Inherit the parent's version stamp so the reply stays anchored to the
+      // same version the parent comment is anchored to.
+      if (typeof c.createdAtPlanVersion === 'number' && typeof reply.createdAtPlanVersion !== 'number') {
+        reply.createdAtPlanVersion = c.createdAtPlanVersion
+      }
       if (!c.replies) c.replies = []
       c.replies.push(reply)
       return plan
@@ -204,7 +308,9 @@ export class FilePlanStore implements PlanStore {
   async getAll(): Promise<Plan[]> {
     try {
       const data = await readFile(this.filePath, 'utf-8')
-      return JSON.parse(data)
+      const plans: Plan[] = JSON.parse(data)
+      for (const p of plans) backfillPlan(p)
+      return plans
     } catch {
       return []
     }
@@ -212,6 +318,12 @@ export class FilePlanStore implements PlanStore {
 
   async get(id: string): Promise<Plan | null> {
     return (await this.getAll()).find((p) => p.id === id) ?? null
+  }
+
+  async getVersion(id: string, version: number): Promise<PlanVersion | null> {
+    const plan = await this.get(id)
+    if (!plan) return null
+    return plan.versions.find((v) => v.version === version) ?? null
   }
 
   private async save(plans: Plan[]): Promise<void> {
@@ -232,6 +344,7 @@ export class FilePlanStore implements PlanStore {
   async upsert(input: { id?: string; title: string; body: string; source?: string; model?: string }): Promise<Plan> {
     const plans = await this.getAll()
     const plan = applyUpsert(plans, input, Date.now())
+    backfillPlan(plan)
     await this.save(plans)
     return plan
   }
@@ -245,6 +358,8 @@ export class FilePlanStore implements PlanStore {
     if (fields.source !== undefined) plan.source = fields.source
     if (fields.model !== undefined) plan.model = fields.model
     plan.updatedAt = Date.now()
+    syncCurrentVersion(plan)
+    backfillPlan(plan)
     await this.save(plans)
     return plan
   }
@@ -277,12 +392,16 @@ export class FilePlanStore implements PlanStore {
     if (!plan.comments) plan.comments = []
     const ok = fn(plan)
     if (!ok) return null
+    backfillPlan(plan)
     await this.save(plans)
     return plan
   }
 
   async addComment(planId: string, comment: PlanComment): Promise<Plan | null> {
     return this.mutate(planId, (plan) => {
+      if (typeof comment.createdAtPlanVersion !== 'number') {
+        comment.createdAtPlanVersion = plan.version ?? 1
+      }
       plan.comments.push(comment)
       return true
     })
@@ -311,6 +430,11 @@ export class FilePlanStore implements PlanStore {
     return this.mutate(planId, (plan) => {
       const c = plan.comments.find((x) => x.id === commentId)
       if (!c) return false
+      // Inherit the parent's version stamp so the reply stays anchored to the
+      // same version the parent comment is anchored to.
+      if (typeof c.createdAtPlanVersion === 'number' && typeof reply.createdAtPlanVersion !== 'number') {
+        reply.createdAtPlanVersion = c.createdAtPlanVersion
+      }
       if (!c.replies) c.replies = []
       c.replies.push(reply)
       return true

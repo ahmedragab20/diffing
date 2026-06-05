@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import type { Plan, PlanDecision } from '../../lib/plan-types'
+import type { Plan, PlanDecision, PlanVersion } from '../../lib/plan-types'
 import { subscribeLive } from '../live'
 
 const PLANS_KEY = ['plans']
@@ -31,6 +31,12 @@ interface AddCommentParams {
   lineContent: string
   sectionTitle?: string
   body: string
+  /**
+   * The plan version the comment is anchored to. Defaults to the plan's
+   * current version; pass an older number when the user is commenting on a
+   * historical version they're browsing in the UI.
+   */
+  createdAtPlanVersion?: number
 }
 
 /**
@@ -249,4 +255,115 @@ export function usePlans() {
     clearAgentActivity: useCallback(() => setAgentActivity(null), []),
     isLoading,
   }
+}
+
+/**
+ * Standalone hook for the plan version-switcher UI. Returns the ordered
+ * list of submitted versions for `planId` (oldest-first) plus helpers to
+ * resolve a specific version's body — first from the in-memory cache (the
+ * `Plan.versions[]` array comes back with every plan), then falling back
+ * to a network call against `/api/plans/:id/versions/:n` if the user
+ * navigates to a version we don't have yet (e.g. live SSE arrived without
+ * the full array).
+ */
+export function usePlanVersions(planId: string | null | undefined) {
+  const queryClient = useQueryClient()
+  const plan = useQuery({
+    queryKey: [...PLANS_KEY, planId],
+    queryFn: async () => (planId ? fetchPlanById(planId) : null),
+    enabled: !!planId,
+  })
+
+  // Keep the per-plan query fresh when the server broadcasts a `plans` SSE
+  // event. `usePlans` does the same invalidation for the full list; we mirror
+  // it here so this hook is self-sufficient for components that use it
+  // without also calling `usePlans`.
+  useEffect(() => {
+    return subscribeLive('plans', () => {
+      queryClient.invalidateQueries({ queryKey: PLANS_KEY })
+    })
+  }, [queryClient])
+
+  const versions = useMemo<PlanVersion[]>(() => plan.data?.versions ?? [], [plan.data])
+
+  const fetchVersion = useCallback(
+    async (n: number): Promise<PlanVersion | null> => {
+      if (!planId) return null
+      // Cache fast path
+      const cached = versions.find((v) => v.version === n)
+      if (cached) return cached
+      try {
+        const res = await fetch(`/api/plans/${planId}/versions/${n}`)
+        if (res.status === 404) return null
+        if (!res.ok) return null
+        const data = (await res.json()) as { version: PlanVersion }
+        return data.version
+      } catch {
+        return null
+      }
+    },
+    [planId, versions],
+  )
+
+  return {
+    versions,
+    currentVersion: plan.data?.version ?? null,
+    isLoading: plan.isLoading,
+    error: plan.error,
+    refetch: () => {
+      queryClient.invalidateQueries({ queryKey: PLANS_KEY })
+      return plan.refetch()
+    },
+    fetchVersion,
+  }
+}
+
+/**
+ * Resolve a single historical version's body. Returns `null` while the
+ * plan cache is loading. If the version is missing locally, falls back to
+ * a `GET /api/plans/:id/versions/:n` round-trip.
+ */
+export function usePlanVersion(planId: string | null | undefined, version: number | null | undefined) {
+  const { versions, currentVersion, fetchVersion, isLoading } = usePlanVersions(planId)
+  const [networkVersion, setNetworkVersion] = useState<PlanVersion | null>(null)
+  // Only invalidate `networkVersion` when the requested version or plan
+  // actually changes. Re-running the effect on every `versions` array identity
+  // change would briefly flip the returned `version` to null, which is wrong
+  // (and trips up tests that poll for the cached value).
+  const lastResolvedKeyRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const key = `${planId ?? ''}::${version ?? ''}`
+    if (lastResolvedKeyRef.current !== key) {
+      lastResolvedKeyRef.current = key
+      setNetworkVersion(null)
+    }
+    if (version == null || !planId) return
+    const cached = versions.find((v) => v.version === version)
+    if (cached) {
+      setNetworkVersion(cached)
+      return
+    }
+    let cancelled = false
+    fetchVersion(version).then((v) => {
+      if (!cancelled) setNetworkVersion(v)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [version, planId, versions, fetchVersion])
+
+  const fromCache = version != null ? versions.find((v) => v.version === version) : undefined
+  return {
+    version: fromCache ?? networkVersion,
+    isCurrent: version != null && version === currentVersion,
+    isLoading: isLoading && !fromCache && !networkVersion,
+  }
+}
+
+async function fetchPlanById(id: string): Promise<Plan | null> {
+  const res = await fetch(`/api/plans/${id}`)
+  if (res.status === 404) return null
+  if (!res.ok) return null
+  return res.json()
 }

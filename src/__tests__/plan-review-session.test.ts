@@ -12,6 +12,7 @@ const plan: Plan = {
   version: 1,
   decision: 'pending',
   comments: [],
+  versions: [{ version: 1, body: '# Plan', title: 'Plan', createdAt: 0 }],
 }
 
 function decideInput(overrides: Partial<Parameters<PlanReviewSession['decide']>[0]> = {}) {

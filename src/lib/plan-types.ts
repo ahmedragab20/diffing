@@ -28,13 +28,35 @@ export interface PlanComment {
   body: string
   status: 'open' | 'resolved'
   createdAt: number
+  /**
+   * `plan.version` at the moment the comment was created. Lets the viewer
+   * filter comments to those anchored to the version the user is reading.
+   * Replies inherit this from their parent comment.
+   */
+  createdAtPlanVersion: number
   replies: CommentReply[]
+}
+
+export interface PlanVersion {
+  /**
+   * Monotonically increasing; matches `Plan.version` at the moment this
+   * snapshot was captured (i.e. the version whose body is `body`).
+   */
+  version: number
+  /** Raw markdown that was submitted for this version. */
+  body: string
+  /** Title at the time of capture — titles can change between submissions. */
+  title: string
+  source?: string
+  model?: string
+  /** Epoch ms the version was submitted. */
+  createdAt: number
 }
 
 export interface Plan {
   id: string
   title: string
-  /** Raw markdown source of the plan. */
+  /** Raw markdown source of the plan's CURRENT version. */
   body: string
   /** Free-form origin label, e.g. an agent/tool name or a file path. */
   source?: string
@@ -49,5 +71,10 @@ export interface Plan {
   decisionComment?: string
   /** Epoch ms the human submitted the decision. */
   decidedAt?: number
+  /**
+   * Ordered history of submitted bodies, oldest-first. The LAST entry's
+   * `body` is always equal to `plan.body`. Always has at least one entry.
+   */
+  versions: PlanVersion[]
   comments: PlanComment[]
 }

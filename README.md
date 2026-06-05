@@ -268,7 +268,8 @@ diffing url                          # Retrieve the active server base URL
 diffing plan submit <file> [--title T] [--model M] [--id <id>] [--wait]   # Submit/resubmit a plan; prints its id
 diffing plan await [--timeout N]     # Block until the human approves/rejects/requests-changes; outputs the verdict XML
 diffing plan list [--json]           # List submitted plans with their verdicts
-diffing plan show [<id>] [--json]    # Show one plan as <plan-review> XML (latest if omitted)
+diffing plan show [<id>] [--json] [--version N]   # Show one plan as <plan-review> XML (latest if omitted; use --version to read a historical body)
+diffing plan versions <id> [--json]  # List every submitted version of a plan, oldest-first (current marked with `*`)
 diffing plan reply <commentId> --body "..."   # Reply to an inline plan comment
 diffing plan resolve <commentId>     # Mark a plan comment resolved
 ```
@@ -286,7 +287,7 @@ If your agent supports MCP (such as Cursor, Claude Desktop, or Gemini), configur
   }
 }
 ```
-Exposes tools directly to your agent for both review flows — diff review: `await_review`, `list_comments`, `reply_to_comment`, `resolve_comment`; and plan review: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `reply_to_plan_comment`, `resolve_plan_comment`.
+Exposes tools directly to your agent for both review flows — diff review: `await_review`, `list_comments`, `reply_to_comment`, `resolve_comment`; and plan review: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment`.
 
 ### C. Agent Skills
 You can install diffing skills directly into your AI coding assistant:
@@ -336,6 +337,13 @@ releases" handoff, applied *before* any code is written.
 - **Three-way verdict** — Approve / Request changes / Reject, GitHub-style, with
   an optional overall comment. Resubmitting a revised plan (same id) bumps the
   version and re-opens it for review.
+- **Browse plan versions** — every submitted body is kept on disk, oldest-first.
+  A version dropdown next to the `v{n}` chip switches the viewer to any past
+  version; comments are filtered to those anchored to the version you're
+  reading; a "viewing v{N} of v{M}" banner makes the historical context obvious.
+  Available from the CLI (`diffing plan versions <id>`, `diffing plan show <id> --version N`),
+  MCP (`get_plan_versions`, `get_plan_version`), and the HTTP API
+  (`GET /api/plans/:id/versions`, `GET /api/plans/:id/versions/:n`).
 - **Live "Plans" badge** — the diff toolbar shows a badge counting plans awaiting
   your review, with a green dot when an agent is connected and waiting.
 - **Same channels everywhere** — drive it from the CLI (`diffing plan …`), the

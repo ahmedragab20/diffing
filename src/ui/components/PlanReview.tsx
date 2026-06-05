@@ -1,8 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { File as DiffsFile } from '@pierre/diffs/react'
 import type { LineAnnotation, SelectedLineRange } from '@pierre/diffs'
-import { Bot, FileText, Code2, MessageSquarePlus, Check, X, MessageSquareWarning, Clock } from 'lucide-react'
-import type { Plan, PlanComment, PlanDecision } from '../../lib/plan-types'
+import { Bot, FileText, Code2, MessageSquarePlus, Check, X, MessageSquareWarning, Clock, History, ArrowLeft } from 'lucide-react'
+import type { Plan, PlanComment, PlanDecision, PlanVersion } from '../../lib/plan-types'
 import { sectionTitleForLine, extractPlanLines } from '../../lib/plan-format'
 import { SHIKI_THEME_MAP, timeAgo } from '../utils'
 import { Markdown } from './Markdown'
@@ -12,6 +12,7 @@ import { CommentForm } from './CommentForm'
 import { PlanCommentBubble } from './PlanCommentBubble'
 import { SubmitPlanReviewPopover } from './SubmitPlanReviewPopover'
 import { FilePreviewModal } from './FilePreviewModal'
+import { Select } from '../primitives/Select'
 
 interface PlanReviewProps {
   plan: Plan
@@ -69,6 +70,74 @@ export function PlanReview({
   const [liveSelectionCount, setLiveSelectionCount] = useState(0)
   const [previewFilePath, setPreviewFilePath] = useState<string | null>(null)
 
+  // Version switcher: `viewingVersion` is the body the user is reading right
+  // now. Defaults to the plan's current version. The user can pick any prior
+  // version from the dropdown in the meta row; the banner + comment filter
+  // adapt accordingly.
+  const versions: PlanVersion[] = plan.versions ?? []
+  const [viewingVersion, setViewingVersion] = useState<number>(plan.version)
+  const [viewingBody, setViewingBody] = useState<string>(plan.body)
+  const [viewingTitle, setViewingTitle] = useState<string>(plan.title)
+
+  // When the server pushes a new version (live SSE), keep the viewer's
+  // position in sync: if they were on the previous current, auto-bump them
+  // to the new current; otherwise leave them where they are.
+  const lastSyncedCurrentRef = useRef<number>(plan.version)
+  useEffect(() => {
+    const wasOnCurrent = viewingVersion === lastSyncedCurrentRef.current
+    if (plan.version !== lastSyncedCurrentRef.current && wasOnCurrent) {
+      setViewingVersion(plan.version)
+    }
+    lastSyncedCurrentRef.current = plan.version
+  }, [plan.version, viewingVersion])
+
+  // Resolve the viewed version's body+title. Cache fast path: the same body
+  // lives in `plan.versions[]`. Falls back to the network only if the
+  // in-memory copy is missing (defensive — shouldn't happen in practice).
+  useEffect(() => {
+    let cancelled = false
+    if (viewingVersion === plan.version) {
+      setViewingBody(plan.body)
+      setViewingTitle(plan.title)
+      return
+    }
+    const local = versions.find((v) => v.version === viewingVersion)
+    if (local) {
+      setViewingBody(local.body)
+      setViewingTitle(local.title)
+      return
+    }
+    fetch(`/api/plans/${plan.id}/versions/${viewingVersion}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { version?: PlanVersion } | null) => {
+        if (cancelled || !data?.version) return
+        setViewingBody(data.version.body)
+        setViewingTitle(data.version.title)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [viewingVersion, plan.version, plan.body, plan.title, plan.id, versions])
+
+  // Switching versions invalidates any in-flight selection/pending comment —
+  // those were anchored to a body that's no longer being rendered.
+  useEffect(() => {
+    setSelectedRange(null)
+    setLiveSelectionCount(0)
+    setPending(null)
+  }, [viewingVersion])
+
+  const isHistorical = viewingVersion !== plan.version
+  const versionOptions = useMemo(
+    () =>
+      versions.map((v) => ({
+        value: String(v.version),
+        label: v.version === plan.version ? `v${v.version} (current)` : `v${v.version}`,
+      })),
+    [versions, plan.version],
+  )
+
   const handleMarkdownClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement
     const anchor = target.closest('a')
@@ -85,12 +154,19 @@ export function PlanReview({
   const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP.nord
   const unsafeCSS = useMemo(() => buildPlanCSS(defaultTabSize, fontSize, monoFontFamily), [defaultTabSize, fontSize, monoFontFamily])
 
-  const comments = plan.comments ?? []
+  // Comments are filtered to those anchored to the version being viewed. A
+  // comment's `createdAtPlanVersion` is set at write time by the server.
+  const allComments = plan.comments ?? []
+  const visibleComments = isHistorical
+    ? allComments.filter((c) => c.createdAtPlanVersion === viewingVersion)
+    : allComments
+  const comments = visibleComments
   const lineComments = comments.filter((c) => c.lineNumber > 0)
   const generalComments = comments.filter((c) => c.lineNumber === 0)
   const openCount = comments.filter((c) => c.status === 'open').length
+  const totalCommentCount = allComments.length
 
-  const lineRange = (start: number | undefined, end: number) => extractPlanLines(plan.body, start ?? end, end)
+  const lineRange = (start: number | undefined, end: number) => extractPlanLines(viewingBody, start ?? end, end)
 
   const commitComment = (p: PendingComment, body: string) => {
     addPlanComment({
@@ -98,8 +174,9 @@ export function PlanReview({
       lineNumber: p.lineNumber,
       startLineNumber: p.startLineNumber,
       lineContent: lineRange(p.startLineNumber, p.lineNumber),
-      sectionTitle: sectionTitleForLine(plan.body, p.startLineNumber ?? p.lineNumber),
+      sectionTitle: sectionTitleForLine(viewingBody, p.startLineNumber ?? p.lineNumber),
       body,
+      createdAtPlanVersion: viewingVersion,
     })
     setPending(null)
     setSelectedRange(null)
@@ -155,15 +232,50 @@ export function PlanReview({
     <div className="plan-review">
       <div className="plan-review-head">
         <div className="plan-review-head-main">
-          <h2 className="plan-review-title" title={plan.title}>
-            {plan.title}
+          <h2 className="plan-review-title" title={viewingTitle}>
+            {viewingTitle}
+            {isHistorical && viewingTitle !== plan.title && (
+              <span className="plan-review-title-historical" title={`Currently submitted title: ${plan.title}`}>
+                {' '}
+                (current: {plan.title})
+              </span>
+            )}
           </h2>
           <div className="plan-review-meta">
             <span className={`plan-badge ${decision.className}`}>
               <DecisionIcon size={12} aria-hidden="true" />
               {decision.label}
             </span>
-            <span className="plan-review-chip">v{plan.version}</span>
+            <span className="plan-review-chip">v{viewingVersion}{versions.length > 1 ? ` / ${versions.length}` : ''}</span>
+            {versions.length > 1 && (
+              <div className="plan-review-version-switcher">
+                <History size={12} aria-hidden="true" className="plan-review-version-switcher-icon" />
+                <Select
+                  value={String(viewingVersion)}
+                  onValueChange={(v) => setViewingVersion(Number(v))}
+                  options={versionOptions}
+                  ariaLabel="Plan version"
+                />
+                {isHistorical && (
+                  <button
+                    type="button"
+                    className="plan-review-version-back"
+                    onClick={() => setViewingVersion(plan.version)}
+                    title={`Back to current v${plan.version}`}
+                  >
+                    <ArrowLeft size={11} aria-hidden="true" />
+                    Back to v{plan.version}
+                  </button>
+                )}
+                {isHistorical && (
+                  <span
+                    className="plan-review-version-current-dot"
+                    title={`This is v${viewingVersion} of ${plan.version}`}
+                    aria-label={`Viewing historical version ${viewingVersion}`}
+                  />
+                )}
+              </div>
+            )}
             {plan.source && <span className="plan-review-chip">{plan.source}</span>}
             {plan.model && (
               <span className="plan-review-chip plan-review-chip-model">
@@ -174,6 +286,9 @@ export function PlanReview({
             {lineComments.length + generalComments.length > 0 && (
               <span className="plan-review-chip">
                 {comments.length} comment{comments.length === 1 ? '' : 's'}
+                {isHistorical && totalCommentCount !== comments.length && (
+                  <span className="plan-review-chip-sub"> of {totalCommentCount}</span>
+                )}
               </span>
             )}
             {liveSelectionCount > 0 && (
@@ -185,6 +300,20 @@ export function PlanReview({
         </div>
 
       </div>
+
+      {isHistorical && (
+        <div className="plan-review-historical-banner" role="status">
+          <History size={14} aria-hidden="true" />
+          <span>
+            Viewing <strong>v{viewingVersion}</strong> of this plan (current is <strong>v{plan.version}</strong>).{' '}
+            Comments and line anchors reflect v{viewingVersion}.
+          </span>
+          <button type="button" className="plan-review-historical-banner-back" onClick={() => setViewingVersion(plan.version)}>
+            <ArrowLeft size={11} aria-hidden="true" />
+            Back to current
+          </button>
+        </div>
+      )}
 
       {plan.decision !== 'pending' && (
         <div className={`plan-decision-banner ${decision.className}`}>
@@ -228,12 +357,12 @@ export function PlanReview({
           className="markdown-body plan-rendered"
           onClick={handleMarkdownClick}
         >
-          <Markdown content={plan.body} />
+          <Markdown content={viewingBody} />
         </div>
       ) : (
         <div className="plan-file">
           <DiffsFile<PlanAnnotationMeta>
-            file={{ name: 'PLAN.md', contents: plan.body, lang: 'markdown' }}
+            file={{ name: 'PLAN.md', contents: viewingBody, lang: 'markdown' }}
             options={{
               disableFileHeader: true,
               enableGutterUtility: true,

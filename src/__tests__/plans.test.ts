@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { InMemoryPlanStore } from '../lib/plans.js'
 
 function comment(id: string, lineNumber = 1) {
-  return { id, lineNumber, lineContent: 'x', body: 'b', status: 'open' as const, createdAt: 0, replies: [] }
+  return { id, lineNumber, lineContent: 'x', body: 'b', status: 'open' as const, createdAt: 0, createdAtPlanVersion: 1, replies: [] }
 }
 
 describe('InMemoryPlanStore', () => {

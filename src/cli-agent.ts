@@ -325,7 +325,11 @@ async function planList(args: string[]): Promise<number> {
 }
 
 async function planShow(args: string[]): Promise<number> {
-  const { values, positionals } = parseArgs({ args, options: { json: { type: 'boolean' } }, allowPositionals: true })
+  const { values, positionals } = parseArgs({
+    args,
+    options: { json: { type: 'boolean' }, version: { type: 'string' } },
+    allowPositionals: true,
+  })
   const base = baseUrl()
   let planId = positionals[0]
   if (!planId) {
@@ -342,10 +346,57 @@ async function planShow(args: string[]): Promise<number> {
     return EXIT_NOT_FOUND
   }
   const plan = (await res.json()) as Plan
+  const requestedVersion = values.version !== undefined ? Number(values.version) : undefined
+  if (requestedVersion !== undefined && (!Number.isFinite(requestedVersion) || requestedVersion < 1)) {
+    console.error(`--version must be a positive integer.`)
+    return EXIT_USAGE
+  }
+  if (requestedVersion !== undefined && requestedVersion !== plan.version) {
+    const ver = (plan.versions ?? []).find((v) => v.version === requestedVersion)
+    if (!ver) {
+      console.error(`Version ${requestedVersion} not found for plan ${planId} (current: v${plan.version}).`)
+      return EXIT_NOT_FOUND
+    }
+  }
   if (values.json) {
     process.stdout.write(JSON.stringify(plan, null, 2) + '\n')
   } else {
-    process.stdout.write(formatPlanReview(plan) + '\n')
+    process.stdout.write(formatPlanReview(plan, { viewingVersion: requestedVersion }) + '\n')
+  }
+  return EXIT_OK
+}
+
+async function planVersions(args: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { json: { type: 'boolean' } },
+    allowPositionals: true,
+  })
+  const base = baseUrl()
+  let planId = positionals[0]
+  if (!planId) {
+    console.error('Usage: diffing plan versions <id> [--json]')
+    return EXIT_USAGE
+  }
+  const planRes = await fetch(`${base}/api/plans/${planId}`)
+  if (planRes.status === 404) {
+    console.error(`Plan ${planId} not found.`)
+    return EXIT_NOT_FOUND
+  }
+  const plan = (await planRes.json()) as Plan
+  const versions = plan.versions ?? []
+  if (values.json) {
+    process.stdout.write(JSON.stringify(versions, null, 2) + '\n')
+    return EXIT_OK
+  }
+  if (versions.length === 0) {
+    console.error('This plan has no recorded versions.')
+    return EXIT_OK
+  }
+  for (const v of versions) {
+    const marker = v.version === plan.version ? '*' : ' '
+    const date = new Date(v.createdAt).toISOString().slice(0, 16).replace('T', ' ')
+    process.stdout.write(`${marker} v${v.version}\t${date}\t${v.title}\n`)
   }
   return EXIT_OK
 }
@@ -430,12 +481,14 @@ async function plan(args: string[]): Promise<number> {
       return planList(rest)
     case 'show':
       return planShow(rest)
+    case 'versions':
+      return planVersions(rest)
     case 'reply':
       return planReply(rest)
     case 'resolve':
       return planResolve(rest)
     default:
-      console.error('Usage: diffing plan <submit|await|list|show|reply|resolve> [...]')
+      console.error('Usage: diffing plan <submit|await|list|show|versions|reply|resolve> [...]')
       return EXIT_USAGE
   }
 }

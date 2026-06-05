@@ -11,6 +11,12 @@ export interface CommentReply {
   createdAt: number
   role?: 'user' | 'agent'
   model?: string
+  /**
+   * `plan.version` at the time the parent comment was created. Inherited by
+   * replies on plan comments so a thread is uniformly anchored to one
+   * version. Unused on diff-comment replies.
+   */
+  createdAtPlanVersion?: number
 }
 
 export interface ReviewComment {

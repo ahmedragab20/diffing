@@ -22,6 +22,7 @@ const base: Plan = {
   version: 1,
   decision: 'pending',
   comments: [],
+  versions: [{ version: 1, body: PLAN_BODY, title: 'My Plan', source: 'claude-code', model: 'opus', createdAt: 1000 }],
 }
 
 describe('formatPlanReview', () => {
@@ -57,11 +58,12 @@ describe('formatPlanReview', () => {
           body: 'Clarify this',
           status: 'open',
           createdAt: 3000,
+          createdAtPlanVersion: 1,
           replies: [],
         },
       ],
     })
-    expect(out).toContain('<comment id="c1" line="4" section="Phase 1" status="open" created-at="1970-01-01T00:00:03.000Z">')
+    expect(out).toContain('<comment id="c1" line="4" section="Phase 1" status="open" created-at="1970-01-01T00:00:03.000Z" plan-version="1">')
     expect(out).toContain('<context><![CDATA[Do the first thing]]></context>')
     expect(out).toContain('<body><![CDATA[Clarify this]]></body>')
   })
@@ -70,8 +72,8 @@ describe('formatPlanReview', () => {
     const out = formatPlanReview({
       ...base,
       comments: [
-        { id: 'c1', lineNumber: 7, startLineNumber: 6, lineContent: '## Phase 2\nDo the second thing', body: 'x', status: 'open', createdAt: 3000, replies: [] },
-        { id: 'c2', lineNumber: 0, lineContent: '', body: 'whole plan note', status: 'open', createdAt: 4000, replies: [] },
+        { id: 'c1', lineNumber: 7, startLineNumber: 6, lineContent: '## Phase 2\nDo the second thing', body: 'x', status: 'open', createdAt: 3000, createdAtPlanVersion: 1, replies: [] },
+        { id: 'c2', lineNumber: 0, lineContent: '', body: 'whole plan note', status: 'open', createdAt: 4000, createdAtPlanVersion: 1, replies: [] },
       ],
     })
     expect(out).toContain('line="6-7"')
@@ -81,7 +83,7 @@ describe('formatPlanReview', () => {
   it('omits the context block for whole-plan comments', () => {
     const out = formatPlanReview({
       ...base,
-      comments: [{ id: 'c2', lineNumber: 0, lineContent: '', body: 'note', status: 'open', createdAt: 4000, replies: [] }],
+      comments: [{ id: 'c2', lineNumber: 0, lineContent: '', body: 'note', status: 'open', createdAt: 4000, createdAtPlanVersion: 1, replies: [] }],
     })
     expect(out).not.toContain('<context><![CDATA[')
   })
@@ -97,6 +99,7 @@ describe('formatPlanReview', () => {
           body: 'Clarify',
           status: 'open',
           createdAt: 3000,
+          createdAtPlanVersion: 1,
           replies: [{ id: 'r1', body: 'Done', createdAt: 5000, role: 'agent', model: 'opus' }],
         },
       ],
@@ -108,6 +111,47 @@ describe('formatPlanReview', () => {
   it('escapes special characters in attribute values', () => {
     const out = formatPlanReview({ ...base, title: 'A "quoted" & <tagged> plan' })
     expect(out).toContain('title="A &quot;quoted&quot; &amp; &lt;tagged&gt; plan"')
+  })
+
+  it('renders a historical version body and tags the plan with viewing-version', () => {
+    const v1 = base.versions![0]
+    const revised: Plan = {
+      ...base,
+      version: 2,
+      title: 'v2 title',
+      body: '# v2',
+      versions: [
+        v1,
+        { version: 2, body: '# v2', title: 'v2 title', createdAt: 2000 },
+      ],
+      comments: [{ id: 'c1', lineNumber: 1, lineContent: '# Title', body: 'old feedback', status: 'open', createdAt: 1500, createdAtPlanVersion: 1, replies: [] }],
+    }
+    const out = formatPlanReview(revised, { viewingVersion: 1 })
+    expect(out).toContain('viewing-version="1"')
+    expect(out).toContain('<viewing-version-info><![CDATA[Reviewing historical version 1 of 2.')
+    expect(out).toContain('<plan-body><![CDATA[# Title')
+    expect(out).not.toContain('<plan-body><![CDATA[# v2')
+    // Old v1 comment should still be visible when viewing v1
+    expect(out).toContain('plan-version="1"')
+    expect(out).toContain('<body><![CDATA[old feedback]]></body>')
+  })
+
+  it('filters comments not anchored to the viewed historical version', () => {
+    const v1 = base.versions![0]
+    const revised: Plan = {
+      ...base,
+      version: 2,
+      title: 'v2',
+      body: '# v2',
+      versions: [v1, { version: 2, body: '# v2', title: 'v2', createdAt: 2000 }],
+      comments: [
+        { id: 'c1', lineNumber: 1, lineContent: '# Title', body: 'old feedback', status: 'open', createdAt: 1500, createdAtPlanVersion: 1, replies: [] },
+        { id: 'c2', lineNumber: 1, lineContent: '# v2', body: 'new feedback', status: 'open', createdAt: 2500, createdAtPlanVersion: 2, replies: [] },
+      ],
+    }
+    const out = formatPlanReview(revised, { viewingVersion: 1 })
+    expect(out).toContain('id="c1"')
+    expect(out).not.toContain('id="c2"')
   })
 })
 

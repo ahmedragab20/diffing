@@ -43,7 +43,31 @@ function lineLabel(comment: PlanComment): string {
   return `${comment.lineNumber}`
 }
 
-export function formatPlanReview(plan: Plan): string {
+export interface FormatPlanReviewOptions {
+  /**
+   * When set, emit a `<plan-body>` for this historical version instead of
+   * the current one, and tag the `<plan>` element with `viewing-version`.
+   * Comments whose `createdAtPlanVersion` doesn't match `viewingVersion`
+   * are filtered out so the agent only sees feedback anchored to the
+   * version it just received.
+   */
+  viewingVersion?: number
+}
+
+export function formatPlanReview(plan: Plan, options: FormatPlanReviewOptions = {}): string {
+  const { viewingVersion } = options
+  // When reading a historical version we render that version's body and
+  // filter comments to those anchored to it.
+  const isHistorical = viewingVersion !== undefined && viewingVersion !== plan.version
+  const versions = plan.versions ?? []
+  const historical =
+    isHistorical && versions.length > 0 ? versions.find((v) => v.version === viewingVersion) : undefined
+  const bodyToRender = historical ? historical.body : plan.body
+  const titleToRender = historical ? historical.title : plan.title
+  const visibleComments = isHistorical
+    ? (plan.comments ?? []).filter((c) => c.createdAtPlanVersion === viewingVersion)
+    : plan.comments ?? []
+
   const lines: string[] = []
   lines.push('<plan-review>')
   lines.push('  <instructions>')
@@ -68,8 +92,9 @@ export function formatPlanReview(plan: Plan): string {
   lines.push('  </instructions>')
 
   const decidedAttr = plan.decidedAt ? ` decided-at="${new Date(plan.decidedAt).toISOString()}"` : ''
+  const viewingAttr = isHistorical ? ` viewing-version="${viewingVersion}"` : ''
   lines.push(
-    `  <plan id="${escapeAttr(plan.id)}" title="${escapeAttr(plan.title)}" version="${plan.version}" decision="${plan.decision}"${decidedAttr}>`,
+    `  <plan id="${escapeAttr(plan.id)}" title="${escapeAttr(titleToRender)}" version="${plan.version}" decision="${plan.decision}"${decidedAttr}${viewingAttr}>`,
   )
   lines.push(`    <decision-summary><![CDATA[${decisionSummary(plan.decision)}]]></decision-summary>`)
 
@@ -78,16 +103,22 @@ export function formatPlanReview(plan: Plan): string {
     lines.push(`    <decision-comment><![CDATA[${trimmedDecisionComment}]]></decision-comment>`)
   }
 
-  lines.push(`    <plan-body><![CDATA[${plan.body}]]></plan-body>`)
+  if (isHistorical) {
+    lines.push(
+      `    <viewing-version-info><![CDATA[Reviewing historical version ${viewingVersion} of ${plan.version}. Comments are filtered to those anchored to v${viewingVersion}.]]></viewing-version-info>`,
+    )
+  }
 
-  const comments = plan.comments ?? []
-  if (comments.length > 0) {
+  lines.push(`    <plan-body><![CDATA[${bodyToRender}]]></plan-body>`)
+
+  if (visibleComments.length > 0) {
     lines.push('    <comments>')
-    for (const comment of comments) {
+    for (const comment of visibleComments) {
       const sectionAttr = comment.sectionTitle ? ` section="${escapeAttr(comment.sectionTitle)}"` : ''
       const isoDate = new Date(comment.createdAt).toISOString()
+      const versionAttr = ` plan-version="${comment.createdAtPlanVersion ?? plan.version}"`
       lines.push(
-        `      <comment id="${escapeAttr(comment.id)}" line="${lineLabel(comment)}"${sectionAttr} status="${comment.status}" created-at="${isoDate}">`,
+        `      <comment id="${escapeAttr(comment.id)}" line="${lineLabel(comment)}"${sectionAttr} status="${comment.status}" created-at="${isoDate}"${versionAttr}>`,
       )
       if (comment.lineNumber !== 0 && comment.lineContent) {
         lines.push(`        <context><![CDATA[${comment.lineContent}]]></context>`)
