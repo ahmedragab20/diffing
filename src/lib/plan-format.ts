@@ -1,4 +1,4 @@
-import type { Plan, PlanComment, PlanDecision } from './plan-types.js'
+import type { Plan, PlanComment, PlanDecision, PlanMode } from './plan-types.js'
 
 /**
  * Serialize a reviewed plan into the `<plan-review>` XML envelope handed back to
@@ -26,6 +26,8 @@ export function decisionSummary(decision: PlanDecision): string {
       return 'The reviewer REJECTED this plan. Do NOT proceed. Reconsider the approach based on the comments; only continue once a new plan is approved.'
     case 'changes-requested':
       return 'The reviewer REQUESTED CHANGES. Revise the plan to address every open comment below, then resubmit the updated plan for re-review (do not start implementation yet).'
+    case 'comment-only':
+      return 'The reviewer chose COMMENT-ONLY mode. You MUST NOT edit any files or implement the plan. Only reply to the comments below — answer questions, provide clarification, or discuss. The decision comment (if present) is your prompt for this chat.'
     default:
       return 'This plan has not been decided yet. Wait for the reviewer to approve, reject, or request changes.'
   }
@@ -52,10 +54,12 @@ export interface FormatPlanReviewOptions {
    * version it just received.
    */
   viewingVersion?: number
+  /** Mode controlling agent behavior: 'standard' (default) or 'comment-only'. */
+  mode?: PlanMode
 }
 
 export function formatPlanReview(plan: Plan, options: FormatPlanReviewOptions = {}): string {
-  const { viewingVersion } = options
+  const { viewingVersion, mode } = options
   // When reading a historical version we render that version's body and
   // filter comments to those anchored to it.
   const isHistorical = viewingVersion !== undefined && viewingVersion !== plan.version
@@ -68,33 +72,39 @@ export function formatPlanReview(plan: Plan, options: FormatPlanReviewOptions = 
     ? (plan.comments ?? []).filter((c) => c.createdAtPlanVersion === viewingVersion)
     : plan.comments ?? []
 
+  const modeAttr = mode && mode !== 'standard' ? ` mode="${mode}"` : ''
   const lines: string[] = []
   lines.push('<plan-review>')
   lines.push('  <instructions>')
   lines.push('    You are an AI coding assistant receiving a human review of a plan you submitted.')
-  lines.push('    - The "decision" attribute is the headline verdict: "approved", "rejected", "changes-requested", or "pending".')
-  lines.push('    - <decision-summary> tells you, in plain language, what to do next based on that verdict.')
-  lines.push('    - <decision-comment> is the reviewer\'s overall note (may be absent).')
-  lines.push('    - <plan-body> is the exact markdown of the plan being reviewed. Inline comments target lines within it.')
-  lines.push('    - Each <comment> targets a line ("line=42"), a range ("line=12-15"), or the whole plan ("line=plan").')
-  lines.push('      "section" names the nearest markdown heading for context. Only address comments with status="open".')
-  lines.push('    - <context> contains the exact plan text the comment is anchored to.')
-  lines.push('')
-  lines.push('    HOW TO RESPOND:')
-  lines.push('    - If approved: proceed with the work.')
-  lines.push('    - If changes-requested: revise the plan and resubmit it for another review round.')
-  lines.push('    - If rejected: stop and rethink; do not implement.')
-  lines.push('    Prefer the diffing CLI or MCP (port-agnostic, no copy-paste):')
-  lines.push('      diffing plan reply <comment-id> --body "..." --model "<your-model-name>"')
-  lines.push('      diffing plan resolve <comment-id>')
-  lines.push('      diffing plan submit <revised-plan.md> --id <plan-id>   # resubmit a new version for re-review')
-  lines.push('    (Or the equivalent MCP tools: reply_to_plan_comment, resolve_plan_comment, submit_plan.)')
+  if (mode === 'comment-only') {
+    lines.push('    ⚠️ COMMENT-ONLY MODE: You MUST NOT edit any files or implement the plan. Your only task is to reply to the comments below — answer questions, provide clarification, or discuss. The decision comment (if present) is your prompt for this chat.')
+  } else {
+    lines.push('    - The "decision" attribute is the headline verdict: "approved", "rejected", "changes-requested", "comment-only", or "pending".')
+    lines.push('    - <decision-summary> tells you, in plain language, what to do next based on that verdict.')
+    lines.push('    - <decision-comment> is the reviewer\'s overall note (may be absent).')
+    lines.push('    - <plan-body> is the exact markdown of the plan being reviewed. Inline comments target lines within it.')
+    lines.push('    - Each <comment> targets a line ("line=42"), a range ("line=12-15"), or the whole plan ("line=plan").')
+    lines.push('      "section" names the nearest markdown heading for context. Only address comments with status="open".')
+    lines.push('    - <context> contains the exact plan text the comment is anchored to.')
+    lines.push('')
+    lines.push('    HOW TO RESPOND:')
+    lines.push('    - If approved: proceed with the work.')
+    lines.push('    - If changes-requested: revise the plan and resubmit it for another review round.')
+    lines.push('    - If rejected: stop and rethink; do not implement.')
+    lines.push('    - If comment-only: do NOT implement; only reply to comments.')
+    lines.push('    Prefer the diffing CLI or MCP (port-agnostic, no copy-paste):')
+    lines.push('      diffing plan reply <comment-id> --body "..." --model "<your-model-name>"')
+    lines.push('      diffing plan resolve <comment-id>')
+    lines.push('      diffing plan submit <revised-plan.md> --id <plan-id>   # resubmit a new version for re-review')
+    lines.push('    (Or the equivalent MCP tools: reply_to_plan_comment, resolve_plan_comment, submit_plan.)')
+  }
   lines.push('  </instructions>')
 
   const decidedAttr = plan.decidedAt ? ` decided-at="${new Date(plan.decidedAt).toISOString()}"` : ''
   const viewingAttr = isHistorical ? ` viewing-version="${viewingVersion}"` : ''
   lines.push(
-    `  <plan id="${escapeAttr(plan.id)}" title="${escapeAttr(titleToRender)}" version="${plan.version}" decision="${plan.decision}"${decidedAttr}${viewingAttr}>`,
+    `  <plan id="${escapeAttr(plan.id)}" title="${escapeAttr(titleToRender)}" version="${plan.version}" decision="${plan.decision}"${decidedAttr}${viewingAttr}${modeAttr}>`,
   )
   lines.push(`    <decision-summary><![CDATA[${decisionSummary(plan.decision)}]]></decision-summary>`)
 

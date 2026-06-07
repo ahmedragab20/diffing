@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Check, X, MessageSquareWarning, Clock, Trash2, Bot, Search, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { Check, X, MessageSquareWarning, Clock, Trash2, Bot, Search, PanelLeftClose, PanelLeftOpen, MessageSquare } from 'lucide-react'
 import type { Plan, PlanDecision } from '../../lib/plan-types'
 import { timeAgo } from '../utils'
 import { Tooltip } from '../primitives/Tooltip'
@@ -18,6 +18,7 @@ const DECISION_ICON: Record<PlanDecision, { icon: typeof Check; className: strin
   approved: { icon: Check, className: 'plan-badge-approved', label: 'Approved' },
   'changes-requested': { icon: MessageSquareWarning, className: 'plan-badge-changes', label: 'Changes' },
   rejected: { icon: X, className: 'plan-badge-rejected', label: 'Rejected' },
+  'comment-only': { icon: MessageSquare, className: 'plan-badge-comment-only', label: 'Comment only' },
 }
 
 export function PlanList({ plans, activeId, onSelect, onDelete, collapsed, onToggleCollapse }: PlanListProps) {

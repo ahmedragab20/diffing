@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import type { Plan, PlanDecision, PlanVersion } from '../../lib/plan-types'
+import type { Plan, PlanDecision, PlanVersion, PlanMode } from '../../lib/plan-types'
 import { subscribeLive } from '../live'
 
 const PLANS_KEY = ['plans']
@@ -189,11 +189,11 @@ export function usePlans() {
   })
 
   const decisionMutation = useMutation({
-    mutationFn: async ({ planId, decision, decisionComment }: { planId: string; decision: PlanDecision; decisionComment?: string }) => {
+    mutationFn: async ({ planId, decision, decisionComment, mode }: { planId: string; decision: PlanDecision; decisionComment?: string; mode?: PlanMode }) => {
       const res = await fetch(`/api/plans/${planId}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision, decisionComment: decisionComment?.trim() || undefined }),
+        body: JSON.stringify({ decision, decisionComment: decisionComment?.trim() || undefined, mode }),
       })
       if (!res.ok) throw new Error('Failed to submit plan decision')
       return res.json() as Promise<{ ok: boolean; round: number; decision: PlanDecision; openCommentCount: number; waiters: number }>
@@ -245,8 +245,8 @@ export function usePlans() {
     ),
     removePlan: useCallback((planId: string) => removePlanMutation.mutate(planId), [removePlanMutation.mutate]),
     submitDecision: useCallback(
-      (planId: string, decision: PlanDecision, decisionComment?: string) =>
-        decisionMutation.mutateAsync({ planId, decision, decisionComment }),
+      (planId: string, decision: PlanDecision, decisionComment?: string, mode?: PlanMode) =>
+        decisionMutation.mutateAsync({ planId, decision, decisionComment, mode }),
       [decisionMutation.mutateAsync],
     ),
     submitting: decisionMutation.isPending,

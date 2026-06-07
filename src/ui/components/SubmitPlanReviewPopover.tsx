@@ -1,13 +1,13 @@
 import { useState } from 'react'
-import { Check, MessageSquareWarning, X, ClipboardCheck, RefreshCw } from 'lucide-react'
-import type { PlanDecision } from '../../lib/plan-types'
+import { Check, MessageSquareWarning, X, ClipboardCheck, RefreshCw, MessageSquare } from 'lucide-react'
+import type { PlanDecision, PlanMode } from '../../lib/plan-types'
 import { useFeedback } from '../hooks/useHaptics'
 import { Popover } from '../primitives/Popover'
 import { MarkdownField } from './MarkdownField'
 
 interface SubmitPlanReviewPopoverProps {
   openCommentCount: number
-  onSubmit: (decision: PlanDecision, comment?: string) => Promise<unknown>
+  onSubmit: (decision: PlanDecision, comment?: string, mode?: PlanMode) => Promise<unknown>
   submitting: boolean
   agentWaiting: boolean
   /** The plan's current verdict, so an already-decided plan reads as re-deciding. */
@@ -38,6 +38,13 @@ const OPTIONS: { value: Verdict; label: string; description: string; icon: typeo
     icon: X,
     className: 'plan-verdict-reject',
   },
+  {
+    value: 'comment-only',
+    label: 'Comment only',
+    description: 'Agent must NOT edit files — only reply to comments. General note goes to chat.',
+    icon: MessageSquare,
+    className: 'plan-verdict-comment-only',
+  },
 ]
 
 /**
@@ -61,7 +68,8 @@ export function SubmitPlanReviewPopover({
     if (!verdict) return
     haptic('heavy')
     sound('send')
-    await onSubmit(verdict, comment)
+    const mode: PlanMode = verdict === 'comment-only' ? 'comment-only' : 'standard'
+    await onSubmit(verdict, comment, mode)
     setComment('')
     setVerdict(null)
     setOpen(false)

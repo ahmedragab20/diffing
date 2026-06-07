@@ -3,7 +3,14 @@
  * the agent — the diff-side twin of {@link import('./plan-types').PlanDecision}
  * (minus `pending`, since a review only exists once it is submitted).
  */
-export type ReviewDecision = 'approved' | 'changes-requested' | 'rejected'
+export type ReviewDecision = 'approved' | 'changes-requested' | 'rejected' | 'comment-only'
+
+/**
+ * Mode controlling agent behavior on review handoff.
+ * - `standard`: Agent addresses comments and applies edits (default).
+ * - `comment-only`: Agent MUST NOT edit files; only replies to comments.
+ */
+export type ReviewMode = 'standard' | 'comment-only'
 
 export interface CommentReply {
   id: string

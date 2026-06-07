@@ -6864,6 +6864,11 @@ file-tree,
     background: var(--feedback-danger-bg);
     border-color: var(--feedback-danger-border);
 }
+.plan-badge-comment-only {
+    color: var(--primary-text);
+    background: var(--primary-bg);
+    border-color: var(--primary-border);
+}
 
 /* Plan review surface */
 .plan-review {
@@ -7210,6 +7215,10 @@ file-tree,
 .plan-verdict-reject .plan-verdict-icon {
     background: var(--feedback-danger-bg);
     color: var(--feedback-danger-text);
+}
+.plan-verdict-comment-only .plan-verdict-icon {
+    background: var(--primary-bg);
+    color: var(--primary-text);
 }
 .plan-verdict-text {
     display: flex;

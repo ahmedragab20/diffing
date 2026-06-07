@@ -10,7 +10,7 @@ import type {
 import { Popover } from '../primitives/Popover'
 import { Select } from '../primitives/Select'
 import { SendReviewPopover } from '../components/SendReviewPopover'
-import type { ReviewComment, ReviewDecision } from '../../lib/types'
+import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
 
 interface ToolbarProps {
   repoName: string
@@ -61,7 +61,7 @@ interface ToolbarProps {
   onOpenMonoFontModal: () => void
   onOpenSearch: () => void
   onCopyComments: () => Promise<void>
-  onSendToAgent: (decision: ReviewDecision, generalComment?: string) => Promise<unknown>
+  onSendToAgent: (decision: ReviewDecision, generalComment?: string, mode?: ReviewMode) => Promise<unknown>
   agentWaiting: boolean
   sending: boolean
   comments: ReviewComment[]

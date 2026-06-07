@@ -3,12 +3,13 @@ name: diffing-plan-review
 description: >
   Submit an implementation plan to diffing for human review and act on the
   verdict. Use BEFORE writing code when you have produced a plan: submit the
-  markdown plan, block until the human approves / rejects / requests changes,
-  then proceed, revise-and-resubmit, or stop accordingly. Also covers replying
-  to and resolving the human's inline comments on specific plan lines/sections.
-  Port-agnostic: uses the diffing CLI subcommands (or MCP tools), so no port is
-  ever hard-coded. Use when the user asks you to get a plan reviewed/approved, or
-  when you want sign-off on an approach before implementing.
+  markdown plan, block until the human approves / rejects / requests changes /
+  chooses comment-only, then proceed, revise-and-resubmit, or stop accordingly.
+  Also covers replying to and resolving the human's inline comments on specific
+  plan lines/sections. Port-agnostic: uses the diffing CLI subcommands (or MCP
+  tools), so no port is ever hard-coded. Use when the user asks you to get a
+  plan reviewed/approved, or when you want sign-off on an approach before
+  implementing.
 user_invocable: true
 ---
 
@@ -59,8 +60,8 @@ Prints plan ID on stdout, review URL on stderr.
 
 ## 2. Wait for Verdict (Handoff)
 
-Block until human approves, rejects, or requests changes. On release, verdict +
-inline comments printed as `<plan-review>` XML:
+Block until human approves, rejects, requests changes, or chooses comment-only.
+On release, verdict + inline comments printed as `<plan-review>` XML:
 
 ```bash
 diffing plan await        # exit 0 + XML on decision; exit 2 (timeout) → run again
@@ -69,7 +70,8 @@ diffing plan submit PLAN.md --wait --model "<model>"
 ```
 
 XML fields:
-- `<plan decision="approved|changes-requested|rejected|pending">`
+- `<plan decision="approved|changes-requested|rejected|comment-only|pending">`
+- `mode="standard|comment-only"` — **controls agent behavior**
 - `<decision-summary>` — plain English next step
 - `<decision-comment>` — reviewer's overall note (optional)
 - Each `<comment>` targets `line=N`, range `line=N-M`, or `line=plan`
@@ -83,11 +85,12 @@ stderr carries: `DIFFING_PLAN_DECISION=<verdict>`, `DIFFING_PLAN_ROUND=<n>`
 
 ## 3. Act on Decision
 
-| Decision | Action |
-|----------|--------|
-| `approved` | Proceed with implementation |
-| `changes-requested` | Revise plan, address every `status="open"` comment, resubmit with `--id <plan-id>`, `await` again |
-| `rejected` | Stop; do not implement |
+| Decision | Mode | Action |
+|----------|------|--------|
+| `approved` | standard | Proceed with implementation |
+| `changes-requested` | standard | Revise plan, address every `status="open"` comment, resubmit with `--id <plan-id>`, `await` again |
+| `rejected` | standard | Stop; do not implement |
+| `comment-only` | comment-only | **Do NOT edit files or implement.** Only reply to comments. The decision comment (if present) is your chat prompt. |
 
 Resubmit revised version (keeps history on one plan):
 
@@ -142,4 +145,5 @@ Tools: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`,
 - **Clean markdown with ATX headings (`##`)** — each heading = commentable section, stable line anchors
 - **Resubmit with `--id`** — not new plan, keeps history/version count
 - **Never implement on `changes-requested` or `rejected`** — only `approved` is green light
+- **`comment-only` means reply only** — the human wants discussion, not edits. The overall note is your prompt.
 - **Always pass `--model` on replies** — UI attributes to your agent

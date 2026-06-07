@@ -42,10 +42,15 @@ arguments work.
 After launching, tell the user:
 
 > diffing is running. Review your changes in the browser and leave inline
-> comments. When you're done, click **"Send to agent"** in the toolbar — I'll
-> pick the comments up automatically.
+> comments. When you're done, click **"Send to agent"** in the toolbar — pick a
+> verdict (Approve / Request edits / Reject / **Comment only**) and optionally
+> add an overall note. I'll pick the comments up automatically.
 
 Keep it brief.
+
+> **Note:** The "Comment only" verdict means the agent will only reply to
+> comments — it will not edit any files. The overall note becomes the chat
+> prompt.
 
 ---
 

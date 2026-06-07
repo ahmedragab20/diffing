@@ -1,4 +1,4 @@
-import type { ReviewComment, ReviewDecision } from './types.js'
+import type { ReviewComment, ReviewDecision, ReviewMode } from './types.js'
 
 /** Plain-language guidance the agent should act on, derived from the verdict. */
 export function reviewDecisionSummary(decision: ReviewDecision): string {
@@ -9,6 +9,8 @@ export function reviewDecisionSummary(decision: ReviewDecision): string {
       return 'The reviewer REQUESTED EDITS. Address every open comment below and apply the requested changes before considering this review done.'
     case 'rejected':
       return 'The reviewer REJECTED these changes. Do NOT keep building on this approach; reconsider it in light of the comments below before continuing.'
+    case 'comment-only':
+      return 'The reviewer chose COMMENT-ONLY mode. You MUST NOT edit any files. Only reply to the comments below — answer questions, provide clarification, or discuss. The general comment (if any) is your prompt for the chat.'
   }
 }
 
@@ -18,7 +20,7 @@ export function reviewDecisionSummary(decision: ReviewDecision): string {
  * (`useComments.formatAllComments`), the server's `/api/review/send` handoff,
  * and the `diffing` CLI/MCP so every channel emits byte-identical output.
  *
- * A review may carry a headline `decision` (approve / request edits / reject)
+ * A review may carry a headline `decision` (approve / request edits / reject / comment-only)
  * and/or an overall comment, so the envelope is emitted even with zero inline
  * comments — letting a reviewer submit a verdict without annotating any line.
  */
@@ -26,6 +28,7 @@ export function formatComments(
   comments: ReviewComment[],
   generalComment?: string,
   decision?: ReviewDecision,
+  mode?: ReviewMode,
 ): string {
   const trimmedGeneral = generalComment?.trim()
   // Nothing to hand off: no inline comments, no verdict, no overall note.
@@ -38,14 +41,22 @@ export function formatComments(
     grouped.set(comment.filePath, list)
   }
 
+  const modeAttr = mode && mode !== 'standard' ? ` mode="${mode}"` : ''
   const lines: string[] = []
-  lines.push(decision ? `<code-review-comments decision="${decision}">` : '<code-review-comments>')
+  lines.push(decision ? `<code-review-comments decision="${decision}"${modeAttr}>` : `<code-review-comments${modeAttr}>`)
   lines.push('  <instructions>')
   lines.push('    You are an AI coding assistant. You are receiving a structured list of code review comments to address in the repository.')
-  lines.push('    For each file, review the inline comments and apply the changes requested.')
+  if (mode === 'comment-only') {
+    lines.push('    ⚠️ COMMENT-ONLY MODE: You MUST NOT edit any files. Your only task is to reply to the comments below — answer questions, provide clarification, or discuss. The general comment (if present) is your prompt for this chat.')
+  } else {
+    lines.push('    For each file, review the inline comments and apply the changes requested.')
+  }
   if (decision) {
-    lines.push('    - The "decision" attribute on the root element is the reviewer\'s headline verdict: "approved", "changes-requested", or "rejected".')
+    lines.push('    - The "decision" attribute on the root element is the reviewer\'s headline verdict: "approved", "changes-requested", "rejected", or "comment-only".')
     lines.push('    - <decision-summary> tells you, in plain language, what to do next based on that verdict.')
+  }
+  if (mode) {
+    lines.push(`    - The "mode" attribute on the root element controls your behavior: "standard" (apply edits) or "comment-only" (reply only, no edits).`)
   }
   lines.push('    - Target lines are specified by the "line" attribute (e.g. line="10" or line="10-15").')
   lines.push('    - "side" indicates whether the comment is on "additions" (added/modified lines) or "deletions" (deleted/old lines).')

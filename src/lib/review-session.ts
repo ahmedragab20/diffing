@@ -1,4 +1,4 @@
-import type { ReviewComment, ReviewDecision } from './types.js'
+import type { ReviewComment, ReviewDecision, ReviewMode } from './types.js'
 
 /**
  * In-process state machine for the "agent waits, the human releases it"
@@ -26,6 +26,8 @@ export interface ReviewPayload {
   comments: ReviewComment[]
   /** The reviewer's headline verdict, when they chose one. */
   decision?: ReviewDecision
+  /** Mode controlling agent behavior: 'standard' (default) or 'comment-only'. */
+  mode: ReviewMode
 }
 
 export type AwaitResult =
@@ -103,7 +105,7 @@ export class ReviewSession {
   }
 
   /** Capture a review batch and release every blocked waiter. */
-  send(input: { sentAt: number; commentXml: string; openCount: number; comments: ReviewComment[]; decision?: ReviewDecision }): ReviewPayload {
+  send(input: { sentAt: number; commentXml: string; openCount: number; comments: ReviewComment[]; decision?: ReviewDecision; mode?: ReviewMode }): ReviewPayload {
     this.round += 1
     this.lastSentAt = input.sentAt
     const payload: ReviewPayload = {
@@ -113,6 +115,7 @@ export class ReviewSession {
       openCount: input.openCount,
       comments: input.comments,
       decision: input.decision,
+      mode: input.mode ?? 'standard',
     }
     this.lastPayload = payload
 

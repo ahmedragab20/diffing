@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { DiffLineAnnotation } from '@pierre/diffs'
-import type { ReviewComment, ReviewDecision } from '../../lib/types'
+import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
 import { formatComments } from '../../lib/comment-format'
 import { subscribeLive } from '../live'
 
@@ -173,11 +173,11 @@ export function useComments() {
   })
 
   const sendToAgentMutation = useMutation({
-    mutationFn: async ({ decision, generalComment }: { decision?: ReviewDecision; generalComment?: string }) => {
+    mutationFn: async ({ decision, generalComment, mode }: { decision?: ReviewDecision; generalComment?: string; mode?: ReviewMode }) => {
       const res = await fetch('/api/review/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision, generalComment: generalComment?.trim() || undefined }),
+        body: JSON.stringify({ decision, generalComment: generalComment?.trim() || undefined, mode }),
       })
       if (!res.ok) throw new Error('Failed to send to agent')
       return res.json() as Promise<{ ok: boolean; round: number; openCount: number; decision?: ReviewDecision; waiters: number }>
@@ -284,8 +284,8 @@ export function useComments() {
   }, [formatAllComments])
 
   const sendToAgent = useCallback(
-    (decision?: ReviewDecision, generalComment?: string) =>
-      sendToAgentMutation.mutateAsync({ decision, generalComment }),
+    (decision?: ReviewDecision, generalComment?: string, mode?: ReviewMode) =>
+      sendToAgentMutation.mutateAsync({ decision, generalComment, mode }),
     [sendToAgentMutation.mutateAsync],
   )
 

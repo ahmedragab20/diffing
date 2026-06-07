@@ -1,4 +1,4 @@
-import type { Plan, PlanDecision } from './plan-types.js'
+import type { Plan, PlanDecision, PlanMode } from './plan-types.js'
 
 /**
  * In-process state machine for the plan-review handoff — the plan-side twin of
@@ -23,6 +23,8 @@ export interface PlanReviewPayload {
   openCommentCount: number
   /** Raw plan at decision time, for structured (MCP) consumers. */
   plan: Plan
+  /** Mode controlling agent behavior: 'standard' (default) or 'comment-only'. */
+  mode: PlanMode
 }
 
 export type PlanAwaitResult =
@@ -98,6 +100,7 @@ export class PlanReviewSession {
     reviewXml: string
     openCommentCount: number
     plan: Plan
+    mode?: PlanMode
   }): PlanReviewPayload {
     this.round += 1
     this.lastDecidedAt = input.sentAt
@@ -110,6 +113,7 @@ export class PlanReviewSession {
       reviewXml: input.reviewXml,
       openCommentCount: input.openCommentCount,
       plan: input.plan,
+      mode: input.mode ?? 'standard',
     }
     this.lastPayload = payload
 

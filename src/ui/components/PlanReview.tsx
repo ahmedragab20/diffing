@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { File as DiffsFile } from '@pierre/diffs/react'
 import type { LineAnnotation, SelectedLineRange } from '@pierre/diffs'
-import { Bot, FileText, Code2, MessageSquarePlus, Check, X, MessageSquareWarning, Clock, History, ArrowLeft } from 'lucide-react'
+import { Bot, FileText, Code2, MessageSquarePlus, Check, X, MessageSquareWarning, Clock, History, ArrowLeft, MessageSquare } from 'lucide-react'
 import type { Plan, PlanComment, PlanDecision, PlanVersion } from '../../lib/plan-types'
 import { sectionTitleForLine, extractPlanLines } from '../../lib/plan-format'
 import { SHIKI_THEME_MAP, timeAgo } from '../utils'
@@ -38,6 +38,7 @@ const DECISION_META: Record<PlanDecision, { label: string; className: string; ic
   approved: { label: 'Approved', className: 'plan-badge-approved', icon: Check },
   'changes-requested': { label: 'Changes requested', className: 'plan-badge-changes', icon: MessageSquareWarning },
   rejected: { label: 'Rejected', className: 'plan-badge-rejected', icon: X },
+  'comment-only': { label: 'Comment only', className: 'plan-badge-comment-only', icon: MessageSquare },
 }
 
 export function PlanReview({

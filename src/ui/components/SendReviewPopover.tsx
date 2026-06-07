@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { Bot, Pencil, Trash2, Check, X, MessageSquareWarning } from 'lucide-react'
+import { Bot, Pencil, Trash2, Check, X, MessageSquareWarning, MessageSquare } from 'lucide-react'
 import { useFeedback } from '../hooks/useHaptics'
-import type { ReviewComment, ReviewDecision } from '../../lib/types'
+import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
 import { fileName } from '../utils'
 import { Popover } from '../primitives/Popover'
 import { MarkdownField } from './MarkdownField'
@@ -10,7 +10,7 @@ interface SendReviewPopoverProps {
   comments: ReviewComment[]
   onEditComment: (id: string, body: string) => void
   onDeleteComment: (id: string) => void
-  onSend: (decision: ReviewDecision, generalComment?: string) => Promise<unknown>
+  onSend: (decision: ReviewDecision, generalComment?: string, mode?: ReviewMode) => Promise<unknown>
   sending: boolean
   agentWaiting: boolean
   onCopyComments?: () => Promise<void>
@@ -43,6 +43,13 @@ const VERDICT_OPTIONS: {
     description: "Don't keep building on this — the approach needs rethinking.",
     icon: X,
     className: 'plan-verdict-reject',
+  },
+  {
+    value: 'comment-only',
+    label: 'Comment only',
+    description: 'Agent must NOT edit files — only reply to comments. General note goes to chat.',
+    icon: MessageSquare,
+    className: 'plan-verdict-comment-only',
   },
 ]
 
@@ -87,7 +94,8 @@ export function SendReviewPopover({
     if (!verdict) return
     haptic('heavy')
     sound('send')
-    await onSend(verdict, general)
+    const mode: ReviewMode = verdict === 'comment-only' ? 'comment-only' : 'standard'
+    await onSend(verdict, general, mode)
     setGeneral('')
     setVerdict(null)
     setOpen(false)

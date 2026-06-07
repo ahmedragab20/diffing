@@ -10,7 +10,7 @@ import { searchFiles, searchContent, searchSymbols, searchAll, getSearchStatus, 
 import { loadSettings, saveSettings } from './lib/settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
 import type { CommentStore } from './lib/comments.js'
-import type { ReviewComment, ReviewDecision } from './lib/types.js'
+import type { ReviewComment, ReviewDecision, ReviewMode } from './lib/types.js'
 import { FilePlanStore } from './lib/plans.js'
 import type { PlanStore } from './lib/plans.js'
 import { FileUiStateStore } from './lib/state.js'
@@ -20,7 +20,7 @@ import { ReviewSession } from './lib/review-session.js'
 import { PlanReviewSession } from './lib/plan-review-session.js'
 import { formatComments } from './lib/comment-format.js'
 import { formatPlanReview, sectionTitleForLine, extractPlanLines } from './lib/plan-format.js'
-import type { PlanDecision } from './lib/plan-types.js'
+import type { PlanDecision, PlanMode } from './lib/plan-types.js'
 import { executeDiffWithMeta } from './lib/diff-engine.js'
 import type { DiffOptions } from './lib/diff-options.js'
 import { DEFAULTS } from './lib/diff-options.js'
@@ -843,23 +843,29 @@ export function createApp(
     const generalComment =
       typeof body?.generalComment === 'string' ? body.generalComment : undefined
     const decision =
-      body?.decision === 'approved' || body?.decision === 'changes-requested' || body?.decision === 'rejected'
+      body?.decision === 'approved' || body?.decision === 'changes-requested' || body?.decision === 'rejected' || body?.decision === 'comment-only'
         ? (body.decision as ReviewDecision)
         : undefined
+    const mode =
+      body?.mode === 'comment-only' || body?.mode === 'standard'
+        ? (body.mode as ReviewMode)
+        : 'standard'
     const all = await store.getAll()
     const openCount = all.filter((x) => x.status === 'open').length
     const payload = reviewSession.send({
       sentAt: Date.now(),
-      commentXml: formatComments(all, generalComment, decision),
+      commentXml: formatComments(all, generalComment, decision, mode),
       openCount,
       comments: all,
       decision,
+      mode,
     })
     return c.json({
       ok: true,
       round: payload.round,
       openCount: payload.openCount,
       decision: payload.decision,
+      mode: payload.mode,
       waiters: reviewSession.snapshot().waiters,
     })
   })
@@ -1056,10 +1062,14 @@ export function createApp(
     const planId = c.req.param('id')
     const body = await c.req.json().catch(() => ({}) as Record<string, unknown>)
     const decision = body.decision as PlanDecision
-    if (decision !== 'approved' && decision !== 'rejected' && decision !== 'changes-requested') {
-      return c.json({ error: 'decision must be one of: approved, rejected, changes-requested' }, 400)
+    if (decision !== 'approved' && decision !== 'rejected' && decision !== 'changes-requested' && decision !== 'comment-only') {
+      return c.json({ error: 'decision must be one of: approved, rejected, changes-requested, comment-only' }, 400)
     }
     const decisionComment = typeof body.decisionComment === 'string' ? body.decisionComment : undefined
+    const mode =
+      body?.mode === 'comment-only' || body?.mode === 'standard'
+        ? (body.mode as PlanMode)
+        : 'standard'
     const plan = await plans.setDecision(planId, decision, decisionComment)
     if (!plan) return c.json({ error: 'Plan not found' }, 404)
 
@@ -1069,14 +1079,16 @@ export function createApp(
       planId,
       decision,
       decisionComment: plan.decisionComment,
-      reviewXml: formatPlanReview(plan),
+      reviewXml: formatPlanReview(plan, { mode }),
       openCommentCount,
       plan,
+      mode,
     })
     return c.json({
       ok: true,
       round: payload.round,
       decision,
+      mode: payload.mode,
       openCommentCount,
       waiters: planReviewSession.snapshot().waiters,
     })

@@ -10,7 +10,14 @@ import type { CommentReply } from './types.js'
  */
 
 /** The human's verdict on a plan. `pending` until they submit a review. */
-export type PlanDecision = 'pending' | 'approved' | 'rejected' | 'changes-requested'
+export type PlanDecision = 'pending' | 'approved' | 'rejected' | 'changes-requested' | 'comment-only'
+
+/**
+ * Mode controlling agent behavior on plan review handoff.
+ * - `standard`: Agent addresses comments and applies edits (default).
+ * - `comment-only`: Agent MUST NOT edit files; only replies to comments.
+ */
+export type PlanMode = 'standard' | 'comment-only'
 
 export interface PlanComment {
   id: string
