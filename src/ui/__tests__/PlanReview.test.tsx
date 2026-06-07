@@ -23,6 +23,7 @@ vi.mock('lucide-react', () => {
   const keys = [
     'Bot', 'FileText', 'Code2', 'MessageSquarePlus', 'Check', 'X',
     'MessageSquareWarning', 'Clock', 'History', 'ArrowLeft', 'ChevronsUpDown',
+    'MessageSquare',
   ]
   for (const k of keys) proxy[k] = Stub
   return proxy
