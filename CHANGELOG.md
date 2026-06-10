@@ -13,6 +13,35 @@
   - **UI**: a `<History>`-iconed version dropdown sits in the plan meta row next to the `v{n}` chip. Picking an older version swaps the body, swaps the title, surfaces a "Viewing v{N} of v{M}" amber banner, and filters the comment list to those anchored to the viewed version. A "Back to current" button restores the latest body. When the server pushes a new version via SSE, the viewer auto-follows only if the user was on the previous current — never auto-bumps someone who's reading history.
   - **Tests**: 10 new `InMemoryPlanStore` version-history tests (`src/__tests__/plans-versions.test.ts`), 6 new endpoint tests (`src/__tests__/plan-endpoints.test.ts`), 2 new `formatPlanReview` version-rendering tests (`src/__tests__/plan-format.test.ts`), 2 new hook tests (`src/ui/hooks/__tests__/usePlans.test.tsx`), 3 new component tests (`src/ui/__tests__/PlanReview.test.tsx`).
 
+- cc9826b: Add 'Comment only' mode to Send to agent and Submit plan review.
+
+  - New `comment-only` verdict option in both `SendReviewPopover` and `SubmitPlanReviewPopover`.
+  - `ReviewMode` / `PlanMode` types (`'standard' | 'comment-only'`) passed through hooks (`useComments`, `usePlans`) to the server.
+  - `/api/review/send` and `/api/plans/:id/decision` accept the mode; included in `ReviewPayload` and `PlanReviewPayload`.
+  - `formatComments` and `formatPlanReview` emit the mode in the XML handoff with special instructions for comment-only reviews.
+  - CSS styles for comment-only badges and verdict options.
+  - Updated skill docs for `diffing-plan-review`, `diffing-review`, `diffing-finish-review`, `diffing-start-review`.
+
+- 264e9d6: Add `@` file mentions in comments and replies.
+
+  - Type `@` in any comment or reply to trigger an fff-powered fuzzy file finder.
+  - Arrow keys navigate, Enter/Tab select, Escape dismiss.
+  - Files render shortened in preview (filename only, dotted underline, hover shows full path).
+  - Dropdown positioned under cursor line with theme-aware highlight.
+  - `Cmd+Shift+P` shortcut to toggle preview mode in comments.
+  - New `useFileMention` hook and `FileMentionDropdown` component.
+  - Updated shortcuts help modal and README documentation.
+
+### Patch Changes
+
+- bd35d8f: Fix legacy plan version backfill. Plans at `version: N > 1` when the version-switcher shipped previously appeared to have a single version — no dropdown, no "Viewing v{N} of v{M}" banner. `backfillPlan` now synthesizes one entry per recorded version (1..N); `FilePlanStore.getAll` writes the backfilled plans back to disk once so legacy plans no longer pay the re-synthesis cost on every restart.
+
+- b522e9b: Add collapsible VimStatusBar with `Cmd+B` toggle and improved keyboard support. Rewrite all four skill files (`diffing-plan-review`, `diffing-review`, `diffing-start-review`, `diffing-finish-review`) with detailed CLI references, MCP alternatives, and cleaner formatting. Overhaul `AGENTS.md` with complete workflows, skill registry, and development conventions.
+
+- 43d03fa: Add a "Keep the project clean" section to `AGENTS.md` (working files under `.diffing/`, not at the project root). Refresh the marketing landing page interactions and copy. Normalize quote style and semicolons in `startup-display.ts` animation primitives (no behaviour change).
+
+- 70ef359: Extract jumplist state into a `useJumpList` hook, fixing a stale-closure bug where multiple `addToJumpList` calls batched in the same React tick broke truncation and the max-size cap. Add 18 `useJumpList` tests and 12 `ShortcutsHelpModal` tests (including `Ctrl+O` / `Ctrl+I` jump-list entries). Fix `PlanReview.test.tsx` mock to include the new `MessageSquare` icon from the comment-only feature.
+
 ## 0.3.0
 
 ### Minor Changes
