@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Markdown } from './Markdown'
+import { useFileMention } from '../hooks/useFileMention'
+import { FileMentionDropdown } from './FileMentionDropdown'
+
+function preprocessMentions(content: string): string {
+  return content.replace(/@([^\s@]+)/g, (_, path: string) => {
+    const name = path.split('/').pop() || path
+    return `[${name}](file-mention://${path})`
+  })
+}
 
 interface MarkdownFieldProps {
   id?: string
@@ -32,12 +41,20 @@ export function MarkdownField({
 }: MarkdownFieldProps) {
   const [tab, setTab] = useState<'write' | 'preview'>('write')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
+  const mention = useFileMention(value, onChange)
   // Mirror the latest value so an async image upload can patch the placeholder
   // it inserted even after further edits, despite this being a controlled field.
   const valueRef = useRef(value)
   useEffect(() => {
     valueRef.current = value
   }, [value])
+
+  useEffect(() => {
+    if (tab === 'preview') {
+      previewRef.current?.focus()
+    }
+  }, [tab])
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData.items
@@ -105,31 +122,59 @@ export function MarkdownField({
       </div>
 
       {tab === 'write' ? (
-        <textarea
-          id={id}
-          ref={textareaRef}
-          className={textareaClassName}
-          value={value}
-          rows={rows}
-          placeholder={placeholder}
-          aria-label={ariaLabel}
-          onChange={(e) => onChange(e.target.value)}
-          onPaste={handlePaste}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault()
-              onSubmitShortcut?.()
-            }
-          }}
-        />
+        <div style={{ position: 'relative' }}>
+          <textarea
+            id={id}
+            ref={(el) => {
+              (textareaRef as React.MutableRefObject<HTMLTextAreaElement | null>).current = el
+              mention.setTextareaRef(el)
+            }}
+            className={textareaClassName}
+            value={value}
+            rows={rows}
+            placeholder={placeholder}
+            aria-label={ariaLabel}
+            onChange={(e) => onChange(e.target.value)}
+            onPaste={handlePaste}
+            onKeyDown={(e) => {
+              if (mention.handleKeyDown(e)) return
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault()
+                onSubmitShortcut?.()
+              }
+              if (e.key === 'p' && (e.metaKey || e.ctrlKey) && e.shiftKey) {
+                e.preventDefault()
+                setTab((t) => (t === 'write' ? 'preview' : 'write'))
+              }
+            }}
+          />
+          {mention.isOpen && (
+            <FileMentionDropdown
+              results={mention.results}
+              focusedIndex={mention.focusedIndex}
+              query={mention.query}
+              cursorTop={mention.cursorTop}
+              onSelect={mention.onSelect}
+              onHover={mention.setFocusedIndex}
+            />
+          )}
+        </div>
       ) : (
         <div
+          ref={previewRef}
           className="md-field-preview markdown-body"
           role="tabpanel"
           aria-label="Markdown preview"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'p' && (e.metaKey || e.ctrlKey) && e.shiftKey) {
+              e.preventDefault()
+              setTab('write')
+            }
+          }}
         >
           {value.trim() ? (
-            <Markdown content={value} />
+            <Markdown content={preprocessMentions(value)} />
           ) : (
             <span className="md-field-empty">Nothing to preview</span>
           )}

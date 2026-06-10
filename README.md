@@ -121,6 +121,7 @@ Full keyboard-driven navigation with vim-like motions and a modal status bar:
 | `n` | Toggle line numbers |
 | `i` | Cycle diff indicators |
 | `I` | Cycle inline diff type |
+| `Cmd+Shift+P` | Toggle preview mode in comments |
 
 ### File Navigation & UI
 | Key | Action |

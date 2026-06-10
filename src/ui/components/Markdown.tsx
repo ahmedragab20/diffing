@@ -17,7 +17,7 @@ const SANITIZE_SCHEMA = {
   ...defaultSchema,
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), 'file'],
+    href: [...(defaultSchema.protocols?.href ?? []), 'file', 'file-mention'],
   },
 }
 
@@ -36,7 +36,9 @@ const REHYPE_PLUGINS: Options['rehypePlugins'] = [
 // react-markdown's default transform drops `file:` URLs; keep them so the plan
 // reviewer's local-file links survive (other protocols stay sanitized).
 function urlTransform(url: string): string {
-  return url.startsWith('file://') ? url : defaultUrlTransform(url)
+  if (url.startsWith('file://')) return url
+  if (url.startsWith('file-mention://')) return url
+  return defaultUrlTransform(url)
 }
 
 /**
@@ -76,6 +78,14 @@ const COMPONENTS: Components = {
     return <pre>{children}</pre>
   },
   a({ href, children }) {
+    if (typeof href === 'string' && href.startsWith('file-mention://')) {
+      const path = href.slice('file-mention://'.length)
+      return (
+        <span className="mention-file" title={path}>
+          {children}
+        </span>
+      )
+    }
     const external = typeof href === 'string' && /^https?:\/\//.test(href)
     return (
       <a href={href} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>

@@ -2,6 +2,15 @@ import { useState, useRef, useEffect } from 'react'
 import { Markdown } from './Markdown'
 import { getDraft, setDraft, clearDraft } from '../drafts'
 import { useFeedback } from '../hooks/useHaptics'
+import { useFileMention } from '../hooks/useFileMention'
+import { FileMentionDropdown } from './FileMentionDropdown'
+
+function preprocessMentions(content: string): string {
+  return content.replace(/@([^\s@]+)/g, (_, path: string) => {
+    const name = path.split('/').pop() || path
+    return `[${name}](file-mention://${path})`
+  })
+}
 
 interface CommentFormProps {
   initialBody?: string
@@ -22,10 +31,15 @@ export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCa
   })
   const [activeTab, setActiveTab] = useState<'write' | 'preview'>('write')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
+
+  const mention = useFileMention(body, setBody)
 
   useEffect(() => {
     if (activeTab === 'write') {
       textareaRef.current?.focus()
+    } else {
+      previewRef.current?.focus()
     }
   }, [activeTab])
 
@@ -46,9 +60,14 @@ export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCa
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (mention.handleKeyDown(e)) return
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
       handleSubmit()
+    }
+    if (e.key === 'p' && (e.metaKey || e.ctrlKey) && e.shiftKey) {
+      e.preventDefault()
+      setActiveTab((t) => (t === 'write' ? 'preview' : 'write'))
     }
     if (e.key === 'Escape') {
       if (body.includes('\n')) return
@@ -131,20 +150,48 @@ export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCa
       </div>
 
       {activeTab === 'write' ? (
-        <textarea
-          id="comment-write-panel"
-          ref={textareaRef}
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder="Leave a review comment (supports Markdown and Pasting Clipboard Images)..."
-          rows={4}
-          aria-label="Comment body"
-          style={{ minHeight: '100px' }}
-        />
+        <div style={{ position: 'relative' }}>
+          <textarea
+            id="comment-write-panel"
+            ref={(el) => {
+              (textareaRef as React.MutableRefObject<HTMLTextAreaElement | null>).current = el
+              mention.setTextareaRef(el)
+            }}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder="Leave a review comment (supports Markdown and Pasting Clipboard Images)..."
+            rows={4}
+            aria-label="Comment body"
+            style={{ minHeight: '100px' }}
+          />
+          {mention.isOpen && (
+            <FileMentionDropdown
+              results={mention.results}
+              focusedIndex={mention.focusedIndex}
+              query={mention.query}
+              cursorTop={mention.cursorTop}
+              onSelect={mention.onSelect}
+              onHover={mention.setFocusedIndex}
+            />
+          )}
+        </div>
       ) : (
-        <div id="comment-preview-panel" role="tabpanel" aria-label="Preview" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div
+          id="comment-preview-panel"
+          ref={previewRef}
+          role="tabpanel"
+          aria-label="Preview"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'p' && (e.metaKey || e.ctrlKey) && e.shiftKey) {
+              e.preventDefault()
+              setActiveTab('write')
+            }
+          }}
+          style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}
+        >
           {(() => {
             const suggestionMatch = body.match(/```suggestion\n([\s\S]*?)```/)
             const hasSuggestion = !!suggestionMatch
@@ -172,7 +219,7 @@ export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCa
                 }}
               >
                 {body.trim() ? (
-                  <Markdown content={body} />
+                  <Markdown content={preprocessMentions(body)} />
                 ) : (
                   <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Nothing to preview</span>
                 )}

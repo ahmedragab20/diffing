@@ -2761,6 +2761,112 @@ body {
 }
 
 /* ==========================================================================
+   File mention dropdown (@ trigger autocomplete)
+   ========================================================================== */
+.mention-dropdown {
+    position: absolute;
+    left: 0;
+    right: 0;
+    z-index: 200;
+    max-height: 220px;
+    overflow-y: auto;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-normal);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    padding: 2px;
+}
+
+.mention-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.mention-item:hover,
+.mention-item-focused {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.mention-item-focused {
+    background: var(--accent-subtle);
+    border-radius: calc(var(--radius-md) - 2px);
+    outline: 1px solid var(--primary);
+    outline-offset: -1px;
+}
+
+.mention-item-focused .mention-name {
+    color: var(--primary);
+}
+
+.mention-item:first-child,
+.mention-item:first-child.mention-item-focused {
+    border-top-left-radius: calc(var(--radius-md) - 2px);
+    border-top-right-radius: calc(var(--radius-md) - 2px);
+}
+
+.mention-item:last-child,
+.mention-item:last-child.mention-item-focused {
+    border-bottom-left-radius: calc(var(--radius-md) - 2px);
+    border-bottom-right-radius: calc(var(--radius-md) - 2px);
+}
+
+.mention-icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    background: var(--accent-subtle);
+    color: var(--primary);
+}
+
+.mention-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.mention-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mention-dir {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mention-highlight {
+    background: var(--accent-subtle);
+    color: var(--primary);
+    border-radius: 2px;
+    font-weight: 700;
+}
+
+.mention-file {
+    display: inline;
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    color: var(--primary);
+    border-bottom: 1px dotted var(--primary);
+    cursor: help;
+}
+
+/* ==========================================================================
    Review comments panel (sidebar) — `cmt-*`
    ========================================================================== */
 .cmt {
@@ -4584,7 +4690,7 @@ file-tree,
 }
 
 .shortcuts-modal {
-    width: 50vw;
+    width: 70vw;
 }
 
 .shortcuts-header {
@@ -8022,4 +8128,3 @@ file-tree,
         padding: 12px;
     }
 }
-
