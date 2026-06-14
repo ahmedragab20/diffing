@@ -42,33 +42,6 @@ describe('ShortcutsHelpModal', () => {
   })
 
   describe('diff mode (default)', () => {
-    it('lists the new Ctrl+O and Ctrl+I jump-list shortcuts', () => {
-      render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} />)
-
-      expect(screen.getByText('Jump Back in scroll history')).toBeInTheDocument()
-      expect(screen.getByText('Jump Forward in scroll history')).toBeInTheDocument()
-    })
-
-    it('renders the Ctrl+O binding as a separate kbd element', () => {
-      render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} />)
-
-      const row = screen.getByText('Jump Back in scroll history').closest('.shortcuts-row') as HTMLElement
-      expect(row).not.toBeNull()
-      const kbdLabels = Array.from(row.querySelectorAll('kbd.vim-kbd'))
-        .map(el => el.textContent?.trim() ?? '')
-      expect(kbdLabels).toEqual(['Ctrl', 'o'])
-    })
-
-    it('renders the Ctrl+I binding as a separate kbd element', () => {
-      render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} />)
-
-      const row = screen.getByText('Jump Forward in scroll history').closest('.shortcuts-row') as HTMLElement
-      expect(row).not.toBeNull()
-      const kbdLabels = Array.from(row.querySelectorAll('kbd.vim-kbd'))
-        .map(el => el.textContent?.trim() ?? '')
-      expect(kbdLabels).toEqual(['Ctrl', 'i'])
-    })
-
     it('still lists the surrounding scrolling shortcuts', () => {
       render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} />)
 
@@ -84,13 +57,6 @@ describe('ShortcutsHelpModal', () => {
   })
 
   describe('plan mode', () => {
-    it('lists the new Ctrl+O and Ctrl+I jump-list shortcuts', () => {
-      render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} mode="plan" />)
-
-      expect(screen.getByText('Jump Back in scroll history')).toBeInTheDocument()
-      expect(screen.getByText('Jump Forward in scroll history')).toBeInTheDocument()
-    })
-
     it('refers to the plan content in the surrounding scrolling entries', () => {
       render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} mode="plan" />)
 
@@ -113,14 +79,4 @@ describe('ShortcutsHelpModal', () => {
     })
   })
 
-  it('exposes the same jump-list entries in both modes', () => {
-    const { unmount } = render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} />)
-    expect(screen.getAllByText('Jump Back in scroll history')).toHaveLength(1)
-    expect(screen.getAllByText('Jump Forward in scroll history')).toHaveLength(1)
-    unmount()
-
-    render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} mode="plan" />)
-    expect(screen.getAllByText('Jump Back in scroll history')).toHaveLength(1)
-    expect(screen.getAllByText('Jump Forward in scroll history')).toHaveLength(1)
-  })
 })

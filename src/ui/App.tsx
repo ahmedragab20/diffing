@@ -26,7 +26,6 @@ import { useMergeStatus } from "./hooks/useMergeStatus";
 import { useSettings, resolveMonoFont } from "./hooks/useSettings";
 import { useApplyFonts } from "./hooks/useApplyFonts";
 import { useViewed } from "./hooks/useViewed";
-import { useJumpList } from "./hooks/useJumpList";
 import { HapticsProvider, playSound, fireFeedback } from "./hooks/useHaptics";
 import { getUiStateItem, setUiStateItem } from "./utils/uiState";
 import { useDiffSearch } from "./hooks/useDiffSearch";
@@ -191,7 +190,6 @@ export function App() {
             return 220;
         }
     });
-    const { jumpList, jumpListIndex, addToJumpList, goBack, goForward } = useJumpList();
     const commentPanelHeightRef = useRef(commentPanelHeight);
     commentPanelHeightRef.current = commentPanelHeight;
 
@@ -697,31 +695,13 @@ export function App() {
             if (e.ctrlKey) {
                 if (key === 'd') {
                     e.preventDefault();
-                    addToJumpList(window.scrollY);
                     window.scrollBy({ top: window.innerHeight / 2, behavior: 'auto' });
                     fireFeedback('selection', 'navigate');
                     keyBuffer = '';
                 } else if (key === 'u') {
                     e.preventDefault();
-                    addToJumpList(window.scrollY);
                     window.scrollBy({ top: -window.innerHeight / 2, behavior: 'auto' });
                     fireFeedback('selection', 'navigate');
-                    keyBuffer = '';
-                } else if (key === 'o') {
-                    e.preventDefault();
-                    const target = goBack();
-                    if (target) {
-                        window.scrollTo({ top: target.scrollY, behavior: 'auto' });
-                        fireFeedback('selection', 'navigate');
-                    }
-                    keyBuffer = '';
-                } else if (key === 'i') {
-                    e.preventDefault();
-                    const target = goForward();
-                    if (target) {
-                        window.scrollTo({ top: target.scrollY, behavior: 'auto' });
-                        fireFeedback('selection', 'navigate');
-                    }
                     keyBuffer = '';
                 }
                 return;
@@ -736,27 +716,23 @@ export function App() {
 
             if (keyBuffer === 'j') {
                 e.preventDefault();
-                addToJumpList(window.scrollY);
                 window.scrollBy({ top: 100, behavior: 'auto' });
                 const now = Date.now();
                 if (now - lastNavSound > 80) { playSound('navigate'); lastNavSound = now; }
                 keyBuffer = '';
             } else if (keyBuffer === 'k') {
                 e.preventDefault();
-                addToJumpList(window.scrollY);
                 window.scrollBy({ top: -100, behavior: 'auto' });
                 const now = Date.now();
                 if (now - lastNavSound > 80) { playSound('navigate'); lastNavSound = now; }
                 keyBuffer = '';
             } else if (keyBuffer === 'gg') {
                 e.preventDefault();
-                addToJumpList(window.scrollY);
                 window.scrollTo({ top: 0, behavior: 'auto' });
                 fireFeedback('selection', 'navigate');
                 keyBuffer = '';
             } else if (keyBuffer === 'G') {
                 e.preventDefault();
-                addToJumpList(window.scrollY);
                 window.scrollTo({
                     top: document.documentElement.scrollHeight,
                     behavior: 'auto',
@@ -765,13 +741,11 @@ export function App() {
                 keyBuffer = '';
             } else if (keyBuffer === 'J') {
                 e.preventDefault();
-                addToJumpList(window.scrollY, activeFile ?? undefined);
                 navigateFile('next');
                 fireFeedback('selection', 'navigate');
                 keyBuffer = '';
             } else if (keyBuffer === 'K') {
                 e.preventDefault();
-                addToJumpList(window.scrollY, activeFile ?? undefined);
                 navigateFile('prev');
                 fireFeedback('selection', 'navigate');
                 keyBuffer = '';
@@ -866,11 +840,6 @@ export function App() {
         cycleDiffIndicators,
         cycleLineDiffType,
         setThemeModalOpen,
-        jumpList,
-        jumpListIndex,
-        addToJumpList,
-        goBack,
-        goForward,
     ]);
 
 

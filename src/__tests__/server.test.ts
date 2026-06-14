@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Hono } from 'hono'
 import type { CommentStore } from '../lib/comments.js'
+import type { PrSession } from '../lib/pr-session.js'
 
 const mockGetGitDiff = vi.fn()
 const mockGetCustomGitDiff = vi.fn()
@@ -180,6 +181,35 @@ describe('server', () => {
         expect(mockGetGitDiffAsync).toHaveBeenCalledWith({ staged: false, untracked: false })
       })
 
+      it('ignores a stale pr-session.json when not started in PR mode', async () => {
+        const { createApp } = await import('../server.js')
+        const { InMemoryPrSessionStore } = await import('../lib/pr-session.js')
+        const prStore = new InMemoryPrSessionStore()
+        await prStore.set({
+          ref: '1',
+          owner: 'acme',
+          repo: 'widget',
+          pullNumber: 1,
+          headSha: 'head',
+          baseSha: 'base',
+          title: 'Stale PR',
+          url: 'https://github.com/acme/widget/pull/1',
+          author: { login: 'ghost' },
+          additions: 1,
+          deletions: 1,
+          changedFiles: 1,
+          diff: 'diff --git a/stale b/stale\n+stale\n',
+          comments: [],
+          existingComments: [],
+        } as unknown as PrSession)
+        const localApp = createApp(clientDir, DEFAULTS, mockStore, undefined, prStore)
+        const res = await localApp.fetch(new Request('http://localhost/api/diff'))
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.prMode).toBeUndefined()
+        expect(body.patch).not.toContain('stale')
+      })
+
       it('uses custom diff in custom mode', async () => {
         const { createApp } = await import('../server.js')
         const diffOpts = { ...DEFAULTS, revisions: ['HEAD~3'] }
@@ -283,6 +313,36 @@ describe('server', () => {
         const res = await app.fetch(new Request('http://localhost/api/diff'))
         const body = await res.json()
         expect(body.binaryFiles).toEqual([{ path: 'img.png', type: 'added' }])
+      })
+    })
+
+    describe('GET /api/gh/session', () => {
+      it('returns 404 when a stale PR session exists but the server is not in PR mode', async () => {
+        const { createApp } = await import('../server.js')
+        const { InMemoryPrSessionStore } = await import('../lib/pr-session.js')
+        const prStore = new InMemoryPrSessionStore()
+        await prStore.set({
+          ref: '1',
+          owner: 'acme',
+          repo: 'widget',
+          pullNumber: 1,
+          headSha: 'head',
+          baseSha: 'base',
+          title: 'Stale PR',
+          url: 'https://github.com/acme/widget/pull/1',
+          author: { login: 'ghost' },
+          additions: 1,
+          deletions: 1,
+          changedFiles: 1,
+          diff: '',
+          comments: [],
+          existingComments: [],
+        } as unknown as PrSession)
+        const localApp = createApp(clientDir, DEFAULTS, mockStore, undefined, prStore)
+        const res = await localApp.fetch(new Request('http://localhost/api/gh/session'))
+        expect(res.status).toBe(404)
+        const body = await res.json()
+        expect(body.prMode).toBe(false)
       })
     })
 

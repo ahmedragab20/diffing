@@ -60,6 +60,7 @@ export function createApp(
   commentStore?: CommentStore,
   planStore?: PlanStore,
   prSessionStore?: PrSessionStore,
+  prMode = false,
 ) {
   const app = new Hono()
   const customMode = isCustomMode(diffOpts)
@@ -200,35 +201,39 @@ export function createApp(
 
     // PR mode: short-circuit and return the cached PR patch. The session
     // lookup is cheap (a JSON read on startup) and avoids a wasteful
-    // `git diff` call.
-    const prSession = await prStore.get()
-    if (prSession) {
-      const binaryFiles: { path: string; type: 'added' | 'deleted' | 'changed' | 'untracked' }[] = []
-      // Best-effort tab size from the project's editorconfig.
-      const filePaths: string[] = []
-      for (const line of prSession.diff.split('\n')) {
-        const m = /^diff --git a\/.+ b\/(.+)$/.exec(line)
-        if (m) filePaths.push(m[1])
+    // `git diff` call. Guard with the server's PR mode flag so a stale
+    // `pr-session.json` left over from a previous `diffing "gh pr N"` run
+    // does not hijack a plain `diffing` invocation.
+    if (prMode) {
+      const prSession = await prStore.get()
+      if (prSession) {
+        const binaryFiles: { path: string; type: 'added' | 'deleted' | 'changed' | 'untracked' }[] = []
+        // Best-effort tab size from the project's editorconfig.
+        const filePaths: string[] = []
+        for (const line of prSession.diff.split('\n')) {
+          const m = /^diff --git a\/.+ b\/(.+)$/.exec(line)
+          if (m) filePaths.push(m[1])
+        }
+        return c.json({
+          patch: prSession.diff,
+          repoName: prSession.repo,
+          branch: `#${prSession.pullNumber}`,
+          customMode: true,
+          binaryFiles,
+          tabSizeMap: {},
+          untrackedFiles: [],
+          prMode: true,
+          prRef: prSession.ref,
+          prOwner: prSession.owner,
+          prRepo: prSession.repo,
+          prPullNumber: prSession.pullNumber,
+          prUrl: prSession.url,
+          prTitle: prSession.title,
+          prAuthor: prSession.author,
+          prHeadSha: prSession.headSha,
+          prBaseSha: prSession.baseSha,
+        })
       }
-      return c.json({
-        patch: prSession.diff,
-        repoName: prSession.repo,
-        branch: `#${prSession.pullNumber}`,
-        customMode: true,
-        binaryFiles,
-        tabSizeMap: {},
-        untrackedFiles: [],
-        prMode: true,
-        prRef: prSession.ref,
-        prOwner: prSession.owner,
-        prRepo: prSession.repo,
-        prPullNumber: prSession.pullNumber,
-        prUrl: prSession.url,
-        prTitle: prSession.title,
-        prAuthor: prSession.author,
-        prHeadSha: prSession.headSha,
-        prBaseSha: prSession.baseSha,
-      })
     }
 
     const optsForDiff = customMode
@@ -642,14 +647,16 @@ export function createApp(
   })
 
   // ── PR review session ─────────────────────────────────────────────────────
-  // All `/api/gh/*` routes are no-ops (404) when no `pr-session.json` exists,
-  // so the local flow is completely unaffected. The UI fetches `/api/gh/session`
-  // on mount to detect PR mode and switch to <PrReviewApp>.
+  // All `/api/gh/*` routes are active only when the server was started in PR
+  // mode (`diffing "gh pr N"`). A stale `pr-session.json` on disk must not
+  // leak PR data into a plain `diffing` invocation. The UI fetches
+  // `/api/gh/session` on mount to detect PR mode and switch to <PrReviewApp>.
 
   /** Shared helper: 404 with a stable shape so the client knows "not in PR mode". */
   const notInPrMode = (c: any) => c.json({ error: 'Not in PR review mode', prMode: false }, 404)
 
   app.get('/api/gh/session', async (c) => {
+    if (!prMode) return notInPrMode(c)
     const session = await prStore.get()
     if (!session) return notInPrMode(c)
     return c.json({
@@ -676,6 +683,7 @@ export function createApp(
 
   /** Re-fetch PR metadata (head SHA, diff, existing comments) and persist. */
   app.post('/api/gh/pr/refresh', async (c) => {
+    if (!prMode) return notInPrMode(c)
     const session = await prStore.get()
     if (!session) return notInPrMode(c)
     try {
@@ -689,6 +697,7 @@ export function createApp(
 
   /** Initialize a PR session from a ref like `1234`, `o/r#42`, or a GitHub URL. */
   app.post('/api/gh/pr/init', async (c) => {
+    if (!prMode) return notInPrMode(c)
     const body = await c.req.json().catch(() => ({}))
     const ref = typeof body?.ref === 'string' ? body.ref : ''
     if (!ref.trim()) {
@@ -718,12 +727,14 @@ export function createApp(
   // PR-mode comments live inside `pr-session.json`. The UI calls these instead
   // of the `/api/comments` family when `prMode === true`.
   app.get('/api/gh/pr-session/comments', async (c) => {
+    if (!prMode) return notInPrMode(c)
     const session = await prStore.get()
     if (!session) return notInPrMode(c)
     return c.json(session.comments ?? [])
   })
 
   app.post('/api/gh/pr-session/comments', async (c) => {
+    if (!prMode) return notInPrMode(c)
     const body = await c.req.json()
     const session = await prStore.get()
     if (!session) return notInPrMode(c)
@@ -745,6 +756,7 @@ export function createApp(
   })
 
   app.put('/api/gh/pr-session/comments/:id', async (c) => {
+    if (!prMode) return notInPrMode(c)
     const id = c.req.param('id')
     const { body, status } = await c.req.json()
     const session = await prStore.get()
@@ -761,6 +773,7 @@ export function createApp(
   })
 
   app.delete('/api/gh/pr-session/comments/:id', async (c) => {
+    if (!prMode) return notInPrMode(c)
     const id = c.req.param('id')
     const session = await prStore.get()
     if (!session) return notInPrMode(c)
@@ -770,6 +783,7 @@ export function createApp(
   })
 
   app.post('/api/gh/pr-session/comments/:id/replies', async (c) => {
+    if (!prMode) return notInPrMode(c)
     const id = c.req.param('id')
     const { body, role, model } = await c.req.json()
     const session = await prStore.get()
@@ -791,6 +805,7 @@ export function createApp(
 
   /** Submit the current PR session's review (new comments + verdict + body) to GitHub. */
   app.post('/api/gh/submit', async (c) => {
+    if (!prMode) return notInPrMode(c)
     const session = await prStore.get()
     if (!session) return notInPrMode(c)
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
@@ -1276,7 +1291,7 @@ export async function cleanupStaleProjects(): Promise<void> {
   }
 }
 
-export function startServer(options: {
+export async function startServer(options: {
   port: number
   host: string
   clientDir: string
@@ -1293,40 +1308,38 @@ export function startServer(options: {
     console.error('Failed to clean up stale projects:', err)
   })
 
+  // Build the PR session BEFORE creating the Hono app so `createApp` knows
+  // whether it should enable the PR routes. `buildPrSession` shells out to
+  // `gh` (auth + metadata + diff fetch) and takes a few seconds -- if we
+  // fire-and-forget like before, the port-bound callback resolves with
+  // `prMode = false` and the lockfile is written as `mode: "web"`. The UI
+  // then hits `/api/diff` before the session lands in the store, falls
+  // through to the local diff, and shows nothing.
   let prMode = false
-  // Build the PR session BEFORE the server starts accepting connections.
-  // `buildPrSession` shells out to `gh` (auth + metadata + diff fetch) and
-  // takes a few seconds -- if we fire-and-forget like before, the port-bound
-  // callback resolves with `prMode = false` and the lockfile is written as
-  // `mode: "web"`. The UI then hits `/api/diff` before the session lands in
-  // the store, falls through to the local diff, and shows nothing.
-  const prReady = (async () => {
-    if (!options.prRef) return
+  if (options.prRef) {
     console.error(`Building PR session for ${options.prRef}...`)
     try {
       const store = new FilePrSessionStore()
       const existing = await store.get()
       if (!existing || existing.ref !== options.prRef) {
-        const session = await buildPrSession(options.prRef!)
+        const session = await buildPrSession(options.prRef)
         await store.set(session)
       }
       prMode = true
     } catch (err: any) {
       console.error(`[pr-session] failed to build session for ${options.prRef}: ${err?.message ?? err}`)
     }
-  })()
+  }
 
-  const app = createApp(options.clientDir, options.diffOpts)
+  const app = createApp(options.clientDir, options.diffOpts, undefined, undefined, undefined, prMode)
 
   return new Promise((resolve) => {
-    prReady.then(() => {
-      serve({
-        fetch: app.fetch,
-        port: options.port,
-        hostname: options.host,
-      }, (info) => {
-        resolve({ port: info.port, prMode })
-      })
+    serve({
+      fetch: app.fetch,
+      port: options.port,
+      hostname: options.host,
+    }, (info) => {
+      resolve({ port: info.port, prMode })
     })
   })
 }

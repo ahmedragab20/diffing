@@ -150,6 +150,7 @@ async function makeApp(prStore: InMemoryPrSessionStore): Promise<Hono> {
         new MockCommentStore(),
         new MockPlanStore(),
         prStore,
+        true,
     );
 }
 

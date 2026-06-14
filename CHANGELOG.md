@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1
+
+### Patch Changes
+
+- Remove the vim-style `Ctrl+O` / `Ctrl+I` scroll jump-list feature. The jumplist was causing unexpected page scrolls and stability issues, so all related state (`useJumpList`), keyboard handlers, and shortcut help entries have been removed.
+- Fix stale PR session leaking into local review mode. `createApp` now receives an explicit `prMode` flag; `/api/diff` and all `/api/gh/*` routes are active only when the server was started with a PR ref. A leftover `pr-session.json` from a previous `diffing "gh pr N"` run no longer hijacks a plain `diffing` invocation.
+
 ## 0.4.0
 
 ### Minor Changes
