@@ -276,7 +276,9 @@ diffing plan resolve <commentId>     # Mark a plan comment resolved
 ```
 
 ### B. Model Context Protocol (MCP) Server
-If your agent supports MCP (such as Cursor, Claude Desktop, or Gemini), configure `diffing` as a stdio-based MCP server. No ports need to be configured:
+If your agent supports MCP, configure `diffing` as a stdio server. The MCP is
+self-describing and can start or reuse the loopback review server, so an
+MCP-only agent does not need to know a port or fall back to raw HTTP:
 
 ```json
 {
@@ -288,18 +290,50 @@ If your agent supports MCP (such as Cursor, Claude Desktop, or Gemini), configur
   }
 }
 ```
-Exposes tools directly to your agent for both review flows — diff review: `await_review`, `list_comments`, `reply_to_comment`, `resolve_comment`; and plan review: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment`.
+
+Global/desktop clients that do not launch MCP from the workspace should bind it
+to one repository explicitly:
+
+```json
+{
+  "mcpServers": {
+    "diffing": {
+      "command": "diffing",
+      "args": ["mcp", "--repo", "/absolute/path/to/repository"]
+    }
+  }
+}
+```
+
+Run `diffing mcp --help` for setup details. The server initialization
+instructions tell an unfamiliar model what to do next, and every tool returns
+both readable text and structured content.
+
+- Session: `review_session_status`, `start_review_session`
+- Local review: `get_diff`, `create_comment`, `await_review`, `list_comments`, `reply_to_comment`, `resolve_comment`
+- Plan review: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment`
+
+Clients that expose MCP prompts can use `review_local_changes` and
+`submit_plan_for_review`; clients that expose resources can read
+`diffing://agent-guide`. Essential guidance is also present in initialization
+instructions and tool descriptions because prompt/resource support varies.
 
 ### C. Agent Skills
 You can install diffing skills directly into your AI coding assistant:
 ```bash
 npx skills add ahmedragab20/diffing
 ```
-Provides commands to coordinate reviews:
-1. **`/diffing-start-review`** — Launches the review server.
-2. **`/diffing-finish-review`** — Blocks the agent using `await-review` until comments are sent, then applies requested edits.
-3. **`/diffing-review`** — Combined launch-and-wait flow.
-4. **`/diffing-plan-review`** — Submit a markdown plan, block until the human approves/rejects/requests changes, then proceed or revise.
+Installs five portable, natural-language-triggered workflows:
+
+1. **`diffing`** — Detects MCP/CLI/offline capabilities and routes the request.
+2. **`diffing-start-review`** — Starts or reuses the review session and returns its URL.
+3. **`diffing-finish-review`** — Waits for human feedback, applies clear requests, and synchronizes replies/resolutions live.
+4. **`diffing-review`** — Inspects the full local diff and posts actionable inline findings.
+5. **`diffing-plan-review`** — Gates implementation on a reviewed plan and deterministic verdict handling.
+
+The skills prefer native MCP tools, fall back to the port-agnostic CLI, and can
+still interpret pasted self-describing XML. The installable `skills/` copies and
+repo-local `.agents/skills/` copies are contract-tested to remain identical.
 
 ### Send Review Popover
 A GitHub-style "finish your review" popover with inline editing of each comment, an optional general/overall comment, and a visual indicator when an agent is waiting. The **"Copy comments"** toolbar button serializes all comments to the XML spec and copies them to the clipboard.

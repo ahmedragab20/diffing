@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -75,6 +75,64 @@ describe('server-lock', () => {
     writeServerLock(makeLock())
     expect(existsSync(join(storageDir, 'server.json'))).toBe(true)
     removeServerLock()
+    expect(readServerLock()).toBeNull()
+  })
+
+  it('serializes startup leases and permits acquisition after release', async () => {
+    const { acquireServerStartupLease } = await loadModule()
+    const first = acquireServerStartupLease('/tmp/test-repo', 'owner-1', 1_000)
+    expect(first).not.toBeNull()
+    expect(acquireServerStartupLease('/tmp/test-repo', 'owner-2', 1_001)).toBeNull()
+
+    first!.release()
+    const second = acquireServerStartupLease('/tmp/test-repo', 'owner-2', 1_002)
+    expect(second).not.toBeNull()
+    second!.release()
+  })
+
+  it('does not steal an old lease from a still-live owner process', async () => {
+    const { acquireServerStartupLease } = await loadModule()
+    const first = acquireServerStartupLease('/tmp/test-repo', 'live-owner', 1_000)
+    expect(first).not.toBeNull()
+    expect(acquireServerStartupLease('/tmp/test-repo', 'other-owner', 61_000)).toBeNull()
+    first!.release()
+  })
+
+  it('recovers a stale startup lease only after its owner process is dead', async () => {
+    const { acquireServerStartupLease } = await loadModule()
+    const leaseDir = join(storageDir, 'server-startup.lock')
+    mkdirSync(leaseDir)
+    writeFileSync(join(leaseDir, 'lease.json'), JSON.stringify({
+      ownerId: 'dead-owner', createdAt: 1_000, pid: 2147483646,
+    }))
+    writeFileSync(join(leaseDir, 'owner-dead-owner'), '')
+
+    const replacement = acquireServerStartupLease('/tmp/test-repo', 'new-owner', 31_001)
+    expect(replacement).not.toBeNull()
+    expect(acquireServerStartupLease('/tmp/test-repo', 'third-owner', 31_002)).toBeNull()
+
+    replacement!.release()
+    expect(acquireServerStartupLease('/tmp/test-repo', 'third-owner', 31_003)).not.toBeNull()
+  })
+
+  it('recovers an empty startup lease directory after it becomes stale', async () => {
+    const { acquireServerStartupLease } = await loadModule()
+    const leaseDir = join(storageDir, 'server-startup.lock')
+    mkdirSync(leaseDir)
+    utimesSync(leaseDir, 0, 0)
+
+    const lease = acquireServerStartupLease('/tmp/test-repo', 'replacement', 31_001)
+    expect(lease).not.toBeNull()
+    lease!.release()
+  })
+
+  it('removes a server lock only for the exact pid and owner identity', async () => {
+    const { writeServerLock, readServerLock, removeServerLockIfOwned } = await loadModule()
+    writeServerLock(makeLock({ ownerId: 'session-a' }))
+
+    expect(removeServerLockIfOwned('/tmp/test-repo', process.pid, 'session-b')).toBe(false)
+    expect(readServerLock()).not.toBeNull()
+    expect(removeServerLockIfOwned('/tmp/test-repo', process.pid, 'session-a')).toBe(true)
     expect(readServerLock()).toBeNull()
   })
 })

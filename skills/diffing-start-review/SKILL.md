@@ -1,50 +1,32 @@
 ---
 name: diffing-start-review
-description: "Start a code review session by launching the diffing server and opening the browser UI. Use when the user invokes /diffing-start-review."
-user_invocable: true
+description: Start or reopen a local diffing review session and give the human its review URL. Use when the user asks to open diffing, inspect changes in the review UI, start a review, or send work for human review.
 ---
 
-# Start diffing Review
+# Start a diffing review
 
-Launch the diffing server so the user can review their git changes in a browser-based UI and leave inline comments.
+Start the local review UI for the repository in scope and make its URL available to the human. Do not review or edit the changes unless the user also asks for that work.
 
-## What to do
+## Choose the available integration
 
-### 1. Launch diffing
+1. If diffing MCP tools are available, call `review_session_status` first. Reuse its URL when the matching session is already running; otherwise call `start_review_session`. Pass diff arguments only when the user requested a specific scope.
+2. Otherwise, if a shell is available, start `diffing --web --no-open` as a persistent background process from the repository. Use `diffing url` to recover the URL. A foreground command that is terminated when the tool call ends is not sufficient.
+3. If neither MCP nor a persistent shell is available, explain that the host must start `diffing` in the repository and return once it is running.
 
-Run `diffing` in the background. By default it shows all working tree changes (staged + unstaged + untracked).
+Never guess a repository. MCP should be bound with `diffing mcp --repo <absolute-path>` when the harness does not launch it from the workspace.
 
-```bash
-diffing
-```
+## Review scope
 
-Common variations — use these when the context calls for it:
+- Working tree (default): no diff arguments.
+- Staged changes: `--staged`.
+- Recent commits: `HEAD~3`.
+- Branch comparison: `main..HEAD`.
+- Path filtering: put paths after `--`.
 
-```bash
-diffing -- --staged          # Only staged changes
-diffing -- HEAD~3            # Last 3 commits
-diffing -- main..HEAD        # Current branch vs main
-diffing -p 8080             # Custom port (default: random available port)
-```
+Use structured argument arrays with `start_review_session`; do not compose a shell string from user input.
 
-Anything after `--` is passed directly to `git diff`, so any valid git diff arguments work.
+## Hand-off to the human
 
-**Important:** Run diffing in the background using the Bash tool with `run_in_background: true`, so the server stays alive while the user reviews.
+Return the local review URL and say that the human can leave inline comments and choose a verdict. If the user requested the complete review loop, continue with the `diffing-finish-review` workflow; otherwise stop after the session is reachable.
 
-### 2. Tell the user
-
-After launching, tell the user:
-
-> diffing is running. Review your changes in the browser and leave inline comments. When you're done, click **"Send to agent"** in the toolbar — I'll pick the comments up automatically.
-
-Keep it brief.
-
-### 3. Wait for the handoff (optional, recommended)
-
-Rather than making the user run a second command, you can block on the handoff immediately. Run:
-
-```bash
-diffing await-review
-```
-
-It sleeps until the user clicks **"Send to agent"**, then prints the review comments as XML — at which point follow the `diffing-finish-review` workflow to apply them. (If it exits with code 2 / `DIFFING_AWAIT_TIMEOUT`, just run it again to keep waiting.) Agents configured with the diffing MCP server can use the `await_review` tool instead.
+Verdicts are behavioral controls: `comment-only` means no file edits, `changes-requested` means address open requests, `approved` permits normal continuation, and `rejected` means stop building on the rejected approach.

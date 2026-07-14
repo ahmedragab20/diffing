@@ -1,14 +1,22 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { dirname, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
 import { readFileSync, existsSync } from 'node:fs'
 import getPort from 'get-port'
 import { parseDiffOptions, DEFAULTS, printHelp, intoShowMode } from './lib/diff-options.js'
 import { runTerminalDiff, validateEnvironment } from './lib/diff-engine.js'
 import { startServer } from './server.js'
 import { loadSettings } from './lib/settings.js'
-import { writeServerLock, removeServerLock } from './lib/server-lock.js'
+import {
+  acquireServerStartupLease,
+  diffScopeKey,
+  isLockAlive,
+  readServerLock,
+  removeServerLockIfOwned,
+  writeServerLock,
+} from './lib/server-lock.js'
 import { getRepoRoot } from './lib/git.js'
 import { playStartupDisplay } from './lib/startup-display.js'
 import type { DiffOptions } from './lib/diff-options.js'
@@ -53,8 +61,52 @@ if (ghPrConsumed > 0) {
 const SUBCOMMANDS = new Set(['await-review', 'reply', 'resolve', 'comments', 'url', 'mcp', 'plan', 'update', 'gh'])
 if (SUBCOMMANDS.has(args[0])) {
   if (args[0] === 'mcp') {
+    const mcpArgs = args.slice(1)
+    if (mcpArgs.includes('--help') || mcpArgs.includes('-h')) {
+      console.log(`Usage: diffing mcp [--repo <absolute-path>]
+
+Run diffing as a local stdio MCP server bound to one Git repository.
+
+Options:
+  --repo <path>  Bind to this absolute Git repository path.
+                 If omitted, the Git repository containing the current directory is used.
+  -h, --help     Show this help.`)
+      process.exit(0)
+    }
+
+    let repoPath: string | undefined
+    for (let index = 0; index < mcpArgs.length; index += 1) {
+      const arg = mcpArgs[index]
+      if (arg === '--repo') {
+        const value = mcpArgs[index + 1]
+        if (!value || value.startsWith('-')) {
+          console.error('diffing mcp: --repo requires an absolute path')
+          process.exit(5)
+        }
+        if (repoPath !== undefined) {
+          console.error('diffing mcp: --repo may be specified only once')
+          process.exit(5)
+        }
+        repoPath = value
+        index += 1
+      } else if (arg.startsWith('--repo=')) {
+        if (repoPath !== undefined) {
+          console.error('diffing mcp: --repo may be specified only once')
+          process.exit(5)
+        }
+        repoPath = arg.slice('--repo='.length)
+      } else {
+        console.error(`diffing mcp: unknown option ${arg}`)
+        process.exit(5)
+      }
+    }
+    if (repoPath !== undefined && !isAbsolute(repoPath)) {
+      console.error('diffing mcp: --repo must be an absolute path')
+      process.exit(5)
+    }
+
     const { startMcpServer } = await import('./mcp.js')
-    await startMcpServer()
+    await startMcpServer({ repoPath })
     // The MCP server owns stdio until the client disconnects (at which point
     // the event loop empties and the process exits). Park here so we never fall
     // through to diff parsing.
@@ -144,26 +196,39 @@ const resolvedClientDir = existsSync(clientDir)
   ? clientDir
   : resolve(process.cwd(), 'dist/client')
 
-const { port: actualPort, prMode } = await startServer({
-  port,
-  host,
-  clientDir: resolvedClientDir,
-  diffOpts: opts,
-  prRef: prRef ?? undefined,
-})
-
-const localUrl = `http://${host}:${actualPort}`
-
-// Advertise the running server so the agent subcommands / MCP server can find
-// the port without the user telling them. Best-effort: a failure here only
-// disables port-agnostic discovery, not the server itself.
+let repoRoot: string
 try {
-  let repoRoot: string
-  try {
-    repoRoot = getRepoRoot()
-  } catch {
-    repoRoot = process.cwd()
-  }
+  repoRoot = getRepoRoot()
+} catch {
+  repoRoot = process.cwd()
+}
+const sessionOwnerId = randomUUID()
+const startupLease = acquireServerStartupLease(repoRoot, sessionOwnerId)
+if (!startupLease) {
+  console.error('Another diffing process is starting a review for this repository. Retry in a moment.')
+  process.exit(3)
+}
+
+const existingLock = readServerLock(repoRoot)
+if (existingLock && isLockAlive(existingLock, repoRoot)) {
+  startupLease.release()
+  const existingUrl = existingLock.port > 0 ? `http://${existingLock.host}:${existingLock.port}` : 'a TUI session'
+  console.error(`A diffing review is already running for this repository at ${existingUrl}. End it before starting another scope.`)
+  process.exit(3)
+}
+
+let actualPort: number
+let prMode: boolean
+try {
+  const started = await startServer({
+    port,
+    host,
+    clientDir: resolvedClientDir,
+    diffOpts: opts,
+    prRef: prRef ?? undefined,
+  })
+  actualPort = started.port
+  prMode = started.prMode
   writeServerLock({
     port: actualPort,
     host,
@@ -173,10 +238,18 @@ try {
     version: currentVersion,
     mode: prMode ? 'gh-pr' : 'web',
     prRef: prMode ? prRef ?? undefined : undefined,
+    scope: diffScopeKey(opts),
+    ownerId: sessionOwnerId,
   })
-} catch {
-  // discovery is optional
+} catch (error) {
+  startupLease.release()
+  const detail = error instanceof Error ? error.message : String(error)
+  console.error(`Failed to start diffing review safely: ${detail}`)
+  process.exit(1)
 }
+startupLease.release()
+
+const localUrl = `http://${host}:${actualPort}`
 
 console.log(`diffing server running at ${localUrl}`)
 await playStartupDisplay()
@@ -207,7 +280,7 @@ if (!opts.noOpen) {
 
 const shutdown = () => {
   console.log('\nShutting down...')
-  removeServerLock()
+  removeServerLockIfOwned(repoRoot, process.pid, sessionOwnerId)
   process.exit(0)
 }
 process.on('SIGINT', shutdown)
@@ -288,4 +361,3 @@ async function launchTui(args: string[]): Promise<number> {
     })
   })
 }
-

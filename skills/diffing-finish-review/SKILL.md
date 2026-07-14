@@ -1,70 +1,39 @@
 ---
 name: diffing-finish-review
-description: "Finish a code review session by waiting for the human to send their comments from the running diffing server, applying requested changes, and marking comments as resolved. Use when the user invokes /diffing-finish-review."
-user_invocable: true
+description: Receive a human's diffing review handoff, apply requested edits, answer questions, and keep comment threads synchronized. Use when the user says their review is ready, asks to process diffing comments, or wants the agent to wait for and address review feedback.
 ---
 
-# Finish diffing Review
+# Finish a diffing review
 
-Wait for the human to hand off their review comments, apply the requested changes, and mark each comment as resolved. This uses the port-agnostic `diffing` subcommands — you never need to know the server's port.
+Wait for the human handoff, act only on open comments, and synchronize every response back to diffing.
 
-## What to do
+## Receive the handoff
 
-### 1. Wait for the human to send the review
+Prefer `await_review` when diffing MCP tools are available. Otherwise run `diffing await-review` from the repository. A timeout is normal: call it again while the user still wants you to wait. If blocking tools are unavailable, use `list_comments` or `diffing comments --open` after the human confirms the review is ready. Pasted `<code-review-comments>` XML is the offline fallback.
 
-Run the blocking handoff command. It sleeps until the human clicks **"Send to agent"** in the diffing UI, then prints the review comments to stdout as `<code-review-comments>` XML:
+Read the root `decision` and `mode` before touching files:
 
-```bash
-diffing await-review
-```
+- `comment-only`: do not edit any file. Reply to questions and discuss the general comment.
+- `changes-requested`: address every clear open change request.
+- `approved`: address any remaining open comments, then continue normally.
+- `rejected`: do not keep building on the rejected approach; answer or clarify before replacing it.
 
-Exit codes:
-- **0** — a review was sent; the comment XML is on stdout. Proceed.
-- **2** — timed out waiting (`DIFFING_AWAIT_TIMEOUT` on stderr). The human hasn't sent yet — just run `diffing await-review` again to keep waiting.
-- **3** — no diffing server is running for this repo. Ask the user to start one with `diffing`.
+## Process each open comment
 
-The XML lists each comment with its `id`, `line`, `side`, `status`, the `<code>` context, the `<body>` request, and any prior `<replies>`. Only act on comments with `status="open"`.
+- Clear change request: inspect the anchored code, make the scoped change, verify it, reply with what changed, then resolve the thread.
+- Question: reply with the answer and leave the thread open for the human.
+- Ambiguous request: ask a precise clarification question and leave the thread open.
+- Resolved comment: do nothing unless the human explicitly reopens it.
 
-> If you prefer a one-shot snapshot without blocking, `diffing comments --open` dumps the current open comments at any time.
-
-### 2. Process each open comment
-
-For each open comment, first determine the intent — is it a **change request** or a **question**?
-
-#### Change requests (e.g., "Rename x to parsedToken", "Extract this into a helper")
-
-1. Read the file at the comment's `path`
-2. Find the relevant code using the `<code>` context
-3. Apply the change described in `<body>`
-4. Reply explaining what you did, then mark it resolved:
+Use `reply_to_comment` and `resolve_comment` over MCP. CLI equivalents are:
 
 ```bash
-diffing reply <comment-id> --body "Done. Renamed x to parsedToken." --model "<your-model-name>"
+diffing reply <comment-id> --body "..." --model "<model-name>"
 diffing resolve <comment-id>
 ```
 
-#### Questions (e.g., "Why not use a Map here?", "Is this thread-safe?")
+Resolve only after a requested change is actually applied. Replies and resolutions update the UI live, so send them as each thread is completed instead of batching them at the end.
 
-Just reply with an answer. Do **not** modify code or resolve the comment — leave it open for the human to read and follow up.
+## Continue the realtime loop
 
-```bash
-diffing reply <comment-id> --body "A Map would work too, but we use a plain object here because..." --model "<your-model-name>"
-```
-
-Each reply and resolve shows up in the diffing UI in real time (the human sees a toast), so the human can watch your progress live.
-
-### 3. Handle edge cases
-
-- If a comment is ambiguous, reply to ask for clarification rather than guessing (leave it open).
-- If multiple comments interact (e.g., a rename that affects several places), handle them together.
-- If there are no open comments, tell the user there's nothing to process.
-
-### 4. Summary, then wait for the next round
-
-After processing all comments, give a brief summary: how many changes you applied, how many questions you answered.
-
-The handoff supports multiple rounds. If the human may review your changes and send again, loop back to step 1 (`diffing await-review`) to pick up the next batch.
-
-## MCP alternative
-
-If you're configured with the diffing MCP server instead of a shell, the equivalent tools are `await_review`, `list_comments`, `reply_to_comment`, and `resolve_comment`.
+Summarize applied changes and unanswered questions. If the user is continuing the review, await the next round. Never interpret an unchanged timeout as completion or as a blocker.

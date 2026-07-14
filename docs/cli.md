@@ -616,11 +616,16 @@ The `crates/diffing-tui/` crate is a member of the workspace at
 
 ---
 
-`diffing` bundles a full MCP-compliant server over standard I/O (stdio). This allows agents running in tools like Cursor, Claude Desktop, or Gemini to interact with the review session natively.
+`diffing` bundles a self-describing MCP server over standard I/O (stdio).
+Initialization instructions, typed tool schemas, annotations, prompts, and a
+guide resource let unfamiliar agents discover both review loops without relying
+on vendor-specific setup.
 
 ### Launching the MCP Server
 ```bash
 diffing mcp
+diffing mcp --repo /absolute/path/to/repository
+diffing mcp --help
 ```
 
 ### Client Configuration Example
@@ -637,105 +642,49 @@ Add the server configuration to your MCP settings file (e.g. `claude_desktop_con
 }
 ```
 
-*Note: No port is configured! The MCP server automatically resolves the local server's port per call using the same lockfile discovery mechanism.*
+No port is configured. The MCP process binds to one repository and can start a
+headless review server on loopback with a random port. Repository selection is
+an explicit `--repo` when provided, otherwise the Git repository containing the
+MCP process working directory. Invalid selection fails instead of guessing.
 
 ### MCP Tool Schema Reference
 
-#### `await_review`
-Blocks until the user clicks "Send to agent" in the review UI, then returns the comments.
-- **Input Schema**:
-  - `timeoutSeconds` (optional number): Maximum time to wait (defaults to 570).
-- **Output Schema**:
-  - Text response with full `<code-review-comments>` XML.
-  - Structured content metadata containing:
-    ```json
-    {
-      "round": 3,
-      "openCount": 2,
-      "comments": [...]
-    }
-    ```
+Every successful tool call returns readable text and schema-validated
+`structuredContent`. Local operations advertise `openWorldHint: false`; status
+and read operations are marked read-only, while mutation retry semantics are
+declared explicitly.
 
-#### `list_comments`
-Queries the active review session comments.
-- **Input Schema**:
-  - `openOnly` (optional boolean): If `true`, returns only unresolved comments.
-- **Output Schema**:
-  - Text response containing XML comments block.
-  - Structured JSON containing raw comment arrays.
+| Area | Tools | Purpose |
+|------|-------|---------|
+| Session | `review_session_status`, `start_review_session` | Inspect the bound repository and live server; idempotently start or reuse a loopback session |
+| Diff review | `get_diff`, `create_comment` | Read the complete unified diff and post typed inline findings without raw HTTP |
+| Human handoff | `await_review`, `list_comments`, `reply_to_comment`, `resolve_comment` | Receive verdict/comments and synchronize the discussion in real time |
+| Plan review | `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment` | Gate implementation on a versioned human-reviewed plan |
 
-#### `reply_to_comment`
-Posts a comment thread reply from the agent.
-- **Input Schema**:
-  - `commentId` (string, required): The UUID target.
-  - `body` (string, required): The reply text.
-  - `model` (optional string): The model name.
+`start_review_session` accepts an optional array of safe git-diff scope,
+filtering, whitespace, context, and rename-detection arguments. Output files,
+external/textconv drivers, non-patch formats, and diffing runtime/network flags
+are rejected before parsing. The tool never constructs a shell command, never
+replaces an incompatible user-owned session, and binds MCP-owned sessions to
+`127.0.0.1`. Diff modifiers require an explicit revision or pathspec anchor;
+baseline working-tree mode accepts only staged/cached selection.
 
-#### `resolve_comment`
-Resolves a comment thread.
-- **Input Schema**:
-  - `commentId` (string, required): Target UUID.
+The await tools return `status: "released" | "timeout"` in structured content.
+Timeout is an expected retry state. Released results include `mode`; when the
+mode is `comment-only`, the agent must reply without editing files.
 
-#### `submit_plan`
-Submits a markdown plan for review (or resubmits a revised version).
-- **Input Schema**:
-  - `body` (string, required): The plan markdown.
-  - `title` (optional string), `source` (optional string), `model` (optional string).
-  - `planId` (optional string): resubmit this existing plan (version bump, verdict reset).
-- **Output**: confirmation text + `{ planId, version, url }`.
+### MCP Prompts and Resource
 
-#### `await_plan_review`
-Blocks until the human approves / rejects / requests changes on a plan.
-- **Input Schema**:
-  - `timeoutSeconds` (optional number): max wait (defaults to 570).
-- **Output**: the `<plan-review>` XML + `{ round, planId, decision, decisionComment, openCommentCount, plan }`.
+- `review_local_changes` guides an agent through status/start, full diff
+  inspection, and actionable inline comments.
+- `submit_plan_for_review` guides the versioned submit/await/verdict loop.
+- `diffing://agent-guide` is a static, client-readable workflow reference.
 
-#### `list_plans`
-Lists all submitted plans.
-- **Output**: a per-plan summary + structured `{ plans: [...] }`.
+These are supplemental. Essential behavior remains in initialization
+instructions and tool descriptions for clients that expose tools only.
 
-#### `get_plan`
-Fetches one plan as `<plan-review>` XML.
-- **Input Schema**:
-  - `planId` (string, required).
-
-#### `reply_to_plan_comment`
-Posts an agent reply to a plan comment (the owning plan is resolved automatically).
-- **Input Schema**:
-  - `commentId` (string, required), `body` (string, required), `model` (optional string).
-
-#### `resolve_plan_comment`
-Marks a plan comment thread as resolved.
-- **Input Schema**:
-  - `commentId` (string, required): Target UUID.
-
----
-
-#### `gh_pr_status`
-Reports the active GitHub PR review session.
-- **Input Schema**: none.
-- **Output**: `PrSession` summary (`ref`, `owner`, `repo`, `pullNumber`, `submittedAt`, etc.) or an "no active PR session" notice. Mirrors the `diffing gh status` CLI verb.
-
-#### `gh_pr_fetch`
-Re-fetches PR metadata (head SHA, diff, existing comments) and persists into `pr-session.json`.
-- **Input Schema**:
-  - `ref` (string, required): `1234`, `owner/repo#N`, or full URL.
-  - `repo` (optional string): `owner/repo` override.
-- **Output**: the refreshed `PrSession` summary.
-
-#### `gh_pr_list_comments`
-Lists the in-progress PR-mode comments (read from `pr-session.json`).
-- **Input Schema**:
-  - `openOnly` (optional boolean).
-- **Output**: a comments array (XML or JSON, mirroring `list_comments`).
-
-#### `gh_pr_submit`
-Submits the current PR review to GitHub.
-- **Input Schema**:
-  - `decision` (string, required): `"approve" | "comment" | "request-changes"`.
-  - `body` (optional string): general review comment.
-  - `dryRun` (optional boolean): print payload and exit without POSTing.
-- **Output**: `{ reviewId, reviewUrl, authSource }` on success, or `{ error, authSource }` on failure.
+GitHub PR automation remains available through the `diffing gh ...` CLI
+subcommands; no `gh_pr_*` MCP tools are currently advertised.
 
 ---
 

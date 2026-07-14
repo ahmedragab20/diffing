@@ -181,6 +181,19 @@ describe('server', () => {
         expect(mockGetGitDiffAsync).toHaveBeenCalledWith({ staged: false, untracked: false })
       })
 
+      it('preserves startup staged/untracked scope when query params are absent', async () => {
+        const { createApp } = await import('../server.js')
+        const scoped = createApp(clientDir, {
+          ...DEFAULTS,
+          staged: true,
+          includeUntracked: false,
+        }, mockStore)
+
+        await scoped.fetch(new Request('http://localhost/api/diff'))
+
+        expect(mockGetGitDiffAsync).toHaveBeenCalledWith({ staged: true, untracked: false })
+      })
+
       it('ignores a stale pr-session.json when not started in PR mode', async () => {
         const { createApp } = await import('../server.js')
         const { InMemoryPrSessionStore } = await import('../lib/pr-session.js')

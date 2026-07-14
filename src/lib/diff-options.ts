@@ -477,7 +477,16 @@ export function parseDiffOptions(rawArgs: string[]): DiffOptions {
     args: rawArgs,
   })
 
-  const opts: DiffOptions = { ...DEFAULTS }
+  // DEFAULTS is exported as a convenient immutable template. Its array fields
+  // must never be shared with parser results: parseDiffOptions mutates these
+  // arrays while collecting revisions/pathspecs, and callers parse repeatedly
+  // in long-lived processes such as the MCP server.
+  const opts: DiffOptions = {
+    ...DEFAULTS,
+    revisions: [],
+    pathspecs: [],
+    showRevspecs: [],
+  }
 
   // ── diffing-specific flags ──────────────────────────
   if (values.help) opts.help = true

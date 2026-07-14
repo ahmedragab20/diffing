@@ -4,6 +4,10 @@
 
 ## Quick Start for Any Agent
 
+Prefer the diffing MCP tools when the harness exposes them: call
+`review_session_status`, then `start_review_session` when needed. The CLI is the
+portable fallback:
+
 ```bash
 diffing                    # Start review server for current repo (all changes)
 diffing url                # Get server base URL (port-agnostic discovery)
@@ -21,12 +25,15 @@ Load a skill when your task matches its trigger. All skills live in `.agents/ski
 
 | Skill | Trigger / When to Use |
 |-------|----------------------|
+| `diffing` | Route any diffing request to the strongest available MCP, CLI, or offline workflow |
 | `diffing-plan-review` | Submitting a markdown plan for human review before non-trivial work; awaiting verdict; replying/resolving plan comments |
 | `diffing-review` | Performing a code review of local git changes; fetching diff/comments; posting inline comments; applying suggestions |
 | `diffing-start-review` | Launching the diffing server so a human can review changes in the browser |
 | `diffing-finish-review` | Waiting for human handoff ("Send to agent"), applying requested changes, resolving comments |
 
-> **Load a skill:** `skill({name: "diffing-plan-review"})` — see opencode's `skill` tool.
+Load the matching skill through the harness's normal skill mechanism. Each skill
+is self-contained and uses natural-language triggers; no slash command or
+vendor-specific tool API is required.
 
 ---
 

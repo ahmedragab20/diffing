@@ -196,8 +196,13 @@ export function createApp(
   })
 
   app.get('/api/diff', async (c) => {
-    const staged = c.req.query('staged') === 'true'
-    const untracked = c.req.query('untracked') === 'true'
+    const stagedQuery = c.req.query('staged')
+    const untrackedQuery = c.req.query('untracked')
+    // MCP and other non-UI callers omit these query parameters. In that case
+    // preserve the scope selected when the server started. Explicit UI values
+    // still override the startup defaults, including explicit false.
+    const staged = stagedQuery === undefined ? diffOpts.staged : stagedQuery === 'true'
+    const untracked = untrackedQuery === undefined ? diffOpts.includeUntracked : untrackedQuery === 'true'
 
     // PR mode: short-circuit and return the cached PR patch. The session
     // lookup is cheap (a JSON read on startup) and avoids a wasteful

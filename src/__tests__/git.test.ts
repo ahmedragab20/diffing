@@ -110,7 +110,7 @@ describe('git', () => {
       const result = getCustomGitDiff(['HEAD~3', '--', '*.ts'])
       expect(result).toBe('output')
       expect(mockExecFileSync).toHaveBeenCalledWith(
-        'git', ['diff', '--no-ext-diff', '--no-color', 'HEAD~3', '--', '*.ts'],
+        'git', ['diff', '--no-ext-diff', '--no-textconv', '--no-color', 'HEAD~3', '--', '*.ts'],
         { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 },
       )
     })

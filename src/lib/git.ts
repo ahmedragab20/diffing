@@ -102,7 +102,9 @@ export function getBranchName(): string {
 
 // Force standard unified diff regardless of user's git config
 // (e.g. diff.external = difftastic, color.ui = always).
-const DIFF_FLAGS = ['--no-ext-diff', '--no-color'] as const
+// Never execute repository-configured diff drivers or textconv commands while
+// producing review data. Both can invoke arbitrary local programs.
+const DIFF_FLAGS = ['--no-ext-diff', '--no-textconv', '--no-color'] as const
 
 export function getCustomGitDiff(args: string[]): string {
   return execFileSync('git', ['diff', ...DIFF_FLAGS, ...args], { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 })
@@ -934,4 +936,3 @@ export async function getShowDiff(
   const patch = commits.map((c) => c.patch).filter(Boolean).join('\n')
   return { commits, patch, truncated }
 }
-
