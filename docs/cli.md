@@ -193,7 +193,7 @@ port-agnostic (resolved from the lockfile).
 Submit (or resubmit) a markdown plan for review.
 
 ```bash
-diffing plan submit <file> [--title T] [--source S] [--model M] [--id <id>] [--wait] [--timeout N]
+diffing plan submit <file> [--title T] [--source S] [--model M] [--id <id>] [--wait] [--timeout N] [--save-source]
 cat PLAN.md | diffing plan submit                 # body via stdin (omit <file> or pass "-")
 ```
 
@@ -203,7 +203,12 @@ cat PLAN.md | diffing plan submit                 # body via stdin (omit <file> 
   resets the verdict to `pending`, and re-opens it for review.
 - `--wait` — after submitting, block until the verdict arrives (combines
   `submit` + `await`); `--timeout` sets the total wait budget in seconds.
-- **Output**: the plan id on stdout; the review URL (`<base>/plan/<id>`) on stderr.
+- `--save-source`, `-S` — after submission, save a copy of the submitted
+  markdown body to `~/.diffing/<repo>/plan-sources/<id>.md`. This preserves the
+  source file for later reference without polluting the consumer project's
+  working tree.
+- **Output**: the plan id on stdout; the review URL (`<base>/plan/<id>`) on
+  stderr; source path on stderr when `--save-source` is used.
 
 ### `plan await`
 Block until the human decides, then print the `<plan-review>` XML.

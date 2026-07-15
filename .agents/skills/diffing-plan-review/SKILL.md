@@ -19,11 +19,11 @@ CLI fallback:
 
 ```bash
 diffing --web --no-open
-diffing plan submit <plan.md> --title "..." --model "<model-name>"
+diffing plan submit <plan.md> [--save-source] --title "..." --model "<model-name>"
 diffing plan await
 ```
 
-Keep temporary plan files in untracked tool state (for example `.diffing/plans/`) rather than the shipped source tree. Piping the body on stdin is also supported. Always resubmit revisions with the original plan ID so history remains one conversation.
+Keep temporary plan files in `~/.diffing/<repo>/plan-sources/` rather than anywhere in the consumer project's working tree. Use `--save-source` / `-S` on `diffing plan submit` to automatically save a copy there. Piping the body on stdin is also supported (this is the preferred path — zero filesystem footprint). Always resubmit revisions with the original plan ID so history remains one conversation.
 
 ## Obey the verdict
 

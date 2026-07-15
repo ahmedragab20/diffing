@@ -1,6 +1,6 @@
 node_modules
 dist
-.diffing
+# .diffing is deliberately NOT here — nothing should ever be written into the consumer repo. If you see one, delete it.
 .playwright-mcp
 # Rust TUI build artefacts (workspace lives in ./crates)
 target/

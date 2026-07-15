@@ -1,6 +1,8 @@
 import { parseArgs } from 'node:util'
-import { readFile } from 'node:fs/promises'
+import { readFile, mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { readServerLock, isLockAlive } from './lib/server-lock.js'
+import { getProjectStorageDir } from './lib/git.js'
 import { formatComments } from './lib/comment-format.js'
 import { formatPlanReview } from './lib/plan-format.js'
 import type { ReviewComment } from './lib/types.js'
@@ -240,6 +242,7 @@ async function planSubmit(args: string[]): Promise<number> {
       id: { type: 'string' },
       wait: { type: 'boolean', short: 'w' },
       timeout: { type: 'string', short: 't' },
+      saveSource: { type: 'boolean', short: 'S' },
     },
     allowPositionals: true,
   })
@@ -287,6 +290,18 @@ async function planSubmit(args: string[]): Promise<number> {
   }
   const plan = (await res.json()) as Plan
   console.error(`Submitted plan ${plan.id} (v${plan.version}) — review at ${base}/plan/${plan.id}`)
+
+  if (values.saveSource) {
+    try {
+      const sourcesDir = join(getProjectStorageDir(), 'plan-sources')
+      await mkdir(sourcesDir, { recursive: true })
+      const sourcePath = join(sourcesDir, `${plan.id}.md`)
+      await writeFile(sourcePath, body, 'utf-8')
+      console.error(`Saved source to ${sourcePath}`)
+    } catch (err: any) {
+      console.error(`Failed to save plan source: ${err?.message ?? err}`)
+    }
+  }
 
   if (!values.wait) {
     process.stdout.write(plan.id + '\n')

@@ -42,7 +42,7 @@ vendor-specific tool API is required.
 ### Plan Review (design → approval → implement)
 
 ```
-1. Write plan → .diffing/plans/PLAN.md
+1. Write plan → ~/.diffing/<repo>/plan-sources/PLAN.md
 2. diffing plan submit PLAN.md --model "<model>"
 3. diffing plan await              # blocks until human decides
 4. Read <plan-review> XML:
@@ -179,4 +179,6 @@ POST   /api/comments/<id>/apply-suggestion  # Apply ```suggestion block
 
 ## Keep the Project Clean
 
-Never add scratch files (plans, notes, drafts, temp scripts) to the project root or any tracked directory. All agent working files — **including implementation plans** — must live under `.diffing/`, which is untracked tooling state. If a file is not part of the shipped product, it does not belong in the user's source tree.
+THE CONSUMER PROJECT MUST STAY CLEAN. Never add scratch files (plans, notes, drafts, temp scripts, .diffing/ directories) to the project root or any tracked directory. All agent working files — **including implementation plans** — must live under `~/.diffing/`, which is outside the consumer project entirely.
+
+If a file is not part of the shipped product, it does not belong in the user's source tree. Write plans, notes, experiments, and agent scratch to `~/.diffing/<repo>/plan-sources/` or pipe them on stdin. Nothing goes in the working tree.
