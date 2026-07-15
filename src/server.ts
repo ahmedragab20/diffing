@@ -436,6 +436,34 @@ export function createApp(
     }
   })
 
+  /**
+   * Pick a single tree-ish suitable for `git blame` from a list of revisions
+   * or show-revspecs. `git blame` does not accept range notation, so for
+   * `A..B` or `A...B` we use the right endpoint (the side being compared
+   * against), which matches the diff's "destination" side.
+   */
+  function extractBlameRevision(
+    revisions: string[],
+    showRevspecs: string[],
+    showMode: boolean,
+  ): string {
+    const list = showMode ? showRevspecs : revisions
+    if (list.length === 0) return 'HEAD'
+    const last = list[list.length - 1]
+    // Check `...` first so that `A...B` is not misread as `A` / `..` / `B`.
+    const threeDot = last.lastIndexOf('...')
+    if (threeDot >= 0) {
+      const target = last.slice(threeDot + 3)
+      if (target) return target
+    }
+    const twoDot = last.lastIndexOf('..')
+    if (twoDot >= 0) {
+      const target = last.slice(twoDot + 2)
+      if (target) return target
+    }
+    return last
+  }
+
   app.get('/api/hunk-history', async (c) => {
     const filePath = c.req.query('filePath')
     const deletionStart = Number(c.req.query('deletionStart'))
@@ -451,9 +479,11 @@ export function createApp(
       if (!relPath) {
         return c.json({ error: 'Forbidden file path' }, 403)
       }
-      const revision = diffOpts.showMode
-        ? diffOpts.showRevspecs[diffOpts.showRevspecs.length - 1] || 'HEAD'
-        : diffOpts.revisions[0] || 'HEAD'
+      const revision = extractBlameRevision(
+        diffOpts.revisions,
+        diffOpts.showRevspecs,
+        diffOpts.showMode,
+      )
       const history = getHunkHistory(relPath, deletionStart, deletionCount, revision)
       return c.json(history)
     } catch (err: any) {

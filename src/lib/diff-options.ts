@@ -65,6 +65,15 @@ export interface DiffOptions {
   findCopiesHarder: boolean
   findRenames?: number
   breakRewrites?: string | number
+  noRenames: boolean
+
+  // ── Merge / conflict stages ───────────────────────────
+  /** --base — compare with stage 1 (merge base) */
+  base: boolean
+  /** --ours — compare with stage 2 (our branch) */
+  ours: boolean
+  /** --theirs — compare with stage 3 (their branch) */
+  theirs: boolean
 
   // ── Output format ──────────────────────────────────────
   outputFormat?: DiffOutputFormat
@@ -179,6 +188,10 @@ export const DEFAULTS: DiffOptions = {
   itaVisible: false,
   noRelative: false,
   findCopiesHarder: false,
+  noRenames: false,
+  base: false,
+  ours: false,
+  theirs: false,
   check: false,
   outputMode: 'auto',
   host: '127.0.0.1',
@@ -233,6 +246,7 @@ export const GIT_DIFF_OPTIONS = {
   'find-copies-harder': { type: 'boolean' as const },
   'find-renames': { type: 'string' as const, short: 'M' },
   'break-rewrites': { type: 'string' as const, short: 'B' },
+  'no-renames': { type: 'boolean' as const },
 
   // ── Output format ───────────────────────────────────
   patch: { type: 'boolean' as const, short: 'p' },
@@ -286,6 +300,11 @@ export const GIT_DIFF_OPTIONS = {
   relative: { type: 'string' as const },
   'no-relative': { type: 'boolean' as const },
   'ignore-submodules': { type: 'string' as const },
+
+  // ── Merge / conflict stages ──────────────────────────
+  base: { type: 'boolean' as const },
+  ours: { type: 'boolean' as const },
+  theirs: { type: 'boolean' as const },
 } as const
 
 /** Options that are diffing-specific, not git-diff options. */
@@ -405,6 +424,12 @@ function printGitDiffHelp(): void {
     --find-copies-harder            Spend extra cycles to find copies
     -M[<n>], --find-renames[=<n>]   Detect renames
     -B[<n>], --break-rewrites[=<n>] Break complete rewrite changes into delete/add pairs
+    --no-renames                    Turn off rename detection
+
+  Merge / Conflict:
+    --base                          Compare with merge base (stage 1)
+    --ours                          Compare with our branch (stage 2)
+    --theirs                        Compare with their branch (stage 3)
 
   Output Format:
     -p, --patch                     Generate patch (default)
@@ -460,21 +485,102 @@ function printGitDiffHelp(): void {
 }
 
 /**
+ * Pre-process argv to handle git's optional-value flags.
+ *
+ * `-C`, `-M`, `-B` and their long forms (`--find-copies`, `--find-renames`,
+ * `--break-rewrites`) take an **optional** numeric argument in git — when the
+ * value is omitted, git uses the default similarity threshold (40%, 50%, 50%
+ * respectively for `-B`'s percentage component, 60% for the `x` part of
+ * `Bx/y`). `node:util.parseArgs` always consumes the next token as the value
+ * for `type: 'string'`, which means `diffing -C main..feature` would
+ * swallow `main..feature` as the `-C` value instead of treating it as a
+ * revision.
+ *
+ * This function rewrites the input argv so that:
+ *  - `-C` (no attached value) followed by a non-digit → `--find-copies=40`
+ *  - `-C` (no attached value) followed by a digit    → left as-is so
+ *                                                       parseArgs consumes
+ *                                                       the numeric value
+ *  - `-C40` (attached value)                          → left as-is
+ *  - `--find-copies` (no value) followed by a digit   → `--find-copies=<n>`
+ *  - `--find-copies=40` (attached value)               → left as-is
+ *
+ * The defaults mirror git's own behaviour: 40, 50, 50/60.
+ */
+function preprocessOptionalValueArgs(rawArgs: string[]): string[] {
+  const SHORTS: Record<string, { long: string; def: string }> = {
+    C: { long: 'find-copies', def: '40' },
+    M: { long: 'find-renames', def: '50' },
+    B: { long: 'break-rewrites', def: '50/60' },
+  }
+  const LONGS = new Set(['find-copies', 'find-renames', 'break-rewrites'])
+
+  const startsWithDigit = (s: string | undefined): boolean =>
+    typeof s === 'string' && /^[0-9]/.test(s)
+
+  const out: string[] = []
+  for (let i = 0; i < rawArgs.length; i++) {
+    const arg = rawArgs[i]
+
+    // Standalone short form: exactly "-C" / "-M" / "-B" (no attached value).
+    if (arg.length === 2 && arg[0] === '-' && SHORTS[arg[1]!]) {
+      const cfg = SHORTS[arg[1]!]!
+      const next = rawArgs[i + 1]
+      if (startsWithDigit(next)) {
+        // parseArgs will correctly consume the next arg as the value.
+        out.push(arg)
+      } else {
+        // Use the default threshold and don't consume the next arg.
+        out.push(`--${cfg.long}=${cfg.def}`)
+      }
+      continue
+    }
+
+    // Long form without "=": "--find-copies" / "--find-renames" / "--break-rewrites".
+    const longMatch = /^--(find-copies|find-renames|break-rewrites)$/.exec(arg)
+    if (longMatch) {
+      const name = longMatch[1]!
+      if (!LONGS.has(name)) {
+        out.push(arg)
+        continue
+      }
+      const next = rawArgs[i + 1]
+      if (startsWithDigit(next)) {
+        out.push(`--${name}=${next}`)
+        i++ // consume the value
+      } else {
+        const def = name === 'find-copies' ? '40' : name === 'find-renames' ? '50' : '50/60'
+        out.push(`--${name}=${def}`)
+      }
+      continue
+    }
+
+    // Long form with "=" attached, or anything else: pass through unchanged.
+    out.push(arg)
+  }
+  return out
+}
+
+/**
  * Parse raw `process.argv` slice into typed DiffOptions.
  *
  * Strategy:
- * 1. Split argv into: [diffing options] [git revisions] [-- pathspecs]
- * 2. Parse known flags via node:util.parseArgs
- * 3. Anything unknown / positional becomes a revision or pathspec
+ * 1. Pre-process optional-value args (`-C`, `-M`, `-B`, long forms) so they
+ *    don't swallow following revisions like `main..feature`.
+ * 2. Split argv into: [diffing options] [git revisions] [-- pathspecs]
+ * 3. Parse known flags via node:util.parseArgs
+ * 4. Anything unknown / positional becomes a revision or pathspec
  */
 export function parseDiffOptions(rawArgs: string[]): DiffOptions {
   const allOptions = { ...GIT_DIFF_OPTIONS, ...DIFFING_OPTIONS }
+
+  const preprocessed = preprocessOptionalValueArgs(rawArgs)
 
   const { values, positionals } = parseArgs({
     options: allOptions,
     allowPositionals: true,
     strict: false, // allow unknown git args to pass through as revisions
-    args: rawArgs,
+    args: preprocessed,
   })
 
   // DEFAULTS is exported as a convenient immutable template. Its array fields
@@ -555,6 +661,12 @@ export function parseDiffOptions(rawArgs: string[]): DiffOptions {
     opts.findRenames = v ? parseInt(v, 10) : 50 // -M defaults to 50%
   }
   if (values['break-rewrites'] !== undefined) opts.breakRewrites = values['break-rewrites'] as string
+  if (values['no-renames']) opts.noRenames = true
+
+  // ── Merge / conflict stages ────────────────────────
+  if (values.base) opts.base = true
+  if (values.ours) opts.ours = true
+  if (values.theirs) opts.theirs = true
 
   // ── Output format ─────────────────────────────────
   if (values.raw) opts.outputFormat = 'raw'
@@ -682,6 +794,9 @@ export function buildGitDiffArgs(opts: DiffOptions): string[] {
   // ── Staging / merge ───────────────────────────────
   if (opts.staged) args.push('--staged')
   if (opts.merge) args.push('--merge')
+  if (opts.base) args.push('--base')
+  if (opts.ours) args.push('--ours')
+  if (opts.theirs) args.push('--theirs')
 
   // ── Whitespace ────────────────────────────────────
   if (opts.ignoreSpaceChange) args.push('--ignore-space-change')
@@ -723,6 +838,7 @@ export function buildGitDiffArgs(opts: DiffOptions): string[] {
   if (opts.breakRewrites !== undefined) {
     args.push(`-B${opts.breakRewrites}`)
   }
+  if (opts.noRenames) args.push('--no-renames')
 
   // ── Output format ─────────────────────────────────
   if (opts.outputFormat === 'raw') args.push('--raw')
