@@ -5,6 +5,7 @@ import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
 import { fileName } from '../utils'
 import { Popover } from '../primitives/Popover'
 import { MarkdownField } from './MarkdownField'
+import { useSubmitPanelSize, SUBMIT_PANEL_PRESETS } from '../hooks/useSubmitPanelSize'
 
 interface SendReviewPopoverProps {
   comments: ReviewComment[]
@@ -74,6 +75,7 @@ export function SendReviewPopover({
   const [general, setGeneral] = useState('')
   const [verdict, setVerdict] = useState<ReviewDecision | null>(null)
   const [copied, setCopied] = useState(false)
+  const { popoverStyle, activePreset, applyPreset, startResize, startLeftResize, panelRef } = useSubmitPanelSize()
 
   const handleCopy = async () => {
     if (onCopyComments) {
@@ -120,13 +122,30 @@ export function SendReviewPopover({
         </button>
       }
     >
-      <div className="srp">
+      <div className="srp" ref={panelRef} style={popoverStyle}>
+        <div className="srp-resize-handle-left" onMouseDown={startLeftResize} role="separator" aria-orientation="vertical" aria-label="Resize submit panel width" tabIndex={0} />
         <div className="srp-head">
           <Bot size={15} aria-hidden="true" />
           <span className="srp-title">Send review to agent</span>
+          <div className="srp-size-presets" role="group" aria-label="Panel size">
+            {SUBMIT_PANEL_PRESETS.map((p, i) => (
+              <button
+                key={p.label}
+                className="srp-preset-btn"
+                role="radio"
+                aria-checked={activePreset === i}
+                aria-pressed={activePreset === i}
+                onClick={() => applyPreset(p)}
+                title={`${p.width}×${p.height}px`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
           <span className="srp-count">{count} comment{count === 1 ? '' : 's'}</span>
         </div>
 
+        <div className="srp-scroll">
         <div className="plan-verdict-options" role="radiogroup" aria-label="Verdict">
           {VERDICT_OPTIONS.map((opt) => {
             const Icon = opt.icon
@@ -183,6 +202,7 @@ export function SendReviewPopover({
             onSubmitShortcut={handleSend}
           />
         </div>
+        </div>
 
         <div className="srp-footer">
           {onCopyComments && (
@@ -206,6 +226,7 @@ export function SendReviewPopover({
             {sending ? 'Sending…' : 'Send review'}
           </button>
         </div>
+        <div className="srp-resize-handle" onMouseDown={startResize} role="separator" aria-orientation="horizontal" aria-label="Resize submit panel" tabIndex={0} />
       </div>
     </Popover>
   )

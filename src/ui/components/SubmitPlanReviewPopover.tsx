@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Check, MessageSquareWarning, X, ClipboardCheck, RefreshCw, MessageSquare } from 'lucide-react'
 import type { PlanDecision, PlanMode } from '../../lib/plan-types'
 import { useFeedback } from '../hooks/useHaptics'
+import { useSubmitPanelSize, SUBMIT_PANEL_PRESETS } from '../hooks/useSubmitPanelSize'
 import { Popover } from '../primitives/Popover'
 import { MarkdownField } from './MarkdownField'
 
@@ -63,6 +64,7 @@ export function SubmitPlanReviewPopover({
   const [open, setOpen] = useState(false)
   const [verdict, setVerdict] = useState<Verdict | null>(null)
   const [comment, setComment] = useState('')
+  const { popoverStyle, activePreset, applyPreset, startResize, startLeftResize, panelRef } = useSubmitPanelSize()
 
   const handleSubmit = async () => {
     if (!verdict) return
@@ -100,7 +102,8 @@ export function SubmitPlanReviewPopover({
         </button>
       }
     >
-      <div className="srp">
+      <div className="srp" ref={panelRef} style={popoverStyle}>
+        <div className="srp-resize-handle-left" onMouseDown={startLeftResize} role="separator" aria-orientation="vertical" aria-label="Resize submit panel width" tabIndex={0} />
         <div className="srp-head">
           {alreadyDecided ? (
             <RefreshCw size={15} aria-hidden="true" />
@@ -108,6 +111,21 @@ export function SubmitPlanReviewPopover({
             <ClipboardCheck size={15} aria-hidden="true" />
           )}
           <span className="srp-title">{alreadyDecided ? 'Update plan review' : 'Submit plan review'}</span>
+          <div className="srp-size-presets" role="group" aria-label="Panel size">
+            {SUBMIT_PANEL_PRESETS.map((p, i) => (
+              <button
+                key={p.label}
+                className="srp-preset-btn"
+                role="radio"
+                aria-checked={activePreset === i}
+                aria-pressed={activePreset === i}
+                onClick={() => applyPreset(p)}
+                title={`${p.width}×${p.height}px`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
           {openCommentCount > 0 && (
             <span className="srp-count">
               {openCommentCount} open comment{openCommentCount === 1 ? '' : 's'}
@@ -115,46 +133,48 @@ export function SubmitPlanReviewPopover({
           )}
         </div>
 
-        <div className="plan-verdict-options" role="radiogroup" aria-label="Verdict">
-          {OPTIONS.map((opt) => {
-            const Icon = opt.icon
-            const selected = verdict === opt.value
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                className={`plan-verdict-option ${opt.className} ${selected ? 'plan-verdict-option-selected' : ''}`}
-                onClick={() => setVerdict(opt.value)}
-              >
-                <span className="plan-verdict-icon">
-                  <Icon size={15} aria-hidden="true" />
-                </span>
-                <span className="plan-verdict-text">
-                  <span className="plan-verdict-label">{opt.label}</span>
-                  <span className="plan-verdict-desc">{opt.description}</span>
-                </span>
-                <span className="plan-verdict-radio" aria-hidden="true" />
-              </button>
-            )
-          })}
-        </div>
+        <div className="srp-scroll">
+          <div className="plan-verdict-options" role="radiogroup" aria-label="Verdict">
+            {OPTIONS.map((opt) => {
+              const Icon = opt.icon
+              const selected = verdict === opt.value
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  className={`plan-verdict-option ${opt.className} ${selected ? 'plan-verdict-option-selected' : ''}`}
+                  onClick={() => setVerdict(opt.value)}
+                >
+                  <span className="plan-verdict-icon">
+                    <Icon size={15} aria-hidden="true" />
+                  </span>
+                  <span className="plan-verdict-text">
+                    <span className="plan-verdict-label">{opt.label}</span>
+                    <span className="plan-verdict-desc">{opt.description}</span>
+                  </span>
+                  <span className="plan-verdict-radio" aria-hidden="true" />
+                </button>
+              )
+            })}
+          </div>
 
-        <div className="srp-general">
-          <label className="srp-general-label" htmlFor="plan-decision-comment">
-            Overall comment <span className="srp-optional">(optional · Markdown)</span>
-          </label>
-          <MarkdownField
-            id="plan-decision-comment"
-            value={comment}
-            onChange={setComment}
-            textareaClassName="srp-general-input"
-            placeholder="Add an overall note for the agent that applies to the whole plan…"
-            rows={3}
-            ariaLabel="Overall plan review comment"
-            onSubmitShortcut={handleSubmit}
-          />
+          <div className="srp-general">
+            <label className="srp-general-label" htmlFor="plan-decision-comment">
+              Overall comment <span className="srp-optional">(optional · Markdown)</span>
+            </label>
+            <MarkdownField
+              id="plan-decision-comment"
+              value={comment}
+              onChange={setComment}
+              textareaClassName="srp-general-input"
+              placeholder="Add an overall note for the agent that applies to the whole plan…"
+              rows={3}
+              ariaLabel="Overall plan review comment"
+              onSubmitShortcut={handleSubmit}
+            />
+          </div>
         </div>
 
         <div className="srp-footer">
@@ -165,6 +185,7 @@ export function SubmitPlanReviewPopover({
             {submitting ? 'Submitting…' : 'Submit review'}
           </button>
         </div>
+        <div className="srp-resize-handle" onMouseDown={startResize} role="separator" aria-orientation="horizontal" aria-label="Resize submit panel" tabIndex={0} />
       </div>
     </Popover>
   )

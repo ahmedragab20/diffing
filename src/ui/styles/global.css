@@ -5818,12 +5818,22 @@ file-tree,
 .send-review-popover {
     padding: 0;
 }
+.submit-plan-review-popover {
+    padding: 0;
+}
+.submit-to-github-popover {
+    padding: 0;
+}
 .srp {
     display: flex;
     flex-direction: column;
-    width: 420px;
+    width: var(--submit-panel-width, 520px);
     max-width: 90vw;
-    max-height: 70vh;
+    height: var(--submit-panel-height, 480px);
+    max-height: min(70vh, 100%);
+    overflow: hidden;
+    min-height: 0;
+    position: relative;
 }
 .srp-head {
     display: flex;
@@ -5832,29 +5842,65 @@ file-tree,
     padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--border-weak);
     color: var(--text-primary);
+    flex-shrink: 0;
 }
 .srp-title {
     font-weight: 600;
     font-size: 0.85rem;
 }
 .srp-count {
-    margin-left: auto;
     font-size: 0.72rem;
     color: var(--text-muted);
     background: var(--bg-tertiary);
     padding: 1px 8px;
     border-radius: var(--radius-round);
+    white-space: nowrap;
+}
+.srp-size-presets {
+    display: inline-flex;
+    gap: 2px;
+    margin-left: auto;
+}
+.srp-preset-btn {
+    height: var(--control-height-sm);
+    padding: 0 8px;
+    border: 1px solid var(--border-weak);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+}
+.srp-preset-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+.srp-preset-btn[aria-pressed="true"] {
+    background: var(--accent-subtle);
+    border-color: var(--border-focus);
+    color: var(--text-primary);
 }
 .srp-list {
     list-style: none;
     margin: 0;
     padding: var(--space-1-5);
-    overflow-y: auto;
-    flex: 1;
+    /* no overflow; .srp-scroll is the sole scroller */
+    flex: 0 1 auto;
     min-height: 0;
     display: flex;
     flex-direction: column;
     gap: var(--space-1-5);
+}
+.srp-scroll {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
 }
 .srp-item {
     border: 1px solid var(--border-weak);
@@ -5951,7 +5997,7 @@ file-tree,
     background: var(--bg-primary);
     border: 1px solid var(--border-normal);
     border-radius: var(--radius-sm);
-    resize: vertical;
+    resize: none;
     box-sizing: border-box;
 }
 .srp-item-edit:focus,
@@ -5962,6 +6008,10 @@ file-tree,
 .srp-general {
     padding: var(--space-2) var(--space-3);
     border-top: 1px solid var(--border-weak);
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
 }
 .srp-general-label {
     display: block;
@@ -5978,7 +6028,6 @@ file-tree,
     padding: var(--space-2) var(--space-3);
     font-size: 0.78rem;
     color: var(--text-muted);
-    border-top: 1px solid var(--border-weak);
 }
 /* Markdown editor field (Write/Preview), reused for "overall comment" inputs. */
 .md-field {
@@ -6006,12 +6055,80 @@ file-tree,
     color: var(--text-muted);
     font-style: italic;
 }
+/* When the MarkdownField ("Overall comment") lives inside the flex-growing
+   submit panel, the textarea should absorb leftover vertical space so it fills
+   the panel when resized. These rules are scoped to .srp-general so other
+   MarkdownField consumers (e.g. CommentForm) are unaffected. */
+.srp-general .md-field {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Keep the Write/Preview tabs at their natural height. */
+.srp-general .md-field > .comment-form-tabs {
+    flex-shrink: 0;
+    width: fit-content;
+}
+
+/* Targets the write-mode relative-positioned <div> wrapper inside MarkdownField. */
+.srp-general .md-field > div:not(.comment-form-tabs) {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* The textarea itself grows to fill the write-mode wrapper.
+   min-height keeps it usable (~5 lines) when the panel shrinks. */
+.srp-general .md-field textarea.srp-general-input {
+    flex: 1 1 0;
+    min-height: 96px;
+}
+
+/* Preview pane: also flex-grow, drop the 240px cap so it matches textarea footprint. */
+.srp-general .md-field > .md-field-preview {
+    flex: 1 1 0;
+    min-height: 96px;
+    max-height: none;
+}
 .srp-footer {
     display: flex;
     justify-content: flex-end;
     gap: var(--space-2);
     padding: var(--space-2) var(--space-3);
     border-top: 1px solid var(--border-weak);
+    flex-shrink: 0;
+}
+.srp-resize-handle {
+    height: 6px;
+    flex-shrink: 0;
+    cursor: row-resize;
+    border-top: 1px solid var(--border-weak);
+    background: transparent;
+    position: relative;
+    z-index: 2;
+    transition: background 0.15s ease;
+}
+.srp-resize-handle:hover,
+.srp-resize-handle:active {
+    background: var(--border-focus);
+}
+.srp-resize-handle-left {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 2;
+    background: transparent;
+    transition: background 0.15s ease;
+}
+.srp-resize-handle-left:hover,
+.srp-resize-handle-left:active {
+    background: var(--border-focus);
 }
 .settings-panel {
     gap: var(--space-0-5);
@@ -7281,7 +7398,7 @@ file-tree,
 }
 .plan-verdict-option {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 10px;
     width: 100%;
     padding: 10px 12px;
@@ -7309,6 +7426,7 @@ file-tree,
     height: 28px;
     border-radius: var(--radius-round);
     flex-shrink: 0;
+    margin-top: 3px;
 }
 .plan-verdict-approve .plan-verdict-icon {
     background: var(--feedback-success-bg);
@@ -7348,6 +7466,7 @@ file-tree,
     border-radius: var(--radius-round);
     border: 2px solid var(--border-strong);
     flex-shrink: 0;
+    margin-top: 3px;
 }
 .plan-verdict-option-selected .plan-verdict-radio {
     border-color: var(--primary);

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.0
+
+### Minor Changes
+
+- Expandable submit panel with 2D size presets and left-edge horizontal resize.
+  The "Send review to agent" and "Submit plan review" popovers now have
+  S(420×340), M(480×440), L(560×560), and XL(640×760) presets that control
+  both panel width and height. A left-edge drag handle lets users resize the
+  panel width independently. The "Overall comment" textarea flex-grows to fill
+  available vertical space.
+- Fix verdict row alignment in the submit panel. Radio circles and icons now
+  top-align consistently across rows regardless of description text wrapping.
+- Fix Write/Preview tab layout in the "Overall comment" MarkdownField. Tabs are
+  now laid out horizontally with content-width sizing.
+- Status bar collapsed by default. The Vim-style status bar at the bottom of
+  the app starts collapsed to maximize main content area. Expand with the toggle
+  button or Cmd+B.
+- Fix comments count chip text wrapping in the submit panel header at narrow
+  preset widths.
+- Fix inverted submit panel resize direction. Dragging the bottom handle down
+  now correctly increases panel height.
+
+
 ## 0.4.1
 
 ### Patch Changes

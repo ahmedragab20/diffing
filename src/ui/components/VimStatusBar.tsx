@@ -13,7 +13,7 @@ export const VimStatusBar = memo(function VimStatusBar({
   placeholder = 'No active file (J/K to jump)',
 }: VimStatusBarProps) {
   const [isInsertMode, setIsInsertMode] = useState(false)
-  const [isCollapsed, setIsCollapsed] = useState(false)
+  const [isCollapsed, setIsCollapsed] = useState(true)
   const toggleRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {

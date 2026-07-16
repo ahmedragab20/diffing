@@ -7,6 +7,7 @@ import { Popover } from '../primitives/Popover'
 import { MarkdownField } from './MarkdownField'
 import { useSubmitPrReview } from '../hooks/usePrSession'
 import { useFeedback } from '../hooks/useHaptics'
+import { useSubmitPanelSize, SUBMIT_PANEL_PRESETS } from '../hooks/useSubmitPanelSize'
 
 interface SubmitToGitHubPopoverProps {
   session: PrSession
@@ -31,6 +32,7 @@ export function SubmitToGitHubPopover({
   const [open, setOpen] = useState(false)
   const [verdict, setVerdict] = useState<PrDecision | null>(null)
   const [general, setGeneral] = useState('')
+  const { popoverStyle, activePreset, applyPreset, startResize, startLeftResize, panelRef } = useSubmitPanelSize()
 
   const count = comments.length
   const sorted = useMemo(
@@ -59,7 +61,7 @@ export function SubmitToGitHubPopover({
       open={open}
       onOpenChange={setOpen}
       ariaLabel="Submit your review to GitHub"
-      className="srp"
+      className="submit-to-github-popover"
       trigger={
         <button
           className="btn btn-primary btn-sm send-review-btn"
@@ -80,15 +82,32 @@ export function SubmitToGitHubPopover({
         </button>
       }
     >
-      <div className="srp-inner">
+      <div className="srp" ref={panelRef} style={popoverStyle}>
+        <div className="srp-resize-handle-left" onMouseDown={startLeftResize} role="separator" aria-orientation="vertical" aria-label="Resize submit panel width" tabIndex={0} />
         <div className="srp-head">
           <GitPullRequest size={15} aria-hidden="true" />
           <span className="srp-title">Submit review to GitHub</span>
+          <div className="srp-size-presets" role="group" aria-label="Panel size">
+            {SUBMIT_PANEL_PRESETS.map((p, i) => (
+              <button
+                key={p.label}
+                className="srp-preset-btn"
+                role="radio"
+                aria-checked={activePreset === i}
+                aria-pressed={activePreset === i}
+                onClick={() => applyPreset(p)}
+                title={`${p.width}×${p.height}px`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
           <span className="srp-count">
             {count} comment{count === 1 ? '' : 's'}
           </span>
         </div>
 
+        <div className="srp-scroll">
         {alreadySubmitted && (
           <div className="srp-already-submitted">
             <Check size={13} />
@@ -169,6 +188,7 @@ export function SubmitToGitHubPopover({
             <span>{submitMutation.error?.message ?? 'Submit failed'}</span>
           </div>
         )}
+        </div>
 
         <div className="srp-footer">
           <button className="btn btn-sm" onClick={() => setOpen(false)} disabled={submitMutation.isPending}>
@@ -182,6 +202,7 @@ export function SubmitToGitHubPopover({
             {submitMutation.isPending ? 'Submitting…' : 'Submit review'}
           </button>
         </div>
+        <div className="srp-resize-handle" onMouseDown={startResize} role="separator" aria-orientation="horizontal" aria-label="Resize submit panel" tabIndex={0} />
       </div>
     </Popover>
   )
