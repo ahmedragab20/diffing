@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.1
+
+### Patch Changes
+
+- Review UX polish + handoff safety nets.
+
+  - Brand mark: an adorable gradient favicon is now used both as the browser tab icon and as a small mark next to the repo name. Empty/error states render a centered icon, title, and hint card instead of plain muted text. The first-paint loader shows the brand mark over a theme-token background so themes apply even before React mounts. Global polish adds themed `::selection`, broader `prefers-reduced-motion` coverage (kills shimmer + infinite spin), and a dynamic `document.title` that reflects the repo and branch.
+  - New "Comfort" settings: pick a `density` (Comfortable / Compact) which applies a `data-density="compact"` attribute on `<html>`, an `autoCollapseLineThreshold` that collapses very large file cards on mount, a `requireViewAllBeforeSend` toggle that surfaces a confirm prompt when some files in the diff are still unmarked, and a `showStatusBar` toggle that hides the vim-style status bar at the bottom of the review UI.
+  - Bulk review actions: a "Resolve all" toolbar button calls `POST /api/comments/resolve-all` (added to both `InMemoryCommentStore` and `FileCommentStore`), and the latest handoff round + verdict shows up as a small "Round N · VERDICT" badge in the toolbar.
+  - Multi-tab sync: the viewed-files endpoint now broadcasts a `viewed` SSE event, and `useViewed` subscribes so marking a file viewed in one browser tab reflects in the other.
+  - Secret-leak guard: `sendToAgent` detects strongly-typed credentials (AWS, GitHub, Slack, JWT, private keys, generic `api_key=…`, and connection strings with passwords) and the server blocks the send with HTTP 400 + `secrets-detected` findings. The review popover renders a callout listing every match and lets the reviewer explicitly "Send anyway" with `force: true`.
+
 ## 0.6.0
 
 ### Minor Changes
