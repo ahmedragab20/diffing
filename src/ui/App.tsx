@@ -26,13 +26,15 @@ import { useMergeStatus } from "./hooks/useMergeStatus";
 import { useSettings, resolveMonoFont } from "./hooks/useSettings";
 import { useApplyFonts } from "./hooks/useApplyFonts";
 import { useViewed } from "./hooks/useViewed";
+import { useScrollToNextFile } from "./hooks/useScrollToNextFile";
 import { HapticsProvider, playSound, fireFeedback } from "./hooks/useHaptics";
+import { parseExtensionFilter, matchesExtensionFilter } from "./lib/extensionFilter";
 import { getUiStateItem, setUiStateItem } from "./utils/uiState";
 import { useDiffSearch } from "./hooks/useDiffSearch";
 import { Toolbar } from "./components/Toolbar";
 import { CommitBanner } from "./components/CommitBanner";
 import { DiffOverviewBanner } from "./components/DiffOverviewBanner";
-import { DiffViewer } from "./components/DiffViewer";
+import { DiffViewer, sortFilesByName } from "./components/DiffViewer";
 import { MergeConflictResolver } from "./components/MergeConflictResolver";
 import { FileTree } from "./components/FileTree";
 import { CommentTracker } from "./components/CommentTracker";
@@ -95,6 +97,16 @@ export function App() {
             return 320;
         }
     });
+    const [extensionFilter, setExtensionFilter] = useState(() => {
+        try {
+            return getUiStateItem("diffing-extension-filter") ?? "";
+        } catch {
+            return "";
+        }
+    });
+    useEffect(() => {
+        setUiStateItem("diffing-extension-filter", extensionFilter);
+    }, [extensionFilter]);
     const sidebarWidthRef = useRef(sidebarWidth);
     sidebarWidthRef.current = sidebarWidth;
     const appRef = useRef<HTMLDivElement>(null);
@@ -341,51 +353,27 @@ export function App() {
         }
     }, [patch, binaryFiles]);
 
-    const diffSearchEntries = useDiffSearch(files);
+    const filteredFiles = useMemo(() => {
+        const extensions = parseExtensionFilter(extensionFilter);
+        if (extensions.length === 0) return files;
+        return files.filter((f) => matchesExtensionFilter(f.name, extensions));
+    }, [files, extensionFilter]);
+
+    const sortedFiles = useMemo(() => [...filteredFiles].sort(sortFilesByName), [filteredFiles]);
+
+    const scrollToNextFile = useScrollToNextFile(sortedFiles);
+
+    const diffSearchEntries = useDiffSearch(sortedFiles);
 
     const diffStats = useMemo(() => {
-        if (!patch) return { additions: 0, deletions: 0 };
         let additions = 0;
         let deletions = 0;
-        let index = 0;
-        const len = patch.length;
-
-        while (index < len) {
-            let nextNewline = patch.indexOf("\n", index);
-            if (nextNewline === -1) {
-                nextNewline = len;
-            }
-
-            const firstChar = patch.charCodeAt(index);
-            if (firstChar === 43) {
-                // '+'
-                if (
-                    index + 2 < len &&
-                    patch.charCodeAt(index + 1) === 43 &&
-                    patch.charCodeAt(index + 2) === 43
-                ) {
-                    // Skip '+++'
-                } else {
-                    additions++;
-                }
-            } else if (firstChar === 45) {
-                // '-'
-                if (
-                    index + 2 < len &&
-                    patch.charCodeAt(index + 1) === 45 &&
-                    patch.charCodeAt(index + 2) === 45
-                ) {
-                    // Skip '---'
-                } else {
-                    deletions++;
-                }
-            }
-
-            index = nextNewline + 1;
+        for (const file of filteredFiles) {
+            additions += file.additionLines.length;
+            deletions += file.deletionLines.length;
         }
-
         return { additions, deletions };
-    }, [patch]);
+    }, [filteredFiles]);
 
     const binaryFileMap = useMemo(() => {
         const map = new Map<string, (typeof binaryFiles)[number]>();
@@ -463,11 +451,16 @@ export function App() {
         }
     }, []);
 
+    const handleExtensionFilterChange = useCallback((value: string) => {
+        setExtensionFilter(value);
+    }, []);
+
     const handleViewedChange = useCallback(
         (filePath: string, viewed: boolean) => {
             setViewed(filePath, viewed);
+            if (viewed) scrollToNextFile(filePath);
         },
-        [setViewed],
+        [setViewed, scrollToNextFile],
     );
 
     const handleDiffStyleChange = useCallback(
@@ -666,7 +659,12 @@ export function App() {
         if (!activeFile) return;
         const isCurrentlyViewed = viewedFiles.has(activeFile);
         setViewed(activeFile, !isCurrentlyViewed);
-    }, [activeFile, viewedFiles, setViewed]);
+        if (!isCurrentlyViewed) scrollToNextFile(activeFile);
+    }, [activeFile, viewedFiles, setViewed, scrollToNextFile]);
+
+    const handleCardToggleCollapse = useCallback((filePath: string, willCollapse: boolean) => {
+        if (willCollapse) scrollToNextFile(filePath);
+    }, [scrollToNextFile]);
 
     const toggleDiffStyle = useCallback(() => {
         const nextStyle = settings.diffStyle === 'split' ? 'unified' : 'split';
@@ -1039,7 +1037,8 @@ export function App() {
             <Toolbar
                 repoName={repoName}
                 branch={branch}
-                fileCount={files.length}
+                fileCount={filteredFiles.length}
+                totalFileCount={files.length}
                 additions={diffStats.additions}
                 deletions={diffStats.deletions}
                 commentCount={comments.length}
@@ -1108,7 +1107,7 @@ export function App() {
                 >
                     <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                         <FileTree
-                            files={files}
+                        files={sortedFiles}
                             activeFile={activeFile}
                             commentCounts={commentCounts}
                             viewedFiles={viewedFiles}
@@ -1116,6 +1115,8 @@ export function App() {
                             onFileClick={handleFileClick}
                             collapsed={sidebarCollapsed}
                             onToggleCollapse={handleToggleCollapse}
+                            extensionFilter={extensionFilter}
+                            onExtensionFilterChange={handleExtensionFilterChange}
                         />
                     </div>
                     {!sidebarCollapsed && comments.length > 0 && (
@@ -1203,7 +1204,7 @@ export function App() {
                         />
                     ))}
                     <DiffViewer
-                        files={files}
+                        files={sortedFiles}
                         diffStyle={settings.diffStyle}
                         tabSizeMap={tabSizeMap}
                         defaultTabSize={settings.defaultTabSize}
@@ -1226,6 +1227,7 @@ export function App() {
                         fileAnnotationsMap={fileAnnotationsMap}
                         onAddComment={addComment}
                         onDeleteComment={removeComment}
+                        onCardToggleCollapse={handleCardToggleCollapse}
                     />
                 </main>
             </div>
@@ -1233,7 +1235,7 @@ export function App() {
                 isOpen={palette.open}
                 onClose={closePalette}
                 initialScope={palette.scope}
-                files={files}
+                files={filteredFiles}
                 changedEntries={diffSearchEntries}
                 customMode={customMode}
                 staged={settings.staged}

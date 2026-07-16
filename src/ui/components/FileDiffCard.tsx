@@ -1,4 +1,4 @@
-import { useState, memo, useRef, useEffect, useMemo } from 'react'
+import { useState, memo, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import { FileDiff, MultiFileDiff } from '@pierre/diffs/react'
 import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide, SelectedLineRange } from '@pierre/diffs'
 import { ChevronDown, ChevronRight, Edit3, MessageSquare, Maximize2, Loader2, Undo2, AlertCircle, X, HelpCircle, GitCommit, Clock, User, Copy, Check } from 'lucide-react'
@@ -46,6 +46,14 @@ interface FileDiffCardProps {
   onViewedChange: (filePath: string, viewed: boolean) => void
   onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
   onDeleteComment: (id: string) => void
+  /**
+   * Fired by the header click AFTER the local `collapsed` state has been
+   * flipped. Used by App.tsx to drive the auto-advance-to-next-file
+   * scroll when the user collapses a card. Not fired by the "Add Comment"
+   * expand path or by the `viewed`-prop sync effect — only by the user's
+   * explicit header click.
+   */
+  onCardToggleCollapse?: (filePath: string, willCollapse: boolean) => void
 }
 
 export const FileDiffCard = memo(function FileDiffCard({
@@ -72,6 +80,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   onViewedChange,
   onAddComment,
   onDeleteComment,
+  onCardToggleCollapse,
 }: FileDiffCardProps) {
   const [pending, setPending] = useState<PendingComment | null>(null)
   const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
@@ -139,8 +148,16 @@ export const FileDiffCard = memo(function FileDiffCard({
     contextExpanded && oldContent !== null && newContent !== null
   const oldFilePath = fileDiff.prevName ?? filePath
 
-  // Synchronize collapse with viewed state changes from parent
-  useEffect(() => {
+  // Synchronize collapse with viewed state changes from parent.
+  // Must use `useLayoutEffect` (NOT `useEffect`) so the collapse commits
+  // before the next paint. The "Viewed" checkbox path in App.tsx schedules
+  // a `requestAnimationFrame` immediately after `setViewed`, and the rAF
+  // fires before paint but AFTER `useLayoutEffect`. If we used `useEffect`,
+  // the collapse would run after paint — after the rAF has already
+  // scrolled — so the scroll would be computed against the un-collapsed
+  // layout, then the page would shift up under the scroll position,
+  // landing on the file AFTER the intended next one.
+  useLayoutEffect(() => {
     setCollapsed(viewed)
   }, [viewed])
 
@@ -297,7 +314,11 @@ export const FileDiffCard = memo(function FileDiffCard({
     >
       <div
         className="file-diff-card-header"
-        onClick={() => setCollapsed(!collapsed)}
+        onClick={() => {
+          const next = !collapsed
+          setCollapsed(next)
+          onCardToggleCollapse?.(filePath, next)
+        }}
       >
         <div className="file-diff-header-left">
           <span className="file-diff-collapse-indicator">

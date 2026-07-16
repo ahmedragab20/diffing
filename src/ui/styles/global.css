@@ -3429,7 +3429,7 @@ textarea:focus-visible,
 
 .ft-search-input {
     width: 100%;
-    padding: 8px 12px 8px 36px;
+    padding: 8px 32px 8px 36px;
     font-size: 13px;
     border: 1px solid var(--border-normal);
     border-radius: var(--radius-md);
@@ -3442,6 +3442,45 @@ textarea:focus-visible,
 .ft-search-input:focus {
     border-color: var(--border-strong);
     box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.ft-search-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ft-search-clear {
+    position: absolute;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.ft-search-clear:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.ft-filter-status {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.ft-filter-status-text {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: var(--radius-round, 999px);
+    background: var(--accent-subtle);
+    color: var(--accent);
 }
 
 .ft-list {

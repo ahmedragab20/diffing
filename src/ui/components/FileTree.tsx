@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react'
 import {
   Search,
+  Filter,
+  X,
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react'
@@ -12,6 +14,7 @@ import {
   sanitizePaths,
   buildExpandedPaths,
 } from '../lib/treePathSanitize'
+import { parseExtensionFilter, matchesExtensionFilter, formatExtensionFilter } from '../lib/extensionFilter'
 import { FileTreeErrorBoundary } from './FileTreeErrorBoundary'
 
 interface FileTreeProps {
@@ -23,6 +26,8 @@ interface FileTreeProps {
   onFileClick: (filePath: string) => void
   collapsed?: boolean
   onToggleCollapse?: () => void
+  extensionFilter?: string
+  onExtensionFilterChange?: (value: string) => void
 }
 
 export const FileTree = memo(function FileTree({
@@ -34,15 +39,23 @@ export const FileTree = memo(function FileTree({
   onFileClick,
   collapsed,
   onToggleCollapse,
+  extensionFilter = '',
+  onExtensionFilterChange,
 }: FileTreeProps) {
   const [filter, setFilter] = useState('')
+
+  const allowedExtensions = useMemo(() => parseExtensionFilter(extensionFilter), [extensionFilter])
+  const filteredFiles = useMemo(() => {
+    if (allowedExtensions.length === 0) return files
+    return files.filter((f) => matchesExtensionFilter(f.name, allowedExtensions))
+  }, [files, allowedExtensions])
 
   // Map files to paths required by @pierre/trees, deduping and resolving
   // file↔directory collisions so the underlying tree model never sees a
   // colliding path (which would throw "Path collides with an existing entry").
   const { paths, dropped } = useMemo(
-    () => sanitizePaths(files.map((f) => f.name)),
-    [files],
+    () => sanitizePaths(filteredFiles.map((f) => f.name)),
+    [filteredFiles],
   )
 
   const pathsSet = useMemo(() => new Set(paths), [paths])
@@ -51,7 +64,7 @@ export const FileTree = memo(function FileTree({
 
   // Map file change type to GitStatusEntry
   const gitStatus = useMemo<GitStatusEntry[]>(() => {
-    return files
+    return filteredFiles
       .filter((file) => pathsSet.has(file.name))
       .map((file) => {
       let status: GitStatus = 'modified'
@@ -70,7 +83,7 @@ export const FileTree = memo(function FileTree({
       }
       return { path: file.name, status }
     })
-  }, [files, untrackedFiles, pathsSet])
+  }, [filteredFiles, untrackedFiles, pathsSet])
 
   // Keep a ref of viewedFiles and commentCounts to avoid recreating renderRowDecoration
   // and maintain absolute freshness on virtualized list updates.
@@ -100,9 +113,9 @@ export const FileTree = memo(function FileTree({
       }
     }
     return null
-  }, [])
+  }, 
+  [])
 
-  // Initialize @pierre/trees model
   const { model } = useFileTree({
     paths,
     fileTreeSearchMode: 'hide-non-matches',
@@ -164,30 +177,67 @@ export const FileTree = memo(function FileTree({
     )
   }
 
+  const filterLabel = formatExtensionFilter(allowedExtensions)
+  const totalFiles = files.length
+  const shownFiles = filteredFiles.length
+  const hiddenFiles = totalFiles - shownFiles
+
   return (
     <div className="ft" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div className="ft-search">
-        {onToggleCollapse && (
-          <Tooltip content="Collapse sidebar" side="right">
-            <button
-              className="sidebar-toggle"
-              onClick={onToggleCollapse}
-              aria-label="Collapse sidebar"
-            >
-              <PanelLeftClose size={16} />
-            </button>
-          </Tooltip>
-        )}
-        <div className="ft-search-wrapper">
-          <Search size={14} className="ft-search-icon" />
-          <input
-            type="text"
-            placeholder="Filter files..."
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="ft-search-input"
-          />
+      <div className="ft-search" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '10px' }}>
+        <div className="ft-search-row">
+          {onToggleCollapse && (
+            <Tooltip content="Collapse sidebar" side="right">
+              <button
+                className="sidebar-toggle"
+                onClick={onToggleCollapse}
+                aria-label="Collapse sidebar"
+              >
+                <PanelLeftClose size={16} />
+              </button>
+            </Tooltip>
+          )}
+          <div className="ft-search-wrapper">
+            <Search size={14} className="ft-search-icon" />
+            <input
+              type="text"
+              placeholder="Filter files..."
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="ft-search-input"
+            />
+          </div>
         </div>
+        <div className="ft-search-row">
+          <div className="ft-search-wrapper">
+            <Filter size={14} className="ft-search-icon" />
+            <input
+              type="text"
+              placeholder="Extensions: vue, js, ts..."
+              value={extensionFilter}
+              onChange={(e) => onExtensionFilterChange?.(e.target.value)}
+              className="ft-search-input"
+              aria-label="Filter by file extension"
+            />
+            {extensionFilter && (
+              <button
+                className="ft-search-clear"
+                onClick={() => onExtensionFilterChange?.('')}
+                aria-label="Clear extension filter"
+                title="Clear extension filter"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        </div>
+        {hiddenFiles > 0 && (
+          <div className="ft-filter-status">
+            <span className="ft-filter-status-text" title={filterLabel}>
+              Showing {shownFiles} of {totalFiles} files
+            </span>
+          </div>
+        )}
       </div>
       {dropped.length > 0 && (
         <div

@@ -16,6 +16,7 @@ interface ToolbarProps {
   repoName: string
   branch: string
   fileCount: number
+  totalFileCount: number
   additions: number
   deletions: number
   commentCount: number
@@ -117,6 +118,7 @@ export const Toolbar = memo(function Toolbar({
   repoName,
   branch,
   fileCount,
+  totalFileCount,
   additions,
   deletions,
   commentCount,
@@ -215,7 +217,15 @@ export const Toolbar = memo(function Toolbar({
             </>
           ) : (
             <>
-              {fileCount} file{fileCount !== 1 ? 's' : ''} changed
+              {fileCount === totalFileCount ? (
+                <>
+                  {fileCount} file{fileCount !== 1 ? 's' : ''} changed
+                </>
+              ) : (
+                <>
+                  {fileCount} of {totalFileCount} files changed
+                </>
+              )}
               {additions > 0 && <span className="stat-additions"> +{additions}</span>}
               {deletions > 0 && <span className="stat-deletions"> -{deletions}</span>}
             </>
