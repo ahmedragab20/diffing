@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { App } from './App'
+import { BrandMark } from './components/BrandMark'
 import { PlanReviewApp } from './components/PlanReviewApp'
 import { PrReviewApp } from './components/PrReviewApp'
 import { useRoutePath } from './router'
@@ -27,14 +28,7 @@ export function Root() {
   if (!loaded) {
     return (
       <div className="boot-loader" role="status" aria-live="polite">
-        <img
-          className="boot-loader-mark"
-          src="/favicon.svg"
-          alt=""
-          width={40}
-          height={40}
-          draggable={false}
-        />
+        <BrandMark size={40} className="boot-loader-mark" />
         <div className="boot-loader-spinner" aria-hidden="true" />
         <span className="boot-loader-label">Loading review session…</span>
       </div>

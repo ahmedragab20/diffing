@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { X, Keyboard, Navigation, Eye, MessageSquare } from 'lucide-react'
 import { Modal } from '../primitives/Modal'
+import { BrandMark } from './BrandMark'
 
 interface ShortcutsHelpModalProps {
   isOpen: boolean
@@ -128,7 +129,7 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
     <Modal open={isOpen} onClose={onClose} className="shortcuts-modal" ariaLabel="Keyboard shortcuts">
       <div className="shortcuts-header">
         <div className="shortcuts-header-title">
-          <Keyboard size={18} className="shortcuts-icon" />
+          <BrandMark size={22} className="shortcuts-mark" />
           <h2>Developer Keyboard Shortcuts</h2>
         </div>
         <button className="shortcuts-close-btn" onClick={onClose} aria-label="Close dialog">

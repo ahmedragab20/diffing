@@ -27,6 +27,7 @@ import { FileTree } from './FileTree'
 import { CommentTracker } from './CommentTracker'
 import { SubmitToGitHubPopover } from './SubmitToGitHubPopover'
 import { PrSubmittedToast } from './PrSubmittedToast'
+import { BrandMark } from './BrandMark'
 import { formatComments } from '../../lib/comment-format'
 import { Copy } from 'lucide-react'
 
@@ -196,6 +197,7 @@ export function PrReviewApp() {
       {/* PR-specific header — minimal, no local settings popover. */}
       <header className="pr-header">
         <div className="pr-header-left">
+          <BrandMark size={20} className="pr-header-mark" />
           <GitPullRequest size={16} aria-hidden="true" />
           <strong className="pr-header-ref">
             {session.owner}/{session.repo}#{session.pullNumber}

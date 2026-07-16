@@ -13,6 +13,7 @@ import { PlanReview } from './PlanReview'
 import { PlanList } from './PlanList'
 import { ThemeModal } from './ThemeModal'
 import { AgentActivityToast } from './AgentActivityToast'
+import { BrandMark } from './BrandMark'
 import { Popover } from '../primitives/Popover'
 import { Select } from '../primitives/Select'
 import { SubmitPlanReviewPopover } from './SubmitPlanReviewPopover'
@@ -466,7 +467,7 @@ export function PlanReviewApp() {
               <span className="btn-label">Diff</span>
             </button>
             <h1 className="toolbar-title plan-app-title">
-              <ClipboardList size={16} style={{ marginRight: '6px' }} />
+              <BrandMark size={18} className="plan-app-brand" />
               Plan review
             </h1>
             <span className="toolbar-stat">

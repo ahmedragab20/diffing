@@ -7555,6 +7555,12 @@ file-tree,
     display: inline-flex;
     align-items: center;
 }
+.plan-app-brand {
+    margin-right: 8px;
+    border-radius: 5px;
+    box-shadow: var(--shadow-sm);
+    flex-shrink: 0;
+}
 .plan-sidebar {
     padding: 0;
     overflow-y: auto;
@@ -8326,6 +8332,13 @@ file-tree,
     flex: 1 1 auto;
     min-width: 0;
 }
+.pr-header-mark {
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    box-shadow: var(--shadow-sm);
+    flex-shrink: 0;
+}
 
 .pr-header-right {
     flex: 0 0 auto;
@@ -8868,3 +8881,29 @@ file-tree,
     min-height: 50vh;
     padding: 28px 16px;
 }
+
+/* ── Brand mark (favicon SVG) ────────────────────────────────────────────
+   Shared again here for clarity: the mark is reused as the toolbar logo,
+   the boot loader, the plan-review toolbar, the PR header, the Theme
+   modal, and the Shortcuts modal. `.brand-mark` is the standalone form
+   callers can drop in anywhere; the .toolbar-brand-mark etc. just
+   override shadow/border-radius to match their surface. */
+
+.theme-modal-mark {
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    box-shadow: var(--shadow-md);
+    flex-shrink: 0;
+    margin-right: 2px;
+}
+
+.shortcuts-mark {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    box-shadow: var(--shadow-sm);
+    flex-shrink: 0;
+}
+
+/* Loader mark already has its own .boot-loader-mark rule above. */

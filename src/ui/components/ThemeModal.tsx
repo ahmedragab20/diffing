@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { Search, X, Check, Moon, Sun } from 'lucide-react'
 import { Modal } from '../primitives/Modal'
+import { BrandMark } from './BrandMark'
 
 export interface ThemeOption {
   id: string
@@ -206,6 +207,7 @@ export function ThemeModal({ open, activeTheme, onThemeChange, onClose }: ThemeM
         {/* Header */}
         <div className="theme-modal-header">
           <div className="theme-modal-title-row">
+            <BrandMark size={24} className="theme-modal-mark" />
             <h2 className="theme-modal-title">Select Color Theme</h2>
             <button className="theme-modal-close-btn" onClick={onClose} aria-label="Close">
               <X size={16} />

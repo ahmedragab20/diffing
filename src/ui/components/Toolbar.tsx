@@ -10,6 +10,7 @@ import type {
 import { Popover } from '../primitives/Popover'
 import { Select } from '../primitives/Select'
 import { SendReviewPopover } from '../components/SendReviewPopover'
+import { BrandMark } from './BrandMark'
 import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
 
 interface LastSendSummary {
@@ -240,14 +241,7 @@ export const Toolbar = memo(function Toolbar({
           </button>
         )}
         <div className="toolbar-brand">
-          <img
-            className="toolbar-brand-mark"
-            src="/favicon.svg"
-            alt=""
-            width={22}
-            height={22}
-            draggable={false}
-          />
+          <BrandMark size={22} className="toolbar-brand-mark" />
           <h1 className="toolbar-title">{repoName || 'diffing'}</h1>
         </div>
         {branch && (
