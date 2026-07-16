@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { subscribeLive } from '../live'
+import type { DiffOverview } from '../../lib/diff-overview'
 
 export interface BinaryFileInfo {
   path: string
@@ -32,6 +33,12 @@ interface DiffData {
   binaryFiles: BinaryFileInfo[]
   tabSizeMap: Record<string, number>
   untrackedFiles: string[]
+  /**
+   * "What is this diff?" overview. The diff-engine builds one whenever it
+   * has enough metadata (working tree / staged / range / show / PR). The
+   * field is optional so old server payloads remain backward-compatible.
+   */
+  overview?: DiffOverview
 }
 
 export interface DiffOptions {
@@ -113,6 +120,9 @@ export function useDiff(options: DiffOptions, enabled = true) {
     binaryFiles: data?.binaryFiles ?? EMPTY_ARRAY,
     tabSizeMap: data?.tabSizeMap ?? EMPTY_OBJECT,
     untrackedFiles: data?.untrackedFiles ?? EMPTY_ARRAY,
+    // Atomic with the rest of the diff payload — no second fetch, no second
+    // source of truth. The banner refreshes whenever the diff does.
+    overview: data?.overview,
     loading,
     refreshing,
     error,

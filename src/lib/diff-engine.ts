@@ -12,8 +12,16 @@ import {
   getUntrackedFilePathsAsync,
   getTabSizeForFiles,
   getShowDiff,
+  getCommitSeriesSummary,
   type CommitInfo,
 } from './git.js'
+import {
+  buildWorkingTreeOverview,
+  buildStagedOnlyOverview,
+  buildRangeOverview,
+  buildCommitOverview,
+  type DiffOverview,
+} from './diff-overview.js'
 
 const MAX_BUFFER = 50 * 1024 * 1024
 
@@ -27,6 +35,12 @@ export interface DiffResult {
   commits?: CommitInfo[]
   /** Number of commits dropped past the show-mode cap. */
   truncated?: number
+  /**
+   * "What is this diff?" overview. Always populated for non-PR flows when we
+   * have enough metadata to derive one; the field is optional so existing
+   * MCP / test callers that destructure the result keep working.
+   */
+  overview?: DiffOverview
 }
 
 export interface DiffMeta {
@@ -166,6 +180,55 @@ export async function executeDiffWithMeta(opts: DiffOptions): Promise<DiffResult
   const filePaths = parseFilePaths(patch)
   const tabSizeMap = getTabSizeForFiles(filePaths)
 
+  // ── Diff overview banner ───────────────────────────────────────────
+  // PR mode is short-circuited in server.ts, so we don't need a pr kind
+  // here. The other branches (show / custom / staged-only / working-tree)
+  // are mutually exclusive based on what `executeDiffAsync` returned and
+  // what the user asked for.
+  let overview: DiffOverview | undefined
+  if (opts.showMode && commits && commits.length > 0) {
+    overview = buildCommitOverview({
+      commits: commits.map((c) => ({
+        subject: c.subject,
+        author: c.authorName,
+        date: c.authorDate,
+      })),
+      truncated: truncated ?? 0,
+    })
+  } else if (!opts.showMode && opts.revisions.length > 0) {
+    // Custom non-show mode: fetch lightweight commit metadata. Cheap enough
+    // because we use `--no-walk` and stop at MAX_SHOW_COMMITS.
+    const series = await getCommitSeriesSummary(opts.revisions, opts.pathspecs)
+    overview = buildRangeOverview({
+      revspecs: opts.revisions,
+      branch,
+      commitSeries: {
+        subjects: series.subjects,
+        authors: series.authors,
+        fromDate: series.fromDate,
+        toDate: series.toDate,
+        commitCount: series.commitCount,
+        truncated: series.truncated,
+      },
+    })
+  } else if (!opts.showMode && opts.staged && !opts.includeUntracked && opts.revisions.length === 0) {
+    // Staged-only: user explicitly turned off untracked and is reviewing a
+    // clean staging area. `staged=true&untracked=true` is the default
+    // working-tree flow, not staged-only.
+    overview = buildStagedOnlyOverview({
+      branch,
+      fileCount: filePaths.length,
+    })
+  } else if (!opts.showMode) {
+    overview = buildWorkingTreeOverview({
+      branch,
+      staged: opts.staged,
+      untracked: opts.includeUntracked,
+      untrackedCount: untrackedFiles.length,
+      fileCount: filePaths.length,
+    })
+  }
+
   return {
     patch,
     binaryFiles,
@@ -176,6 +239,7 @@ export async function executeDiffWithMeta(opts: DiffOptions): Promise<DiffResult
     branch,
     ...(commits ? { commits } : {}),
     ...(truncated ? { truncated } : {}),
+    ...(overview ? { overview } : {}),
   }
 }
 

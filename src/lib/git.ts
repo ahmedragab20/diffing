@@ -936,3 +936,127 @@ export async function getShowDiff(
   const patch = commits.map((c) => c.patch).filter(Boolean).join('\n')
   return { commits, patch, truncated }
 }
+
+export interface CommitSeriesSummary {
+  /** Total commits found by `git log` (capped at `MAX_SHOW_COMMITS`). */
+  commitCount: number
+  /** Commits dropped past the cap; 0 when nothing was truncated. */
+  truncated: number
+  /** First line of each commit message, oldest-first. */
+  subjects: string[]
+  /** De-duplicated authors in commit order. */
+  authors: string[]
+  /** Earliest author date (ISO 8601) across the visible commits. */
+  fromDate?: string
+  /** Latest author date (ISO 8601) across the visible commits. */
+  toDate?: string
+}
+
+/**
+ * Cheap summary of a revspec series: just subject + author + date. Used by
+ * the diff overview banner to render "what am I looking at?" for custom
+ * non-show revisions (e.g. `diffing main..feature`).
+ *
+ * Uses `git log --no-walk --reverse --pretty=%s%x00%an%x00%aI`. The NUL
+ * separators avoid the `|` ambiguity the older `getHunkHistory` parser
+ * suffers from; we keep that call alone rather than refactoring it.
+ *
+ * `--no-walk` keeps single-SHA revspecs cheap (just that commit's metadata)
+ * while ranges still expand normally. Reuses the same `MAX_SHOW_COMMITS`
+ * cap as `getShowDiff` so the banner and the per-commit view agree.
+ */
+export async function getCommitSeriesSummary(
+  revspecs: string[],
+  pathspecs: string[] = [],
+): Promise<CommitSeriesSummary> {
+  const empty: CommitSeriesSummary = {
+    commitCount: 0,
+    truncated: 0,
+    subjects: [],
+    authors: [],
+  }
+  if (revspecs.length === 0) return empty
+
+  // First, count how many commits the revspec resolves to so we know the
+  // truncation count. Use `git rev-list` (no per-commit metadata) so this
+  // stays O(commits) memory and CPU, not the larger fetch we already do for
+  // show mode. `--reverse` matches reading order for a series review.
+  let shaList: string[]
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        'rev-list',
+        '--no-walk',
+        '--reverse',
+        ...revspecs,
+        ...(pathspecs.length ? ['--', ...pathspecs] : []),
+      ],
+      { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 },
+    )
+    shaList = stdout.split('\n').filter(Boolean)
+  } catch {
+    return empty
+  }
+
+  const totalCommits = shaList.length
+  if (totalCommits === 0) return empty
+
+  const truncated = Math.max(0, totalCommits - MAX_SHOW_COMMITS)
+  const trimmed = truncated === 0 ? shaList : shaList.slice(0, MAX_SHOW_COMMITS)
+
+  // Now fetch subject + author + date for the (capped) commit set. NUL is
+  // the only character git never emits in a commit message, so it's a safe
+  // field separator. We don't need patch data here.
+  let raw: string
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        'log',
+        '--no-walk',
+        '--reverse',
+        '--pretty=%s%x00%an%x00%aI',
+        ...DIFF_FLAGS,
+        ...trimmed,
+        ...(pathspecs.length ? ['--', ...pathspecs] : []),
+      ],
+      { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 },
+    )
+    raw = stdout
+  } catch {
+    return { ...empty, commitCount: totalCommits, truncated }
+  }
+
+  const subjects: string[] = []
+  const authors: string[] = []
+  const seenAuthors = new Set<string>()
+  let fromDate: string | undefined
+  let toDate: string | undefined
+
+  for (const line of raw.split('\n')) {
+    if (!line) continue
+    const parts = line.split('\u0000')
+    const subject = parts[0] ?? ''
+    const author = parts[1] ?? ''
+    const date = parts[2] ?? ''
+    if (subject) subjects.push(subject)
+    if (author && !seenAuthors.has(author)) {
+      seenAuthors.add(author)
+      authors.push(author)
+    }
+    if (date) {
+      if (!fromDate || date < fromDate) fromDate = date
+      if (!toDate || date > toDate) toDate = date
+    }
+  }
+
+  return {
+    commitCount: totalCommits,
+    truncated,
+    subjects,
+    authors,
+    fromDate,
+    toDate,
+  }
+}

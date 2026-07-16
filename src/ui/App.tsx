@@ -31,6 +31,7 @@ import { getUiStateItem, setUiStateItem } from "./utils/uiState";
 import { useDiffSearch } from "./hooks/useDiffSearch";
 import { Toolbar } from "./components/Toolbar";
 import { CommitBanner } from "./components/CommitBanner";
+import { DiffOverviewBanner } from "./components/DiffOverviewBanner";
 import { DiffViewer } from "./components/DiffViewer";
 import { MergeConflictResolver } from "./components/MergeConflictResolver";
 import { FileTree } from "./components/FileTree";
@@ -59,6 +60,7 @@ export function App() {
         binaryFiles,
         tabSizeMap,
         untrackedFiles,
+        overview,
         loading,
         refreshing,
         error,
@@ -1156,6 +1158,7 @@ export function App() {
                     />
                 )}
                 <main className="main" ref={diffViewerRef}>
+                    {overview && <DiffOverviewBanner overview={overview} />}
                     {showMode && commits.length > 0 && (
                         <div className="commit-banner-stack" role="list">
                             {commits.map((commit, i) => (

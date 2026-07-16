@@ -309,6 +309,32 @@ describe("gh-pr endpoints (integration)", () => {
         );
         expect(body.patch).toBe("diff --git a/zzz b/zzz\n+hello\n");
         expect(body.branch).toBe("#1234");
+        // Phase 1 PR overview banner: derived entirely from pr-session fields,
+        // no extra git / gh calls.
+        expect(body.overview).toBeDefined();
+        expect(body.overview.kind).toBe("pr");
+        expect(body.overview.headline).toBe("PR #1234: A test PR");
+        expect(body.overview.subtitle).toBe("by octocat · +10 / -5");
+        expect(body.overview.prNumber).toBe(1234);
+        expect(body.overview.prTitle).toBe("A test PR");
+        expect(body.overview.authors).toEqual(["octocat"]);
+    });
+
+    it("PR overview handles a session with no author and zero diffs", async () => {
+        await prStore.set({
+            ...baseSession,
+            author: null,
+            additions: 0,
+            deletions: 0,
+            diff: "diff --git a/empty b/empty\n",
+        });
+        const res = await app.fetch(new Request("http://localhost/api/diff"));
+        const body = await res.json();
+        expect(body.overview.kind).toBe("pr");
+        expect(body.overview.headline).toBe("PR #1234: A test PR");
+        // No author, no diff counts → no subtitle line.
+        expect(body.overview.subtitle).toBeUndefined();
+        expect(body.overview.authors).toEqual([]);
     });
 
     it("all /api/gh/* routes 404 when no PR session (local flow is byte-identical)", async () => {

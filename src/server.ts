@@ -26,6 +26,7 @@ import type { DiffOptions } from './lib/diff-options.js'
 import { DEFAULTS } from './lib/diff-options.js'
 import { FilePrSessionStore, InMemoryPrSessionStore } from './lib/pr-session.js'
 import type { PrSessionStore, PrDecision } from './lib/pr-session.js'
+import { buildPrOverview } from './lib/diff-overview.js'
 import {
   buildPrSession,
   refreshPrSession,
@@ -219,6 +220,15 @@ export function createApp(
           const m = /^diff --git a\/.+ b\/(.+)$/.exec(line)
           if (m) filePaths.push(m[1])
         }
+        // PR overview is built entirely from fields already in pr-session.json.
+        // No extra git or `gh` calls — keeps the hot path cheap.
+        const prOverview = buildPrOverview({
+          prNumber: prSession.pullNumber,
+          prTitle: prSession.title,
+          prAuthor: prSession.author?.login ?? null,
+          additions: prSession.additions,
+          deletions: prSession.deletions,
+        })
         return c.json({
           patch: prSession.diff,
           repoName: prSession.repo,
@@ -237,6 +247,7 @@ export function createApp(
           prAuthor: prSession.author,
           prHeadSha: prSession.headSha,
           prBaseSha: prSession.baseSha,
+          overview: prOverview,
         })
       }
     }
@@ -261,6 +272,11 @@ export function createApp(
       showMode: optsForDiff.showMode || undefined,
       commits: result.commits,
       truncated: result.truncated,
+      // `overview` is optional and absent whenever the diff engine couldn't
+      // build one (e.g. older test fixtures). The new field is a strict
+      // superset of the old payload — every existing field keeps its type
+      // and presence.
+      overview: result.overview,
     })
   })
 

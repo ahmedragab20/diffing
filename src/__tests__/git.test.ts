@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 const mockExecFileSync = vi.fn()
+const mockExecFile = vi.fn()
 const mockReadFileSync = vi.fn()
 const mockIsSafePath = vi.fn()
 const mockParseEditorConfig = vi.fn()
@@ -9,7 +10,7 @@ const mockToSafeRelativePath = vi.fn((filePath) => mockIsSafePath(filePath) ? fi
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
-  return { ...actual, execFileSync: mockExecFileSync }
+  return { ...actual, execFileSync: mockExecFileSync, execFile: mockExecFile }
 })
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -321,6 +322,147 @@ describe('git', () => {
       expect(patch).toContain('+posix')
       expect(patch).toContain('+mac')
       expect(patch.includes('\r')).toBe(false)
+    })
+  })
+
+  describe('getCommitSeriesSummary', () => {
+    // The async helper goes through `execFile` (callback-style) which
+    // `promisify` wraps. Mock the underlying callback to keep the test
+    // path identical to the real one.
+    function queueExecFile(stdout: string, stderr = '') {
+      // Node's `util.promisify(execFile)` installs a custom callback shim that
+      // wraps the `(stdout, stderr)` pair into a single `{ stdout, stderr }`
+      // object before resolving. Our mock would otherwise pass three args to
+      // the callback, which `promisify` would turn into the *array*
+      // `[stdout, stderr]` — and `const { stdout } = await …` destructures
+      // that to `undefined`, making every subsequent `.split()` throw.
+      // Passing a single object argument keeps the resolved value in the
+      // shape the production code expects.
+      mockExecFile.mockImplementationOnce(
+        (_cmd: string, _args: string[] | undefined, _opts: unknown, cb: any) => {
+          cb(null, { stdout, stderr })
+        },
+      )
+    }
+
+    it('returns an empty summary when called with no revspecs', async () => {
+      const { getCommitSeriesSummary } = await import('../lib/git.js')
+      const result = await getCommitSeriesSummary([])
+      expect(result).toEqual({
+        commitCount: 0,
+        truncated: 0,
+        subjects: [],
+        authors: [],
+      })
+      expect(mockExecFile).not.toHaveBeenCalled()
+    })
+
+    it('summarises a single SHA revspec', async () => {
+      // First `git rev-list` returns just the one commit, then the
+      // metadata fetch returns subject/author/date NUL-separated.
+      queueExecFile('1111111111111111111111111111111111111111\n')
+      queueExecFile('first commit\u0000Alice\u00002026-01-02T10:00:00+00:00\n')
+
+      const { getCommitSeriesSummary } = await import('../lib/git.js')
+      const result = await getCommitSeriesSummary(['HEAD'])
+
+      expect(result.commitCount).toBe(1)
+      expect(result.truncated).toBe(0)
+      expect(result.subjects).toEqual(['first commit'])
+      expect(result.authors).toEqual(['Alice'])
+      expect(result.fromDate).toBe('2026-01-02T10:00:00+00:00')
+      expect(result.toDate).toBe('2026-01-02T10:00:00+00:00')
+
+      // First call: `rev-list --no-walk --reverse HEAD` (no pathspec → no `--`).
+      expect(mockExecFile.mock.calls[0][0]).toBe('git')
+      expect(mockExecFile.mock.calls[0][1]).toEqual(['rev-list', '--no-walk', '--reverse', 'HEAD'])
+    })
+
+    it('summarises a range revspec and passes pathspecs through', async () => {
+      queueExecFile('aaa\naaa\n')
+      queueExecFile(
+        'one\u0000Alice\u00002026-01-01T00:00:00+00:00\n' +
+        'two\u0000Bob\u00002026-02-01T00:00:00+00:00\n',
+      )
+
+      const { getCommitSeriesSummary } = await import('../lib/git.js')
+      const result = await getCommitSeriesSummary(['main..feature'], ['src/'])
+
+      expect(result.commitCount).toBe(2)
+      expect(result.subjects).toEqual(['one', 'two'])
+      expect(result.authors).toEqual(['Alice', 'Bob'])
+      expect(result.fromDate).toBe('2026-01-01T00:00:00+00:00')
+      expect(result.toDate).toBe('2026-02-01T00:00:00+00:00')
+
+      // rev-list call: range + pathspec via `--`.
+      expect(mockExecFile.mock.calls[0][1]).toEqual([
+        'rev-list', '--no-walk', '--reverse', 'main..feature', '--', 'src/',
+      ])
+      // metadata call: includes the standardised DIFF_FLAGS so we never
+      // re-invoke the user's diff.external / textconv drivers.
+      expect(mockExecFile.mock.calls[1][1]).toEqual([
+        'log', '--no-walk', '--reverse', '--pretty=%s%x00%an%x00%aI',
+        '--no-ext-diff', '--no-textconv', '--no-color',
+        'aaa', 'aaa', '--', 'src/',
+      ])
+    })
+
+    it('reports truncated when the range resolves to more than MAX_SHOW_COMMITS', async () => {
+      // 105 SHAs returned by rev-list; only 100 (MAX_SHOW_COMMITS) should
+      // be passed to the metadata fetch.
+      const shas = Array.from({ length: 105 }, (_, i) => `sha-${i}`).join('\n') + '\n'
+      queueExecFile(shas)
+      // The metadata call gets the trimmed 100 SHAs.
+      const trimmedShas = Array.from({ length: 100 }, (_, i) => `sha-${i}`).join('\n') + '\n'
+      queueExecFile(trimmedShas)
+
+      const { getCommitSeriesSummary, MAX_SHOW_COMMITS } = await import('../lib/git.js')
+      const result = await getCommitSeriesSummary(['main..HEAD'])
+
+      expect(result.commitCount).toBe(105)
+      expect(result.truncated).toBe(5)
+      expect(result.subjects.length).toBe(MAX_SHOW_COMMITS)
+    })
+
+    it('returns an empty summary when rev-list yields nothing', async () => {
+      queueExecFile('')
+      const { getCommitSeriesSummary } = await import('../lib/git.js')
+      const result = await getCommitSeriesSummary(['nonexistent..HEAD'])
+
+      expect(result).toEqual({
+        commitCount: 0,
+        truncated: 0,
+        subjects: [],
+        authors: [],
+      })
+    })
+
+    it('returns an empty summary when rev-list throws (bad revspec)', async () => {
+      mockExecFile.mockImplementationOnce(
+        (_cmd: string, _args: unknown, _opts: unknown, cb: any) => {
+          cb(new Error('unknown revision'), '', '')
+        },
+      )
+      const { getCommitSeriesSummary } = await import('../lib/git.js')
+      const result = await getCommitSeriesSummary(['nope..also-nope'])
+      expect(result.commitCount).toBe(0)
+    })
+
+    it('returns an empty subjects list (but accurate totals) when the metadata fetch fails', async () => {
+      // rev-list succeeds with 3 SHAs …
+      queueExecFile('a\nb\nc\n')
+      // … but the log call throws.
+      mockExecFile.mockImplementationOnce(
+        (_cmd: string, _args: unknown, _opts: unknown, cb: any) => {
+          cb(new Error('boom'), '', '')
+        },
+      )
+      const { getCommitSeriesSummary } = await import('../lib/git.js')
+      const result = await getCommitSeriesSummary(['main..HEAD'])
+
+      expect(result.commitCount).toBe(3)
+      expect(result.subjects).toEqual([])
+      expect(result.authors).toEqual([])
     })
   })
 })

@@ -5312,6 +5312,166 @@ file-tree,
     font-family: var(--font-sans);
 }
 
+/* ── Diff overview banner ─────────────────────────────────────────────
+ * "What is this diff?" — always-on, deterministic summary that sits
+ * below the toolbar. It mirrors .commit-banner: full width of the file
+ * view, left accent border, and a two-row header (subject line + meta
+ * line) so the layout aligns with the diff cards below it. */
+.diff-overview-banner {
+    margin-block: 12px;
+    padding: 10px 14px 12px;
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-weak);
+    border-left: 3px solid var(--accent);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-family: var(--font-sans);
+    color: var(--text-primary, var(--text-muted));
+}
+
+.diff-overview-banner-header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.diff-overview-banner-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.diff-overview-banner-icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.diff-overview-banner-headline {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary, var(--text-muted));
+    word-break: break-word;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.diff-overview-banner-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-muted);
+    min-width: 0;
+}
+
+.diff-overview-banner-subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+    word-break: break-word;
+    min-width: 0;
+}
+
+.diff-overview-banner-truncated-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: var(--radius-round, 999px);
+    background: var(--feedback-warning-bg, var(--accent-subtle));
+    color: var(--feedback-warning-text, var(--text-muted));
+    border: 1px solid var(--feedback-warning-border, var(--border-weak));
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+}
+
+.diff-overview-banner-details-toggle {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: var(--radius-sm, 4px);
+}
+
+.diff-overview-banner-details-toggle:hover {
+    background: var(--accent-subtle);
+    color: var(--text-primary, var(--text-muted));
+}
+
+.diff-overview-banner-subjects {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 240px;
+    overflow: auto;
+    border-top: 1px dashed var(--border-weak);
+    padding-top: 6px;
+}
+
+.diff-overview-banner-subject-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-primary, var(--text-muted));
+    min-width: 0;
+}
+
+.diff-overview-banner-subject-icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.diff-overview-banner-subject-text {
+    word-break: break-word;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.diff-overview-banner-subject-dates {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+
+@media (max-width: 1024px) {
+    .diff-overview-banner {
+        margin: 10px 12px 0;
+        padding: 10px 12px 12px;
+    }
+}
+
+@media (max-width: 640px) {
+    .diff-overview-banner {
+        margin: 8px 8px 0;
+        padding: 8px 10px 10px;
+    }
+    .diff-overview-banner-headline {
+        font-size: 13px;
+    }
+}
+
 .toolbar-stat-count {
     color: var(--text-primary, var(--text-muted));
     font-weight: 600;
@@ -8149,7 +8309,7 @@ file-tree,
     color: var(--text-secondary);
     font-size: 12.5px;
     font-style: italic;
-    padding: 6px 0;
+    padding: 6px;
 }
 
 .srp-error {

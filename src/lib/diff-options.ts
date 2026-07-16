@@ -367,6 +367,9 @@ Subcommands:
                        ranges (a..b, a...b), tags, and multiple SHAs.
                        Use '--' to separate revspecs from pathspecs.
 
+Custom ranges (e.g. main..feature) and 'gh pr' sessions also display a
+"what is this diff" banner in the web UI summarising the diff source.
+
 Examples:
   diffing                        Review uncommitted changes (web UI)
   diffing --staged               Review staged changes

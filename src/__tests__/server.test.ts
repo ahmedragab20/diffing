@@ -24,6 +24,7 @@ const mockGetRepoRootAsync = vi.fn()
 const mockGetBranchNameAsync = vi.fn()
 const mockGetUntrackedFilePathsAsync = vi.fn()
 const mockGetShowDiff = vi.fn()
+const mockGetCommitSeriesSummary = vi.fn()
 
 vi.mock('../lib/git.js', () => ({
   getGitDiff: mockGetGitDiff,
@@ -41,6 +42,7 @@ vi.mock('../lib/git.js', () => ({
   getRepoRoot: mockGetRepoRoot,
   getProjectStorageDir: mockGetProjectStorageDir,
   getShowDiff: mockGetShowDiff,
+  getCommitSeriesSummary: mockGetCommitSeriesSummary,
 }))
 
 vi.mock('../lib/settings.js', () => ({
@@ -155,6 +157,15 @@ describe('server', () => {
     mockGetUntrackedFilePathsAsync.mockResolvedValue([])
     mockGetGitDiffAsync.mockResolvedValue('diff --git a/src/index.ts b/src/index.ts\n@@ -1 +1 @@\n-old\n+new\n')
     mockGetCustomGitDiffAsync.mockResolvedValue('custom')
+    // Default: custom-range revisions resolve to two commits.
+    mockGetCommitSeriesSummary.mockResolvedValue({
+      commitCount: 2,
+      truncated: 0,
+      subjects: ['feat: one', 'feat: two'],
+      authors: ['Alice', 'Bob'],
+      fromDate: '2026-01-01T00:00:00+00:00',
+      toDate: '2026-02-01T00:00:00+00:00',
+    })
   })
 
   describe('createApp', () => {
@@ -316,6 +327,175 @@ describe('server', () => {
           expect(body.showMode).toBeUndefined()
           expect(body.commits).toBeUndefined()
           expect(body.truncated).toBeUndefined()
+        })
+      })
+
+      describe('diff overview banner', () => {
+        it('returns a working-tree overview in the default flow', async () => {
+          mockGetGitDiffAsync.mockResolvedValue(
+            'diff --git a/src/index.ts b/src/index.ts\n@@ -1 +1 @@\n-old\n+new\n',
+          )
+          const res = await app.fetch(
+            new Request('http://localhost/api/diff?staged=true&untracked=true'),
+          )
+          const body = await res.json()
+          expect(body.overview).toBeDefined()
+          expect(body.overview.kind).toBe('working-tree')
+          expect(body.overview.headline).toContain('Working-tree changes')
+          expect(body.overview.headline).toContain('main')
+          // No commits on the working-tree flow.
+          expect(body.overview.commitSubjects).toEqual([])
+          expect(mockGetCommitSeriesSummary).not.toHaveBeenCalled()
+        })
+
+        it('returns a staged-only overview when only --staged is set', async () => {
+          // staged=true, untracked=false, no revisions
+          mockGetGitDiffAsync.mockResolvedValue('diff --git a/s.ts b/s.ts\n+x\n')
+          const res = await app.fetch(
+            new Request('http://localhost/api/diff?staged=true&untracked=false'),
+          )
+          const body = await res.json()
+          expect(body.overview.kind).toBe('staged-only')
+          expect(body.overview.headline).toContain('Staged changes')
+        })
+
+        it('returns a range overview for custom revisions', async () => {
+          const { createApp } = await import('../server.js')
+          const custom = createApp(
+            clientDir,
+            { ...DEFAULTS, revisions: ['main..feature'] },
+            mockStore,
+          )
+          mockGetCustomGitDiffAsync.mockResolvedValue('diff --git a/x b/x\n+hi\n')
+          mockGetBranchNameAsync.mockResolvedValue('main')
+          mockGetCommitSeriesSummary.mockResolvedValue({
+            commitCount: 2,
+            truncated: 0,
+            subjects: ['feat: one', 'feat: two'],
+            authors: ['Alice', 'Bob'],
+            fromDate: '2026-01-01T00:00:00+00:00',
+            toDate: '2026-02-01T00:00:00+00:00',
+          })
+
+          const res = await custom.fetch(new Request('http://localhost/api/diff'))
+          const body = await res.json()
+
+          expect(body.overview.kind).toBe('range')
+          expect(body.overview.headline).toContain('Comparing main..feature')
+          expect(body.overview.rangeLabel).toBe('main..feature')
+          expect(body.overview.commitSubjects).toEqual(['feat: one', 'feat: two'])
+          expect(body.overview.commitCount).toBe(2)
+          expect(mockGetCommitSeriesSummary).toHaveBeenCalledWith(['main..feature'], [])
+        })
+
+        it('surfaces the truncated count from getCommitSeriesSummary', async () => {
+          const { createApp } = await import('../server.js')
+          const custom = createApp(
+            clientDir,
+            { ...DEFAULTS, revisions: ['main..HEAD'] },
+            mockStore,
+          )
+          mockGetCustomGitDiffAsync.mockResolvedValue('diff --git a/x b/x\n+hi\n')
+          mockGetCommitSeriesSummary.mockResolvedValue({
+            commitCount: 2,
+            truncated: 50,
+            subjects: ['a', 'b'],
+            authors: ['A'],
+          })
+
+          const res = await custom.fetch(new Request('http://localhost/api/diff'))
+          const body = await res.json()
+          expect(body.overview.kind).toBe('range')
+          expect(body.overview.truncated).toBe(50)
+        })
+
+        it('returns a commit-single overview for a single-commit show', async () => {
+          const { createApp } = await import('../server.js')
+          const diffOpts = {
+            ...DEFAULTS,
+            showMode: true,
+            showRevspecs: ['HEAD'],
+            revisions: [],
+            pathspecs: [],
+          }
+          const showApp = createApp(clientDir, diffOpts, mockStore)
+          const fakePatch = 'diff --git a/foo.ts b/foo.ts\n+hi\n'
+          const fakeCommit = {
+            sha: '1'.repeat(40),
+            shortSha: '1111111',
+            parents: ['0'.repeat(40)],
+            subject: 'Hello',
+            body: '',
+            authorName: 'Alice',
+            authorEmail: 'alice@example.com',
+            authorDate: '2026-01-01T00:00:00+00:00',
+            committerName: 'Alice',
+            committerEmail: 'alice@example.com',
+            committerDate: '2026-01-01T00:00:00+00:00',
+            patch: fakePatch,
+          }
+          mockGetShowDiff.mockResolvedValue({ commits: [fakeCommit], patch: fakePatch, truncated: 0 })
+
+          const res = await showApp.fetch(new Request('http://localhost/api/diff'))
+          const body = await res.json()
+          expect(body.overview.kind).toBe('commit-single')
+          expect(body.overview.headline).toBe('Commit: Hello')
+          expect(body.overview.authors).toEqual(['Alice'])
+        })
+
+        it('returns a commit-series overview for a multi-commit show', async () => {
+          const { createApp } = await import('../server.js')
+          const diffOpts = {
+            ...DEFAULTS,
+            showMode: true,
+            showRevspecs: ['HEAD~2..HEAD'],
+            revisions: [],
+            pathspecs: [],
+          }
+          const showApp = createApp(clientDir, diffOpts, mockStore)
+          const fakePatch = 'diff --git a/x b/x\n+hi\n'
+          const c1 = {
+            sha: '1'.repeat(40),
+            shortSha: '1111111',
+            parents: ['0'.repeat(40)],
+            subject: 'first',
+            body: '',
+            authorName: 'A',
+            authorEmail: 'a@x',
+            authorDate: '2026-01-01T00:00:00+00:00',
+            committerName: 'A',
+            committerEmail: 'a@x',
+            committerDate: '2026-01-01T00:00:00+00:00',
+            patch: fakePatch,
+          }
+          const c2 = { ...c1, sha: '2'.repeat(40), shortSha: '2222222', subject: 'second' }
+          mockGetShowDiff.mockResolvedValue({ commits: [c1, c2], patch: fakePatch, truncated: 0 })
+
+          const res = await showApp.fetch(new Request('http://localhost/api/diff'))
+          const body = await res.json()
+          expect(body.overview.kind).toBe('commit-series')
+          expect(body.overview.headline).toBe('Reviewing 2 commits')
+        })
+
+        it('does not call getCommitSeriesSummary in show mode (commits are already on the payload)', async () => {
+          const { createApp } = await import('../server.js')
+          const showApp = createApp(
+            clientDir,
+            { ...DEFAULTS, showMode: true, showRevspecs: ['HEAD'], revisions: [], pathspecs: [] },
+            mockStore,
+          )
+          mockGetShowDiff.mockResolvedValue({
+            commits: [{
+              sha: '1'.repeat(40), shortSha: '1111111', parents: [], subject: 's', body: '',
+              authorName: 'A', authorEmail: 'a@x', authorDate: '2026-01-01T00:00:00+00:00',
+              committerName: 'A', committerEmail: 'a@x', committerDate: '2026-01-01T00:00:00+00:00',
+              patch: '',
+            }],
+            patch: '', truncated: 0,
+          })
+          mockGetCommitSeriesSummary.mockClear()
+          await showApp.fetch(new Request('http://localhost/api/diff'))
+          expect(mockGetCommitSeriesSummary).not.toHaveBeenCalled()
         })
       })
 

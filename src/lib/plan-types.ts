@@ -42,6 +42,16 @@ export interface PlanComment {
    */
   createdAtPlanVersion: number
   replies: CommentReply[]
+  /**
+   * Discriminator so the synthetic comment created from a verdict's overall
+   * note can be addressed like any other thread. Defaults to `'general'` for
+   * legacy plans and ordinary inline comments. The verdict's note is promoted
+   * to a `kind: 'decision'` comment so the agent has a replyable handle for
+   * "rewrite the whole thing" / bare "rejected" verdicts — see
+   * `Plan.decisionCommentId` and the ambiguous-verdict detection in
+   * `/api/plans/:id/decision`.
+   */
+  kind?: 'general' | 'decision'
 }
 
 export interface PlanVersion {
