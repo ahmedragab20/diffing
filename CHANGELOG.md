@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+### Minor Changes
+
+- 23c6793: Make diffing self-discovering and fully usable from MCP-only agents, including repository-bound session startup, native diff/comment tools, structured tool contracts, and portable synchronized skills.
+- 107fd0d: Enhance show command's commit range display: consolidate multiple CommitBanner alerts into a single overview banner with detailed commit rows (SHA, subject, author, date, expandable body). Overview subtitle now shows the range label, authors, and date range. Toolbar shows +/- diff stats in show mode after the commit count.
+
 ## 0.5.1
 
 ### Minor Changes
@@ -43,7 +50,6 @@
   preset widths.
 - Fix inverted submit panel resize direction. Dragging the bottom handle down
   now correctly increases panel height.
-
 
 ## 0.4.1
 
