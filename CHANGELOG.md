@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.2
+
+### Patch Changes
+
+- Brand mark + README polish.
+
+  - New `<BrandMark>` component in `src/ui/components/BrandMark.tsx` renders the existing favicon SVG at any size, replacing five copies of inline `<img src="/favicon.svg" />` scattered through the app.
+  - The mark now anchors every identity surface: the diff toolbar, the plan-review toolbar, the PR-review header, the Theme picker header, the Shortcuts modal header, and the boot loader — so the user sees the same friendly face everywhere instead of just one spot.
+  - README mirrors this: the npm page now shows the brand icon directly under the title, giving the package the same identity inside the README as it has inside the running app.
+
 ## 0.6.1
 
 ### Patch Changes
