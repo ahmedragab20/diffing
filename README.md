@@ -1,5 +1,9 @@
 # diffing
 
+<p align="center">
+  <img src="public/favicon.svg" alt="diffing brand icon" width="72" height="72" />
+</p>
+
 A local-first code review tool and double-sided bridge designed for the modern AI coding agent workflow. Review AI-generated changes in a high-fidelity, GitHub-like web UI, leave inline comments, and hand them back to your coding agent to fix in real time — and review the agent's **plan** the same way *before* it writes any code, approving, rejecting, or requesting changes on specific lines and sections.
 
 <img width="1667" height="1087" alt="image" src="https://github.com/user-attachments/assets/52dcd2af-fc85-44ba-a679-4609e667c6f4" />
