@@ -214,6 +214,8 @@ export const Toolbar = memo(function Toolbar({
                 {showCommitCount}
               </strong>{' '}
               commit{showCommitCount === 1 ? '' : 's'}
+              {additions > 0 && <span className="stat-additions"> +{additions}</span>}
+              {deletions > 0 && <span className="stat-deletions"> -{deletions}</span>}
             </>
           ) : (
             <>

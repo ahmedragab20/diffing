@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { DiffOverviewBanner } from '../DiffOverviewBanner'
 import type { DiffOverview } from '../../../lib/diff-overview'
+import type { CommitInfo } from '../../hooks/useDiff'
 
 // Stub lucide-react icons as no-op components so the jsdom env doesn't
 // need the SVG engine. The banner imports several — we cover them all.
@@ -10,7 +11,7 @@ vi.mock('lucide-react', () => {
   const Stub = () => null
   const proxy: Record<string, unknown> = {}
   for (const k of [
-    'ChevronDown', 'ChevronRight', 'FileText', 'GitBranch',
+    'ChevronDown', 'ChevronRight', 'Copy', 'Check', 'FileText', 'GitBranch',
     'GitCommit', 'GitPullRequest', 'Layers',
   ]) proxy[k] = Stub
   return proxy
@@ -183,6 +184,112 @@ describe('DiffOverviewBanner', () => {
         />,
       )
       expect(screen.getByTitle('1 additional commit not shown')).toBeInTheDocument()
+    })
+  })
+
+  describe('detailed commit rows (show mode)', () => {
+    let clipboardWrite: ReturnType<typeof vi.fn>
+
+    beforeEach(() => {
+      clipboardWrite = vi.fn().mockResolvedValue(undefined)
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText: clipboardWrite },
+        configurable: true,
+        writable: true,
+      })
+    })
+
+    function makeCommit(overrides: Partial<CommitInfo> = {}): CommitInfo {
+      return {
+        sha: 'a'.repeat(40),
+        shortSha: 'aaaaaaa',
+        parents: ['b'.repeat(40)],
+        subject: 'feat: add a widget',
+        body: '',
+        authorName: 'Alice',
+        authorEmail: 'alice@example.com',
+        authorDate: '2026-01-15T10:30:00+00:00',
+        committerName: 'Alice',
+        committerEmail: 'alice@example.com',
+        committerDate: '2026-01-15T10:30:00+00:00',
+        patch: 'diff --git ...',
+        ...overrides,
+      }
+    }
+
+    it('renders a detailed commit row when commits are provided', () => {
+      render(
+        <DiffOverviewBanner
+          overview={ov({
+            kind: 'commit-series',
+            commitSubjects: ['feat: add a widget'],
+            commitCount: 1,
+          })}
+          commits={[makeCommit()]}
+        />,
+      )
+      const btn = screen.getByRole('button', { name: /show 1 commit/i })
+      fireEvent.click(btn)
+      expect(screen.getByText('aaaaaaa')).toBeInTheDocument()
+      expect(screen.getByText('feat: add a widget')).toBeInTheDocument()
+      expect(screen.getByText('Alice')).toBeInTheDocument()
+      expect(screen.getByText(/2026/)).toBeInTheDocument()
+    })
+
+    it('copies the full SHA from a detailed commit row', async () => {
+      render(
+        <DiffOverviewBanner
+          overview={ov({
+            kind: 'commit-series',
+            commitSubjects: ['feat: add a widget'],
+            commitCount: 1,
+          })}
+          commits={[makeCommit()]}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { name: /show 1 commit/i }))
+      const sha = 'a'.repeat(40)
+      const button = screen.getByRole('button', { name: `Copy full SHA ${sha}` })
+      fireEvent.click(button)
+      await waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith(sha))
+    })
+
+    it('shows a merge badge for multi-parent commits in the detailed list', () => {
+      render(
+        <DiffOverviewBanner
+          overview={ov({
+            kind: 'commit-series',
+            commitSubjects: ['Merge branch feature'],
+            commitCount: 1,
+          })}
+          commits={[makeCommit({
+            parents: ['b'.repeat(40), 'c'.repeat(40)],
+            subject: 'Merge branch feature',
+          })]}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { name: /show 1 commit/i }))
+      expect(screen.getByText('merge')).toBeInTheDocument()
+    })
+
+    it('expands and hides the commit message body in a detailed row', () => {
+      const body = 'This is the commit body.\n\nIt has multiple lines.'
+      render(
+        <DiffOverviewBanner
+          overview={ov({
+            kind: 'commit-series',
+            commitSubjects: ['feat: add a widget'],
+            commitCount: 1,
+          })}
+          commits={[makeCommit({ body })]}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { name: /show 1 commit/i }))
+      const toggle = screen.getByRole('button', { name: /show message/i })
+      fireEvent.click(toggle)
+      const pre = document.querySelector('.diff-overview-banner-commit-body-pre')
+      expect(pre).toBeInTheDocument()
+      expect(pre?.textContent).toBe(body)
     })
   })
 })

@@ -5494,6 +5494,168 @@ file-tree,
     flex-shrink: 0;
 }
 
+/* Detailed commit rows inside the overview banner (replaces stacked CommitBanners). */
+.diff-overview-banner-commit-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border-weak);
+}
+
+.diff-overview-banner-commit-row:last-of-type {
+    border-bottom: none;
+}
+
+.diff-overview-banner-commit-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.diff-overview-banner-commit-sha {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--border-weak);
+    border-radius: var(--radius-sm, 4px);
+    padding: 2px 6px;
+    color: var(--text-primary, var(--text-muted));
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 120ms ease, background 120ms ease;
+    flex-shrink: 0;
+}
+
+.diff-overview-banner-commit-sha:hover {
+    border-color: var(--border-focus);
+    background: var(--accent-subtle);
+}
+
+.diff-overview-banner-commit-sha svg {
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+
+.diff-overview-banner-commit-sha:hover svg {
+    opacity: 1;
+}
+
+.diff-overview-banner-commit-subject {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary, var(--text-muted));
+    word-break: break-word;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.diff-overview-banner-commit-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding-left: 20px;
+}
+
+.diff-overview-banner-commit-author {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+}
+
+.diff-overview-banner-commit-author-name {
+    color: var(--text-primary, var(--text-muted));
+    font-weight: 500;
+}
+
+.diff-overview-banner-commit-author-email {
+    color: var(--text-muted);
+    opacity: 0.7;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    word-break: break-all;
+}
+
+.diff-overview-banner-commit-date {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+}
+
+.diff-overview-banner-commit-committer {
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+
+.diff-overview-banner-commit-committer-label {
+    opacity: 0.7;
+}
+
+.diff-overview-banner-commit-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-left: 20px;
+}
+
+.diff-overview-banner-commit-body-toggle {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: var(--radius-sm, 4px);
+}
+
+.diff-overview-banner-commit-body-toggle:hover {
+    background: var(--accent-subtle);
+    color: var(--text-primary, var(--text-muted));
+}
+
+.diff-overview-banner-commit-body-pre {
+    margin: 0;
+    padding: 8px 10px;
+    background: var(--bg-elevated, rgba(0, 0, 0, 0.2));
+    border: 1px solid var(--border-weak);
+    border-radius: var(--radius-sm, 4px);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-primary, var(--text-muted));
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 240px;
+    overflow: auto;
+}
+
+.diff-overview-banner-merge-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: var(--radius-round, 999px);
+    background: var(--feedback-warning-bg);
+    color: var(--feedback-warning-text);
+    border: 1px solid var(--feedback-warning-border);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+}
+
 @media (max-width: 1024px) {
     .diff-overview-banner {
         margin: 10px 12px 0;

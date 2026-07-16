@@ -194,6 +194,7 @@ export async function executeDiffWithMeta(opts: DiffOptions): Promise<DiffResult
         date: c.authorDate,
       })),
       truncated: truncated ?? 0,
+      rangeLabel: deriveShowRangeLabel(opts.showRevspecs),
     })
   } else if (!opts.showMode && opts.revisions.length > 0) {
     // Custom non-show mode: fetch lightweight commit metadata. Cheap enough
@@ -241,6 +242,20 @@ export async function executeDiffWithMeta(opts: DiffOptions): Promise<DiffResult
     ...(truncated ? { truncated } : {}),
     ...(overview ? { overview } : {}),
   }
+}
+
+/**
+ * Derive a display label for `diffing show` revspecs. Multi-revspecs and
+ * range-like expressions (`A..B`, `A...B`) keep their raw form so the banner
+ * subtitle tells the reviewer exactly what range is being shown. A plain
+ * single SHA/tag is omitted because the headline already names the commit.
+ */
+function deriveShowRangeLabel(revspecs: string[]): string | undefined {
+  if (revspecs.length === 0) return undefined
+  if (revspecs.length > 1) return revspecs.join(' ')
+  const single = revspecs[0]
+  if (single && (single.includes('..') || single.includes('...'))) return single
+  return undefined
 }
 
 /**

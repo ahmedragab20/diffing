@@ -32,7 +32,6 @@ import { parseExtensionFilter, matchesExtensionFilter } from "./lib/extensionFil
 import { getUiStateItem, setUiStateItem } from "./utils/uiState";
 import { useDiffSearch } from "./hooks/useDiffSearch";
 import { Toolbar } from "./components/Toolbar";
-import { CommitBanner } from "./components/CommitBanner";
 import { DiffOverviewBanner } from "./components/DiffOverviewBanner";
 import { DiffViewer, sortFilesByName } from "./components/DiffViewer";
 import { MergeConflictResolver } from "./components/MergeConflictResolver";
@@ -1159,23 +1158,11 @@ export function App() {
                     />
                 )}
                 <main className="main" ref={diffViewerRef}>
-                    {overview && <DiffOverviewBanner overview={overview} />}
-                    {showMode && commits.length > 0 && (
-                        <div className="commit-banner-stack" role="list">
-                            {commits.map((commit, i) => (
-                                <CommitBanner
-                                    key={commit.sha}
-                                    commit={commit}
-                                    index={i}
-                                    total={commits.length}
-                                />
-                            ))}
-                            {truncated > 0 && (
-                                <div className="commit-banner-truncated" role="status">
-                                    + {truncated} more commit{truncated === 1 ? "" : "s"} not shown
-                                </div>
-                            )}
-                        </div>
+                    {overview && (
+                        <DiffOverviewBanner
+                            overview={overview}
+                            commits={showMode ? commits : undefined}
+                        />
                     )}
                     {mergeStatus.inMerge && mergeStatus.conflicts.length > 0 && (
                         <div className="merge-conflict-banner">

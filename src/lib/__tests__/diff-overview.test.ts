@@ -245,7 +245,7 @@ describe('buildCommitOverview', () => {
     expect(ov.headline).toBe('Reviewing 2 commits')
   })
 
-  it('omits the subtitle for a series when nothing is truncated', () => {
+  it('includes authors and dates in the subtitle for a series', () => {
     const ov = buildCommitOverview({
       commits: [
         { subject: 'a', author: 'A', date: '2026-01-01T00:00:00+00:00' },
@@ -253,10 +253,11 @@ describe('buildCommitOverview', () => {
       ],
       truncated: 0,
     })
-    expect(ov.subtitle).toBeUndefined()
+    expect(ov.subtitle).toContain('A')
+    expect(ov.subtitle).toContain('2026')
   })
 
-  it('surfaces the truncated count for a series', () => {
+  it('surfaces the truncated count for a series alongside authors', () => {
     const ov = buildCommitOverview({
       commits: [
         { subject: 'a', author: 'A' },
@@ -264,7 +265,7 @@ describe('buildCommitOverview', () => {
       ],
       truncated: 3,
     })
-    expect(ov.subtitle).toBe('2 of 5 commits shown')
+    expect(ov.subtitle).toContain('2 of 5 commits shown')
     expect(ov.truncated).toBe(3)
   })
 
@@ -290,6 +291,32 @@ describe('buildCommitOverview', () => {
     expect(ov.commitSubjects).toEqual(['a'])
     expect(ov.authors).toEqual(['A', 'B'])
     expect(ov.commitCount).toBe(2)
+  })
+
+  it('includes the range label in the subtitle for a series', () => {
+    const ov = buildCommitOverview({
+      commits: [
+        { subject: 'a', author: 'A', date: '2026-01-01T00:00:00+00:00' },
+        { subject: 'b', author: 'B', date: '2026-01-02T00:00:00+00:00' },
+      ],
+      truncated: 0,
+      rangeLabel: 'main..feature',
+    })
+    expect(ov.headline).toBe('Reviewing 2 commits')
+    expect(ov.subtitle).toContain('main..feature')
+    expect(ov.subtitle).toContain('A, B')
+    expect(ov.rangeLabel).toBe('main..feature')
+  })
+
+  it('includes the range label and author/date for a single commit', () => {
+    const ov = buildCommitOverview({
+      commits: [{ subject: 'first', author: 'Alice', date: '2026-01-01T00:00:00+00:00' }],
+      truncated: 0,
+      rangeLabel: 'HEAD~1..HEAD',
+    })
+    expect(ov.kind).toBe('commit-single')
+    expect(ov.subtitle).toContain('HEAD~1..HEAD')
+    expect(ov.subtitle).toContain('Alice')
   })
 })
 

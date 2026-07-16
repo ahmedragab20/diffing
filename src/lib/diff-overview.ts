@@ -86,6 +86,8 @@ export interface RangeInput {
 export interface CommitInput {
   commits: DiffOverviewCommitRow[]
   truncated: number
+  /** Original revspec text for `diffing show <range>`; surfaced in the subtitle. */
+  rangeLabel?: string
 }
 
 export interface PrInput {
@@ -181,7 +183,7 @@ export function buildRangeOverview(input: RangeInput): DiffOverview {
  * headline than a series.
  */
 export function buildCommitOverview(input: CommitInput): DiffOverview {
-  const { commits, truncated } = input
+  const { commits, truncated, rangeLabel } = input
   const { commitCount, subjects, authors, fromDate, toDate } =
     summariseCommitRows(commits)
   const isSingle = commitCount === 1
@@ -191,12 +193,23 @@ export function buildCommitOverview(input: CommitInput): DiffOverview {
   let subtitle: string | undefined
   if (isSingle) {
     headline = subjects[0] ? `Commit: ${subjects[0]}` : 'Single commit'
+    const subParts: string[] = []
+    if (rangeLabel) subParts.push(rangeLabel)
+    if (authors[0]) subParts.push(authors[0])
+    if (fromDate) subParts.push(formatDateShort(fromDate))
+    if (truncated > 0) subParts.push(`${commitCount} of ${commitCount + truncated} commits shown`)
+    subtitle = subParts.length > 0 ? subParts.join(' · ') : undefined
   } else {
     const plural = 'commits'
     headline = `Reviewing ${commitCount} ${plural}`
-    subtitle = truncated > 0
-      ? `${commitCount} of ${commitCount + truncated} ${plural} shown`
-      : undefined
+    const subParts: string[] = []
+    if (rangeLabel) subParts.push(rangeLabel)
+    if (authors.length > 0) subParts.push(authors.join(', '))
+    if (fromDate && toDate) {
+      subParts.push(`${formatDateShort(fromDate)} – ${formatDateShort(toDate)}`)
+    }
+    if (truncated > 0) subParts.push(`${commitCount} of ${commitCount + truncated} ${plural} shown`)
+    subtitle = subParts.length > 0 ? subParts.join(' · ') : undefined
   }
 
   return {
@@ -209,6 +222,21 @@ export function buildCommitOverview(input: CommitInput): DiffOverview {
     fromDate,
     toDate,
     authors,
+    rangeLabel,
+  }
+}
+
+function formatDateShort(iso: string): string {
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return iso
+    return d.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    })
+  } catch {
+    return iso
   }
 }
 
