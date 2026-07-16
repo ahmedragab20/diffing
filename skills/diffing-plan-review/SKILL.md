@@ -1,6 +1,7 @@
 ---
 name: diffing-plan-review
 description: Submit an implementation plan to diffing for human approval and obey the verdict before writing code. Use for plan sign-off, architecture review, risky work, or any request to let the human comment on a plan before implementation.
+user_invocable: true
 ---
 
 # Review an implementation plan with diffing

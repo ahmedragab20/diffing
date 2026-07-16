@@ -1,6 +1,7 @@
 ---
 name: diffing-review
 description: Review local git changes in diffing, inspect every changed file, and post actionable inline feedback for the human. Use when the user asks for a code review of working-tree, staged, commit, or branch changes through diffing.
+user_invocable: true
 ---
 
 # Review changes with diffing
