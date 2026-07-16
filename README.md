@@ -6,7 +6,8 @@
 
 A local-first code review tool and double-sided bridge designed for the modern AI coding agent workflow. Review AI-generated changes in a high-fidelity, GitHub-like web UI, leave inline comments, and hand them back to your coding agent to fix in real time — and review the agent's **plan** the same way *before* it writes any code, approving, rejecting, or requesting changes on specific lines and sections.
 
-<img width="1667" height="1087" alt="image" src="https://github.com/user-attachments/assets/52dcd2af-fc85-44ba-a679-4609e667c6f4" />
+<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/def904bb-c5b4-48f5-b899-e38350769d77" />
+
 
 
 ---
@@ -83,7 +84,8 @@ A local Hono-powered review server delivers a full-featured GitHub-like code rev
 - **Instant Switching** — CSS transitions suppressed during theme changes for a snappy, lag-free experience.
 - **Persistent Setting** — Theme choice saved to `~/.config/diffing/settings.json` and restored on next launch.
 
-<img width="1667" height="1087" alt="image" src="https://github.com/user-attachments/assets/6e4a4552-fef2-4002-8b8f-b544c95c4c26" />
+
+<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/eaa0675c-21d6-4754-8fbd-97ee63a743dc" />
 
 
 
@@ -103,8 +105,7 @@ Blazing-fast, native fuzzy code search integrated directly into the sidebar sear
 - **Graceful Degradation** — If the native Rust binary is unavailable, search reports as unavailable without crashing the server.
 - **Auto-Indexing** — The Rust engine maintains its own file system watcher for real-time index updates as the working tree changes.
 
-<img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/0830b770-3c7f-44a1-b8ff-a70b2b34144a" />
-
+<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/2b2bc001-2d3a-4744-b9d5-a23642f1afba" />
 
 ---
 
@@ -143,7 +144,7 @@ Full keyboard-driven navigation with vim-like motions and a modal status bar:
 
 A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), file path, and a help button. Multi-key sequences use an 800ms key buffer.
 
-<img width="1840" height="1196" alt="image" src="https://github.com/user-attachments/assets/d230d020-4fb2-475a-a8a0-0ae11bb271ff" />
+<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/f0971704-65a2-4512-978f-6b6e656b5dda" />
 
 
 ---
@@ -416,7 +417,8 @@ self-documenting `<plan-review>` envelope:
 </plan-review>
 ```
 
-<img width="1667" height="1087" alt="image" src="https://github.com/user-attachments/assets/00e884b5-4c90-4a9a-9e24-9ae57d80f3f2" />
+<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/744fa144-151b-42b2-a1ed-8e9337841eed" />
+
 
 ---
 
@@ -697,12 +699,6 @@ For advanced features, internal API endpoints, sequence specifications, and conf
 > - Monotonic sequence `round` synchronization for race-free polling.
 > - Full Web API endpoints schema (`GET /api/review/await`, `POST /api/comments`, etc.).
 > - Custom git config shell aliases.
-
----
-
-## Landing Page
-
-<img width="1287" height="6579" alt="screencapture-localhost-3000-2026-05-31-20_57_04" src="https://github.com/user-attachments/assets/a163b00e-a85a-428f-b8d5-2a33ff9fa1eb" />
 
 ---
 
