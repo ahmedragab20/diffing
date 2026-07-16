@@ -44,6 +44,7 @@ import { ShortcutsHelpModal } from "./components/ShortcutsHelpModal";
 import { AgentActivityToast } from "./components/AgentActivityToast";
 import { ThemeModal } from "./components/ThemeModal"
 import { FontPickerModal } from "./components/FontPickerModal";
+import { AlertTriangle } from "lucide-react";
 
 
 export function App() {
@@ -72,7 +73,7 @@ export function App() {
         },
         true,
     );
-    const { comments, addComment, removeComment, resolveComment, unresolveComment, addReply, editComment, editReply, removeReply, copyAllComments, agentActivity, clearAgentActivity, sendToAgent, sending, agentWaiting } =
+    const { comments, addComment, removeComment, resolveComment, unresolveComment, addReply, editComment, editReply, removeReply, copyAllComments, agentActivity, clearAgentActivity, sendToAgent, sending, agentWaiting, resolveAllOpen, lastSend } =
         useComments();
     const { plans } = usePlans();
     const pendingPlanCount = useMemo(
@@ -607,6 +608,53 @@ export function App() {
         [updateSettings],
     );
 
+    const handleDensityChange = useCallback(
+        (v: 'comfortable' | 'compact') => {
+            updateSettings({ density: v });
+        },
+        [updateSettings],
+    );
+
+    const handleAutoCollapseChange = useCallback(
+        (v: number) => {
+            updateSettings({ autoCollapseLineThreshold: v });
+        },
+        [updateSettings],
+    );
+
+    const handleRequireViewAllChange = useCallback(
+        (v: boolean) => {
+            updateSettings({ requireViewAllBeforeSend: v });
+        },
+        [updateSettings],
+    );
+
+    const handleShowStatusBarChange = useCallback(
+        (v: boolean) => {
+            updateSettings({ showStatusBar: v });
+        },
+        [updateSettings],
+    );
+
+    const handleShowVimStatusBarChange = useCallback(
+        (v: boolean) => {
+            updateSettings({ showVimStatusBar: v });
+        },
+        [updateSettings],
+    );
+
+    const handleResolveAllOpen = useCallback(async () => {
+        try {
+            const result = await resolveAllOpen();
+            fireFeedback('selection', 'toggle');
+            // Toast or sound feedback could be wired here; for now we just
+            // emit a short haptic pulse to acknowledge the bulk action.
+            void result.resolved;
+        } catch {
+            // error already logged by mutation
+        }
+    }, [resolveAllOpen, fireFeedback]);
+
     const toggleLineWrap = useCallback(() => {
         handleLineWrapChange(!settings.lineWrap);
     }, [settings.lineWrap, handleLineWrapChange]);
@@ -871,11 +919,12 @@ export function App() {
         // palette has painted instantly.
         root.classList.add("theme-switching");
         root.setAttribute("data-theme", activeTheme);
+        root.setAttribute("data-density", settings.density || "comfortable");
         const id = requestAnimationFrame(() => {
             requestAnimationFrame(() => root.classList.remove("theme-switching"));
         });
         return () => cancelAnimationFrame(id);
-    }, [settings.theme]);
+    }, [settings.theme, settings.density]);
 
     useApplyFonts(loaded, settings.uiFont, settings.monoFont);
 
@@ -922,6 +971,14 @@ export function App() {
             langs: [],
         }).catch(() => {});
     }, [shikiConfig]);
+
+    useEffect(() => {
+        const parts = [repoName, branch].filter(Boolean);
+        document.title = parts.length > 0 ? `${parts.join(" · ")} · diffing` : "diffing";
+        return () => {
+            document.title = "diffing";
+        };
+    }, [repoName, branch]);
 
     if (loading) {
         return (
@@ -1009,8 +1066,12 @@ export function App() {
 
     if (error) {
         return (
-            <div className="error">
-                <p>Error: {error}</p>
+            <div className="error empty-state" role="alert">
+                <div className="empty-state-icon empty-state-icon-danger" aria-hidden="true">
+                    <AlertTriangle size={24} strokeWidth={1.75} />
+                </div>
+                <p className="empty-state-title">Couldn&apos;t load the diff</p>
+                <p className="empty-state-hint">{error}</p>
             </div>
         );
     }
@@ -1043,6 +1104,7 @@ export function App() {
                 commentCount={comments.length}
                 planCount={plans.length}
                 pendingPlanCount={pendingPlanCount}
+                lastSend={lastSend}
                 onOpenPlans={() => navigate("/plan")}
                 diffStyle={settings.diffStyle}
                 diffOptions={diffOptions}
@@ -1081,6 +1143,15 @@ export function App() {
                 onFontSizeChange={handleFontSizeChange}
                 onHapticsChange={handleHapticsChange}
                 onSoundsChange={handleSoundsChange}
+                density={settings.density}
+                autoCollapseLineThreshold={settings.autoCollapseLineThreshold}
+                requireViewAllBeforeSend={settings.requireViewAllBeforeSend}
+                showStatusBar={settings.showStatusBar ?? true}
+                onDensityChange={handleDensityChange}
+                onAutoCollapseLineThresholdChange={handleAutoCollapseChange}
+                onRequireViewAllBeforeSendChange={handleRequireViewAllChange}
+                onShowStatusBarChange={handleShowStatusBarChange}
+                onResolveAllOpen={handleResolveAllOpen}
                 onOpenUiFontModal={() => setUiFontModalOpen(true)}
                 onOpenMonoFontModal={() => setMonoFontModalOpen(true)}
                 onOpenSearch={() => openPalette('all')}
@@ -1089,6 +1160,7 @@ export function App() {
                 agentWaiting={agentWaiting}
                 sending={sending}
                 comments={comments}
+                viewedFileCount={viewedFiles.size}
                 onEditComment={editComment}
                 onDeleteComment={removeComment}
             />
@@ -1210,6 +1282,7 @@ export function App() {
                         expandContextByDefault={settings.expandContextByDefault}
                         collapsedContextThreshold={settings.collapsedContextThreshold}
                         expansionLineCount={settings.expansionLineCount}
+                        autoCollapseLineThreshold={settings.autoCollapseLineThreshold}
                         onViewedChange={handleViewedChange}
                         fileAnnotationsMap={fileAnnotationsMap}
                         onAddComment={addComment}
@@ -1238,6 +1311,7 @@ export function App() {
             <VimStatusBar
                 activeFile={activeFile}
                 onShowHelp={() => setShortcutsHelpOpen(true)}
+                visible={settings.showStatusBar ?? true}
             />
             <ShortcutsHelpModal
                 isOpen={shortcutsHelpOpen}

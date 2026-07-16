@@ -7,6 +7,8 @@ export interface CommentStore {
   getAll(): Promise<ReviewComment[]>
   add(comment: ReviewComment): Promise<ReviewComment>
   update(id: string, fields: { body?: string; status?: ReviewComment['status'] }): Promise<ReviewComment | null>
+  /** Resolve every open comment in one write. Returns how many were updated. */
+  resolveAllOpen(): Promise<number>
   remove(id: string): Promise<boolean>
   addReply(commentId: string, reply: CommentReply): Promise<ReviewComment | null>
   removeReply(commentId: string, replyId: string): Promise<ReviewComment | null>
@@ -31,6 +33,17 @@ export class InMemoryCommentStore implements CommentStore {
     if (fields.body !== undefined) comment.body = fields.body
     if (fields.status !== undefined) comment.status = fields.status
     return comment
+  }
+
+  async resolveAllOpen(): Promise<number> {
+    let n = 0
+    for (const c of this.comments) {
+      if (c.status === 'open') {
+        c.status = 'resolved'
+        n++
+      }
+    }
+    return n
   }
 
   async remove(id: string): Promise<boolean> {
@@ -122,6 +135,19 @@ export class FileCommentStore implements CommentStore {
     if (fields.status !== undefined) comment.status = fields.status
     await this.save(comments)
     return comment
+  }
+
+  async resolveAllOpen(): Promise<number> {
+    const comments = await this.getAll()
+    let n = 0
+    for (const c of comments) {
+      if (c.status === 'open') {
+        c.status = 'resolved'
+        n++
+      }
+    }
+    if (n > 0) await this.save(comments)
+    return n
   }
 
   async remove(id: string): Promise<boolean> {

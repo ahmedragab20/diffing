@@ -273,7 +273,7 @@ describe('useComments', () => {
       expect(mockFetch).toHaveBeenCalledWith('/api/review/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision: 'approved', generalComment: undefined }),
+        body: JSON.stringify({ decision: 'approved', force: false }),
       })
     })
 
@@ -289,8 +289,61 @@ describe('useComments', () => {
       expect(mockFetch).toHaveBeenCalledWith('/api/review/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision: 'changes-requested', generalComment: 'Please prioritise the security fixes' }),
+        body: JSON.stringify({
+          decision: 'changes-requested',
+          generalComment: 'Please prioritise the security fixes',
+          force: false,
+        }),
       })
+    })
+
+    it('sendToAgent retries with force=true when secrets are detected', async () => {
+      let calls = 0
+      mockFetch.mockImplementation((url: string | URL, init?: RequestInit) => {
+        const urlStr = typeof url === 'string' ? url : url.toString()
+        if (urlStr === '/api/comments' && (!init || init.method === 'GET' || !init.method)) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(sampleComments) })
+        }
+        if (urlStr === '/api/review/send') {
+          calls++
+          if (calls === 1) {
+            return Promise.resolve({
+              ok: false,
+              status: 400,
+              json: () => Promise.resolve({ ok: false, error: 'secrets-detected', findings: [] }),
+            } as unknown as Response)
+          }
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ ok: true, round: 1, openCount: 0, waiters: 0 }),
+          } as unknown as Response)
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) } as unknown as Response)
+      })
+      const { result } = renderHook(() => useComments(), { wrapper: createWrapper() })
+      await waitFor(() => expect(result.current.comments).toHaveLength(2))
+
+      await act(async () => {
+        try {
+          await result.current.sendToAgent('approved')
+          throw new Error('expected secrets-detected error')
+        } catch (err: any) {
+          expect(err.kind).toBe('secrets')
+          // Simulate the popover confirming force-send.
+          await result.current.sendToAgent('approved', undefined, 'standard', true)
+        }
+      })
+
+      // First call: no force flag.
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/review/send',
+        expect.objectContaining({ method: 'POST', body: expect.stringContaining('"force":false') }),
+      )
+      // Second call: force=true.
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/review/send',
+        expect.objectContaining({ method: 'POST', body: expect.stringContaining('"force":true') }),
+      )
     })
 
     it('agentWaiting reflects the seeded review status', async () => {
@@ -303,6 +356,34 @@ describe('useComments', () => {
       })
       const { result } = renderHook(() => useComments(), { wrapper: createWrapper() })
       await waitFor(() => expect(result.current.agentWaiting).toBe(true))
+    })
+
+    it('resolveAllOpen POSTs to /api/comments/resolve-all and refetches', async () => {
+      mockFetch.mockImplementation((url: string | URL, init?: RequestInit) => {
+        const urlStr = typeof url === 'string' ? url : url.toString()
+        if (urlStr === '/api/comments' && (!init || init.method === 'GET' || !init.method)) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(sampleComments) })
+        }
+        if (urlStr === '/api/comments/resolve-all' && init?.method === 'POST') {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ ok: true, resolved: 3 }),
+          } as unknown as Response)
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) } as unknown as Response)
+      })
+      const { result } = renderHook(() => useComments(), { wrapper: createWrapper() })
+      await waitFor(() => expect(result.current.comments).toHaveLength(2))
+
+      let resolved: { ok: boolean; resolved: number } | null = null
+      await act(async () => {
+        resolved = await result.current.resolveAllOpen()
+      })
+      expect(resolved?.resolved).toBe(3)
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/comments/resolve-all',
+        expect.objectContaining({ method: 'POST' }),
+      )
     })
   })
 })

@@ -1,6 +1,7 @@
 ---
 name: diffing-start-review
 description: Start or reopen a local diffing review session and give the human its review URL. Use when the user asks to open diffing, inspect changes in the review UI, start a review, or send work for human review.
+user_invocable: true
 ---
 
 # Start a diffing review

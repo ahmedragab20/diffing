@@ -37,6 +37,10 @@ const DEFAULTS = {
   sounds: true,
   uiFont: null,
   monoFont: null,
+  density: 'comfortable' as const,
+  autoCollapseLineThreshold: 400,
+  requireViewAllBeforeSend: false,
+  showStatusBar: true,
 }
 
 describe('settings', () => {

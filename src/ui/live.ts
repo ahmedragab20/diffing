@@ -13,6 +13,8 @@
  *                 plan comment added / replied / resolved) → re-read plans
  *   - `plan-review-status` an agent connected to / disconnected from the plan
  *                 handoff, or a decision was sent → update plan-review UI state
+ *   - `viewed`    the viewed-files set changed (another client marked/unmarked
+ *                 a file) → re-read viewed state so multi-tab sessions sync
  *   - `heartbeat` keep-alive, ignored by subscribers
  *
  * One EventSource is shared across the whole app (lazily opened on first
@@ -26,6 +28,7 @@ export type LiveEvent =
   | 'agent-status'
   | 'plans'
   | 'plan-review-status'
+  | 'viewed'
   | 'heartbeat'
 
 type Handler = (data: string) => void

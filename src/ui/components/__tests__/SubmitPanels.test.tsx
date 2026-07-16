@@ -80,6 +80,9 @@ function renderSend(open = true) {
   return render(
     <SendReviewPopover
       comments={[]}
+      totalFileCount={0}
+      viewedFileCount={0}
+      requireViewAllBeforeSend={false}
       onEditComment={noop as any}
       onDeleteComment={noop as any}
       onSend={noop as any}

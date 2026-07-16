@@ -107,4 +107,25 @@ describe('formatComments', () => {
     expect(out).toContain('<reply id="r2" created-at="1970-01-01T00:00:04.000Z" role="user">')
     expect(out).toContain('<![CDATA[Done]]>')
   })
+
+  it('orders file paths alphabetically so the XML is stable across clients', () => {
+    const a: ReviewComment = { ...base, id: 'cA', filePath: 'src/z.ts' }
+    const b: ReviewComment = { ...base, id: 'cB', filePath: 'src/a.ts' }
+    const out = formatComments([a, b])
+    const aIdx = out.indexOf('<file path="src/a.ts">')
+    const zIdx = out.indexOf('<file path="src/z.ts">')
+    expect(aIdx).toBeGreaterThan(-1)
+    expect(zIdx).toBeGreaterThan(aIdx)
+  })
+
+  it('groups multiple comments under the same file even when added out of order', () => {
+    const a1: ReviewComment = { ...base, id: 'cA1', filePath: 'src/index.ts', lineNumber: 5 }
+    const a2: ReviewComment = { ...base, id: 'cA2', filePath: 'src/index.ts', lineNumber: 15 }
+    const out = formatComments([a2, a1])
+    const section = out.substring(
+      out.indexOf('<file path="src/index.ts">'),
+      out.indexOf('</file>'),
+    )
+    expect(section.indexOf('id="cA2"')).toBeLessThan(section.indexOf('id="cA1"'))
+  })
 })

@@ -1982,6 +1982,11 @@ body {
     -webkit-font-smoothing: antialiased;
 }
 
+::selection {
+    background: var(--accent-subtle);
+    color: var(--text-primary);
+}
+
 /* Scrollbars */
 ::-webkit-scrollbar {
     width: 8px;
@@ -1991,11 +1996,48 @@ body {
     background: var(--bg-primary);
 }
 ::-webkit-scrollbar-thumb {
-    background: var(--border-color);
+    background: var(--border-normal);
     border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
     background: var(--primary);
+}
+
+/* First-paint boot loader (Root.tsx) — uses theme tokens, not hardcoded GH dark */
+.boot-loader {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    width: 100vw;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    gap: 14px;
+}
+
+.boot-loader-mark {
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+    box-shadow: var(--shadow-md);
+}
+
+.boot-loader-spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid color-mix(in srgb, var(--text-muted) 18%, transparent);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: diffing-spin 0.8s linear infinite;
+}
+
+.boot-loader-label {
+    font-size: 13px;
+    font-weight: 500;
+    opacity: 0.8;
+    letter-spacing: 0.2px;
 }
 
 .app {
@@ -2028,12 +2070,30 @@ body {
     gap: 14px;
 }
 
+.toolbar-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.toolbar-brand-mark {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    box-shadow: var(--shadow-sm);
+}
+
 .toolbar-title {
     font-size: 18px;
     font-weight: 800;
     letter-spacing: -0.6px;
     color: var(--text-primary);
     font-family: var(--font-sans);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .toolbar-branch {
@@ -3376,16 +3436,60 @@ textarea:focus-visible,
 .error,
 .empty-state {
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 12px;
     min-height: 60vh;
+    padding: 40px 24px;
+    text-align: center;
     font-size: 16px;
     color: var(--text-muted);
     font-weight: 500;
 }
 
+.empty-state-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-round);
+    background: var(--accent-subtle);
+    color: var(--primary);
+    border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+    margin-bottom: 4px;
+}
+
+.empty-state-icon-danger {
+    background: var(--feedback-danger-bg);
+    color: var(--feedback-danger-text);
+    border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+}
+
+.empty-state-title {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.2px;
+}
+
+.empty-state-hint {
+    margin: 0;
+    max-width: 420px;
+    font-size: 13px;
+    line-height: 1.55;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
 .error {
-    color: var(--danger);
+    color: var(--text-muted);
+}
+
+.error .empty-state-title {
+    color: var(--feedback-danger-text);
 }
 
 /* File tree styling overrides */
@@ -4547,6 +4651,27 @@ file-tree,
 @media (prefers-reduced-motion: reduce) {
     .searchpalette {
         transition: none;
+    }
+
+    .spin,
+    .spinning,
+    .boot-loader-spinner,
+    .agent-waiting-dot {
+        animation: none !important;
+    }
+
+    .skeleton-search::after,
+    .skeleton-logo::after,
+    .skeleton-stats::after,
+    .skeleton-actions::after,
+    .skeleton-node-icon::after,
+    .skeleton-node-text::after,
+    .skeleton-card-header::after,
+    .skeleton-card-title::after,
+    .skeleton-card-badge::after,
+    .skeleton-code-line::after {
+        animation: none !important;
+        transform: none !important;
     }
 }
 
@@ -6390,6 +6515,68 @@ file-tree,
     font-size: 0.78rem;
     color: var(--text-muted);
 }
+
+/* In-panel callouts — "files still unviewed" warning and the secret-detected
+   prompt. Both align to the same chrome-y card look so reviewers notice them
+   between the comment list and the overall note. */
+.srp-warning {
+    margin: var(--space-2) var(--space-3) 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(var(--primary-rgb), 0.07);
+    border: 1px solid color-mix(in srgb, var(--primary) 28%, transparent);
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+.srp-warning strong {
+    color: var(--text-primary);
+}
+.srp-warning-danger {
+    background: var(--feedback-danger-bg);
+    border-color: color-mix(in srgb, var(--danger) 32%, transparent);
+    color: var(--feedback-danger-text);
+}
+.srp-warning-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+.srp-warning-list {
+    list-style: none;
+    margin: 0 0 8px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+}
+.srp-warning-list code {
+    background: rgba(0, 0, 0, 0.05);
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+.srp-warning-source {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    margin-left: 4px;
+}
+.srp-warning-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+}
+.btn-danger {
+    background: var(--danger);
+    color: #fff;
+    border-color: var(--danger);
+}
+.btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 88%, black);
+    border-color: color-mix(in srgb, var(--danger) 88%, black);
+}
 /* Markdown editor field (Write/Preview), reused for "overall comment" inputs. */
 .md-field {
     margin-top: var(--space-1);
@@ -7299,6 +7486,50 @@ file-tree,
     border-color: var(--primary);
     color: var(--primary);
 }
+
+/* Toolbar "Resolve all" bulk action — uses the secondary button style so it
+   doesn't compete with the primary "Send to agent" CTA next to it. */
+.toolbar-resolve-all-btn {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-secondary);
+}
+.toolbar-resolve-all-btn:hover {
+    color: var(--primary);
+    border-color: var(--primary);
+}
+
+/* "Round N · VERDICT" indicator in the toolbar — a small status pill that
+   shows the last handoff round so reviewers know the agent is up to date
+   without needing to scroll to a history view. */
+.toolbar-last-send {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    height: 22px;
+    border-radius: var(--radius-pill);
+    background: var(--accent-subtle);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    cursor: help;
+}
+.toolbar-last-send-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--primary);
+}
+.toolbar-last-send-decision {
+    text-transform: uppercase;
+    font-size: 10px;
+    color: var(--primary);
+}
+.toolbar-last-send-decision[data-decision="rejected"] {
+    color: var(--danger);
+}
 .toolbar-plans-badge {
     margin-left: 6px;
     min-width: 16px;
@@ -7449,9 +7680,9 @@ file-tree,
     border-color: var(--feedback-danger-border);
 }
 .plan-badge-comment-only {
-    color: var(--primary-text);
-    background: var(--primary-bg);
-    border-color: var(--primary-border);
+    color: var(--primary);
+    background: var(--accent-subtle);
+    border-color: color-mix(in srgb, var(--primary) 35%, transparent);
 }
 
 /* Plan review surface */
@@ -7802,8 +8033,8 @@ file-tree,
     color: var(--feedback-danger-text);
 }
 .plan-verdict-comment-only .plan-verdict-icon {
-    background: var(--primary-bg);
-    color: var(--primary-text);
+    background: var(--accent-subtle);
+    color: var(--primary);
 }
 .plan-verdict-text {
     display: flex;
@@ -8607,4 +8838,33 @@ file-tree,
     .pr-diff-surface {
         padding: 12px;
     }
+}
+
+/* ── Density (comfortable | compact) ───────────────────────────────────────
+   "comfortable" is the default and matches the historical layout.
+   "compact" tightens paddings and font sizes in the chrome and file cards so
+   a long review fits more on screen. Theme tokens are not affected. */
+[data-density="compact"] .toolbar {
+    height: calc(var(--toolbar-height) - 6px);
+    padding: 0 16px;
+}
+[data-density="compact"] .toolbar-title {
+    font-size: 15px;
+}
+[data-density="compact"] .file-diff-card {
+    margin-bottom: 10px;
+}
+[data-density="compact"] .file-diff-card-header {
+    padding: 8px 12px;
+}
+[data-density="compact"] .srp {
+    font-size: 12px;
+}
+[data-density="compact"] .settings-item {
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+[data-density="compact"] .empty-state {
+    min-height: 50vh;
+    padding: 28px 16px;
 }

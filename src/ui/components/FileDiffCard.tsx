@@ -43,6 +43,12 @@ interface FileDiffCardProps {
   expandContextByDefault: boolean
   collapsedContextThreshold: number
   expansionLineCount: number
+  /**
+   * Auto-collapse the card when its added+deleted line count exceeds this.
+   * Set to 0 to disable. The user can still expand any card by clicking the
+   * header; auto-collapse only fires on initial mount / file change.
+   */
+  autoCollapseLineThreshold: number
   onViewedChange: (filePath: string, viewed: boolean) => void
   onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
   onDeleteComment: (id: string) => void
@@ -77,6 +83,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   expandContextByDefault,
   collapsedContextThreshold,
   expansionLineCount,
+  autoCollapseLineThreshold,
   onViewedChange,
   onAddComment,
   onDeleteComment,
@@ -87,7 +94,12 @@ export const FileDiffCard = memo(function FileDiffCard({
   const [liveSelectionCount, setLiveSelectionCount] = useState(0)
   const [permalinkFlash, setPermalinkFlash] = useState<string | null>(null)
   const [pathCopyFlash, setPathCopyFlash] = useState(false)
-  const [collapsed, setCollapsed] = useState(viewed)
+  const lineTotal = fileDiff.additionLines.length + fileDiff.deletionLines.length
+  // Collapse if the user has viewed the file OR if the auto-collapse threshold
+  // is set and the file is larger than it. Threshold 0 = never auto-collapse.
+  const initialCollapsed =
+    viewed || (autoCollapseLineThreshold > 0 && lineTotal > autoCollapseLineThreshold)
+  const [collapsed, setCollapsed] = useState(initialCollapsed)
   const [opening, setOpening] = useState(false)
   const [showFileCommentForm, setShowFileCommentForm] = useState(false)
   const [contextExpanded, setContextExpanded] = useState(expandContextByDefault)
@@ -410,7 +422,16 @@ export const FileDiffCard = memo(function FileDiffCard({
             <input
               type="checkbox"
               checked={viewed}
-              onChange={(e) => onViewedChange(filePath, e.target.checked)}
+              onChange={(e) => {
+                const next = e.target.checked
+                // Collapse optimistically in the same event as the parent
+                // viewed update so React 18 batches them into one commit.
+                // Without this, viewed flips first, the card body is still
+                // mounted for a frame, and scroll-to-next measures against
+                // the full expanded height — landing past the next file.
+                setCollapsed(next)
+                onViewedChange(filePath, next)
+              }}
             />
             Viewed
           </label>

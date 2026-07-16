@@ -39,6 +39,19 @@ export interface ReviewSessionSnapshot {
   /** Number of agents currently blocked on await(). */
   waiters: number
   lastSentAt: number | null
+  /** Headline of the most recent send, if any. */
+  lastDecision?: ReviewDecision
+  lastOpenCount?: number
+}
+
+/** Lightweight round summary kept for the UI history / "since last handoff" banner. */
+export interface ReviewRoundSummary {
+  round: number
+  sentAt: number
+  openCount: number
+  decision?: ReviewDecision
+  mode: ReviewMode
+  filePaths: string[]
 }
 
 interface Waiter {
@@ -47,10 +60,13 @@ interface Waiter {
   cleanup: () => void
 }
 
+const MAX_ROUND_HISTORY = 20
+
 export class ReviewSession {
   private round = 0
   private lastSentAt: number | null = null
   private lastPayload: ReviewPayload | null = null
+  private history: ReviewRoundSummary[] = []
   private waiters = new Set<Waiter>()
   private onStatusChange?: (snapshot: ReviewSessionSnapshot) => void
 
@@ -108,6 +124,7 @@ export class ReviewSession {
   send(input: { sentAt: number; commentXml: string; openCount: number; comments: ReviewComment[]; decision?: ReviewDecision; mode?: ReviewMode }): ReviewPayload {
     this.round += 1
     this.lastSentAt = input.sentAt
+    const mode = input.mode ?? 'standard'
     const payload: ReviewPayload = {
       round: this.round,
       sentAt: input.sentAt,
@@ -115,9 +132,22 @@ export class ReviewSession {
       openCount: input.openCount,
       comments: input.comments,
       decision: input.decision,
-      mode: input.mode ?? 'standard',
+      mode,
     }
     this.lastPayload = payload
+
+    const filePaths = [...new Set(input.comments.map((c) => c.filePath))].sort()
+    this.history.push({
+      round: this.round,
+      sentAt: input.sentAt,
+      openCount: input.openCount,
+      decision: input.decision,
+      mode,
+      filePaths,
+    })
+    if (this.history.length > MAX_ROUND_HISTORY) {
+      this.history.splice(0, this.history.length - MAX_ROUND_HISTORY)
+    }
 
     const waiters = [...this.waiters]
     this.waiters.clear()
@@ -131,7 +161,19 @@ export class ReviewSession {
   }
 
   snapshot(): ReviewSessionSnapshot {
-    return { round: this.round, waiters: this.waiters.size, lastSentAt: this.lastSentAt }
+    const last = this.history[this.history.length - 1]
+    return {
+      round: this.round,
+      waiters: this.waiters.size,
+      lastSentAt: this.lastSentAt,
+      lastDecision: last?.decision,
+      lastOpenCount: last?.openCount,
+    }
+  }
+
+  /** Newest-first round summaries for the UI timeline. */
+  getHistory(): ReviewRoundSummary[] {
+    return [...this.history].reverse()
   }
 
   private removeWaiter(waiter: Waiter): void {

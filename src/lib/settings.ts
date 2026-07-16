@@ -46,6 +46,20 @@ export interface Settings {
   uiFont?: string | null
   /** Code/diff/plans font family override. null = default (JetBrains Mono from CDN). */
   monoFont?: string | null
+  /** UI density — compact tightens padding / control heights. */
+  density: 'comfortable' | 'compact'
+  /**
+   * Auto-collapse file cards whose added+deleted line count exceeds this.
+   * Set 0 to disable.
+   */
+  autoCollapseLineThreshold: number
+  /**
+   * When true, "Send to agent" warns (and blocks until acknowledged) if any
+   * files in the current diff are still unviewed.
+   */
+  requireViewAllBeforeSend: boolean
+  /** Whether the vim-style status bar at the bottom is visible. */
+  showStatusBar: boolean
 }
 
 const DEFAULTS: Settings = {
@@ -69,6 +83,10 @@ const DEFAULTS: Settings = {
   sounds: true,
   uiFont: null,
   monoFont: null,
+  density: 'comfortable',
+  autoCollapseLineThreshold: 400,
+  requireViewAllBeforeSend: false,
+  showStatusBar: true,
 }
 
 export function loadSettings(): Settings {

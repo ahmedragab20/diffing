@@ -19,6 +19,7 @@ import { resolveEditorCommand, type EditorChoice } from './lib/editor-launcher.j
 import { ReviewSession } from './lib/review-session.js'
 import { PlanReviewSession } from './lib/plan-review-session.js'
 import { formatComments } from './lib/comment-format.js'
+import { scanReviewForSecrets } from './lib/secrets-scan.js'
 import { formatPlanReview, sectionTitleForLine, extractPlanLines } from './lib/plan-format.js'
 import type { PlanDecision, PlanMode } from './lib/plan-types.js'
 import { executeDiffWithMeta } from './lib/diff-engine.js'
@@ -575,12 +576,18 @@ export function createApp(
     } else {
       viewedFiles.delete(filePath)
     }
+    broadcast('viewed', JSON.stringify([...viewedFiles]))
     return c.json({ ok: true })
   })
 
   app.get('/api/comments', async (c) => {
     const comments = await store.getAll()
     return c.json(comments)
+  })
+
+  app.post('/api/comments/resolve-all', async (c) => {
+    const resolved = await store.resolveAllOpen()
+    return c.json({ ok: true, resolved })
   })
 
   app.post('/api/comments', async (c) => {
@@ -916,7 +923,15 @@ export function createApp(
       body?.mode === 'comment-only' || body?.mode === 'standard'
         ? (body.mode as ReviewMode)
         : 'standard'
+    const force = body?.force === true
     const all = await store.getAll()
+
+    // Safety rail: block accidental secret leaks unless the human confirms.
+    const findings = scanReviewForSecrets({ generalComment, comments: all })
+    if (findings.length > 0 && !force) {
+      return c.json({ ok: false, error: 'secrets-detected', findings }, 400)
+    }
+
     const openCount = all.filter((x) => x.status === 'open').length
     const payload = reviewSession.send({
       sentAt: Date.now(),
@@ -933,6 +948,7 @@ export function createApp(
       decision: payload.decision,
       mode: payload.mode,
       waiters: reviewSession.snapshot().waiters,
+      secretsBypassed: findings.length > 0 && force,
     })
   })
 
@@ -954,6 +970,10 @@ export function createApp(
 
   app.get('/api/review/status', (c) => {
     return c.json(reviewSession.snapshot())
+  })
+
+  app.get('/api/review/history', (c) => {
+    return c.json({ rounds: reviewSession.getHistory() })
   })
 
   // ── Plan review ───────────────────────────────────────────────────────────

@@ -532,6 +532,14 @@ export function PlanReviewApp() {
                   />
                   Show line numbers
                 </label>
+                <label className="settings-item">
+                  <input
+                    type="checkbox"
+                    checked={settings.showStatusBar ?? true}
+                    onChange={(e) => updateSettings({ showStatusBar: e.target.checked })}
+                  />
+                  Show status bar
+                </label>
                 <div className="settings-item settings-item-spaced">
                   <span>Hover highlight</span>
                   <Select
@@ -653,6 +661,7 @@ export function PlanReviewApp() {
           activeFile={activePlan ? activePlan.title : null}
           onShowHelp={() => setShortcutsHelpOpen(true)}
           placeholder="No active plan (J/K to jump)"
+          visible={settings.showStatusBar ?? true}
         />
         <ShortcutsHelpModal
           isOpen={shortcutsHelpOpen}

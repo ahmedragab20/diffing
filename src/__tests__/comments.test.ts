@@ -190,5 +190,30 @@ for (const suite of suites) {
         expect(result).toBeNull()
       })
     })
+
+    describe('resolveAllOpen', () => {
+      it('resolves every open comment and returns the count', async () => {
+        await store.add(makeComment({ id: 'c1' }))
+        await store.add(makeComment({ id: 'c2' }))
+        await store.add(makeComment({ id: 'c3', status: 'resolved' }))
+        const n = await store.resolveAllOpen()
+        expect(n).toBe(2)
+        const all = await store.getAll()
+        expect(all.every((c) => c.status === 'resolved')).toBe(true)
+      })
+
+      it('returns 0 and is a no-op when everything is already resolved', async () => {
+        await store.add(makeComment({ id: 'c1', status: 'resolved' }))
+        const n = await store.resolveAllOpen()
+        expect(n).toBe(0)
+        const all = await store.getAll()
+        expect(all[0].status).toBe('resolved')
+      })
+
+      it('returns 0 when there are no comments at all', async () => {
+        const n = await store.resolveAllOpen()
+        expect(n).toBe(0)
+      })
+    })
   })
 }

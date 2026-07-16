@@ -4,6 +4,7 @@ import type { FileDiffMetadata } from '@pierre/diffs'
 import { useWorkerPool } from '@pierre/diffs/react'
 import {
   ArrowLeft,
+  GitCompare,
   GitPullRequest,
   ExternalLink,
   RefreshCw,
@@ -291,8 +292,12 @@ export function PrReviewApp() {
           {loading && !patch ? (
             <div className="pr-app-loading">Loading PR diff…</div>
           ) : files.length === 0 ? (
-            <div className="empty-state">
-              <p>No changes found in this PR.</p>
+            <div className="empty-state" role="status">
+              <div className="empty-state-icon" aria-hidden="true">
+                <GitCompare size={24} strokeWidth={1.75} />
+              </div>
+              <p className="empty-state-title">All clean</p>
+              <p className="empty-state-hint">No changes found in this PR.</p>
             </div>
           ) : (
             <PrDiffSurface
@@ -403,6 +408,7 @@ function PrDiffSurface({
               expandContextByDefault={false}
               collapsedContextThreshold={Number.MAX_SAFE_INTEGER}
               expansionLineCount={0}
+              autoCollapseLineThreshold={0}
               onViewedChange={onViewedChange}
               fileAnnotationsMap={new Map([[filePath, fileAnnotations.get(filePath) ?? []]])}
               onAddComment={(...args) => {

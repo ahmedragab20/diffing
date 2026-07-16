@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { Bot, Pencil, Trash2, Check, X, MessageSquareWarning, MessageSquare } from 'lucide-react'
+import { Bot, Pencil, Trash2, Check, X, MessageSquareWarning, MessageSquare, ShieldAlert } from 'lucide-react'
 import { useFeedback } from '../hooks/useHaptics'
 import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
 import { fileName } from '../utils'
@@ -7,11 +7,25 @@ import { Popover } from '../primitives/Popover'
 import { MarkdownField } from './MarkdownField'
 import { useSubmitPanelSize, SUBMIT_PANEL_PRESETS } from '../hooks/useSubmitPanelSize'
 
+interface SecretFinding {
+  rule: string
+  snippet: string
+  source: string
+}
+
 interface SendReviewPopoverProps {
   comments: ReviewComment[]
+  totalFileCount: number
+  viewedFileCount: number
+  requireViewAllBeforeSend: boolean
   onEditComment: (id: string, body: string) => void
   onDeleteComment: (id: string) => void
-  onSend: (decision: ReviewDecision, generalComment?: string, mode?: ReviewMode) => Promise<unknown>
+  onSend: (
+    decision: ReviewDecision,
+    generalComment?: string,
+    mode?: ReviewMode,
+    force?: boolean,
+  ) => Promise<unknown>
   sending: boolean
   agentWaiting: boolean
   onCopyComments?: () => Promise<void>
@@ -63,6 +77,9 @@ const VERDICT_OPTIONS: {
  */
 export function SendReviewPopover({
   comments,
+  totalFileCount,
+  viewedFileCount,
+  requireViewAllBeforeSend,
   onEditComment,
   onDeleteComment,
   onSend,
@@ -75,6 +92,8 @@ export function SendReviewPopover({
   const [general, setGeneral] = useState('')
   const [verdict, setVerdict] = useState<ReviewDecision | null>(null)
   const [copied, setCopied] = useState(false)
+  const [secretFindings, setSecretFindings] = useState<SecretFinding[] | null>(null)
+  const [forceConfirmed, setForceConfirmed] = useState(false)
   const { popoverStyle, activePreset, applyPreset, startResize, startLeftResize, panelRef } = useSubmitPanelSize()
 
   const handleCopy = async () => {
@@ -92,15 +111,52 @@ export function SendReviewPopover({
     [comments],
   )
 
+  const unviewedCount = Math.max(0, totalFileCount - viewedFileCount)
+
   const handleSend = async () => {
     if (!verdict) return
+    // Guard: warn when "require view-all" is on and some files are unviewed.
+    // We bail out and surface the warning so the reviewer can either tick the
+    // viewed boxes or change their mind — silently sending would defeat the
+    // purpose of the toggle.
+    if (requireViewAllBeforeSend && unviewedCount > 0 && !forceConfirmed) {
+      haptic('medium')
+      const ok =
+        typeof window === 'undefined'
+          ? false
+          : window.confirm(
+              `${unviewedCount} file${unviewedCount === 1 ? '' : 's'} ${unviewedCount === 1 ? 'is' : 'are'} still unviewed. ` +
+                'Send the review to the agent anyway?',
+            )
+      if (!ok) {
+        setForceConfirmed(false)
+        setOpen(true)
+        return
+      }
+      setForceConfirmed(true)
+    }
+
     haptic('heavy')
     sound('send')
     const mode: ReviewMode = verdict === 'comment-only' ? 'comment-only' : 'standard'
-    await onSend(verdict, general, mode)
-    setGeneral('')
-    setVerdict(null)
-    setOpen(false)
+    try {
+      await onSend(verdict, general, mode, forceConfirmed)
+      setGeneral('')
+      setVerdict(null)
+      setOpen(false)
+      setSecretFindings(null)
+      setForceConfirmed(false)
+    } catch (err: any) {
+      // Surface a structured secrets-detected prompt so the reviewer can
+      // either redact the credentials or explicitly force-send.
+      if (err?.kind === 'secrets') {
+        setSecretFindings(err.findings as SecretFinding[])
+        setForceConfirmed(false)
+        return
+      }
+      // Re-throw for the surrounding mutation to handle generic failures.
+      throw err
+    }
   }
 
   return (
@@ -185,6 +241,57 @@ export function SendReviewPopover({
           </ul>
         ) : (
           <p className="srp-empty">No inline comments — your verdict and overall note will be sent on their own.</p>
+        )}
+
+        {unviewedCount > 0 && (
+          <div className="srp-warning" role="note" data-tone="muted">
+            <span>
+              <strong>{unviewedCount}</strong> of <strong>{totalFileCount}</strong> file
+              {totalFileCount === 1 ? '' : 's'} still unviewed.
+              {requireViewAllBeforeSend && (
+                <> Sending will require an extra confirmation.</>
+              )}
+            </span>
+          </div>
+        )}
+
+        {secretFindings && (
+          <div className="srp-warning srp-warning-danger" role="alert" data-tone="danger">
+            <div className="srp-warning-head">
+              <ShieldAlert size={14} aria-hidden="true" />
+              <strong>
+                {secretFindings.length} possible secret
+                {secretFindings.length === 1 ? '' : 's'} detected
+              </strong>
+            </div>
+            <ul className="srp-warning-list">
+              {secretFindings.map((f, i) => (
+                <li key={i}>
+                  <code>{f.rule}</code>: <code>{f.snippet}</code> <span className="srp-warning-source">in {f.source}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="srp-warning-actions">
+              <button
+                className="btn btn-sm"
+                onClick={() => setSecretFindings(null)}
+                disabled={sending}
+              >
+                Cancel &amp; edit
+              </button>
+              <button
+                className="btn btn-sm btn-danger"
+                onClick={() => {
+                  setForceConfirmed(true)
+                  setSecretFindings(null)
+                  void handleSend()
+                }}
+                disabled={sending}
+              >
+                Send anyway
+              </button>
+            </div>
+          </div>
         )}
 
         <div className="srp-general">

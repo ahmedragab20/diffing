@@ -171,14 +171,19 @@ export function useScrollToNextFile(_files: FileDiffMetadata[]) {
             }
             lastTargetRef.current = { id: targetId, ts: now }
 
-            // Defer to the next animation frame so React has time to commit
-            // the collapse state update (setCollapsed). If we scroll before
-            // the current card shrinks, the target element shifts position
-            // when the card collapses, landing on the wrong card.
+            // Wait two animation frames so React can commit the collapse
+            // (optimistic setCollapsed + viewed prop) and the browser can
+            // reflow content-visibility cards. A single rAF often fires
+            // before the expanded body unmounts, so scrollIntoView measures
+            // against the full-height card and overshoots the next file.
             requestAnimationFrame(() => {
-                targetEl.scrollIntoView({
-                    block: 'start',
-                    behavior,
+                requestAnimationFrame(() => {
+                    // Re-resolve in case the node was replaced during commit.
+                    const el = document.getElementById(targetId) ?? targetEl
+                    el.scrollIntoView({
+                        block: 'start',
+                        behavior,
+                    })
                 })
             })
         },

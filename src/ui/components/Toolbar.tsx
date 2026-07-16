@@ -1,5 +1,5 @@
 import { useState, useEffect, memo } from 'react'
-import { GitBranch, Settings, Palette, Search, ClipboardList, Type, Menu } from 'lucide-react'
+import { GitBranch, Settings, Palette, Search, ClipboardList, Type, Menu, LayoutGrid, Sparkles, CheckCheck } from 'lucide-react'
 import type { DiffOptions } from '../hooks/useDiff'
 import type {
   LineDiffType,
@@ -12,6 +12,13 @@ import { Select } from '../primitives/Select'
 import { SendReviewPopover } from '../components/SendReviewPopover'
 import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
 
+interface LastSendSummary {
+  round: number
+  sentAt: number
+  decision?: 'approved' | 'changes-requested' | 'rejected' | 'comment-only'
+  openCount: number | null
+}
+
 interface ToolbarProps {
   repoName: string
   branch: string
@@ -22,6 +29,7 @@ interface ToolbarProps {
   commentCount: number
   planCount: number
   pendingPlanCount: number
+  lastSend: LastSendSummary | null
   onOpenPlans: () => void
   diffStyle: 'split' | 'unified'
   diffOptions: DiffOptions
@@ -43,6 +51,10 @@ interface ToolbarProps {
   sounds: boolean
   uiFont?: string | null
   monoFont?: string | null
+  density: 'comfortable' | 'compact'
+  autoCollapseLineThreshold: number
+  requireViewAllBeforeSend: boolean
+  showStatusBar: boolean
   onDiffStyleChange: (style: 'split' | 'unified') => void
   onDiffOptionsChange: (options: DiffOptions) => void
   onDefaultTabSizeChange: (size: number) => void
@@ -58,6 +70,11 @@ interface ToolbarProps {
   onFontSizeChange: (v: number) => void
   onHapticsChange: (v: boolean) => void
   onSoundsChange: (v: boolean) => void
+  onDensityChange: (v: 'comfortable' | 'compact') => void
+  onAutoCollapseLineThresholdChange: (v: number) => void
+  onRequireViewAllBeforeSendChange: (v: boolean) => void
+  onShowStatusBarChange: (v: boolean) => void
+  onResolveAllOpen: () => void
   onOpenUiFontModal: () => void
   onOpenMonoFontModal: () => void
   onOpenSearch: () => void
@@ -66,6 +83,7 @@ interface ToolbarProps {
   agentWaiting: boolean
   sending: boolean
   comments: ReviewComment[]
+  viewedFileCount: number
   onEditComment: (id: string, body: string) => void
   onDeleteComment: (id: string) => void
   sidebarCollapsed?: boolean
@@ -99,6 +117,17 @@ const HOVER_OPTS = [
 ]
 const FONT_SIZE_OPTS = [11, 12, 13, 14, 15, 16].map((n) => ({ value: String(n), label: `${n}px` }))
 const TAB_SIZE_OPTS = [2, 4, 8].map((n) => ({ value: String(n), label: String(n) }))
+const DENSITY_OPTS = [
+  { value: 'comfortable', label: 'Comfortable' },
+  { value: 'compact', label: 'Compact' },
+]
+const AUTO_COLLAPSE_OPTS: { value: string; label: string }[] = [
+  { value: '0', label: 'Disabled' },
+  { value: '100', label: '100 lines' },
+  { value: '200', label: '200 lines' },
+  { value: '400', label: '400 lines' },
+  { value: '800', label: '800 lines' },
+] as const
 const BROWSER_OPTS = [
   { value: '', label: 'Default' },
   { value: 'chrome', label: 'Chrome' },
@@ -124,6 +153,7 @@ export const Toolbar = memo(function Toolbar({
   commentCount,
   planCount,
   pendingPlanCount,
+  lastSend,
   onOpenPlans,
   diffStyle,
   diffOptions,
@@ -145,6 +175,10 @@ export const Toolbar = memo(function Toolbar({
   sounds,
   uiFont,
   monoFont,
+  density,
+  autoCollapseLineThreshold,
+  requireViewAllBeforeSend,
+  showStatusBar,
   onDiffStyleChange,
   onDiffOptionsChange,
   onDefaultTabSizeChange,
@@ -160,6 +194,11 @@ export const Toolbar = memo(function Toolbar({
   onFontSizeChange,
   onHapticsChange,
   onSoundsChange,
+  onDensityChange,
+  onAutoCollapseLineThresholdChange,
+  onRequireViewAllBeforeSendChange,
+  onShowStatusBarChange,
+  onResolveAllOpen,
   onOpenUiFontModal,
   onOpenMonoFontModal,
   onOpenSearch,
@@ -168,6 +207,7 @@ export const Toolbar = memo(function Toolbar({
   agentWaiting,
   sending,
   comments,
+  viewedFileCount,
   onEditComment,
   onDeleteComment,
   sidebarCollapsed,
@@ -199,7 +239,17 @@ export const Toolbar = memo(function Toolbar({
             <Menu size={18} />
           </button>
         )}
-        <h1 className="toolbar-title">{repoName}</h1>
+        <div className="toolbar-brand">
+          <img
+            className="toolbar-brand-mark"
+            src="/favicon.svg"
+            alt=""
+            width={22}
+            height={22}
+            draggable={false}
+          />
+          <h1 className="toolbar-title">{repoName || 'diffing'}</h1>
+        </div>
         {branch && (
           <span className="toolbar-branch">
             <GitBranch size={12} />
@@ -233,6 +283,25 @@ export const Toolbar = memo(function Toolbar({
             </>
           )}
         </span>
+        {lastSend && lastSend.round > 0 && (
+          <span
+            className="toolbar-last-send"
+            title={
+              lastSend.decision
+                ? `Round ${lastSend.round} · ${lastSend.decision} · ${lastSend.openCount == null ? '?' : lastSend.openCount} open · sent ${new Date(lastSend.sentAt).toLocaleString()}`
+                : `Round ${lastSend.round} · sent ${new Date(lastSend.sentAt).toLocaleString()}`
+            }
+          >
+            <span className="toolbar-last-send-dot" aria-hidden="true" />
+            Round {lastSend.round}
+            {lastSend.decision && (
+              <span className="toolbar-last-send-decision" data-decision={lastSend.decision}>
+                {' · '}
+                {lastSend.decision}
+              </span>
+            )}
+          </span>
+        )}
       </div>
       <div className="toolbar-right">
         <button className="btn btn-sm toolbar-search-btn" onClick={onOpenSearch} title="Search (⌘K)">
@@ -254,6 +323,27 @@ export const Toolbar = memo(function Toolbar({
             <ClipboardList size={14} style={{ marginRight: '6px' }} />
             <span>Plans</span>
             {pendingPlanCount > 0 && <span className="toolbar-plans-badge">{pendingPlanCount}</span>}
+          </button>
+        )}
+
+        {commentCount > 0 && (
+          <button
+            className="btn btn-sm toolbar-resolve-all-btn"
+            onClick={() => {
+              if (typeof window === 'undefined') return
+              if (
+                window.confirm(
+                  `Resolve all ${commentCount} open comment${commentCount === 1 ? '' : 's'}? ` +
+                    'This marks every open thread as resolved in one move.',
+                )
+              ) {
+                onResolveAllOpen()
+              }
+            }}
+            title="Mark every open comment as resolved"
+          >
+            <CheckCheck size={14} style={{ marginRight: '6px' }} />
+            <span>Resolve all</span>
           </button>
         )}
 
@@ -323,6 +413,14 @@ export const Toolbar = memo(function Toolbar({
               />
               Show line numbers
             </label>
+            <label className="settings-item">
+              <input
+                type="checkbox"
+                checked={showStatusBar}
+                onChange={(e) => onShowStatusBarChange(e.target.checked)}
+              />
+              Show status bar
+            </label>
             <div className="settings-item settings-item-spaced">
               <span>Hunk separator</span>
               <Select
@@ -373,6 +471,47 @@ export const Toolbar = memo(function Toolbar({
                 </span>
               </button>
             </div>
+            <div className="settings-section-label">Comfort</div>
+            <div className="settings-item settings-item-spaced">
+              <span>Density</span>
+              <Select
+                value={density}
+                onValueChange={(v) => onDensityChange(v as 'comfortable' | 'compact')}
+                options={DENSITY_OPTS}
+                ariaLabel="UI density"
+              />
+            </div>
+            <div className="settings-item settings-item-spaced">
+              <span>Auto-collapse huge files</span>
+              <Select
+                value={String(autoCollapseLineThreshold)}
+                onValueChange={(v) => onAutoCollapseLineThresholdChange(Number(v))}
+                options={AUTO_COLLAPSE_OPTS}
+                ariaLabel="Auto-collapse line threshold"
+              />
+            </div>
+            <label className="settings-item">
+              <input
+                type="checkbox"
+                checked={requireViewAllBeforeSend}
+                onChange={(e) => onRequireViewAllBeforeSendChange(e.target.checked)}
+              />
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <Sparkles size={12} aria-hidden="true" />
+                Warn before sending if files are unviewed
+              </span>
+            </label>
+            <label className="settings-item">
+              <input
+                type="checkbox"
+                checked={showStatusBar}
+                onChange={(e) => onShowStatusBarChange(e.target.checked)}
+              />
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <LayoutGrid size={12} aria-hidden="true" />
+                Show status bar
+              </span>
+            </label>
             <div className="settings-item settings-item-spaced">
               <span>Code font</span>
               <button
@@ -454,6 +593,9 @@ export const Toolbar = memo(function Toolbar({
         </Popover>
         <SendReviewPopover
           comments={comments}
+          totalFileCount={totalFileCount}
+          viewedFileCount={viewedFileCount}
+          requireViewAllBeforeSend={requireViewAllBeforeSend}
           onEditComment={onEditComment}
           onDeleteComment={onDeleteComment}
           onSend={onSendToAgent}

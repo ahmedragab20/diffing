@@ -1,4 +1,5 @@
 import { memo, useMemo } from 'react'
+import { GitCompare } from 'lucide-react'
 import type { FileDiffMetadata, DiffLineAnnotation, AnnotationSide } from '@pierre/diffs'
 import type { ReviewComment } from '../../lib/types'
 import type { BinaryFileInfo } from '../hooks/useDiff'
@@ -31,6 +32,7 @@ interface DiffViewerProps {
   expandContextByDefault: boolean
   collapsedContextThreshold: number
   expansionLineCount: number
+  autoCollapseLineThreshold: number
   onViewedChange: (filePath: string, viewed: boolean) => void
   fileAnnotationsMap: Map<string, DiffLineAnnotation<ReviewComment>[]>
   onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
@@ -93,6 +95,7 @@ export const DiffViewer = memo(function DiffViewer({
   expandContextByDefault,
   collapsedContextThreshold,
   expansionLineCount,
+  autoCollapseLineThreshold,
   onViewedChange,
   fileAnnotationsMap,
   onAddComment,
@@ -105,8 +108,14 @@ export const DiffViewer = memo(function DiffViewer({
 
   if (sortedFiles.length === 0) {
     return (
-      <div className="empty-state">
-        <p>No changes found.</p>
+      <div className="empty-state" role="status">
+        <div className="empty-state-icon" aria-hidden="true">
+          <GitCompare size={24} strokeWidth={1.75} />
+        </div>
+        <p className="empty-state-title">All clean</p>
+        <p className="empty-state-hint">
+          No changes found. Stage, edit, or pick a different range to review.
+        </p>
       </div>
     )
   }
@@ -150,6 +159,7 @@ export const DiffViewer = memo(function DiffViewer({
             expandContextByDefault={expandContextByDefault}
             collapsedContextThreshold={collapsedContextThreshold}
             expansionLineCount={expansionLineCount}
+            autoCollapseLineThreshold={autoCollapseLineThreshold}
             onViewedChange={onViewedChange}
             onAddComment={onAddComment}
             onDeleteComment={onDeleteComment}

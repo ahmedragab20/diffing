@@ -1,6 +1,7 @@
 ---
 name: diffing
 description: Use diffing for a native human-AI review loop over local code changes or implementation plans. Routes requests to start a review UI, review changes, submit a plan for approval, wait for human feedback, and address inline comments across MCP, CLI, or pasted XML.
+user_invocable: true
 ---
 
 # diffing workflow router

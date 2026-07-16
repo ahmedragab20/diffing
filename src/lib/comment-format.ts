@@ -40,6 +40,8 @@ export function formatComments(
     list.push(comment)
     grouped.set(comment.filePath, list)
   }
+  // Alphabetical file order so handoff XML is stable across clients/reloads.
+  const sortedFilePaths = [...grouped.keys()].sort((a, b) => a.localeCompare(b))
 
   const modeAttr = mode && mode !== 'standard' ? ` mode="${mode}"` : ''
   const lines: string[] = []
@@ -96,7 +98,8 @@ export function formatComments(
     lines.push('  </general-comment>')
   }
 
-  for (const [filePath, fileComments] of grouped) {
+  for (const filePath of sortedFilePaths) {
+    const fileComments = grouped.get(filePath)!
     lines.push(`  <file path="${filePath}">`)
     for (const comment of fileComments) {
       const lineAttr = comment.lineNumber === 0

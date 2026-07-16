@@ -1,6 +1,7 @@
 ---
 name: diffing-finish-review
 description: Receive a human's diffing review handoff, apply requested edits, answer questions, and keep comment threads synchronized. Use when the user says their review is ready, asks to process diffing comments, or wants the agent to wait for and address review feedback.
+user_invocable: true
 ---
 
 # Finish a diffing review

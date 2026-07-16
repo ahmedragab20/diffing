@@ -172,8 +172,8 @@ describe('useScrollToNextFile (hook integration)', () => {
         }
         scrollIntoViewSpy = vi.spyOn(Element.prototype, 'scrollIntoView')
 
-        // Shim rAF to execute callbacks synchronously in tests
-        const origRAF = window.requestAnimationFrame
+        // Shim rAF to execute callbacks synchronously in tests.
+        // Nested rAF (double-frame layout settle) still runs to completion.
         window.requestAnimationFrame = (cb: FrameRequestCallback) => {
             cb(0)
             return 0

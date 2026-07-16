@@ -74,4 +74,61 @@ describe('ReviewSession', () => {
     session.send(sendInput())
     expect(onStatus).toHaveBeenLastCalledWith(expect.objectContaining({ waiters: 0, round: 1 }))
   })
+
+  describe('getHistory', () => {
+    it('returns the rounds newest-first with file paths, decision, and mode', () => {
+      const session = new ReviewSession()
+      session.send({
+        ...sendInput({
+          comments: [
+            { id: 'c1', filePath: 'src/z.ts' },
+            { id: 'c2', filePath: 'src/a.ts' },
+          ],
+        }),
+        sentAt: 1000,
+        decision: 'changes-requested',
+        mode: 'comment-only',
+      })
+      session.send({
+        ...sendInput({ comments: [{ id: 'c3', filePath: 'src/m.ts' }] }),
+        sentAt: 2000,
+        decision: 'approved',
+      })
+      const rounds = session.getHistory()
+      expect(rounds).toHaveLength(2)
+      // Newest first since the UI shows "since last handoff" with current at the top.
+      expect(rounds[0].round).toBe(2)
+      expect(rounds[0].decision).toBe('approved')
+      expect(rounds[0].mode).toBe('standard')
+      expect(rounds[1].round).toBe(1)
+      expect(rounds[1].decision).toBe('changes-requested')
+      expect(rounds[1].mode).toBe('comment-only')
+      // File paths are deduplicated and sorted alphabetically.
+      expect(rounds[1].filePaths).toEqual(['src/a.ts', 'src/z.ts'])
+    })
+
+    it('caps history at 20 rounds and drops the oldest (newest still first)', () => {
+      const session = new ReviewSession()
+      for (let i = 1; i <= 25; i++) {
+        session.send({ ...sendInput(), sentAt: i * 1000 })
+      }
+      const rounds = session.getHistory()
+      expect(rounds).toHaveLength(20)
+      expect(rounds[0].round).toBe(25)
+      expect(rounds[rounds.length - 1].round).toBe(6)
+    })
+
+    it('returns an empty array before the first send', () => {
+      const session = new ReviewSession()
+      expect(session.getHistory()).toEqual([])
+    })
+
+    it('snapshot exposes the last decision and open count of the most recent round', () => {
+      const session = new ReviewSession()
+      session.send({ ...sendInput({ openCount: 3 }), decision: 'approved' })
+      const snap = session.snapshot()
+      expect(snap.lastDecision).toBe('approved')
+      expect(snap.lastOpenCount).toBe(3)
+    })
+  })
 })

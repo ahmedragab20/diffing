@@ -24,6 +24,8 @@ interface AgentStatus {
   round: number
   waiters: number
   lastSentAt: number | null
+  lastDecision?: ReviewDecision
+  lastOpenCount?: number
 }
 
 export function useComments() {
@@ -42,7 +44,13 @@ export function useComments() {
   // Track the agent-handoff state so the "Send to agent" button can show
   // whether an agent is connected and waiting. Seed once, then follow the
   // server's `agent-status` pushes (an agent connected/left, or a round sent).
-  const [agentStatus, setAgentStatus] = useState<AgentStatus>({ round: 0, waiters: 0, lastSentAt: null })
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>({
+    round: 0,
+    waiters: 0,
+    lastSentAt: null,
+    lastDecision: undefined,
+    lastOpenCount: undefined,
+  })
   useEffect(() => {
     let cancelled = false
     fetch('/api/review/status')
@@ -173,12 +181,41 @@ export function useComments() {
   })
 
   const sendToAgentMutation = useMutation({
-    mutationFn: async ({ decision, generalComment, mode }: { decision?: ReviewDecision; generalComment?: string; mode?: ReviewMode }) => {
+    mutationFn: async ({
+      decision,
+      generalComment,
+      mode,
+      force,
+    }: {
+      decision?: ReviewDecision
+      generalComment?: string
+      mode?: ReviewMode
+      force?: boolean
+    }) => {
       const res = await fetch('/api/review/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision, generalComment: generalComment?.trim() || undefined, mode }),
+        body: JSON.stringify({
+          decision,
+          generalComment: generalComment?.trim() || undefined,
+          mode,
+          force: !!force,
+        }),
       })
+      if (res.status === 400) {
+        const body = (await res.json().catch(() => null)) as
+          | { ok?: false; error?: string; findings?: { rule: string; snippet: string; source: string }[] }
+          | null
+        if (body?.error === 'secrets-detected') {
+          const err = new Error('Secrets detected') as Error & {
+            kind: 'secrets'
+            findings: { rule: string; snippet: string; source: string }[]
+          }
+          err.kind = 'secrets'
+          err.findings = body.findings ?? []
+          throw err
+        }
+      }
       if (!res.ok) throw new Error('Failed to send to agent')
       return res.json() as Promise<{ ok: boolean; round: number; openCount: number; decision?: ReviewDecision; waiters: number }>
     },
@@ -284,10 +321,23 @@ export function useComments() {
   }, [formatAllComments])
 
   const sendToAgent = useCallback(
-    (decision?: ReviewDecision, generalComment?: string, mode?: ReviewMode) =>
-      sendToAgentMutation.mutateAsync({ decision, generalComment, mode }),
+    (decision?: ReviewDecision, generalComment?: string, mode?: ReviewMode, force?: boolean) =>
+      sendToAgentMutation.mutateAsync({ decision, generalComment, mode, force }),
     [sendToAgentMutation.mutateAsync],
   )
+
+  const resolveAllOpenMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/comments/resolve-all', { method: 'POST' })
+      if (!res.ok) throw new Error('Failed to resolve all comments')
+      return (await res.json()) as { ok: boolean; resolved: number }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: COMMENTS_KEY })
+    },
+  })
+
+  const resolveAllOpen = useCallback(() => resolveAllOpenMutation.mutateAsync(), [resolveAllOpenMutation])
 
   return {
     comments,
@@ -308,5 +358,22 @@ export function useComments() {
     sendToAgent,
     sending: sendToAgentMutation.isPending,
     agentWaiting: agentStatus.waiters > 0,
+    /**
+     * Snapshot of the most recent handoff round. The UI uses this to render a
+     * "Last sent" badge in the toolbar so reviewers can see at a glance
+     * whether the agent is already up to date (round > 0) and what verdict
+     * they last sent.
+     */
+    lastSend:
+      agentStatus.lastSentAt == null
+        ? null
+        : {
+            round: agentStatus.round,
+            sentAt: agentStatus.lastSentAt,
+            decision: agentStatus.lastDecision,
+            openCount: agentStatus.lastOpenCount ?? null,
+          },
+    resolveAllOpen,
+    resolvingAll: resolveAllOpenMutation.isPending,
   }
 }

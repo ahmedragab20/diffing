@@ -5,13 +5,18 @@ interface VimStatusBarProps {
   activeFile: string | null
   onShowHelp: () => void
   placeholder?: string
+  /** When false, the bar is hidden entirely (no DOM). Defaults to true. */
+  visible?: boolean
 }
 
 export const VimStatusBar = memo(function VimStatusBar({
   activeFile,
   onShowHelp,
   placeholder = 'No active file (J/K to jump)',
+  visible = true,
 }: VimStatusBarProps) {
+  if (!visible) return null
+
   const [isInsertMode, setIsInsertMode] = useState(false)
   const [isCollapsed, setIsCollapsed] = useState(true)
   const toggleRef = useRef<HTMLButtonElement>(null)
