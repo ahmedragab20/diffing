@@ -8,6 +8,11 @@ import type { FileDiffMetadata } from '@pierre/diffs'
 import { FileTree as PierreFileTree, useFileTree } from '@pierre/trees/react'
 import type { FileTreeRowDecorationRenderer, GitStatusEntry, GitStatus } from '@pierre/trees'
 import { Tooltip } from '../primitives/Tooltip'
+import {
+  sanitizePaths,
+  buildExpandedPaths,
+} from '../lib/treePathSanitize'
+import { FileTreeErrorBoundary } from './FileTreeErrorBoundary'
 
 interface FileTreeProps {
   files: FileDiffMetadata[]
@@ -32,23 +37,23 @@ export const FileTree = memo(function FileTree({
 }: FileTreeProps) {
   const [filter, setFilter] = useState('')
 
-  // Map files to paths required by @pierre/trees
-  const paths = useMemo(() => files.map((f) => f.name), [files])
+  // Map files to paths required by @pierre/trees, deduping and resolving
+  // file↔directory collisions so the underlying tree model never sees a
+  // colliding path (which would throw "Path collides with an existing entry").
+  const { paths, dropped } = useMemo(
+    () => sanitizePaths(files.map((f) => f.name)),
+    [files],
+  )
 
-  const expandedPaths = useMemo(() => {
-    const set = new Set<string>()
-    paths.forEach((path) => {
-      const parts = path.split('/')
-      for (let i = 1; i < parts.length; i++) {
-        set.add(parts.slice(0, i).join('/'))
-      }
-    })
-    return Array.from(set)
-  }, [paths])
+  const pathsSet = useMemo(() => new Set(paths), [paths])
+
+  const expandedPaths = useMemo(() => buildExpandedPaths(paths), [paths])
 
   // Map file change type to GitStatusEntry
   const gitStatus = useMemo<GitStatusEntry[]>(() => {
-    return files.map((file) => {
+    return files
+      .filter((file) => pathsSet.has(file.name))
+      .map((file) => {
       let status: GitStatus = 'modified'
       if (untrackedFiles.has(file.name)) {
         status = 'untracked'
@@ -65,7 +70,7 @@ export const FileTree = memo(function FileTree({
       }
       return { path: file.name, status }
     })
-  }, [files, untrackedFiles])
+  }, [files, untrackedFiles, pathsSet])
 
   // Keep a ref of viewedFiles and commentCounts to avoid recreating renderRowDecoration
   // and maintain absolute freshness on virtualized list updates.
@@ -103,7 +108,8 @@ export const FileTree = memo(function FileTree({
     fileTreeSearchMode: 'hide-non-matches',
     gitStatus,
     renderRowDecoration,
-    initialSelectedPaths: activeFile ? [activeFile] : [],
+    initialSelectedPaths:
+      activeFile && pathsSet.has(activeFile) ? [activeFile] : [],
     initialExpandedPaths: expandedPaths,
     onSelectionChange: (selectedPaths) => {
       if (selectedPaths.length > 0 && selectedPaths[0] !== activeFile) {
@@ -124,15 +130,14 @@ export const FileTree = memo(function FileTree({
 
   // Synchronize activeFile selection and viewport scroll
   useEffect(() => {
-    if (activeFile) {
-      try {
-        model.focusPath(activeFile)
-        model.scrollToPath(activeFile, { focus: true, offset: 'nearest' })
-      } catch (err) {
-        console.error('Failed to scroll to active file:', err)
-      }
+    if (!activeFile || !pathsSet.has(activeFile)) return
+    try {
+      model.focusPath(activeFile)
+      model.scrollToPath(activeFile, { focus: true, offset: 'nearest' })
+    } catch (err) {
+      console.error('Failed to scroll to active file:', err)
     }
-  }, [activeFile, model])
+  }, [activeFile, model, pathsSet])
 
   // Synchronize custom filter search input with @pierre/trees search engine
   useEffect(() => {
@@ -184,8 +189,24 @@ export const FileTree = memo(function FileTree({
           />
         </div>
       </div>
+      {dropped.length > 0 && (
+        <div
+          className="ft-collision-warning"
+          title={dropped.join('\n')}
+          style={{
+            fontSize: '0.75rem',
+            padding: '4px 8px',
+            background: 'var(--bg-warning, #fff3cd)',
+            color: 'var(--text-warning, #856404)',
+          }}
+        >
+          ⚠ {dropped.length} file(s) hidden due to path collision (hover for details)
+        </div>
+      )}
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-        <PierreFileTree model={model} className="ft-pierre-tree" />
+        <FileTreeErrorBoundary>
+          <PierreFileTree model={model} className="ft-pierre-tree" />
+        </FileTreeErrorBoundary>
       </div>
     </div>
   )

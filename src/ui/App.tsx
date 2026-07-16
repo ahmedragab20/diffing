@@ -300,8 +300,19 @@ export function App() {
                 }
             }
 
+            // Defense-in-depth: drop duplicate `name` entries before they reach
+            // either the diff list or the FileTree. The tree view runs its own
+            // collision sanitizer, but stripping duplicates here keeps the
+            // diff indices (prev/next navigation, comment lookups) consistent.
+            const seenNames = new Set<string>();
+            const dedupedParsedFiles = parsedFiles.filter((f) => {
+                if (seenNames.has(f.name)) return false;
+                seenNames.add(f.name);
+                return true;
+            });
+
             // Optimize rendering by keeping exact object references for unchanged files
-            const cachedFiles = parsedFiles.map((newFile) => {
+            const cachedFiles = dedupedParsedFiles.map((newFile) => {
                 const prevFile = prevFilesRef.current.find(
                     (f) => f.name === newFile.name,
                 );
