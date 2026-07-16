@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.1
+
+### Minor Changes
+
+- Smooth scroll to next file when collapsing a file card or marking it as viewed.
+  The page no longer "jumps" or lands two files ahead — it scrolls smoothly to the
+  immediate next card using DOM sibling traversal for reliable positioning.
+  (`useScrollToNextFile` hook)
+
+- Add "What is this diff?" overview banner that summarizes the commit series
+  when reviewing a range of commits or a PR branch. The banner shows the commit
+  subjects, authors, and a natural-language summary generated from the diff
+  metadata.
+
+### Patch Changes
+
+- Fix "Path collides" crash in FileTree when file paths share a common prefix
+  (e.g., `src/a.ts` and `src/a/b.ts`). Paths are now sanitized before tree
+  insertion to prevent false collision detection.
+
+- Add `user_invocable` field to agent skill files for proper skill registration.
+
 ## 0.5.0
 
 ### Minor Changes
