@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { GripVertical, Minus, Maximize2, X, MessageSquarePlus } from 'lucide-react'
 import { CommentForm } from './CommentForm'
+import { ConfirmDialog } from '../primitives/ConfirmDialog'
 import { getDraft, clearDraft } from '../drafts'
 import type { CommentSeverity } from '../../lib/types'
 
@@ -91,12 +92,6 @@ function hasUnsavedDraft(planId: string, id: string): boolean {
   return !!(body && body.trim())
 }
 
-function confirmDiscard(label: string): boolean {
-  return window.confirm(
-    `Discard this comment draft${label ? ` (${label})` : ''}?\n\nUnsaved text will be lost.`,
-  )
-}
-
 interface PlanFloatComposersProps {
   planId: string
   composers: FloatComposerDraft[]
@@ -141,6 +136,11 @@ export function PlanFloatComposers({
     origH: number
   } | null>(null)
 
+  const [pendingDiscard, setPendingDiscard] = useState<{
+    id: string
+    quote: string
+  } | null>(null)
+
   const updateOne = useCallback(
     (id: string, patch: Partial<FloatComposerDraft>) => {
       onChange((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)))
@@ -160,12 +160,20 @@ export function PlanFloatComposers({
     (id: string) => {
       const c = composers.find((x) => x.id === id)
       if (!c) return
-      const label = c.selectedQuote.slice(0, 40)
-      if (hasUnsavedDraft(planId, id) && !confirmDiscard(label)) return
+      if (hasUnsavedDraft(planId, id)) {
+        setPendingDiscard({ id, quote: c.selectedQuote })
+        return
+      }
       removeOne(id)
     },
     [composers, planId, removeOne],
   )
+
+  const confirmPendingDiscard = useCallback(() => {
+    if (!pendingDiscard) return
+    removeOne(pendingDiscard.id)
+    setPendingDiscard(null)
+  }, [pendingDiscard, removeOne])
 
   const onDragStart = useCallback(
     (id: string, e: React.MouseEvent) => {
@@ -463,6 +471,22 @@ export function PlanFloatComposers({
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!pendingDiscard}
+        title="Discard comment draft?"
+        description="Unsaved text in this floating comment will be lost."
+        detail={
+          pendingDiscard?.quote
+            ? `“${pendingDiscard.quote.slice(0, 120)}${pendingDiscard.quote.length > 120 ? '…' : ''}”`
+            : undefined
+        }
+        confirmLabel="Discard"
+        cancelLabel="Keep editing"
+        variant="danger"
+        onConfirm={confirmPendingDiscard}
+        onCancel={() => setPendingDiscard(null)}
+      />
     </>
   )
 

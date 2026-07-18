@@ -6715,6 +6715,101 @@ file-tree,
    ════════════════════════════════════════════════════════════ */
 
 /* Modal (Base UI Dialog) */
+/* Confirm dialog (design-system replacement for window.confirm) */
+.ui-modal-popup.confirm-dialog {
+    width: min(400px, calc(100vw - 32px));
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.confirm-dialog-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.confirm-dialog-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+}
+.confirm-dialog-icon-danger {
+    color: var(--feedback-danger-text);
+    background: var(--feedback-danger-bg);
+    border: 1px solid var(--feedback-danger-border);
+}
+.confirm-dialog-icon-primary {
+    color: var(--primary);
+    background: var(--accent-subtle);
+    border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+}
+.confirm-dialog-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+.confirm-dialog-desc {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+.confirm-dialog-detail {
+    margin: 0;
+    padding: 8px 10px;
+    border-left: 3px solid var(--primary);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-style: italic;
+    line-height: 1.4;
+    max-height: 4.5em;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+}
+.confirm-dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+}
+.confirm-dialog-cancel {
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+}
+.confirm-dialog-cancel:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+.confirm-dialog-confirm-danger {
+    border: 1px solid var(--feedback-danger-border);
+    background: var(--feedback-danger-bg);
+    color: var(--feedback-danger-text);
+    font-weight: 700;
+}
+.confirm-dialog-confirm-danger:hover {
+    filter: brightness(1.08);
+}
+.confirm-dialog-confirm-primary {
+    border: 1px solid var(--primary);
+    background: var(--accent-subtle);
+    color: var(--primary);
+    font-weight: 700;
+}
+.confirm-dialog-confirm-primary:hover {
+    filter: brightness(1.05);
+}
+
 .ui-modal-backdrop {
     position: fixed;
     inset: 0;
