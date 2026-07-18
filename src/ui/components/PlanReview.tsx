@@ -32,7 +32,11 @@ import { FilePreviewModal } from './FilePreviewModal'
 import { Select } from '../primitives/Select'
 import { Tooltip } from '../primitives/Tooltip'
 import { buildPlanOutline } from '../lib/planOutline'
-import { mapSelectionToLines } from '../lib/planSelection'
+import {
+  mapSelectionToLines,
+  selectionIntersectsRoot,
+  selectionRangeInRoot,
+} from '../lib/planSelection'
 import { setUiStateItem } from '../utils/uiState'
 import { PLAN_UI, readBoolUi } from '../lib/planUiState'
 import {
@@ -465,41 +469,75 @@ export function PlanReview({
     if (lineEl instanceof HTMLElement) scrollToPlanElement(lineEl, 'center')
   }, [scrollToPlanElement])
 
-  const handleRenderedMouseUp = useCallback(() => {
-    if (isHistorical) return
+  /**
+   * Evaluate the current selection and show/hide the Add-comment chip.
+   * Direction-agnostic: works LTR, RTL, and when the drag starts/ends
+   * outside the plan pane.
+   *
+   * @param mode `update` — only open/refresh when there is a real selection
+   *   (used by selectionchange so collapsing the selection on chip click
+   *   does not yank the chip away). `sync` — full sync, may clear the chip.
+   */
+  const evaluateRenderedSelection = useCallback((mode: 'update' | 'sync' = 'sync') => {
+    if (isHistorical) {
+      if (mode === 'sync') setSelectionPopup(null)
+      return
+    }
+    const root = renderedRef.current
     const sel = window.getSelection()
-    if (!sel || sel.isCollapsed || !sel.rangeCount) {
-      setSelectionPopup(null)
+    if (!root || !sel || sel.isCollapsed || !sel.rangeCount) {
+      if (mode === 'sync') setSelectionPopup(null)
       return
     }
-    const text = sel.toString()
-    const mapped = mapSelectionToLines(viewingBody, text)
-    if (!mapped) {
-      setSelectionPopup(null)
+    if (!selectionIntersectsRoot(sel, root)) {
+      if (mode === 'sync') setSelectionPopup(null)
       return
     }
-    // Only react to selections inside the rendered plan body.
-    const anchorNode = sel.anchorNode
-    if (!renderedRef.current || !anchorNode || !renderedRef.current.contains(anchorNode)) {
-      setSelectionPopup(null)
+
+    const range = selectionRangeInRoot(sel, root) ?? sel.getRangeAt(0)
+    const text = range.toString()
+    if (!text.trim()) {
+      if (mode === 'sync') setSelectionPopup(null)
       return
     }
-    const range = sel.getRangeAt(0)
-    // Prefer the last client rect so multi-line selections pin the chip
-    // under the final line (avoids covering the highlight).
+
+    // Prefer mapped source lines; if mapping fails, still show the chip
+    // so highlight → Add comment always has a path forward.
+    const mapped =
+      mapSelectionToLines(viewingBody, text) ??
+      ({
+        text: text.replace(/\s+/g, ' ').trim(),
+        startLine: 1,
+        endLine: 1,
+      } as const)
+
     const rects = range.getClientRects()
-    const first = rects[0] ?? range.getBoundingClientRect()
-    const last = rects[rects.length - 1] ?? first
+    // first/last non-empty rects are visual top→bottom regardless of direction.
+    let first: DOMRect | null = null
+    let last: DOMRect | null = null
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i]
+      if (r.width === 0 && r.height === 0) continue
+      if (!first) first = r
+      last = r
+    }
+    const box = first && last ? null : range.getBoundingClientRect()
+    const topRect = first ?? box
+    const bottomRect = last ?? box
+    if (!topRect || !bottomRect || (topRect.width === 0 && topRect.height === 0)) {
+      if (mode === 'sync') setSelectionPopup(null)
+      return
+    }
+
     const popupH = 36
     const gap = 10
-    const spaceBelow = window.innerHeight - last.bottom
+    const spaceBelow = window.innerHeight - bottomRect.bottom
     const placement: 'above' | 'below' =
-      spaceBelow < popupH + gap + 8 && first.top > popupH + gap + 8 ? 'above' : 'below'
-    const x = Math.min(
-      Math.max(72, (last.left + last.right) / 2),
-      window.innerWidth - 72,
-    )
-    const y = placement === 'below' ? last.bottom + gap : first.top - gap
+      spaceBelow < popupH + gap + 8 && topRect.top > popupH + gap + 8 ? 'above' : 'below'
+    const midX = (bottomRect.left + bottomRect.right) / 2
+    const x = Math.min(Math.max(72, midX), window.innerWidth - 72)
+    const y = placement === 'below' ? bottomRect.bottom + gap : topRect.top - gap
+
     setSelectionPopup({
       x,
       y,
@@ -509,6 +547,49 @@ export function PlanReview({
       text: mapped.text,
     })
   }, [viewingBody, isHistorical])
+
+  // Document-level listeners so we never miss reverse selections, releases
+  // outside the pane, or keyboard Shift+Arrow selections.
+  useEffect(() => {
+    if (isHistorical || !showRendered) return
+
+    let selTimer: ReturnType<typeof setTimeout> | 0 = 0
+    const schedule = (mode: 'update' | 'sync') => {
+      if (selTimer) clearTimeout(selTimer)
+      selTimer = setTimeout(() => {
+        requestAnimationFrame(() => evaluateRenderedSelection(mode))
+      }, 0)
+    }
+
+    const onMouseUp = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      // Keep chip alive when pressing Add comment or interacting with floats.
+      if (t?.closest?.('.plan-selection-popup, .plan-selection-comment, .plan-float-tray, .confirm-dialog')) {
+        return
+      }
+      schedule('sync')
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift' || e.key.startsWith('Arrow') || e.key === 'End' || e.key === 'Home') {
+        schedule('sync')
+      }
+    }
+    const onSelectionChange = () => {
+      // Only open/refresh — never clear here. Clearing on collapse would
+      // remove the chip mid-click when the browser drops the selection.
+      schedule('update')
+    }
+
+    document.addEventListener('mouseup', onMouseUp, true)
+    document.addEventListener('keyup', onKeyUp, true)
+    document.addEventListener('selectionchange', onSelectionChange)
+    return () => {
+      if (selTimer) clearTimeout(selTimer)
+      document.removeEventListener('mouseup', onMouseUp, true)
+      document.removeEventListener('keyup', onKeyUp, true)
+      document.removeEventListener('selectionchange', onSelectionChange)
+    }
+  }, [isHistorical, showRendered, evaluateRenderedSelection])
 
   const startCommentFromSelection = useCallback(() => {
     if (!selectionPopup) return
@@ -668,7 +749,6 @@ export function PlanReview({
         ref={renderedRef}
         className="markdown-body plan-rendered"
         onClick={handleMarkdownClick}
-        onMouseUp={handleRenderedMouseUp}
       >
         {!isHistorical && (
           <div className="plan-rendered-select-hint">
