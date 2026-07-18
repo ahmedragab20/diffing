@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Minor Changes
+
+- Non-TUI feature roadmap: GitHub PR repair, multi-round review, suggestions, MCP/CLI lifecycle, navigation UX, agent visibility, DX tools, and PR deep parity.
+
+  **GitHub PR mode (P0/P1)**
+  - Open browser at `/gh/pr` in PR mode; soft `GET /api/gh/session` returns `{ prMode: false }` outside PR so SPA boot does not 404-spam.
+  - Wire `--gh-pr` / `gh pr N` through `parseDiffOptions`; fail hard when PR session build fails (no silent local fallback).
+  - Fix `PrReviewApp` FileTree/CommentTracker contracts; local resolve for draft PR comments; fork-safe base owner/repo; dry-run never hits network; refresh preserves drafts and invalidates patch; correct `isOutdated`, multi-line sides, file-level comments, draft pending reviews, CI checks strip, and reply-to-existing GH threads with line-anchored bubbles.
+
+  **Multi-round review**
+  - Review history popover (Round N badge), “changed since last review” file chips, and outdated comment detection (badge + tracker filter; best-effort re-anchor).
+
+  **Suggestions + comment model**
+  - Multi-line `apply-suggestion` via `lib/apply-suggestion.ts`; CommentForm “Suggest change”; severity labels (blocking/nit/question/praise); saved replies in global settings.
+
+  **MCP + CLI lifecycle**
+  - New MCP tools: `edit_comment`, `unresolve_comment`, `delete_comment`, `apply_suggestion`, `resolve_all_comments`, `get_review_history`, `report_progress`, `edit_reply`, `delete_reply`.
+  - CLI: `comment edit|delete|unresolve`, `comments --format md|xml|json`, `progress`, `doctor`, `completion <bash|zsh|fish>`.
+
+  **Diff navigation**
+  - Live whitespace toggles; file-tree filter chips; deep permalinks (`?file&line&side&comment`); commit-walk bar in show mode; hybrid minimap (header change-map + vertical density strip).
+
+  **Agent visibility + export**
+  - Markdown export from toolbar / CLI; agent progress SSE + toast; multi-agent waiter identity in the toolbar.
+
+  **DX**
+  - `diffing doctor` and shell completions. Project config intentionally deferred.
+
+  **UI polish**
+  - Compact dense file headers, severity filters in tracker, shortcuts help for review affordances, reduced-motion-friendly animations.
+
 ## 0.6.2
 
 ### Patch Changes

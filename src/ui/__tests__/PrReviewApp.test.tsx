@@ -15,6 +15,11 @@ vi.mock('../hooks/usePrSession', () => ({
     removeComment: vi.fn(),
     updateComment: vi.fn(),
     addReply: vi.fn(),
+    resolveComment: vi.fn(),
+    unresolveComment: vi.fn(),
+    editComment: vi.fn(),
+    editReply: vi.fn(),
+    removeReply: vi.fn(),
   }),
   useSubmitPrReview: () => ({ mutateAsync: vi.fn() }),
   useRefreshPrSession: () => ({ mutate: vi.fn(), isPending: false }),
@@ -46,6 +51,15 @@ vi.mock('@pierre/diffs/react', () => ({
   useWorkerPool: () => ({ /* no-op */ }),
 }))
 
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>()
+  return {
+    ...actual,
+    useQuery: () => ({ data: null, isLoading: false }),
+    useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  }
+})
+
 // Stub lucide-react icons as simple no-op components so the jsdom env
 // doesn't need the SVG engine. The full set used across the components
 // the empty-state path transitively imports.
@@ -55,8 +69,9 @@ vi.mock('lucide-react', () => {
   const keys = [
     'GitPullRequest', 'ArrowLeft', 'ExternalLink', 'RefreshCw', 'MessageCircle', 'Copy',
     'Pencil', 'Trash2', 'Check', 'X', 'MessageSquareWarning', 'AlertCircle',
-    'CheckCircle2', 'Loader2', 'Eye', 'EyeOff', 'Search', 'XCircle',
-    'ChevronDown', 'ChevronUp', 'ChevronLeft', 'ChevronRight',
+    'CheckCircle2', 'Loader2', 'Eye', 'EyeOff', 'Search', 'XCircle', 'Clock',
+    'ChevronDown', 'ChevronUp', 'ChevronLeft', 'ChevronRight', 'CornerUpLeft',
+    'FilePenLine',
   ]
   for (const k of keys) proxy[k] = Stub
   return proxy

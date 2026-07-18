@@ -33,10 +33,13 @@ describe('decisionToEvent', () => {
   it('comment → COMMENT', () => {
     expect(decisionToEvent('comment')).toBe('COMMENT')
   })
+  it('draft → null (pending review, omit event)', () => {
+    expect(decisionToEvent('draft')).toBeNull()
+  })
 })
 
 describe('expandMultiLineComments', () => {
-  it('emits one entry per single-line comment', () => {
+  it('emits one entry per single-line comment on the RIGHT side', () => {
     const out = expandMultiLineComments([
       c({ filePath: 'a/foo.ts', lineNumber: 10, body: 'hi' }),
     ])
@@ -45,14 +48,28 @@ describe('expandMultiLineComments', () => {
     ])
   })
 
-  it('expands a multi-line comment into N entries with [part N/M] prefix', () => {
+  it('maps deletions side to LEFT', () => {
+    const out = expandMultiLineComments([
+      c({ filePath: 'a/foo.ts', lineNumber: 3, side: 'deletions', body: 'gone' }),
+    ])
+    expect(out).toEqual([
+      { path: 'foo.ts', line: 3, side: 'LEFT', body: 'gone' },
+    ])
+  })
+
+  it('emits a single multi-line comment with start_line/line (no N-part explosion)', () => {
     const out = expandMultiLineComments([
       c({ filePath: 'a/foo.ts', lineNumber: 12, startLineNumber: 10, body: 'range comment' }),
     ])
     expect(out).toEqual([
-      { path: 'foo.ts', line: 10, side: 'RIGHT', body: '[part 1/3]\nrange comment' },
-      { path: 'foo.ts', line: 11, side: 'RIGHT', body: '[part 2/3]\nrange comment' },
-      { path: 'foo.ts', line: 12, side: 'RIGHT', body: '[part 3/3]\nrange comment' },
+      {
+        path: 'foo.ts',
+        line: 12,
+        start_line: 10,
+        side: 'RIGHT',
+        start_side: 'RIGHT',
+        body: 'range comment',
+      },
     ])
   })
 
@@ -86,6 +103,18 @@ describe('buildReviewPayload', () => {
     expect(payload).toEqual({ body: undefined, event: 'COMMENT', comments: [] })
   })
 
+  it('draft omits event so GitHub creates a PENDING review', () => {
+    const payload = buildReviewPayload({
+      decision: 'draft',
+      body: 'WIP notes',
+      comments: [c({ filePath: 'a/x.ts', lineNumber: 1, body: 'nit' })],
+    })
+    expect(payload.event).toBeUndefined()
+    expect(payload.body).toBe('WIP notes')
+    expect(payload.comments).toHaveLength(1)
+    expect('event' in payload).toBe(false)
+  })
+
   it('with a body and no comments → COMMENT event with body', () => {
     const payload = buildReviewPayload({ decision: 'comment', body: 'Looks fine overall' })
     expect(payload).toEqual({
@@ -106,7 +135,7 @@ describe('buildReviewPayload', () => {
     ])
   })
 
-  it('multi-line comment + general body + mixed expansion', () => {
+  it('multi-line comment + folds file-level into the review body', () => {
     const payload = buildReviewPayload({
       decision: 'request-changes',
       body: 'Please address the range',
@@ -118,19 +147,25 @@ describe('buildReviewPayload', () => {
           startLineNumber: 10,
           body: 'range',
         }),
-        c({ filePath: 'a/z.ts', lineNumber: 0, body: 'file-level' }), // dropped
+        c({ filePath: 'a/z.ts', lineNumber: 0, body: 'file-level note' }),
       ],
     })
-    expect(payload).toEqual({
-      body: 'Please address the range',
-      event: 'REQUEST_CHANGES',
-      comments: [
-        { path: 'src/x.ts', line: 5, side: 'RIGHT', body: 'single' },
-        { path: 'src/y.ts', line: 10, side: 'RIGHT', body: '[part 1/3]\nrange' },
-        { path: 'src/y.ts', line: 11, side: 'RIGHT', body: '[part 2/3]\nrange' },
-        { path: 'src/y.ts', line: 12, side: 'RIGHT', body: '[part 3/3]\nrange' },
-      ],
-    })
+    expect(payload.event).toBe('REQUEST_CHANGES')
+    expect(payload.comments).toEqual([
+      { path: 'src/x.ts', line: 5, side: 'RIGHT', body: 'single' },
+      {
+        path: 'src/y.ts',
+        line: 12,
+        start_line: 10,
+        side: 'RIGHT',
+        start_side: 'RIGHT',
+        body: 'range',
+      },
+    ])
+    expect(payload.body).toContain('Please address the range')
+    expect(payload.body).toContain('### File comments')
+    expect(payload.body).toContain('z.ts')
+    expect(payload.body).toContain('file-level note')
   })
 
   it('NEVER includes existingComments in the payload (read-only context only)', () => {

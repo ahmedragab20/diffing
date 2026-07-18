@@ -123,6 +123,23 @@ describe('ReviewSession', () => {
       expect(session.getHistory()).toEqual([])
     })
 
+    it('stores diff fingerprints for since-last baseline', () => {
+      const session = new ReviewSession()
+      session.send({
+        ...sendInput(),
+        diffFingerprints: { 'src/a.ts': 'aaaa', 'src/b.ts': 'bbbb' },
+      })
+      expect(session.getLastDiffFingerprints()).toEqual({
+        'src/a.ts': 'aaaa',
+        'src/b.ts': 'bbbb',
+      })
+      expect(session.snapshot().hasSinceLastBaseline).toBe(true)
+      expect(session.getHistory()[0].diffFingerprints).toEqual({
+        'src/a.ts': 'aaaa',
+        'src/b.ts': 'bbbb',
+      })
+    })
+
     it('snapshot exposes the last decision and open count of the most recent round', () => {
       const session = new ReviewSession()
       session.send({ ...sendInput({ openCount: 3 }), decision: 'approved' })

@@ -98,14 +98,19 @@ export function useDiff(options: DiffOptions, enabled = true) {
     // Coalesce bursty change events. Tools like an IDE's git integration touch
     // several `.git` files in quick succession; debouncing avoids a refetch
     // stampede from a single logical change.
+    // Also listen to `pr-session`: PR refresh rewrites the cached patch without
+    // touching the working tree, so `change` alone would leave a stale diff.
     let timer: ReturnType<typeof setTimeout> | null = null
-    const unsubscribe = subscribeLive('change', () => {
+    const bump = () => {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => setRefreshCount((c) => c + 1), 150)
-    })
+    }
+    const unsubChange = subscribeLive('change', bump)
+    const unsubPr = subscribeLive('pr-session', bump)
     return () => {
       if (timer) clearTimeout(timer)
-      unsubscribe()
+      unsubChange()
+      unsubPr()
     }
   }, [enabled])
 

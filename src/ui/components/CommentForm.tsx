@@ -4,6 +4,8 @@ import { getDraft, setDraft, clearDraft } from '../drafts'
 import { useFeedback } from '../hooks/useHaptics'
 import { useFileMention } from '../hooks/useFileMention'
 import { FileMentionDropdown } from './FileMentionDropdown'
+import { useSettings, type SavedReply } from '../hooks/useSettings'
+import type { CommentSeverity } from '../../lib/types'
 
 function preprocessMentions(content: string): string {
   return content.replace(/@([^\s@]+)/g, (_, path: string) => {
@@ -12,16 +14,36 @@ function preprocessMentions(content: string): string {
   })
 }
 
+const SEVERITY_OPTIONS: { value: CommentSeverity; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'blocking', label: 'Blocking' },
+  { value: 'nit', label: 'Nit' },
+  { value: 'question', label: 'Question' },
+  { value: 'praise', label: 'Praise' },
+]
+
 interface CommentFormProps {
   initialBody?: string
   lineContent?: string
   draftKey?: string
-  onSubmit: (body: string) => void
+  /** Called with body + optional severity (omit / none = no severity). */
+  onSubmit: (body: string, severity?: CommentSeverity) => void
   onCancel: () => void
+  /** Hide severity control (e.g. reply-only contexts). Default true for new comments. */
+  showSeverity?: boolean
 }
 
-export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCancel }: CommentFormProps) {
+export function CommentForm({
+  initialBody,
+  lineContent,
+  draftKey,
+  onSubmit,
+  onCancel,
+  showSeverity = true,
+}: CommentFormProps) {
   const { haptic, sound } = useFeedback()
+  const { settings, updateSettings } = useSettings()
+  const savedReplies: SavedReply[] = settings.savedReplies ?? []
   const [body, setBody] = useState(() => {
     if (draftKey) {
       const draft = getDraft(draftKey)
@@ -29,11 +51,32 @@ export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCa
     }
     return initialBody || ''
   })
+  const [severity, setSeverity] = useState<CommentSeverity>('none')
   const [activeTab, setActiveTab] = useState<'write' | 'preview'>('write')
+  const [showSavedReplies, setShowSavedReplies] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
 
   const mention = useFileMention(body, setBody)
+
+  const insertSavedReply = (reply: SavedReply) => {
+    setBody((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${reply.body}` : reply.body))
+    setShowSavedReplies(false)
+    setActiveTab('write')
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }
+
+  const saveCurrentAsReply = () => {
+    const trimmed = body.trim()
+    if (!trimmed) return
+    const title = window.prompt('Template title', trimmed.slice(0, 40))?.trim()
+    if (!title) return
+    const next: SavedReply[] = [
+      ...savedReplies,
+      { id: crypto.randomUUID(), title, body: trimmed },
+    ]
+    updateSettings({ savedReplies: next })
+  }
 
   useEffect(() => {
     if (activeTab === 'write') {
@@ -55,8 +98,26 @@ export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCa
       if (draftKey) clearDraft(draftKey)
       haptic('success')
       sound('success')
-      onSubmit(trimmed)
+      onSubmit(trimmed, severity === 'none' ? undefined : severity)
     }
+  }
+
+  /** Pre-fill a GitHub-style ```suggestion fence from the selected line content. */
+  const insertSuggestion = () => {
+    if (!lineContent) return
+    // Strip leading +/- markers from the reviewed line snapshot.
+    const code = lineContent
+      .split('\n')
+      .map((l) => l.replace(/^[+\- ]/, ''))
+      .join('\n')
+    const fence = `\`\`\`suggestion\n${code}\n\`\`\`\n`
+    setBody((prev) => {
+      if (!prev.trim()) return fence
+      if (prev.includes('```suggestion')) return prev
+      return `${prev.trimEnd()}\n\n${fence}`
+    })
+    setActiveTab('write')
+    requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -151,6 +212,64 @@ export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCa
 
       {activeTab === 'write' ? (
         <div style={{ position: 'relative' }}>
+          <div className="comment-form-suggest-row">
+            {savedReplies.length > 0 && (
+              <div className="comment-form-saved-replies">
+                <button
+                  type="button"
+                  className="btn btn-sm comment-form-suggest-btn"
+                  onClick={() => setShowSavedReplies((v) => !v)}
+                  aria-expanded={showSavedReplies}
+                  title="Insert a saved reply template"
+                >
+                  Saved replies
+                </button>
+                {showSavedReplies && (
+                  <ul className="comment-form-saved-list" role="listbox">
+                    {savedReplies.map((r) => (
+                      <li key={r.id}>
+                        <button type="button" onClick={() => insertSavedReply(r)} role="option">
+                          {r.title}
+                        </button>
+                        <button
+                          type="button"
+                          className="comment-form-saved-delete"
+                          aria-label={`Delete template ${r.title}`}
+                          onClick={() =>
+                            updateSettings({
+                              savedReplies: savedReplies.filter((x) => x.id !== r.id),
+                            })
+                          }
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            {body.trim() && (
+              <button
+                type="button"
+                className="btn btn-sm comment-form-suggest-btn"
+                onClick={saveCurrentAsReply}
+                title="Save current body as a reusable template"
+              >
+                Save template
+              </button>
+            )}
+            {lineContent ? (
+              <button
+                type="button"
+                className="btn btn-sm comment-form-suggest-btn"
+                onClick={insertSuggestion}
+                title="Insert a ```suggestion block pre-filled with the selected line(s)"
+              >
+                Suggest change
+              </button>
+            ) : null}
+          </div>
           <textarea
             id="comment-write-panel"
             ref={(el) => {
@@ -293,13 +412,37 @@ export function CommentForm({ initialBody, lineContent, draftKey, onSubmit, onCa
         </div>
       )}
 
-      <div className="comment-form-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px' }}>
-        <button className="btn btn-secondary btn-sm" onClick={onCancel}>
-          Cancel
-        </button>
-        <button className="btn btn-primary btn-sm" onClick={handleSubmit} disabled={!body.trim()}>
-          {initialBody ? 'Save' : 'Comment'}
-        </button>
+      <div className="comment-form-actions">
+        {showSeverity && (
+          <label className="comment-form-severity">
+            <span className="comment-form-severity-label">Severity</span>
+            <select
+              value={severity}
+              onChange={(e) => setSeverity(e.target.value as CommentSeverity)}
+              aria-label="Comment severity"
+              data-severity={severity}
+            >
+              {SEVERITY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <div className="comment-form-actions-right">
+          <button type="button" className="btn btn-secondary btn-sm" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={handleSubmit}
+            disabled={!body.trim()}
+          >
+            {initialBody ? 'Save' : 'Comment'}
+          </button>
+        </div>
       </div>
     </div>
   )

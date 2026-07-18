@@ -26,6 +26,8 @@ const EXIT_NO_SERVER = 3
 const EXIT_NOT_FOUND = 4
 const EXIT_USAGE = 5
 
+let activeCapability: string | undefined
+
 /** Resolve the running server's base URL from the lockfile, or exit cleanly. */
 function baseUrl(): string {
   const lock = readServerLock()
@@ -36,7 +38,15 @@ function baseUrl(): string {
   // Always connect over loopback even when the server bound 0.0.0.0, so the
   // CLI never traverses the network.
   const host = lock.host === '0.0.0.0' || lock.host === '::' ? '127.0.0.1' : lock.host
+  activeCapability = lock.mode === 'tui' ? lock.capability : undefined
   return `http://${host}:${lock.port}`
+}
+
+/** Attach the per-session TUI capability while preserving ordinary web calls. */
+function apiFetch(input: string | URL | Request, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers)
+  if (activeCapability) headers.set('X-Diffing-Capability', activeCapability)
+  return fetch(input, { ...init, headers })
 }
 
 async function readStdin(): Promise<string> {
@@ -51,38 +61,75 @@ async function awaitReview(args: string[]): Promise<number> {
     options: {
       timeout: { type: 'string', short: 't' },
       since: { type: 'string' },
+      model: { type: 'string', short: 'm' },
+      label: { type: 'string' },
+      'agent-id': { type: 'string' },
     },
     allowPositionals: false,
   })
   const totalBudgetMs = (values.timeout ? Number(values.timeout) : 570) * 1000
   const base = baseUrl()
 
+  // Register identity so the human UI can show multi-agent waiting chips.
+  let agentId: string | undefined =
+    typeof values['agent-id'] === 'string' ? values['agent-id'] : undefined
+  try {
+    const reg = await apiFetch(`${base}/api/agent/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId,
+        model: values.model,
+        label: values.label ?? values.model,
+      }),
+    })
+    if (reg.ok) {
+      const body = (await reg.json()) as { agentId?: string }
+      agentId = body.agentId ?? agentId
+    }
+  } catch {
+    // Identity is best-effort; await still works without it.
+  }
+
   // Seed the round cursor so we only react to sends that happen from now on.
   let sinceRound = 0
   try {
-    const status = await fetch(`${base}/api/review/status`).then((r) => r.json())
+    const status = await apiFetch(`${base}/api/review/status`).then((r) => r.json())
     sinceRound = status.round ?? 0
   } catch {
     // fall through; the await loop will surface a connection error
+  }
+
+  const unregister = async () => {
+    if (!agentId) return
+    try {
+      await apiFetch(`${base}/api/agent/register/${encodeURIComponent(agentId)}`, {
+        method: 'DELETE',
+      })
+    } catch {
+      /* ignore */
+    }
   }
 
   const deadline = Date.now() + totalBudgetMs
   while (Date.now() < deadline) {
     let res: Response
     try {
-      res = await fetch(
+      res = await apiFetch(
         `${base}/api/review/await?timeoutMs=25000&sinceRound=${sinceRound}`,
         { signal: AbortSignal.timeout(30000) },
       )
     } catch (err: any) {
       if (err?.name === 'TimeoutError') continue
       console.error(`Failed to reach diffing server: ${err?.message ?? err}`)
+      await unregister()
       return EXIT_NO_SERVER
     }
     const result = await res.json()
     if (result.status === 'released') {
       process.stdout.write(result.payload.commentXml + '\n')
       console.error(`DIFFING_REVIEW_ROUND=${result.payload.round}`)
+      await unregister()
       return EXIT_OK
     }
     sinceRound = result.round ?? sinceRound
@@ -90,6 +137,7 @@ async function awaitReview(args: string[]): Promise<number> {
 
   console.error('DIFFING_AWAIT_TIMEOUT')
   console.error('No review sent within the timeout. Run `diffing await-review` again to keep waiting.')
+  await unregister()
   return EXIT_AWAIT_TIMEOUT
 }
 
@@ -114,7 +162,7 @@ async function reply(args: string[]): Promise<number> {
     return EXIT_USAGE
   }
 
-  const res = await fetch(`${baseUrl()}/api/comments/${commentId}/replies`, {
+  const res = await apiFetch(`${baseUrl()}/api/comments/${commentId}/replies`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ body, role: 'agent', model: values.model }),
@@ -138,7 +186,7 @@ async function resolve(args: string[]): Promise<number> {
     console.error('Usage: diffing resolve <commentId>')
     return EXIT_USAGE
   }
-  const res = await fetch(`${baseUrl()}/api/comments/${commentId}`, {
+  const res = await apiFetch(`${baseUrl()}/api/comments/${commentId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status: 'resolved' }),
@@ -155,6 +203,100 @@ async function resolve(args: string[]): Promise<number> {
   return EXIT_OK
 }
 
+async function unresolve(args: string[]): Promise<number> {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} })
+  const commentId = positionals[0]
+  if (!commentId) {
+    console.error('Usage: diffing unresolve <commentId>')
+    return EXIT_USAGE
+  }
+  const res = await apiFetch(`${baseUrl()}/api/comments/${commentId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'open' }),
+  })
+  if (res.status === 404) {
+    console.error(`Comment ${commentId} not found.`)
+    return EXIT_NOT_FOUND
+  }
+  if (!res.ok) {
+    console.error(`Failed to unresolve: HTTP ${res.status}`)
+    return 1
+  }
+  console.error(`Re-opened ${commentId}.`)
+  return EXIT_OK
+}
+
+async function commentEdit(args: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { body: { type: 'string', short: 'b' } },
+    allowPositionals: true,
+  })
+  const commentId = positionals[0]
+  if (!commentId) {
+    console.error('Usage: diffing comment edit <commentId> --body <text>')
+    return EXIT_USAGE
+  }
+  let body = values.body as string | undefined
+  if (body === '-' || body === undefined) body = (await readStdin()).trim()
+  if (!body) {
+    console.error('A body is required (--body <text> or stdin).')
+    return EXIT_USAGE
+  }
+  const res = await apiFetch(`${baseUrl()}/api/comments/${commentId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body }),
+  })
+  if (res.status === 404) {
+    console.error(`Comment ${commentId} not found.`)
+    return EXIT_NOT_FOUND
+  }
+  if (!res.ok) {
+    console.error(`Failed to edit: HTTP ${res.status}`)
+    return 1
+  }
+  console.error(`Edited ${commentId}.`)
+  return EXIT_OK
+}
+
+async function commentDelete(args: string[]): Promise<number> {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} })
+  const commentId = positionals[0]
+  if (!commentId) {
+    console.error('Usage: diffing comment delete <commentId>')
+    return EXIT_USAGE
+  }
+  const res = await apiFetch(`${baseUrl()}/api/comments/${commentId}`, {
+    method: 'DELETE',
+  })
+  if (res.status === 404) {
+    console.error(`Comment ${commentId} not found.`)
+    return EXIT_NOT_FOUND
+  }
+  if (!res.ok) {
+    console.error(`Failed to delete: HTTP ${res.status}`)
+    return 1
+  }
+  console.error(`Deleted ${commentId}.`)
+  return EXIT_OK
+}
+
+async function commentCmd(args: string[]): Promise<number> {
+  const action = args[0]
+  const rest = args.slice(1)
+  switch (action) {
+    case 'edit':
+      return commentEdit(rest)
+    case 'delete':
+      return commentDelete(rest)
+    default:
+      console.error('Usage: diffing comment <edit|delete> ...')
+      return EXIT_USAGE
+  }
+}
+
 async function url(): Promise<number> {
   process.stdout.write(baseUrl() + '\n')
   return EXIT_OK
@@ -163,13 +305,21 @@ async function url(): Promise<number> {
 async function comments(args: string[]): Promise<number> {
   const { values } = parseArgs({
     args,
-    options: { open: { type: 'boolean' }, json: { type: 'boolean' } },
+    options: {
+      open: { type: 'boolean' },
+      json: { type: 'boolean' },
+      format: { type: 'string' },
+    },
     allowPositionals: false,
   })
-  const all: ReviewComment[] = await fetch(`${baseUrl()}/api/comments`).then((r) => r.json())
+  const all: ReviewComment[] = await apiFetch(`${baseUrl()}/api/comments`).then((r) => r.json())
   const selected = values.open ? all.filter((c) => c.status === 'open') : all
-  if (values.json) {
+  const format = (values.format as string | undefined)?.toLowerCase()
+  if (values.json || format === 'json') {
     process.stdout.write(JSON.stringify(selected, null, 2) + '\n')
+  } else if (format === 'markdown' || format === 'md') {
+    const { formatCommentsMarkdown } = await import('./lib/review-export.js')
+    process.stdout.write(formatCommentsMarkdown(selected) + '\n')
   } else {
     process.stdout.write(formatComments(selected) + '\n')
   }
@@ -197,7 +347,7 @@ async function pollPlanDecision(base: string, totalBudgetMs: number, seedSince?:
   let sinceRound = seedSince ?? 0
   if (seedSince === undefined) {
     try {
-      const status = await fetch(`${base}/api/plan-review/status`).then((r) => r.json())
+      const status = await apiFetch(`${base}/api/plan-review/status`).then((r) => r.json())
       sinceRound = status.round ?? 0
     } catch {
       // fall through; the await loop will surface a connection error
@@ -208,7 +358,7 @@ async function pollPlanDecision(base: string, totalBudgetMs: number, seedSince?:
   while (Date.now() < deadline) {
     let res: Response
     try {
-      res = await fetch(
+      res = await apiFetch(
         `${base}/api/plan-review/await?timeoutMs=25000&sinceRound=${sinceRound}`,
         { signal: AbortSignal.timeout(30000) },
       )
@@ -272,14 +422,14 @@ async function planSubmit(args: string[]): Promise<number> {
   let sinceRound = 0
   if (values.wait) {
     try {
-      const status = await fetch(`${base}/api/plan-review/status`).then((r) => r.json())
+      const status = await apiFetch(`${base}/api/plan-review/status`).then((r) => r.json())
       sinceRound = status.round ?? 0
     } catch {
       // surfaced by the poll loop below
     }
   }
 
-  const res = await fetch(`${base}/api/plans`, {
+  const res = await apiFetch(`${base}/api/plans`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: values.id, title, body, source: values.source, model: values.model }),
@@ -323,7 +473,7 @@ async function planAwait(args: string[]): Promise<number> {
 
 async function planList(args: string[]): Promise<number> {
   const { values } = parseArgs({ args, options: { json: { type: 'boolean' } }, allowPositionals: false })
-  const all: Plan[] = await fetch(`${baseUrl()}/api/plans`).then((r) => r.json())
+  const all: Plan[] = await apiFetch(`${baseUrl()}/api/plans`).then((r) => r.json())
   if (values.json) {
     process.stdout.write(JSON.stringify(all, null, 2) + '\n')
     return EXIT_OK
@@ -348,14 +498,14 @@ async function planShow(args: string[]): Promise<number> {
   const base = baseUrl()
   let planId = positionals[0]
   if (!planId) {
-    const all: Plan[] = await fetch(`${base}/api/plans`).then((r) => r.json())
+    const all: Plan[] = await apiFetch(`${base}/api/plans`).then((r) => r.json())
     if (all.length === 0) {
       console.error('No plans submitted yet.')
       return EXIT_NOT_FOUND
     }
     planId = all[all.length - 1].id
   }
-  const res = await fetch(`${base}/api/plans/${planId}`)
+  const res = await apiFetch(`${base}/api/plans/${planId}`)
   if (res.status === 404) {
     console.error(`Plan ${planId} not found.`)
     return EXIT_NOT_FOUND
@@ -393,7 +543,7 @@ async function planVersions(args: string[]): Promise<number> {
     console.error('Usage: diffing plan versions <id> [--json]')
     return EXIT_USAGE
   }
-  const planRes = await fetch(`${base}/api/plans/${planId}`)
+  const planRes = await apiFetch(`${base}/api/plans/${planId}`)
   if (planRes.status === 404) {
     console.error(`Plan ${planId} not found.`)
     return EXIT_NOT_FOUND
@@ -418,7 +568,7 @@ async function planVersions(args: string[]): Promise<number> {
 
 /** Locate which plan owns a given comment id (comment ids are globally unique). */
 async function findCommentPlan(base: string, commentId: string): Promise<Plan | null> {
-  const all: Plan[] = await fetch(`${base}/api/plans`).then((r) => r.json())
+  const all: Plan[] = await apiFetch(`${base}/api/plans`).then((r) => r.json())
   return all.find((p) => (p.comments ?? []).some((c) => c.id === commentId)) ?? null
 }
 
@@ -445,7 +595,7 @@ async function planReply(args: string[]): Promise<number> {
     console.error(`Plan comment ${commentId} not found.`)
     return EXIT_NOT_FOUND
   }
-  const res = await fetch(`${base}/api/plans/${plan.id}/comments/${commentId}/replies`, {
+  const res = await apiFetch(`${base}/api/plans/${plan.id}/comments/${commentId}/replies`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ body, role: 'agent', model: values.model }),
@@ -471,7 +621,7 @@ async function planResolve(args: string[]): Promise<number> {
     console.error(`Plan comment ${commentId} not found.`)
     return EXIT_NOT_FOUND
   }
-  const res = await fetch(`${base}/api/plans/${plan.id}/comments/${commentId}`, {
+  const res = await apiFetch(`${base}/api/plans/${plan.id}/comments/${commentId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status: 'resolved' }),
@@ -508,6 +658,72 @@ async function plan(args: string[]): Promise<number> {
   }
 }
 
+async function doctor(): Promise<number> {
+  const { runDoctor, formatDoctorReport } = await import('./lib/doctor.js')
+  const report = await runDoctor({ cwd: process.cwd(), cliImportMetaUrl: import.meta.url })
+  process.stdout.write(formatDoctorReport(report) + '\n')
+  return report.ok ? EXIT_OK : 1
+}
+
+async function completion(args: string[]): Promise<number> {
+  const shell = args[0]
+  if (!shell || args.includes('--help') || args.includes('-h')) {
+    console.error('Usage: diffing completion <bash|zsh|fish>')
+    console.error('  # Install examples:')
+    console.error('  #   diffing completion bash >> ~/.bashrc')
+    console.error('  #   diffing completion zsh  > ~/.zfunc/_diffing')
+    console.error('  #   diffing completion fish > ~/.config/fish/completions/diffing.fish')
+    return EXIT_USAGE
+  }
+  const { completionFor } = await import('./lib/completions.js')
+  const script = completionFor(shell)
+  if (!script) {
+    console.error(`Unknown shell: ${shell}. Use bash, zsh, or fish.`)
+    return EXIT_USAGE
+  }
+  process.stdout.write(script)
+  return EXIT_OK
+}
+
+async function progress(args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      message: { type: 'string', short: 'm' },
+      model: { type: 'string' },
+      'agent-id': { type: 'string' },
+      pct: { type: 'string' },
+      'comment-id': { type: 'string' },
+    },
+    allowPositionals: true,
+  })
+  const message =
+    (values.message as string | undefined) ||
+    (args.find((a) => !a.startsWith('-')) ?? '')
+  if (!message) {
+    console.error('Usage: diffing progress --message "Working on comment…" [--model M] [--pct N]')
+    return EXIT_USAGE
+  }
+  const base = baseUrl()
+  const res = await apiFetch(`${base}/api/agent/progress`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message,
+      model: values.model,
+      agentId: values['agent-id'],
+      commentId: values['comment-id'],
+      pct: values.pct != null ? Number(values.pct) : undefined,
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    console.error((err as any).error ?? res.statusText)
+    return 1
+  }
+  return EXIT_OK
+}
+
 export async function runSubcommand(name: string, args: string[]): Promise<number> {
   switch (name) {
     case 'await-review':
@@ -516,6 +732,10 @@ export async function runSubcommand(name: string, args: string[]): Promise<numbe
       return reply(args)
     case 'resolve':
       return resolve(args)
+    case 'unresolve':
+      return unresolve(args)
+    case 'comment':
+      return commentCmd(args)
     case 'comments':
       return comments(args)
     case 'url':
@@ -528,6 +748,12 @@ export async function runSubcommand(name: string, args: string[]): Promise<numbe
     case 'gh':
       const { runGhSubcommand } = await import('./cli-gh.js')
       return runGhSubcommand(args)
+    case 'doctor':
+      return doctor()
+    case 'completion':
+      return completion(args)
+    case 'progress':
+      return progress(args)
     default:
       console.error(`Unknown subcommand: ${name}`)
       return EXIT_USAGE

@@ -20,6 +20,7 @@ vi.mock('lucide-react', () => ({
   RefreshCw: () => <svg data-testid="lucide-refresh" />,
   AlertCircle: () => <svg data-testid="lucide-alert" />,
   ExternalLink: () => <svg data-testid="lucide-external" />,
+  FilePenLine: () => <svg data-testid="lucide-file-pen" />,
 }))
 
 vi.mock('../../hooks/useHaptics', () => ({

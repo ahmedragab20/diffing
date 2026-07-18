@@ -58,19 +58,33 @@ function isCustomMode(opts: DiffOptions): boolean {
 
 export function createApp(
   clientDir: string,
-  diffOpts: DiffOptions = DEFAULTS,
+  diffOptsInput: DiffOptions = DEFAULTS,
   commentStore?: CommentStore,
   planStore?: PlanStore,
   prSessionStore?: PrSessionStore,
   prMode = false,
 ) {
   const app = new Hono()
+  // Mutable so the UI can live-toggle whitespace (and future) options without
+  // restarting the server. Seeded from startup CLI flags / defaults.
+  let diffOpts: DiffOptions = { ...diffOptsInput }
   const customMode = isCustomMode(diffOpts)
   const store = commentStore ?? new FileCommentStore()
   const plans = planStore ?? new FilePlanStore()
   const prStore = prSessionStore ?? new FilePrSessionStore()
   const uiStateStore = new FileUiStateStore()
   const viewedFiles = new Set<string>()
+  /** Agent-reported progress events for the human UI (SSE `agent-progress`). */
+  let lastAgentProgress: {
+    at: number
+    message: string
+    model?: string
+    agentId?: string
+    commentId?: string
+    pct?: number
+  } | null = null
+  /** Waiters registered with optional identity for multi-agent display. */
+  const agentWaiters = new Map<string, { model?: string; label?: string; connectedAt: number }>()
 
   const activeClients = new Set<(event: string, data: string) => void>()
 
@@ -84,11 +98,14 @@ export function createApp(
     }
   }
 
+  const agentsSnapshot = () =>
+    [...agentWaiters.entries()].map(([id, a]) => ({ id, ...a }))
+
   // Tracks the "agent waits, human releases" handoff. Whenever the set of
   // blocked agents or the round changes, push an `agent-status` event so the
   // UI's "Send to agent" button can show whether an agent is connected.
   const reviewSession = new ReviewSession((snapshot) =>
-    broadcast('agent-status', JSON.stringify(snapshot)),
+    broadcast('agent-status', JSON.stringify({ ...snapshot, agents: agentsSnapshot() })),
   )
 
   // The plan-review twin of reviewSession: tracks agents blocked waiting for a
@@ -545,7 +562,102 @@ export function createApp(
   app.put('/api/settings', async (c) => {
     const body = await c.req.json()
     const settings = saveSettings(body)
+    // Live-apply whitespace flags into the running diff options so the next
+    // /api/diff (and SSE change) reflects them without a process restart.
+    let whitespaceChanged = false
+    if (typeof body.ignoreSpaceChange === 'boolean' && body.ignoreSpaceChange !== diffOpts.ignoreSpaceChange) {
+      diffOpts = { ...diffOpts, ignoreSpaceChange: body.ignoreSpaceChange }
+      whitespaceChanged = true
+    }
+    if (typeof body.ignoreAllSpace === 'boolean' && body.ignoreAllSpace !== diffOpts.ignoreAllSpace) {
+      diffOpts = { ...diffOpts, ignoreAllSpace: body.ignoreAllSpace }
+      whitespaceChanged = true
+    }
+    if (whitespaceChanged) {
+      broadcast('change', Date.now().toString())
+    }
     return c.json(settings)
+  })
+
+  /** Patch live diff options (subset). Broadcasts `change` so clients refetch. */
+  app.put('/api/diff-options', async (c) => {
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const next = { ...diffOpts }
+    if (typeof body.ignoreSpaceChange === 'boolean') next.ignoreSpaceChange = body.ignoreSpaceChange
+    if (typeof body.ignoreAllSpace === 'boolean') next.ignoreAllSpace = body.ignoreAllSpace
+    if (typeof body.ignoreBlankLines === 'boolean') next.ignoreBlankLines = body.ignoreBlankLines
+    diffOpts = next
+    // Mirror into persisted settings when whitespace keys are present.
+    const settingsPatch: Record<string, boolean> = {}
+    if (typeof body.ignoreSpaceChange === 'boolean') settingsPatch.ignoreSpaceChange = body.ignoreSpaceChange
+    if (typeof body.ignoreAllSpace === 'boolean') settingsPatch.ignoreAllSpace = body.ignoreAllSpace
+    if (Object.keys(settingsPatch).length) saveSettings(settingsPatch)
+    broadcast('change', Date.now().toString())
+    return c.json({
+      ignoreSpaceChange: diffOpts.ignoreSpaceChange,
+      ignoreAllSpace: diffOpts.ignoreAllSpace,
+      ignoreBlankLines: diffOpts.ignoreBlankLines,
+    })
+  })
+
+  app.get('/api/diff-options', (c) => {
+    return c.json({
+      ignoreSpaceChange: diffOpts.ignoreSpaceChange,
+      ignoreAllSpace: diffOpts.ignoreAllSpace,
+      ignoreBlankLines: diffOpts.ignoreBlankLines,
+    })
+  })
+
+  // ── Agent progress / multi-agent identity ──────────────────────────────
+  app.post('/api/agent/progress', async (c) => {
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const message = typeof body.message === 'string' ? body.message.trim() : ''
+    if (!message) return c.json({ error: 'message is required' }, 400)
+    const payload = {
+      at: Date.now(),
+      message,
+      model: typeof body.model === 'string' ? body.model : undefined,
+      agentId: typeof body.agentId === 'string' ? body.agentId : undefined,
+      commentId: typeof body.commentId === 'string' ? body.commentId : undefined,
+      pct: typeof body.pct === 'number' && body.pct >= 0 && body.pct <= 100 ? body.pct : undefined,
+    }
+    lastAgentProgress = payload
+    broadcast('agent-progress', JSON.stringify(payload))
+    return c.json({ ok: true, ...payload })
+  })
+
+  app.get('/api/agent/progress', (c) => {
+    return c.json({ progress: lastAgentProgress })
+  })
+
+  app.post('/api/agent/register', async (c) => {
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    const agentId =
+      (typeof body.agentId === 'string' && body.agentId) || crypto.randomUUID()
+    const model = typeof body.model === 'string' ? body.model : undefined
+    const label = typeof body.label === 'string' ? body.label : undefined
+    agentWaiters.set(agentId, { model, label, connectedAt: Date.now() })
+    broadcast(
+      'agent-status',
+      JSON.stringify({
+        ...reviewSession.snapshot(),
+        agents: [...agentWaiters.entries()].map(([id, a]) => ({ id, ...a })),
+      }),
+    )
+    return c.json({ ok: true, agentId })
+  })
+
+  app.delete('/api/agent/register/:id', async (c) => {
+    const id = c.req.param('id')
+    agentWaiters.delete(id)
+    broadcast(
+      'agent-status',
+      JSON.stringify({
+        ...reviewSession.snapshot(),
+        agents: [...agentWaiters.entries()].map(([aid, a]) => ({ id: aid, ...a })),
+      }),
+    )
+    return c.json({ ok: true })
   })
 
   app.get('/api/ui-state', async (c) => {
@@ -592,6 +704,15 @@ export function createApp(
 
   app.post('/api/comments', async (c) => {
     const body = await c.req.json()
+    const severityRaw = body.severity
+    const severity =
+      severityRaw === 'blocking' ||
+      severityRaw === 'nit' ||
+      severityRaw === 'question' ||
+      severityRaw === 'praise' ||
+      severityRaw === 'none'
+        ? severityRaw
+        : undefined
     const comment = {
       id: crypto.randomUUID(),
       filePath: body.filePath,
@@ -603,6 +724,7 @@ export function createApp(
       status: 'open' as const,
       createdAt: Date.now(),
       replies: [],
+      ...(severity ? { severity } : {}),
     }
     const created = await store.add(comment)
     return c.json(created, 201)
@@ -660,16 +782,6 @@ export function createApp(
       return c.json({ error: 'Comment not found' }, 404)
     }
 
-    if (comment.side !== 'additions') {
-      return c.json({ error: 'Suggestions can only be applied to added or modified lines' }, 400)
-    }
-
-    const match = comment.body.match(/```suggestion\n([\s\S]*?)```/)
-    if (!match) {
-      return c.json({ error: 'No suggestion block found in comment body' }, 400)
-    }
-    const suggestion = match[1]
-
     try {
       const root = getRepoRoot()
       const relPath = toSafeRelativePath(comment.filePath, root)
@@ -678,20 +790,20 @@ export function createApp(
       }
       const absolutePath = resolve(root, relPath)
       const content = await readFile(absolutePath, 'utf-8')
-      const lines = content.split(/\r?\n/)
-
-      const lineIdx = comment.lineNumber - 1
-      if (lineIdx < 0 || lineIdx >= lines.length) {
-        return c.json({ error: 'Comment line number out of range' }, 400)
+      const { applySuggestionToContent } = await import('./lib/apply-suggestion.js')
+      const result = applySuggestionToContent({
+        content,
+        lineNumber: comment.lineNumber,
+        startLineNumber: comment.startLineNumber,
+        body: comment.body,
+        side: comment.side,
+      })
+      if (!result.ok) {
+        return c.json({ error: result.error }, 400)
       }
-
-      lines[lineIdx] = suggestion.trimEnd()
-      const newContent = lines.join('\n')
-      await writeFile(absolutePath, newContent, 'utf-8')
-
+      await writeFile(absolutePath, result.content, 'utf-8')
       await store.update(id, { status: 'resolved' })
-
-      return c.json({ ok: true })
+      return c.json({ ok: true, replacedLines: result.replacedLines })
     } catch (err: any) {
       return c.json({ error: `Failed to apply suggestion: ${err.message}` }, 500)
     }
@@ -714,9 +826,12 @@ export function createApp(
   const notInPrMode = (c: any) => c.json({ error: 'Not in PR review mode', prMode: false }, 404)
 
   app.get('/api/gh/session', async (c) => {
-    if (!prMode) return notInPrMode(c)
+    // Soft probe for Root.tsx / SPA boot: return 200 + prMode:false instead of
+    // 404 so local review mode doesn't spam the browser console with red XHR.
+    // Mutating /api/gh/* routes still 404 when not in PR mode.
+    if (!prMode) return c.json({ prMode: false })
     const session = await prStore.get()
-    if (!session) return notInPrMode(c)
+    if (!session) return c.json({ prMode: false })
     return c.json({
       prMode: true,
       ref: session.ref,
@@ -750,6 +865,66 @@ export function createApp(
       return c.json({ ok: true, headSha: refreshed.headSha })
     } catch (err: any) {
       return c.json({ error: err?.message ?? 'Refresh failed' }, 500)
+    }
+  })
+
+  /** CI / check-runs status for the PR head. */
+  app.get('/api/gh/checks', async (c) => {
+    if (!prMode) return notInPrMode(c)
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    try {
+      const { fetchPrChecks } = await import('./lib/github.js')
+      const checks = await fetchPrChecks(
+        {
+          owner: session.owner,
+          repo: session.repo,
+          pullNumber: session.pullNumber,
+          ref: session.ref,
+        },
+        session.headSha,
+      )
+      const summary = {
+        total: checks.length,
+        success: checks.filter((x) => x.state === 'success').length,
+        failure: checks.filter((x) => x.state === 'failure' || x.state === 'error').length,
+        pending: checks.filter((x) => x.state === 'pending').length,
+      }
+      return c.json({ checks, summary, headSha: session.headSha })
+    } catch (err: any) {
+      return c.json({ error: err?.message ?? 'Failed to fetch checks', checks: [], summary: null }, 500)
+    }
+  })
+
+  /** Reply to an existing GitHub review comment thread. */
+  app.post('/api/gh/existing-comments/:id/replies', async (c) => {
+    if (!prMode) return notInPrMode(c)
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const id = Number(c.req.param('id'))
+    if (!Number.isFinite(id)) return c.json({ error: 'Invalid comment id' }, 400)
+    const body = await c.req.json().catch(() => ({})) as { body?: string }
+    const text = typeof body.body === 'string' ? body.body.trim() : ''
+    if (!text) return c.json({ error: 'body is required' }, 400)
+    try {
+      const { replyToPrComment } = await import('./lib/github.js')
+      const result = await replyToPrComment({
+        resolved: {
+          owner: session.owner,
+          repo: session.repo,
+          pullNumber: session.pullNumber,
+          ref: session.ref,
+        },
+        inReplyTo: id,
+        body: text,
+      })
+      if (!result.ok) return c.json({ error: result.error ?? 'Reply failed' }, 500)
+      // Refresh existing comments so the new reply shows up.
+      const refreshed = await refreshPrSession(session)
+      await prStore.set(refreshed)
+      return c.json({ ok: true, id: result.id })
+    } catch (err: any) {
+      return c.json({ error: err?.message ?? 'Reply failed' }, 500)
     }
   })
 
@@ -868,11 +1043,36 @@ export function createApp(
     if (!session) return notInPrMode(c)
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
     const decision = body.decision
-    if (decision !== 'approve' && decision !== 'comment' && decision !== 'request-changes') {
-      return c.json({ error: 'decision must be one of: approve, comment, request-changes' }, 400)
+    if (
+      decision !== 'approve' &&
+      decision !== 'comment' &&
+      decision !== 'request-changes' &&
+      decision !== 'draft'
+    ) {
+      return c.json(
+        { error: 'decision must be one of: approve, comment, request-changes, draft' },
+        400,
+      )
     }
     const generalBody = typeof body.body === 'string' ? body.body : ''
     const dryRun = body.dryRun === true
+
+    // Dry-run validates and returns the payload shape without POSTing to GitHub.
+    if (dryRun) {
+      const { buildReviewPayload } = await import('./lib/github.js')
+      const payload = buildReviewPayload({
+        decision: decision as PrDecision,
+        body: generalBody,
+        comments: session.comments ?? [],
+      })
+      return c.json({
+        ok: true,
+        dryRun: true,
+        authSource: session.authSource ?? 'none',
+        failedComments: 0,
+        payload,
+      })
+    }
 
     const result = await githubSubmitReview({
       resolved: {
@@ -886,7 +1086,7 @@ export function createApp(
       comments: session.comments ?? [],
     })
 
-    if (result.ok && !dryRun) {
+    if (result.ok) {
       const next = {
         ...session,
         submittedAt: Date.now(),
@@ -904,7 +1104,7 @@ export function createApp(
       failedComments: result.failedComments ?? 0,
       authSource: result.authSource,
       error: result.error,
-      dryRun,
+      dryRun: false,
     })
   })
 
@@ -933,6 +1133,27 @@ export function createApp(
     }
 
     const openCount = all.filter((x) => x.status === 'open').length
+
+    // Snapshot live-diff fingerprints so the next review can show
+    // "files changed since last send" even after the agent rewrites the tree.
+    let diffFingerprints: Record<string, string> | undefined
+    try {
+      const { fingerprintDiffFiles } = await import('./lib/diff-fingerprint.js')
+      if (prMode) {
+        const prSession = await prStore.get()
+        if (prSession?.diff) {
+          diffFingerprints = fingerprintDiffFiles(prSession.diff)
+        }
+      } else {
+        const live = await executeDiffWithMeta(diffOpts)
+        if (live.patch) {
+          diffFingerprints = fingerprintDiffFiles(live.patch)
+        }
+      }
+    } catch {
+      // Best-effort — handoff still succeeds without a baseline.
+    }
+
     const payload = reviewSession.send({
       sentAt: Date.now(),
       commentXml: formatComments(all, generalComment, decision, mode),
@@ -940,6 +1161,7 @@ export function createApp(
       comments: all,
       decision,
       mode,
+      diffFingerprints,
     })
     return c.json({
       ok: true,
@@ -949,6 +1171,7 @@ export function createApp(
       mode: payload.mode,
       waiters: reviewSession.snapshot().waiters,
       secretsBypassed: findings.length > 0 && force,
+      hasSinceLastBaseline: Boolean(diffFingerprints && Object.keys(diffFingerprints).length > 0),
     })
   })
 
@@ -974,6 +1197,48 @@ export function createApp(
 
   app.get('/api/review/history', (c) => {
     return c.json({ rounds: reviewSession.getHistory() })
+  })
+
+  /**
+   * Files that differ from the last handoff baseline (content changed or new
+   * in the live diff). Used by the "Since last" file-tree chip.
+   */
+  app.get('/api/review/since-last', async (c) => {
+    const previous = reviewSession.getLastDiffFingerprints()
+    if (!previous) {
+      return c.json({
+        hasBaseline: false,
+        round: reviewSession.snapshot().round,
+        changed: [] as string[],
+        added: [] as string[],
+        removed: [] as string[],
+        reviewFiles: [] as string[],
+      })
+    }
+
+    let currentPatch = ''
+    try {
+      if (prMode) {
+        const prSession = await prStore.get()
+        currentPatch = prSession?.diff ?? ''
+      } else {
+        const live = await executeDiffWithMeta(diffOpts)
+        currentPatch = live.patch ?? ''
+      }
+    } catch (err: any) {
+      return c.json({ error: err?.message ?? 'Failed to compute current diff' }, 500)
+    }
+
+    const { fingerprintDiffFiles, diffSinceLast, filesToReviewSinceLast } =
+      await import('./lib/diff-fingerprint.js')
+    const current = fingerprintDiffFiles(currentPatch)
+    const delta = diffSinceLast(previous, current)
+    return c.json({
+      hasBaseline: true,
+      round: reviewSession.snapshot().round,
+      ...delta,
+      reviewFiles: filesToReviewSinceLast(delta),
+    })
   })
 
   // ── Plan review ───────────────────────────────────────────────────────────
@@ -1398,7 +1663,10 @@ export async function startServer(options: {
       }
       prMode = true
     } catch (err: any) {
-      console.error(`[pr-session] failed to build session for ${options.prRef}: ${err?.message ?? err}`)
+      // Fail hard: silent fall-through to local web mode is the #1 reason
+      // users report "PR review doesn't work" (they see a working-tree diff).
+      const detail = err?.message ?? String(err)
+      throw new Error(`Failed to build PR session for ${options.prRef}: ${detail}`)
     }
   }
 

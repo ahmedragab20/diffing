@@ -58,7 +58,22 @@ if (ghPrConsumed > 0) {
 // ── Agent subcommands ───────────────────────────────────
 // A small reserved set of verbs drives the user→agent handoff. They're checked
 // before diff parsing so they never collide with `git diff` revisions.
-const SUBCOMMANDS = new Set(['await-review', 'reply', 'resolve', 'comments', 'url', 'mcp', 'plan', 'update', 'gh'])
+const SUBCOMMANDS = new Set([
+  'await-review',
+  'reply',
+  'resolve',
+  'unresolve',
+  'comment',
+  'comments',
+  'url',
+  'mcp',
+  'plan',
+  'update',
+  'gh',
+  'doctor',
+  'completion',
+  'progress',
+])
 if (SUBCOMMANDS.has(args[0])) {
   if (args[0] === 'mcp') {
     const mcpArgs = args.slice(1)
@@ -129,6 +144,12 @@ if (args[0] === 'show') {
 }
 
 const opts = parseDiffOptions(args)
+
+// `--gh-pr <ref>` is parsed by parseDiffOptions; merge it with the quoted /
+// unquoted `gh pr <ref>` forms detected above so both entry points work.
+if (!prRef && opts.ghPr) {
+  prRef = opts.ghPr
+}
 
 if (showSubcommand) {
   if (opts.revisions.length === 0 && !opts.help && !opts.version) {
@@ -267,7 +288,9 @@ try {
 if (!opts.noOpen) {
   const settings = loadSettings()
   const openHost = host === '0.0.0.0' ? '127.0.0.1' : host
-  const openUrl = `http://${openHost}:${actualPort}`
+  // PR mode mounts <PrReviewApp> only on `/gh/pr` — open that path so the
+  // user lands on Submit-to-GitHub instead of the local review surface.
+  const openUrl = `http://${openHost}:${actualPort}${prMode ? '/gh/pr' : ''}`
   const openModule = await import('open')
   let appName: string | readonly string[] | undefined
   if (settings.browser) {

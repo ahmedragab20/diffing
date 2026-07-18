@@ -2,6 +2,24 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULTS, intoShowMode, parseDiffOptions } from '../lib/diff-options.js'
 
+describe('parseDiffOptions --gh-pr', () => {
+  it('parses --gh-pr <ref> into opts.ghPr', () => {
+    const opts = parseDiffOptions(['--gh-pr', '1234', '--no-open'])
+    expect(opts.ghPr).toBe('1234')
+    expect(opts.noOpen).toBe(true)
+  })
+
+  it('parses --gh-pr=owner/repo#N form', () => {
+    const opts = parseDiffOptions(['--gh-pr=acme/widget#42'])
+    expect(opts.ghPr).toBe('acme/widget#42')
+  })
+
+  it('leaves ghPr undefined when the flag is absent', () => {
+    const opts = parseDiffOptions(['HEAD'])
+    expect(opts.ghPr).toBeUndefined()
+  })
+})
+
 describe('parseDiffOptions isolation', () => {
   it('returns fresh revision and pathspec arrays on sequential calls', () => {
     const first = parseDiffOptions(['HEAD~2', '--', 'src/'])

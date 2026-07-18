@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { DiffLineAnnotation } from '@pierre/diffs'
-import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
+import type { CommentSeverity, ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
 import { formatComments } from '../../lib/comment-format'
 import { subscribeLive } from '../live'
 
@@ -26,6 +26,7 @@ interface AgentStatus {
   lastSentAt: number | null
   lastDecision?: ReviewDecision
   lastOpenCount?: number
+  agents?: Array<{ id: string; model?: string; label?: string; connectedAt: number }>
 }
 
 export function useComments() {
@@ -97,7 +98,15 @@ export function useComments() {
   }, [comments])
 
   const addMutation = useMutation({
-    mutationFn: async (params: { filePath: string; side: 'deletions' | 'additions'; lineNumber: number; startLineNumber?: number; lineContent: string; body: string }) => {
+    mutationFn: async (params: {
+      filePath: string
+      side: 'deletions' | 'additions'
+      lineNumber: number
+      startLineNumber?: number
+      lineContent: string
+      body: string
+      severity?: CommentSeverity
+    }) => {
       const res = await fetch('/api/comments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -238,8 +247,24 @@ export function useComments() {
   })
 
   const addComment = useCallback(
-    (filePath: string, side: 'deletions' | 'additions', lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => {
-      addMutation.mutate({ filePath, side, lineNumber, startLineNumber, lineContent, body })
+    (
+      filePath: string,
+      side: 'deletions' | 'additions',
+      lineNumber: number,
+      lineContent: string,
+      body: string,
+      startLineNumber?: number,
+      severity?: CommentSeverity,
+    ) => {
+      addMutation.mutate({
+        filePath,
+        side,
+        lineNumber,
+        startLineNumber,
+        lineContent,
+        body,
+        severity: severity && severity !== 'none' ? severity : undefined,
+      })
     },
     [addMutation.mutate],
   )
@@ -320,6 +345,13 @@ export function useComments() {
     await navigator.clipboard.writeText(text)
   }, [formatAllComments])
 
+  const copyAllCommentsMarkdown = useCallback(async () => {
+    const { formatCommentsMarkdown } = await import('../../lib/review-export.js')
+    const text = formatCommentsMarkdown(comments)
+    if (!text) return
+    await navigator.clipboard.writeText(text)
+  }, [comments])
+
   const sendToAgent = useCallback(
     (decision?: ReviewDecision, generalComment?: string, mode?: ReviewMode, force?: boolean) =>
       sendToAgentMutation.mutateAsync({ decision, generalComment, mode, force }),
@@ -353,11 +385,13 @@ export function useComments() {
     getAnnotationsForFile,
     formatAllComments,
     copyAllComments,
+    copyAllCommentsMarkdown,
     agentActivity,
     clearAgentActivity: useCallback(() => setAgentActivity(null), []),
     sendToAgent,
     sending: sendToAgentMutation.isPending,
-    agentWaiting: agentStatus.waiters > 0,
+    agentWaiting: agentStatus.waiters > 0 || (agentStatus.agents?.length ?? 0) > 0,
+    waitingAgents: agentStatus.agents ?? [],
     /**
      * Snapshot of the most recent handoff round. The UI uses this to render a
      * "Last sent" badge in the toolbar so reviewers can see at a glance

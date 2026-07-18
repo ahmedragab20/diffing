@@ -20,12 +20,15 @@ export interface ServerLock {
   /**
    * Which surface owns the lock.
    *  - `"web"` — Hono server (port is meaningful).
-   *  - `"tui"` — Rust binary in `crates/diffing-tui` (port is always 0).
+   *  - `"tui"` — Rust binary in `crates/diffing-tui` (embedded loopback API).
    *  - `"gh-pr"` — Hono server opened on a GitHub PR (port is meaningful).
    * Optional for backward compat with writes made before this field existed;
    * consumers should treat absent as `"web"`.
    */
   mode?: 'web' | 'tui' | 'gh-pr'
+
+  /** Bearer capability for a TUI-owned loopback API. Never sent off-host. */
+  capability?: string
 
   /**
    * When `mode === 'gh-pr'`, the original `gh pr <ref>` input. Used by

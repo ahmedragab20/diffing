@@ -77,6 +77,17 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
         { keys: ['⌘', 'Shift', 'P'], description: 'Toggle Preview Mode in Comments' },
       ],
     },
+    {
+      title: 'Review & Comments',
+      icon: <MessageSquare size={15} />,
+      items: [
+        { keys: ['UI'], description: 'Round badge → open review history timeline' },
+        { keys: ['UI'], description: 'File-tree chips: Unviewed · Comments · Since last · status' },
+        { keys: ['UI'], description: 'Comment form “Suggest change” inserts ```suggestion fence' },
+        { keys: ['click #'], description: 'Line number copies a deep permalink (?file&line&side)' },
+        { keys: ['UI'], description: 'Minimap: header change-map + density strip scroll targets' },
+      ],
+    },
   ]
 
   const planCategories: ShortcutCategory[] = [

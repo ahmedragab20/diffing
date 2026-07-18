@@ -37,6 +37,9 @@ const defaultSettings = {
   autoCollapseLineThreshold: 400,
   requireViewAllBeforeSend: false,
   showStatusBar: true,
+  savedReplies: [],
+  ignoreSpaceChange: false,
+  ignoreAllSpace: false,
 }
 
 describe('useSettings', () => {

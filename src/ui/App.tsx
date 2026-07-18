@@ -35,7 +35,7 @@ import { Toolbar } from "./components/Toolbar";
 import { DiffOverviewBanner } from "./components/DiffOverviewBanner";
 import { DiffViewer, sortFilesByName } from "./components/DiffViewer";
 import { MergeConflictResolver } from "./components/MergeConflictResolver";
-import { FileTree } from "./components/FileTree";
+import { FileTree, type FileTreeChipFilter } from "./components/FileTree";
 import { CommentTracker } from "./components/CommentTracker";
 import { SearchPalette } from "./components/SearchPalette";
 import type { Scope } from "./lib/searchTypes";
@@ -45,6 +45,12 @@ import { AgentActivityToast } from "./components/AgentActivityToast";
 import { ThemeModal } from "./components/ThemeModal"
 import { FontPickerModal } from "./components/FontPickerModal";
 import { AlertTriangle } from "lucide-react";
+import { markOutdatedComments } from "../lib/comment-outdated";
+import { parsePermalink } from "./lib/permalink";
+import { scrollToLine } from "./utils";
+import { CommitWalkBar } from "./components/CommitWalkBar";
+import { AgentProgressToast } from "./components/AgentProgressToast";
+import { useSinceLastRound } from "./hooks/useSinceLastRound";
 
 
 export function App() {
@@ -73,8 +79,18 @@ export function App() {
         },
         true,
     );
-    const { comments, addComment, removeComment, resolveComment, unresolveComment, addReply, editComment, editReply, removeReply, copyAllComments, agentActivity, clearAgentActivity, sendToAgent, sending, agentWaiting, resolveAllOpen, lastSend } =
+    const { comments: rawComments, addComment, removeComment, resolveComment, unresolveComment, addReply, editComment, editReply, removeReply, copyAllComments, copyAllCommentsMarkdown, agentActivity, clearAgentActivity, sendToAgent, sending, agentWaiting, waitingAgents, resolveAllOpen, lastSend } =
         useComments();
+    // Badge-only outdated detection: if the comment's line snapshot is no longer
+    // present in the live patch, flag it. No auto-remap.
+    const comments = useMemo(() => {
+        if (!patch) return rawComments
+        const map = new Map<string, string>()
+        for (const c of rawComments) {
+            if (!map.has(c.filePath)) map.set(c.filePath, patch)
+        }
+        return markOutdatedComments(rawComments, map)
+    }, [rawComments, patch])
     const { plans } = usePlans();
     const pendingPlanCount = useMemo(
         () => plans.filter((p) => p.decision === "pending").length,
@@ -107,6 +123,37 @@ export function App() {
     useEffect(() => {
         setUiStateItem("diffing-extension-filter", extensionFilter);
     }, [extensionFilter]);
+    const [chipFilter, setChipFilter] = useState<FileTreeChipFilter>(() => {
+        try {
+            const stored = getUiStateItem("diffing-chip-filter");
+            if (
+                stored === "unviewed" ||
+                stored === "has-comments" ||
+                stored === "all" ||
+                stored === "since-last"
+            ) {
+                return stored;
+            }
+        } catch {}
+        return "all";
+    });
+    useEffect(() => {
+        setUiStateItem("diffing-chip-filter", chipFilter);
+    }, [chipFilter]);
+    const { reviewSet: sinceLastFiles, hasBaseline: sinceLastAvailable } =
+        useSinceLastRound(true);
+    // Drop "Since last" filter when no baseline exists yet.
+    useEffect(() => {
+        if (!sinceLastAvailable && chipFilter === "since-last") {
+            setChipFilter("all");
+        }
+    }, [sinceLastAvailable, chipFilter]);
+    /** null = all commits in show mode; number = focus one commit's patch */
+    const [commitWalkIndex, setCommitWalkIndex] = useState<number | null>(null)
+    useEffect(() => {
+        // Reset walk when the commit list changes (new show range).
+        setCommitWalkIndex(null)
+    }, [commits])
     const sidebarWidthRef = useRef(sidebarWidth);
     sidebarWidthRef.current = sidebarWidth;
     const appRef = useRef<HTMLDivElement>(null);
@@ -285,10 +332,21 @@ export function App() {
 
     const prevFilesRef = useRef<FileDiffMetadata[]>([]);
 
+    const activePatch = useMemo(() => {
+        if (
+            showMode &&
+            commitWalkIndex != null &&
+            commits[commitWalkIndex]?.patch
+        ) {
+            return commits[commitWalkIndex].patch
+        }
+        return patch
+    }, [showMode, commitWalkIndex, commits, patch])
+
     const files = useMemo(() => {
-        if (!patch) return [];
+        if (!activePatch) return [];
         try {
-            const parsed = parsePatchFiles(patch);
+            const parsed = parsePatchFiles(activePatch);
             const parsedFiles = parsed.flatMap((p) => p.files);
 
             // Add synthetic entries for binary files not already in parsed output
@@ -351,15 +409,60 @@ export function App() {
         } catch {
             return [];
         }
-    }, [patch, binaryFiles]);
+    }, [activePatch, binaryFiles]);
+
+    const commentCounts = useMemo(() => {
+        const counts: Record<string, number> = {};
+        for (const c of comments) {
+            counts[c.filePath] = (counts[c.filePath] ?? 0) + 1;
+        }
+        return counts;
+    }, [comments]);
 
     const filteredFiles = useMemo(() => {
+        let list = files;
         const extensions = parseExtensionFilter(extensionFilter);
-        if (extensions.length === 0) return files;
-        return files.filter((f) => matchesExtensionFilter(f.name, extensions));
-    }, [files, extensionFilter]);
+        if (extensions.length > 0) {
+            list = list.filter((f) => matchesExtensionFilter(f.name, extensions));
+        }
+        if (chipFilter === "unviewed") {
+            list = list.filter((f) => !viewedFiles.has(f.name));
+        } else if (chipFilter === "has-comments") {
+            list = list.filter((f) => (commentCounts[f.name] ?? 0) > 0);
+        } else if (chipFilter === "since-last") {
+            list = list.filter((f) => sinceLastFiles.has(f.name));
+        }
+        return list;
+    }, [files, extensionFilter, chipFilter, viewedFiles, commentCounts, sinceLastFiles]);
 
     const sortedFiles = useMemo(() => [...filteredFiles].sort(sortFilesByName), [filteredFiles]);
+
+    // Deep links: ?file=&line=&side=&comment= — MUST sit after sortedFiles is
+    // declared (TDZ). Run once files are available.
+    const permalinkApplied = useRef(false)
+    useEffect(() => {
+        if (permalinkApplied.current || loading || sortedFiles.length === 0) return
+        if (typeof window === 'undefined') return
+        const target = parsePermalink(window.location.search)
+        if (!target.file && !target.comment) return
+        permalinkApplied.current = true
+        if (target.file) {
+            setActiveFile(target.file)
+            if (target.line != null) {
+                requestAnimationFrame(() => {
+                    scrollToLine(target.file!, target.line!, target.side ?? 'additions')
+                })
+            }
+        }
+        if (target.comment) {
+            requestAnimationFrame(() => {
+                document.getElementById(`comment-${target.comment}`)?.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                })
+            })
+        }
+    }, [loading, sortedFiles.length])
 
     const scrollToNextFile = useScrollToNextFile(sortedFiles);
 
@@ -382,14 +485,6 @@ export function App() {
         }
         return map;
     }, [binaryFiles]);
-
-    const commentCounts = useMemo(() => {
-        const counts: Record<string, number> = {};
-        for (const c of comments) {
-            counts[c.filePath] = (counts[c.filePath] ?? 0) + 1;
-        }
-        return counts;
-    }, [comments]);
 
     const prevAnnotationsRef = useRef<
         Map<
@@ -632,6 +727,18 @@ export function App() {
     const handleShowStatusBarChange = useCallback(
         (v: boolean) => {
             updateSettings({ showStatusBar: v });
+        },
+        [updateSettings],
+    );
+    const handleIgnoreSpaceChange = useCallback(
+        (v: boolean) => {
+            updateSettings({ ignoreSpaceChange: v });
+        },
+        [updateSettings],
+    );
+    const handleIgnoreAllSpaceChange = useCallback(
+        (v: boolean) => {
+            updateSettings({ ignoreAllSpace: v });
         },
         [updateSettings],
     );
@@ -1088,7 +1195,10 @@ export function App() {
                 } as React.CSSProperties
             }
         >
-            {refreshing && <div className="refresh-bar" role="status" aria-label="Refreshing diff" />}
+            <a href="#diff-main" className="skip-to-main">
+                Skip to diff
+            </a>
+            {refreshing && <div className="refresh-bar" role="status" aria-live="polite" aria-label="Refreshing diff" />}
             <div
                 className="sidebar-resize-guide"
                 ref={sidebarGuideRef}
@@ -1147,17 +1257,23 @@ export function App() {
                 autoCollapseLineThreshold={settings.autoCollapseLineThreshold}
                 requireViewAllBeforeSend={settings.requireViewAllBeforeSend}
                 showStatusBar={settings.showStatusBar ?? true}
+                ignoreSpaceChange={settings.ignoreSpaceChange ?? false}
+                ignoreAllSpace={settings.ignoreAllSpace ?? false}
                 onDensityChange={handleDensityChange}
                 onAutoCollapseLineThresholdChange={handleAutoCollapseChange}
                 onRequireViewAllBeforeSendChange={handleRequireViewAllChange}
                 onShowStatusBarChange={handleShowStatusBarChange}
+                onIgnoreSpaceChange={handleIgnoreSpaceChange}
+                onIgnoreAllSpaceChange={handleIgnoreAllSpaceChange}
                 onResolveAllOpen={handleResolveAllOpen}
                 onOpenUiFontModal={() => setUiFontModalOpen(true)}
                 onOpenMonoFontModal={() => setMonoFontModalOpen(true)}
                 onOpenSearch={() => openPalette('all')}
                 onCopyComments={copyAllComments}
+                onCopyMarkdown={copyAllCommentsMarkdown}
                 onSendToAgent={sendToAgent}
                 agentWaiting={agentWaiting}
+                waitingAgents={waitingAgents}
                 sending={sending}
                 comments={comments}
                 viewedFileCount={viewedFiles.size}
@@ -1188,6 +1304,10 @@ export function App() {
                             onToggleCollapse={handleToggleCollapse}
                             extensionFilter={extensionFilter}
                             onExtensionFilterChange={handleExtensionFilterChange}
+                            chipFilter={chipFilter}
+                            onChipFilterChange={setChipFilter}
+                            sinceLastFiles={sinceLastFiles}
+                            sinceLastAvailable={sinceLastAvailable}
                         />
                     </div>
                     {!sidebarCollapsed && comments.length > 0 && (
@@ -1229,11 +1349,18 @@ export function App() {
                         tabIndex={0}
                     />
                 )}
-                <main className="main" ref={diffViewerRef}>
+                <main className="main" ref={diffViewerRef} id="diff-main" tabIndex={-1}>
                     {overview && (
                         <DiffOverviewBanner
                             overview={overview}
                             commits={showMode ? commits : undefined}
+                        />
+                    )}
+                    {showMode && commits.length > 1 && (
+                        <CommitWalkBar
+                            commits={commits}
+                            activeIndex={commitWalkIndex}
+                            onChange={setCommitWalkIndex}
                         />
                     )}
                     {mergeStatus.inMerge && mergeStatus.conflicts.length > 0 && (
@@ -1344,6 +1471,7 @@ export function App() {
                 onDismiss={clearAgentActivity}
                 onJump={handleFileClick}
             />
+            <AgentProgressToast />
         </div>
         </HapticsProvider>
     );

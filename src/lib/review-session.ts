@@ -42,6 +42,8 @@ export interface ReviewSessionSnapshot {
   /** Headline of the most recent send, if any. */
   lastDecision?: ReviewDecision
   lastOpenCount?: number
+  /** True when a prior handoff has diff fingerprints for since-last delta. */
+  hasSinceLastBaseline?: boolean
 }
 
 /** Lightweight round summary kept for the UI history / "since last handoff" banner. */
@@ -51,7 +53,13 @@ export interface ReviewRoundSummary {
   openCount: number
   decision?: ReviewDecision
   mode: ReviewMode
+  /** Paths that had comments at send time (handoff XML grouping). */
   filePaths: string[]
+  /**
+   * Fingerprints of every file in the live diff at send time
+   * (path → content hash). Used for "since last round" delta.
+   */
+  diffFingerprints?: Record<string, string>
 }
 
 interface Waiter {
@@ -121,7 +129,16 @@ export class ReviewSession {
   }
 
   /** Capture a review batch and release every blocked waiter. */
-  send(input: { sentAt: number; commentXml: string; openCount: number; comments: ReviewComment[]; decision?: ReviewDecision; mode?: ReviewMode }): ReviewPayload {
+  send(input: {
+    sentAt: number
+    commentXml: string
+    openCount: number
+    comments: ReviewComment[]
+    decision?: ReviewDecision
+    mode?: ReviewMode
+    /** Optional live-diff fingerprints at send time (path → hash). */
+    diffFingerprints?: Record<string, string>
+  }): ReviewPayload {
     this.round += 1
     this.lastSentAt = input.sentAt
     const mode = input.mode ?? 'standard'
@@ -144,6 +161,9 @@ export class ReviewSession {
       decision: input.decision,
       mode,
       filePaths,
+      diffFingerprints: input.diffFingerprints
+        ? { ...input.diffFingerprints }
+        : undefined,
     })
     if (this.history.length > MAX_ROUND_HISTORY) {
       this.history.splice(0, this.history.length - MAX_ROUND_HISTORY)
@@ -168,12 +188,20 @@ export class ReviewSession {
       lastSentAt: this.lastSentAt,
       lastDecision: last?.decision,
       lastOpenCount: last?.openCount,
+      hasSinceLastBaseline: Boolean(last?.diffFingerprints && Object.keys(last.diffFingerprints).length > 0),
     }
   }
 
   /** Newest-first round summaries for the UI timeline. */
   getHistory(): ReviewRoundSummary[] {
     return [...this.history].reverse()
+  }
+
+  /** Fingerprints captured at the most recent send, if any. */
+  getLastDiffFingerprints(): Record<string, string> | null {
+    const last = this.history[this.history.length - 1]
+    if (!last?.diffFingerprints) return null
+    return { ...last.diffFingerprints }
   }
 
   private removeWaiter(waiter: Waiter): void {

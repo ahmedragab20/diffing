@@ -60,6 +60,21 @@ export interface Settings {
   requireViewAllBeforeSend: boolean
   /** Whether the vim-style status bar at the bottom is visible. */
   showStatusBar: boolean
+  /**
+   * Saved reply templates for quick insert into comment forms.
+   * Stored globally in settings.json.
+   */
+  savedReplies: SavedReply[]
+  /** Ignore changes in amount of whitespace (`git diff -b`). Live-toggled from UI. */
+  ignoreSpaceChange: boolean
+  /** Ignore all whitespace (`git diff -w`). Live-toggled from UI. */
+  ignoreAllSpace: boolean
+}
+
+export interface SavedReply {
+  id: string
+  title: string
+  body: string
 }
 
 const DEFAULTS: Settings = {
@@ -87,6 +102,9 @@ const DEFAULTS: Settings = {
   autoCollapseLineThreshold: 400,
   requireViewAllBeforeSend: false,
   showStatusBar: true,
+  savedReplies: [],
+  ignoreSpaceChange: false,
+  ignoreAllSpace: false,
 }
 
 export function loadSettings(): Settings {

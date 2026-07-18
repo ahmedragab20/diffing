@@ -35,7 +35,15 @@ interface DiffViewerProps {
   autoCollapseLineThreshold: number
   onViewedChange: (filePath: string, viewed: boolean) => void
   fileAnnotationsMap: Map<string, DiffLineAnnotation<ReviewComment>[]>
-  onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
+  onAddComment: (
+    filePath: string,
+    side: AnnotationSide,
+    lineNumber: number,
+    lineContent: string,
+    body: string,
+    startLineNumber?: number,
+    severity?: import('../../lib/types').CommentSeverity,
+  ) => void
   onDeleteComment: (id: string) => void
   /**
    * Fired by `<FileDiffCard>` right after the user toggles the card's

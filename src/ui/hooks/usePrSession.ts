@@ -41,7 +41,10 @@ export function usePrSession() {
       const res = await fetch('/api/gh/session')
       if (res.status === 404) return null
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      return res.json()
+      const json = (await res.json()) as PrSessionResponse & { prMode?: boolean }
+      // Soft "not in PR mode" probe returns 200 + { prMode: false }.
+      if (json?.prMode === false) return null
+      return json
     },
     retry: false,
   })
@@ -153,12 +156,36 @@ export function usePrComments(enabled: boolean) {
     },
   })
 
+  const resolveComment = useCallback(
+    (id: string) => {
+      updateMutation.mutate({ id, status: 'resolved' })
+    },
+    [updateMutation],
+  )
+
+  const unresolveComment = useCallback(
+    (id: string) => {
+      updateMutation.mutate({ id, status: 'open' })
+    },
+    [updateMutation],
+  )
+
+  // Reply edit/delete are local-only draft helpers; PR drafts don't yet have
+  // dedicated reply routes for edit/delete, so no-op until those land.
+  const editReply = useCallback((_commentId: string, _replyId: string, _body: string) => {}, [])
+  const removeReply = useCallback((_commentId: string, _replyId: string) => {}, [])
+
   return {
     comments,
     addComment: addMutation.mutate,
     removeComment: removeMutation.mutate,
     updateComment: updateMutation.mutate,
     addReply: replyMutation.mutate,
+    resolveComment,
+    unresolveComment,
+    editComment: (id: string, body: string) => updateMutation.mutate({ id, body }),
+    editReply,
+    removeReply,
   }
 }
 
@@ -179,6 +206,7 @@ export interface SubmitPrReviewResult {
 }
 
 export function useSubmitPrReview() {
+  const queryClient = useQueryClient()
   return useMutation<SubmitPrReviewResult, Error, SubmitPrReviewInput>({
     mutationFn: async (input) => {
       const res = await fetch('/api/gh/submit', {
@@ -196,6 +224,9 @@ export function useSubmitPrReview() {
       }
       return data
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: PR_SESSION_KEY })
+    },
   })
 }
 
@@ -210,6 +241,7 @@ export function useRefreshPrSession() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: PR_SESSION_KEY })
+      queryClient.invalidateQueries({ queryKey: PR_COMMENTS_KEY })
     },
   })
 }

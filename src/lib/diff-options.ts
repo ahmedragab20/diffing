@@ -147,6 +147,12 @@ export interface DiffOptions {
   gpu: boolean
 
   /**
+   * Open a GitHub PR review session instead of a working-tree diff.
+   * Set by `--gh-pr <ref>` (bare number, `owner/repo#N`, or full URL).
+   */
+  ghPr?: string
+
+  /**
    * `diffing show <revspec>...` — render the given commits with metadata
    * banners in the UI. Strictly opt-in via the `show` subcommand; never
    * inferred from `revisions`.
@@ -603,6 +609,7 @@ export function parseDiffOptions(rawArgs: string[]): DiffOptions {
   if (values.port) opts.port = parseInt(values.port as string, 10)
   if (values.host) opts.host = values.host as string
   if (values['no-open']) opts.noOpen = true
+  if (values['gh-pr']) opts.ghPr = String(values['gh-pr'])
 
   // ── Staging / merge ───────────────────────────────
   if (values.staged || values.cached) opts.staged = true

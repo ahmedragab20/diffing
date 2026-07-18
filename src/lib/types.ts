@@ -26,6 +26,9 @@ export interface CommentReply {
   createdAtPlanVersion?: number
 }
 
+/** Reviewer intent label for triage (optional; missing = none). */
+export type CommentSeverity = 'blocking' | 'nit' | 'question' | 'praise' | 'none'
+
 export interface ReviewComment {
   id: string
   filePath: string
@@ -37,4 +40,14 @@ export interface ReviewComment {
   status: 'open' | 'resolved'
   createdAt: number
   replies: CommentReply[]
+  /**
+   * Optional triage severity. Agents and the comment tracker can filter on this.
+   * Absent on legacy comments → treat as `'none'`.
+   */
+  severity?: CommentSeverity
+  /**
+   * True when the anchored line content no longer matches the live diff
+   * (badge-only v1 — no auto-remap). Set by the client/server on refresh.
+   */
+  outdated?: boolean
 }

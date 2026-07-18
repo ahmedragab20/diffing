@@ -109,7 +109,13 @@ export function formatComments(
           : `${comment.lineNumber}`)
 
       const isoDate = new Date(comment.createdAt).toISOString()
-      lines.push(`    <comment id="${comment.id}" line="${lineAttr}" side="${comment.side}" status="${comment.status}" created-at="${isoDate}">`)
+      const severityAttr =
+        comment.severity && comment.severity !== 'none'
+          ? ` severity="${comment.severity}"`
+          : ''
+      lines.push(
+        `    <comment id="${comment.id}" line="${lineAttr}" side="${comment.side}" status="${comment.status}"${severityAttr} created-at="${isoDate}">`,
+      )
 
       if (comment.lineNumber !== 0) {
         const prefix = comment.side === 'additions' ? '+' : '-'

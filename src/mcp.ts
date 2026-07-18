@@ -156,7 +156,7 @@ function isLoopbackHost(host: string): boolean {
 }
 
 function lockUrl(lock: ServerLock): string | null {
-  if ((lock.mode ?? 'web') === 'tui' || lock.port <= 0) return null
+  if (lock.port <= 0) return null
   if (!isLoopbackHost(lock.host)) return null
   const host = lock.host === '::1' ? '[::1]' : lock.host
   return `http://${host}:${lock.port}`
@@ -461,15 +461,14 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     }
     ensureReusableLock(lock)
     const mode = lock.mode ?? 'web'
-    if (mode !== 'web') {
+    if (mode === 'gh-pr') {
       throw new Error(
-        `The active diffing session is ${mode}, not a local web review. ` +
-        'MCP local-review tools refuse TUI and GitHub PR stores; end it and call start_review_session.',
+        'The active diffing session is a GitHub PR review, not a local review.',
       )
     }
     const url = lockUrl(lock)
     if (!url) {
-      throw new Error('The active diffing session is TUI-only. Start a web review session before using MCP review tools.')
+      throw new Error('The active diffing session does not expose a reachable loopback API.')
     }
     return {
       lock,
@@ -478,8 +477,21 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     }
   }
 
-  function requireBaseUrl(): string {
-    return requireWebSession().url
+  function requestSessionJson<T>(
+    session: ReturnType<typeof requireWebSession>,
+    path: string,
+    init: RequestInit = {},
+  ): Promise<T> {
+    const headers = new Headers(init.headers)
+    if (session.lock.mode === 'tui') {
+      if (!session.lock.capability) throw new Error('The TUI lock is missing its API capability.')
+      headers.set('X-Diffing-Capability', session.lock.capability)
+    }
+    return requestJson<T>(session.url, path, { ...init, headers })
+  }
+
+  function requestBaseJson<T>(path: string, init?: RequestInit): Promise<T> {
+    return requestSessionJson<T>(requireWebSession(), path, init)
   }
 
   async function seedReviewCursor(
@@ -487,7 +499,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     signal?: AbortSignal,
   ): Promise<number> {
     if (reviewCursor?.identity === session.identity) return reviewCursor.round
-    const status = await requestJson<{ round?: number }>(session.url, '/api/review/status', { signal })
+    const status = await requestSessionJson<{ round?: number }>(session, '/api/review/status', { signal })
     // On first attachment replay the latest cached handoff if one exists.
     reviewCursor = { identity: session.identity, round: Math.max(0, (status.round ?? 0) - 1) }
     return reviewCursor.round
@@ -499,7 +511,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     force = false,
   ): Promise<number> {
     if (!force && planCursor?.identity === session.identity) return planCursor.round
-    const status = await requestJson<{ round?: number }>(session.url, '/api/plan-review/status', { signal })
+    const status = await requestSessionJson<{ round?: number }>(session, '/api/plan-review/status', { signal })
     planCursor = {
       identity: session.identity,
       round: force ? (status.round ?? 0) : Math.max(0, (status.round ?? 0) - 1),
@@ -522,7 +534,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     }
     const mode = lock.mode ?? 'web'
     const url = lockUrl(lock)
-    const inaccessible = mode !== 'tui' && url === null
+    const inaccessible = url === null
     return {
       repository: repoRoot,
       serverState: 'running',
@@ -533,7 +545,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
       nextAction: inaccessible
         ? 'This session is not loopback-only, so MCP will not connect to it. End it manually and call start_review_session.'
         : mode === 'tui'
-        ? 'A TUI session cannot serve MCP tools; stop it manually and call start_review_session.'
+        ? 'The native TUI agent API is available; use diff_summary/diff_files/diff_hunks/diff_slice/diff_search or review tools.'
         : mode === 'gh-pr'
           ? 'This is a GitHub PR session; use the GitHub review workflow or start a local session after it ends.'
           : 'Call get_diff to inspect changes, or use a plan-review tool.',
@@ -720,7 +732,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     },
     annotations: READ_ONLY,
   }, async () => {
-    const diff = await requestJson<DiffResponse>(requireBaseUrl(), '/api/diff')
+    const diff = await requestBaseJson<DiffResponse>('/api/diff')
     const structured = {
       patch: diff.patch,
       repoName: diff.repoName,
@@ -750,7 +762,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { status: z.literal('created'), comment: commentSchema },
     annotations: MUTATING,
   }, async (input) => {
-    const comment = await requestJson<ReviewComment>(requireBaseUrl(), '/api/comments', {
+    const comment = await requestBaseJson<ReviewComment>('/api/comments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -778,7 +790,6 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     annotations: AWAIT,
   }, async ({ timeoutSeconds }, extra) => {
     const session = requireWebSession()
-    const base = session.url
     const budgetMs = (timeoutSeconds ?? 570) * 1000
     const progressToken = extra?._meta?.progressToken
     let sinceRound = await seedReviewCursor(session, extra?.signal)
@@ -787,8 +798,8 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 
     while (Date.now() < deadline) {
       const remaining = Math.max(1, deadline - Date.now())
-      const result = await requestJson<any>(
-        base,
+      const result = await requestSessionJson<any>(
+        session,
         `/api/review/await?timeoutMs=${Math.min(25000, remaining)}&sinceRound=${sinceRound}`,
         { signal: extra?.signal },
       )
@@ -840,7 +851,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { comments: z.array(commentSchema) },
     annotations: READ_ONLY,
   }, async ({ openOnly }) => {
-    const all = await requestJson<ReviewComment[]>(requireBaseUrl(), '/api/comments')
+    const all = await requestBaseJson<ReviewComment[]>('/api/comments')
     const comments = openOnly ? all.filter((comment) => comment.status === 'open') : all
     return textResult(formatComments(comments), { comments })
   })
@@ -856,7 +867,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { status: z.literal('replied'), commentId: z.string() },
     annotations: MUTATING,
   }, async ({ commentId, body, model }) => {
-    await requestJson<unknown>(requireBaseUrl(), `/api/comments/${encodeURIComponent(commentId)}/replies`, {
+    await requestBaseJson<unknown>(`/api/comments/${encodeURIComponent(commentId)}/replies`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ body, role: 'agent', model }),
     })
@@ -870,11 +881,190 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { status: z.literal('resolved'), commentId: z.string() },
     annotations: IDEMPOTENT_MUTATION,
   }, async ({ commentId }) => {
-    await requestJson<unknown>(requireBaseUrl(), `/api/comments/${encodeURIComponent(commentId)}`, {
+    await requestBaseJson<unknown>(`/api/comments/${encodeURIComponent(commentId)}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'resolved' }),
     })
     return textResult(`Resolved ${commentId}.`, { status: 'resolved', commentId })
+  })
+
+  server.registerTool('unresolve_comment', {
+    title: 'Unresolve a code review comment',
+    description: 'Re-open a previously resolved code-review thread. Safe to retry.',
+    inputSchema: { commentId: z.string().min(1).describe('Comment id to re-open.') },
+    outputSchema: { status: z.literal('open'), commentId: z.string() },
+    annotations: IDEMPOTENT_MUTATION,
+  }, async ({ commentId }) => {
+    await requestBaseJson<unknown>(`/api/comments/${encodeURIComponent(commentId)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'open' }),
+    })
+    return textResult(`Re-opened ${commentId}.`, { status: 'open', commentId })
+  })
+
+  server.registerTool('edit_comment', {
+    title: 'Edit a code review comment body',
+    description: 'Replace the body of an existing code-review comment (human or agent).',
+    inputSchema: {
+      commentId: z.string().min(1).describe('Comment id to edit.'),
+      body: z.string().min(1).describe('New Markdown body.'),
+    },
+    outputSchema: { status: z.literal('edited'), commentId: z.string() },
+    annotations: MUTATING,
+  }, async ({ commentId, body }) => {
+    await requestBaseJson<unknown>(`/api/comments/${encodeURIComponent(commentId)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body }),
+    })
+    return textResult(`Edited ${commentId}.`, { status: 'edited', commentId })
+  })
+
+  server.registerTool('delete_comment', {
+    title: 'Delete a code review comment',
+    description: 'Permanently delete a code-review thread and its replies.',
+    inputSchema: { commentId: z.string().min(1).describe('Comment id to delete.') },
+    outputSchema: { status: z.literal('deleted'), commentId: z.string() },
+    annotations: MUTATING,
+  }, async ({ commentId }) => {
+    await requestBaseJson<unknown>(`/api/comments/${encodeURIComponent(commentId)}`, {
+      method: 'DELETE',
+    })
+    return textResult(`Deleted ${commentId}.`, { status: 'deleted', commentId })
+  })
+
+  server.registerTool('apply_suggestion', {
+    title: 'Apply a suggestion block from a comment',
+    description:
+      'Apply the first ```suggestion fence in a comment to the working-tree file (additions side). Supports multi-line ranges. Resolves the comment on success.',
+    inputSchema: { commentId: z.string().min(1).describe('Comment id containing a ```suggestion fence.') },
+    outputSchema: { status: z.literal('applied'), commentId: z.string() },
+    annotations: MUTATING,
+  }, async ({ commentId }) => {
+    await requestBaseJson<unknown>(
+      `/api/comments/${encodeURIComponent(commentId)}/apply-suggestion`,
+      { method: 'POST' },
+    )
+    return textResult(`Applied suggestion from ${commentId}.`, { status: 'applied', commentId })
+  })
+
+  server.registerTool('resolve_all_comments', {
+    title: 'Resolve all open code review comments',
+    description: 'Mark every open code-review thread as resolved. Safe to retry.',
+    inputSchema: {},
+    outputSchema: { status: z.literal('resolved-all'), resolved: z.number() },
+    annotations: IDEMPOTENT_MUTATION,
+  }, async () => {
+    const result = await requestBaseJson<{ ok: boolean; resolved: number }>(
+      '/api/comments/resolve-all',
+      { method: 'POST' },
+    )
+    return textResult(`Resolved ${result.resolved} comment(s).`, {
+      status: 'resolved-all',
+      resolved: result.resolved,
+    })
+  })
+
+  server.registerTool('get_review_history', {
+    title: 'Get review handoff history',
+    description:
+      'List past "Send to agent" rounds (newest first). In-memory only — empty after server restart.',
+    inputSchema: {},
+    outputSchema: {
+      rounds: z.array(z.object({
+        round: z.number(),
+        sentAt: z.number(),
+        openCount: z.number(),
+        decision: z.string().optional(),
+        mode: z.string().optional(),
+        filePaths: z.array(z.string()),
+      })),
+    },
+    annotations: READ_ONLY,
+  }, async () => {
+    const data = await requestBaseJson<{ rounds: Array<Record<string, unknown>> }>(
+      '/api/review/history',
+    )
+    return textResult(
+      `Review history: ${data.rounds?.length ?? 0} round(s).`,
+      { rounds: data.rounds ?? [] },
+    )
+  })
+
+  server.registerTool('report_progress', {
+    title: 'Report agent progress to the human UI',
+    description:
+      'Push a short status message (and optional percent) to the review UI so the human sees what you are doing.',
+    inputSchema: {
+      message: z.string().min(1).describe('Short progress message.'),
+      model: z.string().optional().describe('Model / agent name.'),
+      agentId: z.string().optional().describe('Stable agent id for multi-agent sessions.'),
+      commentId: z.string().optional().describe('Related comment id, if any.'),
+      pct: z.number().min(0).max(100).optional().describe('Optional 0–100 progress.'),
+    },
+    outputSchema: { status: z.literal('ok') },
+    annotations: MUTATING,
+  }, async ({ message, model, agentId, commentId, pct }) => {
+    await requestBaseJson<unknown>('/api/agent/progress', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, model, agentId, commentId, pct }),
+    })
+    return textResult('Progress reported.', { status: 'ok' })
+  })
+
+  server.registerTool('edit_reply', {
+    title: 'Edit a reply on a code review comment',
+    description: 'Replace the body of an existing reply on a code-review thread.',
+    inputSchema: {
+      commentId: z.string().min(1).describe('Parent comment id.'),
+      replyId: z.string().min(1).describe('Reply id to edit.'),
+      body: z.string().min(1).describe('New Markdown body.'),
+    },
+    outputSchema: {
+      status: z.literal('edited'),
+      commentId: z.string(),
+      replyId: z.string(),
+    },
+    annotations: MUTATING,
+  }, async ({ commentId, replyId, body }) => {
+    await requestBaseJson<unknown>(
+      `/api/comments/${encodeURIComponent(commentId)}/replies/${encodeURIComponent(replyId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      },
+    )
+    return textResult(`Edited reply ${replyId} on ${commentId}.`, {
+      status: 'edited',
+      commentId,
+      replyId,
+    })
+  })
+
+  server.registerTool('delete_reply', {
+    title: 'Delete a reply on a code review comment',
+    description: 'Permanently delete a reply from a code-review thread.',
+    inputSchema: {
+      commentId: z.string().min(1).describe('Parent comment id.'),
+      replyId: z.string().min(1).describe('Reply id to delete.'),
+    },
+    outputSchema: {
+      status: z.literal('deleted'),
+      commentId: z.string(),
+      replyId: z.string(),
+    },
+    annotations: MUTATING,
+  }, async ({ commentId, replyId }) => {
+    await requestBaseJson<unknown>(
+      `/api/comments/${encodeURIComponent(commentId)}/replies/${encodeURIComponent(replyId)}`,
+      { method: 'DELETE' },
+    )
+    return textResult(`Deleted reply ${replyId} on ${commentId}.`, {
+      status: 'deleted',
+      commentId,
+      replyId,
+    })
   })
 
   server.registerTool('submit_plan', {
@@ -898,7 +1088,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     // after submission; await_plan_review must still ask from this pre-submit
     // cursor instead of reseeding past that fast verdict.
     await seedPlanCursor(session, undefined, true)
-    const plan = await requestJson<Plan>(base, '/api/plans', {
+    const plan = await requestSessionJson<Plan>(session, '/api/plans', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: planId, title, body, source, model }),
     })
@@ -929,7 +1119,6 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     annotations: AWAIT,
   }, async ({ timeoutSeconds }, extra) => {
     const session = requireWebSession()
-    const base = session.url
     const budgetMs = (timeoutSeconds ?? 570) * 1000
     const progressToken = extra?._meta?.progressToken
     let sinceRound = await seedPlanCursor(session, extra?.signal)
@@ -938,8 +1127,8 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 
     while (Date.now() < deadline) {
       const remaining = Math.max(1, deadline - Date.now())
-      const result = await requestJson<any>(
-        base,
+      const result = await requestSessionJson<any>(
+        session,
         `/api/plan-review/await?timeoutMs=${Math.min(25000, remaining)}&sinceRound=${sinceRound}`,
         { signal: extra?.signal },
       )
@@ -991,7 +1180,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { plans: z.array(z.unknown()) },
     annotations: READ_ONLY,
   }, async () => {
-    const plans = await requestJson<Plan[]>(requireBaseUrl(), '/api/plans')
+    const plans = await requestBaseJson<Plan[]>('/api/plans')
     const summary = plans.map((plan) => {
       const open = (plan.comments ?? []).filter((comment) => comment.status === 'open').length
       return `${plan.id} [${plan.decision}] v${plan.version} — ${open} open comment(s) — ${plan.title}`
@@ -1006,7 +1195,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { plan: z.unknown() },
     annotations: READ_ONLY,
   }, async ({ planId }) => {
-    const plan = await requestJson<Plan>(requireBaseUrl(), `/api/plans/${encodeURIComponent(planId)}`)
+    const plan = await requestBaseJson<Plan>(`/api/plans/${encodeURIComponent(planId)}`)
     return textResult(formatPlanReview(plan), { plan })
   })
 
@@ -1017,8 +1206,8 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { versions: z.array(z.unknown()) },
     annotations: READ_ONLY,
   }, async ({ planId }) => {
-    const versions = await requestJson<NonNullable<Plan['versions']>>(
-      requireBaseUrl(), `/api/plans/${encodeURIComponent(planId)}/versions`,
+    const versions = await requestBaseJson<NonNullable<Plan['versions']>>(
+      `/api/plans/${encodeURIComponent(planId)}/versions`,
     )
     const summary = versions.map((version) => {
       const date = new Date(version.createdAt).toISOString().slice(0, 16).replace('T', ' ')
@@ -1039,20 +1228,19 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     },
     annotations: READ_ONLY,
   }, async ({ planId, version }) => {
-    const base = requireBaseUrl()
     const encodedId = encodeURIComponent(planId)
-    const plan = await requestJson<Plan>(base, `/api/plans/${encodedId}`)
+    const plan = await requestBaseJson<Plan>(`/api/plans/${encodedId}`)
     if (version === undefined) return textResult(formatPlanReview(plan), { plan })
-    const data = await requestJson<{ version: NonNullable<Plan['versions']>[number]; plan: { currentVersion: number } }>(
-      base, `/api/plans/${encodedId}/versions/${version}`,
+    const data = await requestBaseJson<{ version: NonNullable<Plan['versions']>[number]; plan: { currentVersion: number } }>(
+      `/api/plans/${encodedId}/versions/${version}`,
     )
     return textResult(formatPlanReview(plan, { viewingVersion: data.version.version }), {
       plan, version: data.version, currentVersion: data.plan.currentVersion,
     })
   })
 
-  async function findPlanForComment(base: string, commentId: string): Promise<Plan | null> {
-    const plans = await requestJson<Plan[]>(base, '/api/plans')
+  async function findPlanForComment(commentId: string): Promise<Plan | null> {
+    const plans = await requestBaseJson<Plan[]>('/api/plans')
     return plans.find((plan) => (plan.comments ?? []).some((comment) => comment.id === commentId)) ?? null
   }
 
@@ -1067,11 +1255,9 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { status: z.literal('replied'), commentId: z.string(), planId: z.string() },
     annotations: MUTATING,
   }, async ({ commentId, body, model }) => {
-    const base = requireBaseUrl()
-    const plan = await findPlanForComment(base, commentId)
+    const plan = await findPlanForComment(commentId)
     if (!plan) throw new Error(`Plan comment ${commentId} was not found. Refresh the plan before retrying.`)
-    await requestJson<unknown>(
-      base,
+    await requestBaseJson<unknown>(
       `/api/plans/${encodeURIComponent(plan.id)}/comments/${encodeURIComponent(commentId)}/replies`,
       {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1090,11 +1276,9 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { status: z.literal('resolved'), commentId: z.string(), planId: z.string() },
     annotations: IDEMPOTENT_MUTATION,
   }, async ({ commentId }) => {
-    const base = requireBaseUrl()
-    const plan = await findPlanForComment(base, commentId)
+    const plan = await findPlanForComment(commentId)
     if (!plan) throw new Error(`Plan comment ${commentId} was not found. Refresh the plan before retrying.`)
-    await requestJson<unknown>(
-      base,
+    await requestBaseJson<unknown>(
       `/api/plans/${encodeURIComponent(plan.id)}/comments/${encodeURIComponent(commentId)}`,
       {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },

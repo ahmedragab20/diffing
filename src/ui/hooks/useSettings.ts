@@ -45,6 +45,15 @@ export interface Settings {
   requireViewAllBeforeSend: boolean
   /** Whether the vim-style status bar at the bottom is visible. */
   showStatusBar: boolean
+  savedReplies: SavedReply[]
+  ignoreSpaceChange: boolean
+  ignoreAllSpace: boolean
+}
+
+export interface SavedReply {
+  id: string
+  title: string
+  body: string
 }
 
 const DEFAULTS: Settings = {
@@ -72,6 +81,9 @@ const DEFAULTS: Settings = {
   autoCollapseLineThreshold: 400,
   requireViewAllBeforeSend: false,
   showStatusBar: true,
+  savedReplies: [],
+  ignoreSpaceChange: false,
+  ignoreAllSpace: false,
 }
 
 const MONO_FALLBACK = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace'

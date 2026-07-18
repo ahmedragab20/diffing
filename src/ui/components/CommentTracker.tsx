@@ -12,9 +12,10 @@ import {
   ChevronRight,
   X,
 } from 'lucide-react'
-import type { ReviewComment, CommentReply } from '../../lib/types'
+import type { ReviewComment, CommentReply, CommentSeverity } from '../../lib/types'
 import { timeAgo, fileName, scrollToLine } from '../utils'
 import { Markdown } from './Markdown'
+import { AlertTriangle } from 'lucide-react'
 
 interface CommentTrackerProps {
   comments: ReviewComment[]
@@ -28,7 +29,8 @@ interface CommentTrackerProps {
 }
 
 type Status = 'open' | 'replied' | 'resolved'
-type FilterKey = 'all' | Status
+type StatusFilter = 'all' | Status
+type SeverityFilter = 'all' | CommentSeverity | 'outdated'
 
 function statusOf(c: ReviewComment): Status {
   if (c.status === 'resolved') return 'resolved'
@@ -36,11 +38,20 @@ function statusOf(c: ReviewComment): Status {
   return 'open'
 }
 
-const FILTERS: { key: FilterKey; label: string }[] = [
+const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'open', label: 'Open' },
   { key: 'replied', label: 'Replied' },
   { key: 'resolved', label: 'Resolved' },
+]
+
+const SEVERITY_FILTERS: { key: SeverityFilter; label: string }[] = [
+  { key: 'all', label: 'Any' },
+  { key: 'blocking', label: 'Blocking' },
+  { key: 'nit', label: 'Nit' },
+  { key: 'question', label: 'Question' },
+  { key: 'praise', label: 'Praise' },
+  { key: 'outdated', label: 'Outdated' },
 ]
 
 export function CommentTracker({
@@ -53,11 +64,30 @@ export function CommentTracker({
   editReply,
   removeReply,
 }: CommentTrackerProps) {
-  const [filter, setFilter] = useState<FilterKey>('all')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all')
 
-  const counts = useMemo(() => {
+  const statusCounts = useMemo(() => {
     const c = { all: comments.length, open: 0, replied: 0, resolved: 0 }
     for (const comment of comments) c[statusOf(comment)]++
+    return c
+  }, [comments])
+
+  const severityCounts = useMemo(() => {
+    const c: Record<SeverityFilter, number> = {
+      all: comments.length,
+      blocking: 0,
+      nit: 0,
+      question: 0,
+      praise: 0,
+      none: 0,
+      outdated: 0,
+    }
+    for (const comment of comments) {
+      if (comment.outdated) c.outdated++
+      const s = comment.severity && comment.severity !== 'none' ? comment.severity : 'none'
+      c[s]++
+    }
     return c
   }, [comments])
 
@@ -66,9 +96,24 @@ export function CommentTracker({
     [comments],
   )
 
-  const visible = useMemo(
-    () => (filter === 'all' ? sorted : sorted.filter((c) => statusOf(c) === filter)),
-    [sorted, filter],
+  const visible = useMemo(() => {
+    return sorted.filter((c) => {
+      if (statusFilter !== 'all' && statusOf(c) !== statusFilter) return false
+      if (severityFilter === 'outdated') return Boolean(c.outdated)
+      if (severityFilter !== 'all') {
+        const s = c.severity && c.severity !== 'none' ? c.severity : null
+        if (s !== severityFilter) return false
+      }
+      return true
+    })
+  }, [sorted, statusFilter, severityFilter])
+
+  const hasSeverityOrOutdated = useMemo(
+    () =>
+      comments.some(
+        (c) => c.outdated || (c.severity && c.severity !== 'none'),
+      ),
+    [comments],
   )
 
   if (comments.length === 0) return null
@@ -81,26 +126,45 @@ export function CommentTracker({
           <span>Comments</span>
           <span className="cmt-total">{comments.length}</span>
         </div>
-        <div className="cmt-filters" role="tablist" aria-label="Filter comments">
-          {FILTERS.map((f) => (
+        <div className="cmt-filters" role="tablist" aria-label="Filter by status">
+          {STATUS_FILTERS.map((f) => (
             <button
               key={f.key}
               role="tab"
-              aria-selected={filter === f.key}
-              className={`cmt-filter ${filter === f.key ? 'cmt-filter-active' : ''}`}
-              onClick={() => setFilter(f.key)}
-              disabled={f.key !== 'all' && counts[f.key] === 0}
+              aria-selected={statusFilter === f.key}
+              className={`cmt-filter ${statusFilter === f.key ? 'cmt-filter-active' : ''}`}
+              onClick={() => setStatusFilter(f.key)}
+              disabled={f.key !== 'all' && statusCounts[f.key] === 0}
             >
               {f.label}
-              <span className="cmt-filter-count">{counts[f.key]}</span>
+              <span className="cmt-filter-count">{statusCounts[f.key]}</span>
             </button>
           ))}
         </div>
+        {hasSeverityOrOutdated && (
+          <div className="cmt-filters cmt-filters-severity" role="tablist" aria-label="Filter by severity">
+            {SEVERITY_FILTERS.filter(
+              (f) => f.key === 'all' || (severityCounts[f.key] ?? 0) > 0,
+            ).map((f) => (
+              <button
+                key={f.key}
+                role="tab"
+                aria-selected={severityFilter === f.key}
+                className={`cmt-filter cmt-filter-sev ${severityFilter === f.key ? 'cmt-filter-active' : ''}`}
+                data-severity={f.key}
+                onClick={() => setSeverityFilter(f.key)}
+              >
+                {f.label}
+                <span className="cmt-filter-count">{severityCounts[f.key]}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <ul className="cmt-list" aria-label="Comment threads">
         {visible.length === 0 ? (
-          <li className="cmt-empty">No {filter} comments</li>
+          <li className="cmt-empty">No matching comments</li>
         ) : (
           visible.map((comment) => (
             <CommentCard
@@ -163,6 +227,16 @@ function CommentCard({
           <span className="cmt-loc-file">{fileName(comment.filePath)}</span>
           <span className="cmt-loc-line">{lineLabel}</span>
         </button>
+        {comment.severity && comment.severity !== 'none' && (
+          <span className="comment-severity-badge" data-severity={comment.severity}>
+            {comment.severity}
+          </span>
+        )}
+        {comment.outdated && (
+          <span className="comment-outdated-badge" title="Anchored code no longer matches">
+            <AlertTriangle size={10} /> outdated
+          </span>
+        )}
         <span className="cmt-time">{timeAgo(comment.createdAt)}</span>
       </div>
 

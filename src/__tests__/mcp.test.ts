@@ -55,6 +55,9 @@ describe('diffing MCP', () => {
       const names = tools.tools.map((tool) => tool.name)
       expect(names).toEqual(expect.arrayContaining([
         'await_review', 'list_comments', 'reply_to_comment', 'resolve_comment',
+        'unresolve_comment', 'edit_comment', 'delete_comment', 'apply_suggestion',
+        'resolve_all_comments', 'get_review_history', 'report_progress',
+        'edit_reply', 'delete_reply',
         'submit_plan', 'await_plan_review', 'list_plans', 'get_plan',
         'get_plan_versions', 'get_plan_version', 'reply_to_plan_comment', 'resolve_plan_comment',
         'review_session_status', 'start_review_session', 'get_diff', 'create_comment',
@@ -566,7 +569,7 @@ describe('diffing MCP', () => {
     }
   })
 
-  it('rejects local MCP tools for TUI and GitHub PR session modes', async () => {
+  it('rejects local MCP tools for GitHub PR mode and TUI locks without a loopback port', async () => {
     let lock: ServerLock = {
       port: 43135, host: '127.0.0.1', pid: process.pid, repoRoot,
       startedAt: 1, version: MCP_VERSION, mode: 'gh-pr',
@@ -575,12 +578,17 @@ describe('diffing MCP', () => {
     vi.stubGlobal('fetch', fetchSpy)
     const session = await connect({ repoRoot, readLock: () => lock, lockIsAlive: () => true })
     try {
-      for (const mode of ['gh-pr', 'tui'] as const) {
-        lock = { ...lock, mode, port: mode === 'tui' ? 0 : 43135 }
-        const result = await session.client.callTool({ name: 'get_diff', arguments: {} })
-        expect(result.isError).toBe(true)
-        expect(JSON.stringify(result.content)).toContain(`session is ${mode}`)
-      }
+      lock = { ...lock, mode: 'gh-pr', port: 43135 }
+      const prResult = await session.client.callTool({ name: 'get_diff', arguments: {} })
+      expect(prResult.isError).toBe(true)
+      expect(JSON.stringify(prResult.content)).toContain('GitHub PR review')
+
+      // TUI with no HTTP port cannot serve loopback review tools.
+      lock = { ...lock, mode: 'tui', port: 0 }
+      const tuiResult = await session.client.callTool({ name: 'get_diff', arguments: {} })
+      expect(tuiResult.isError).toBe(true)
+      expect(JSON.stringify(tuiResult.content)).toMatch(/loopback API|TUI/i)
+
       expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
       await session.close()

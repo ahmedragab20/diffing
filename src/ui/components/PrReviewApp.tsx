@@ -28,8 +28,10 @@ import { CommentTracker } from './CommentTracker'
 import { SubmitToGitHubPopover } from './SubmitToGitHubPopover'
 import { PrSubmittedToast } from './PrSubmittedToast'
 import { BrandMark } from './BrandMark'
+import { ExistingPrCommentBubble } from './ExistingPrCommentBubble'
 import { formatComments } from '../../lib/comment-format'
-import { Copy } from 'lucide-react'
+import { Copy, CheckCircle2, XCircle, Clock } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 /**
  * Top-level surface for the `/gh/pr` route. Renders the PR diff with the
@@ -46,13 +48,47 @@ export function PrReviewApp() {
   useApplyFonts(loaded, settings.uiFont, settings.monoFont)
   const { session, loaded: sessionLoaded } = usePrSession()
   const refreshPr = useRefreshPrSession()
+  const queryClient = useQueryClient()
   const {
     comments,
     addComment,
     removeComment,
     updateComment,
     addReply,
+    resolveComment,
+    unresolveComment,
+    editComment,
+    editReply,
+    removeReply,
   } = usePrComments(sessionLoaded && !!session)
+
+  const { data: checksData } = useQuery({
+    queryKey: ['pr-checks', session?.headSha],
+    queryFn: async () => {
+      const res = await fetch('/api/gh/checks')
+      if (!res.ok) return null
+      return res.json() as Promise<{
+        checks: Array<{ name: string; state: string; detailsUrl?: string | null }>
+        summary: { total: number; success: number; failure: number; pending: number }
+      }>
+    },
+    enabled: sessionLoaded && !!session,
+    staleTime: 30_000,
+  })
+
+  const replyToExisting = useCallback(
+    async (commentId: number, body: string) => {
+      const res = await fetch(`/api/gh/existing-comments/${commentId}/replies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      })
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      queryClient.invalidateQueries({ queryKey: ['pr-session'] })
+    },
+    [queryClient],
+  )
   const {
     patch,
     loading,
@@ -164,6 +200,16 @@ export function PrReviewApp() {
     return map
   }, [comments])
 
+  const commentCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const c of comments) {
+      counts[c.filePath] = (counts[c.filePath] ?? 0) + 1
+    }
+    return counts
+  }, [comments])
+
+  const emptyUntracked = useMemo(() => new Set<string>(), [])
+
   const totalExisting = session?.existingComments?.length ?? 0
 
   // ── Empty / loading / error states ──
@@ -205,6 +251,32 @@ export function PrReviewApp() {
           <span className="pr-header-title">{session.title}</span>
         </div>
         <div className="pr-header-right">
+          {checksData?.summary && checksData.summary.total > 0 && (
+            <span
+              className="pr-header-checks"
+              title={
+                checksData.checks
+                  .map((c) => `${c.name}: ${c.state}`)
+                  .join('\n') || 'CI checks'
+              }
+            >
+              {checksData.summary.failure > 0 ? (
+                <XCircle size={12} className="pr-check-fail" />
+              ) : checksData.summary.pending > 0 ? (
+                <Clock size={12} className="pr-check-pending" />
+              ) : (
+                <CheckCircle2 size={12} className="pr-check-ok" />
+              )}
+              <span>
+                {checksData.summary.success}/{checksData.summary.total} checks
+                {checksData.summary.failure > 0
+                  ? ` · ${checksData.summary.failure} failing`
+                  : checksData.summary.pending > 0
+                    ? ` · ${checksData.summary.pending} pending`
+                    : ''}
+              </span>
+            </span>
+          )}
           <span
             className="pr-header-stat"
             title={`+${session.additions} -${session.deletions} across ${session.changedFiles} files`}
@@ -278,11 +350,12 @@ export function PrReviewApp() {
           <FileTree
             files={files}
             activeFile={activeFile}
-            setActiveFile={setActiveFile}
-            commentCounts={{}}
-            existingCommentCounts={Object.fromEntries(
-              [...existingCommentsByFile.entries()].map(([k, v]) => [k, v.length]),
-            )}
+            commentCounts={commentCounts}
+            viewedFiles={viewedFiles}
+            untrackedFiles={emptyUntracked}
+            onFileClick={setActiveFile}
+            collapsed={sidebarCollapsed}
+            onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
           />
           <div
             className="sidebar-resize-handle"
@@ -322,6 +395,7 @@ export function PrReviewApp() {
               onEditComment={(commentId, body) => updateComment({ id: commentId, body })}
               onDeleteComment={removeComment}
               onViewedChange={setViewed}
+              onReplyExisting={replyToExisting}
             />
           )}
         </main>
@@ -331,14 +405,13 @@ export function PrReviewApp() {
 
       <CommentTracker
         comments={comments}
-        files={files}
-        activeFile={activeFile}
-        onSetActiveFile={setActiveFile}
-        onEditComment={(id, body) => updateComment({ id, body })}
-        onDeleteComment={removeComment}
-        onAddReply={(id, body) => addReply({ id, body })}
-        collapsed={false}
-        onToggleCollapsed={() => {}}
+        resolveComment={resolveComment}
+        unresolveComment={unresolveComment}
+        removeComment={removeComment}
+        addReply={(id, body) => addReply({ id, body })}
+        editComment={editComment}
+        editReply={editReply}
+        removeReply={removeReply}
       />
 
       {session.submittedAt && <PrSubmittedToast session={session} />}
@@ -372,6 +445,7 @@ function PrDiffSurface({
   onEditComment,
   onDeleteComment,
   onViewedChange,
+  onReplyExisting,
 }: {
   files: FileDiffMetadata[]
   fileAnnotations: Map<string, any[]>
@@ -383,6 +457,7 @@ function PrDiffSurface({
   onEditComment: (commentId: string, body: string) => void
   onDeleteComment: (commentId: string) => void
   onViewedChange: (filePath: string, viewed: boolean) => void
+  onReplyExisting: (commentId: number, body: string) => Promise<void>
 }) {
   return (
     <div className="pr-diff-surface">
@@ -427,29 +502,15 @@ function PrDiffSurface({
                     {existing.length} existing comment{existing.length === 1 ? '' : 's'} on this file
                   </span>
                 </div>
-                <ul className="pr-existing-strip-list">
+                <div className="pr-existing-bubbles">
                   {existing.map((c) => (
-                    <li key={c.id} className="pr-existing-strip-item">
-                      <div className="pr-existing-strip-meta">
-                        <strong>@{c.author?.login ?? 'unknown'}</strong>
-                        <span className="pr-existing-strip-line">
-                          {c.line != null ? `:${c.line}` : '· file'}
-                        </span>
-                        {c.state && (
-                          <span className={`pr-existing-strip-state pr-state-${c.state.toLowerCase()}`}>
-                            {c.state.toLowerCase().replace('_', ' ')}
-                          </span>
-                        )}
-                        {c.replies.length > 0 && (
-                          <span className="pr-existing-strip-replies">
-                            +{c.replies.length} repl{c.replies.length === 1 ? 'y' : 'ies'}
-                          </span>
-                        )}
-                      </div>
-                      <p className="pr-existing-strip-body">{c.body}</p>
-                    </li>
+                    <ExistingPrCommentBubble
+                      key={c.id}
+                      comment={c}
+                      onReply={onReplyExisting}
+                    />
                   ))}
-                </ul>
+                </div>
               </div>
             )}
           </div>

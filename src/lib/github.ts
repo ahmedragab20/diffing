@@ -207,10 +207,9 @@ export async function fetchPrMetadataViaGh(resolved: ResolvedPr): Promise<PrMeta
     throw new Error(`gh pr diff failed: ${stderr.trim()}`)
   }
 
-  // Author: the JSON shape uses `headRepositoryOwner` for the owning org/user.
-  const headOwner =
-    metaJson.headRepositoryOwner?.login || metaJson.headRepository?.owner?.login || resolved.owner
-  const repoName = metaJson.headRepository?.name || resolved.repo
+  // Reviews / comments / submit always target the *base* repository (where
+  // the PR lives). Using headRepositoryOwner here broke fork PRs — submit
+  // would POST to the fork owner and get 404. Keep `resolved.owner/repo`.
   const author = metaJson.author
     ? { login: metaJson.author.login, avatarUrl: metaJson.author.avatarUrl }
     : null
@@ -228,8 +227,8 @@ export async function fetchPrMetadataViaGh(resolved: ResolvedPr): Promise<PrMeta
     additions: metaJson.additions,
     deletions: metaJson.deletions,
     changedFiles: metaJson.changedFiles,
-    owner: headOwner,
-    repo: repoName,
+    owner: resolved.owner,
+    repo: resolved.repo,
     diff,
     existingComments,
   }
@@ -311,7 +310,12 @@ async function fetchExistingCommentsViaGh(resolved: ResolvedPr): Promise<PrExist
         createdAt: r.created_at,
         updatedAt: r.updated_at,
       })),
-      isOutdated: typeof c.position === 'number' && c.position === null ? false : false,
+      // Outdated when the current line is gone but an original anchor remains,
+      // or when GitHub's deprecated `position` is explicitly null with history.
+      isOutdated: Boolean(
+        (c.line == null && c.original_line != null) ||
+          (c.position === null && c.original_position != null),
+      ),
     })
   }
 
@@ -327,7 +331,7 @@ async function fetchExistingCommentsViaGh(resolved: ResolvedPr): Promise<PrExist
 
 export interface SubmitInput {
   resolved: ResolvedPr
-  decision: 'approve' | 'comment' | 'request-changes'
+  decision: 'approve' | 'comment' | 'request-changes' | 'draft'
   body: string
   comments: ReviewComment[]
 }
@@ -370,45 +374,56 @@ export async function submitReview(input: SubmitInput): Promise<SubmitOutput> {
  * Map our `PrDecision` to the GitHub REST event string. Exported so the
  * test suite can pin the mapping (including the `rejected → REQUEST_CHANGES`
  * quirk, which exists because GitHub has no REJECT event).
+ *
+ * Returns `null` for `draft` — GitHub creates a PENDING review when `event`
+ * is omitted from the payload.
  */
-export function decisionToEvent(decision: 'approve' | 'comment' | 'request-changes'): 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT' {
+export function decisionToEvent(
+  decision: 'approve' | 'comment' | 'request-changes' | 'draft',
+): 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT' | null {
+  if (decision === 'draft') return null
   if (decision === 'approve') return 'APPROVE'
   if (decision === 'request-changes') return 'REQUEST_CHANGES'
   return 'COMMENT'
 }
 
+/** GitHub REST pull-request review comment shape (multi-line aware). */
+export interface GhReviewComment {
+  path: string
+  body: string
+  line: number
+  side: 'LEFT' | 'RIGHT'
+  start_line?: number
+  start_side?: 'LEFT' | 'RIGHT'
+}
+
 /**
- * Expand multi-line `ReviewComment`s into N single-line `gh`-shaped entries
- * with `[part N/M]` prefixes. Exported for the test suite — the body of the
- * caller (`buildReviewPayload`) is otherwise private.
- *
- * Skips: non-`open` comments, file-level comments (`lineNumber === 0`).
- * Strips the `a/` / `b/` prefix from the file path (GitHub expects PR-relative
- * paths in the `path` field).
+ * Map open line-anchored `ReviewComment`s to GitHub multi-line review comments.
+ * - `deletions` → LEFT, `additions` → RIGHT
+ * - Ranges use `start_line`/`line` (no N-part explosion)
+ * - File-level comments (`lineNumber === 0`) are excluded; callers fold them
+ *   into the review body via {@link buildReviewPayload}.
  */
-export function expandMultiLineComments(
-  comments: ReviewComment[],
-): Array<{ path: string; line: number; side: 'RIGHT'; body: string }> {
-  const flat: Array<{ path: string; line: number; side: 'RIGHT'; body: string }> = []
+export function expandMultiLineComments(comments: ReviewComment[]): GhReviewComment[] {
+  const flat: GhReviewComment[] = []
   for (const c of comments) {
     if (c.status !== 'open') continue
     if (c.lineNumber === 0) continue
     const path = stripBPrefix(c.filePath)
-    const start = c.startLineNumber && c.startLineNumber < c.lineNumber ? c.startLineNumber : c.lineNumber
-    const end = c.lineNumber
-    const span = end - start + 1
-    if (span > 1) {
-      for (let i = 0; i < span; i++) {
-        flat.push({
-          path,
-          line: start + i,
-          side: 'RIGHT',
-          body: `[part ${i + 1}/${span}]\n${c.body}`,
-        })
-      }
-    } else {
-      flat.push({ path, line: end, side: 'RIGHT', body: c.body })
+    const side: 'LEFT' | 'RIGHT' = c.side === 'deletions' ? 'LEFT' : 'RIGHT'
+    const start =
+      c.startLineNumber && c.startLineNumber < c.lineNumber ? c.startLineNumber : undefined
+    const entry: GhReviewComment = {
+      path,
+      line: c.lineNumber,
+      side,
+      body: c.body,
     }
+    if (start !== undefined) {
+      entry.start_line = start
+      entry.start_side = side
+    }
+    flat.push(entry)
   }
   return flat
 }
@@ -417,13 +432,34 @@ export function buildReviewPayload(
   input: Pick<SubmitInput, 'body' | 'decision' | 'comments'>,
 ): {
   body: string | undefined
-  event: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
-  comments: Array<{ path: string; line: number; side: 'RIGHT'; body: string }>
+  /** Omitted for draft/pending reviews. */
+  event?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
+  comments: GhReviewComment[]
 } {
+  const comments = input.comments ?? []
+  const inline = expandMultiLineComments(comments)
+  const fileLevel = comments.filter((c) => c.status === 'open' && c.lineNumber === 0)
+  let body = typeof input.body === 'string' ? input.body.trim() : ''
+  if (fileLevel.length > 0) {
+    const sections = fileLevel.map((c) => {
+      const path = stripBPrefix(c.filePath)
+      return `**\`${path}\`:** ${c.body}`
+    })
+    const block = ['### File comments', ...sections].join('\n\n')
+    body = body ? `${body}\n\n${block}` : block
+  }
+  const event = decisionToEvent(input.decision ?? 'comment')
+  // GitHub: omit `event` entirely to create a PENDING (draft) review.
+  if (event === null) {
+    return {
+      body: body || undefined,
+      comments: inline,
+    }
+  }
   return {
-    body: input.body,
-    event: decisionToEvent(input.decision ?? 'comment'),
-    comments: expandMultiLineComments(input.comments ?? []),
+    body: body || undefined,
+    event,
+    comments: inline,
   }
 }
 
@@ -517,6 +553,101 @@ async function submitViaToken(input: SubmitInput, token: string): Promise<Submit
       authSource: 'token',
       error: err?.message || 'Network error',
     }
+  }
+}
+
+// ── PR checks (CI status) ──────────────────────────────────────────────
+
+export interface PrCheck {
+  name: string
+  state: 'success' | 'failure' | 'pending' | 'neutral' | 'error' | 'skipped' | 'cancelled' | 'timed_out' | 'action_required' | 'unknown'
+  conclusion?: string | null
+  detailsUrl?: string | null
+}
+
+/**
+ * Fetch check runs + combined status for a PR head via `gh api`.
+ * Best-effort: returns [] on any failure so the UI can degrade gracefully.
+ */
+export async function fetchPrChecks(resolved: ResolvedPr, headSha: string): Promise<PrCheck[]> {
+  const checks: PrCheck[] = []
+  try {
+    const endpoint = `repos/${resolved.owner}/${resolved.repo}/commits/${headSha}/check-runs?per_page=50`
+    const { stdout } = await execFileAsync(
+      'gh',
+      ['api', endpoint, '-H', 'Accept: application/vnd.github+json'],
+      { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 },
+    )
+    const parsed = JSON.parse(stdout) as {
+      check_runs?: Array<{
+        name: string
+        status: string
+        conclusion: string | null
+        html_url?: string
+      }>
+    }
+    for (const run of parsed.check_runs ?? []) {
+      let state: PrCheck['state'] = 'unknown'
+      if (run.status === 'completed') {
+        const c = (run.conclusion ?? '').toLowerCase()
+        if (c === 'success') state = 'success'
+        else if (c === 'failure' || c === 'startup_failure') state = 'failure'
+        else if (c === 'neutral') state = 'neutral'
+        else if (c === 'cancelled') state = 'cancelled'
+        else if (c === 'timed_out') state = 'timed_out'
+        else if (c === 'skipped') state = 'skipped'
+        else if (c === 'action_required') state = 'action_required'
+        else state = 'error'
+      } else {
+        state = 'pending'
+      }
+      checks.push({
+        name: run.name,
+        state,
+        conclusion: run.conclusion,
+        detailsUrl: run.html_url ?? null,
+      })
+    }
+  } catch {
+    // ignore — optional surface
+  }
+  return checks
+}
+
+/**
+ * Reply to an existing GitHub review comment (thread).
+ * POST /repos/{owner}/{repo}/pulls/{pull_number}/comments with in_reply_to.
+ */
+export async function replyToPrComment(input: {
+  resolved: ResolvedPr
+  inReplyTo: number
+  body: string
+}): Promise<{ ok: boolean; id?: number; error?: string }> {
+  const endpoint = `repos/${input.resolved.owner}/${input.resolved.repo}/pulls/${input.resolved.pullNumber}/comments`
+  const payload = JSON.stringify({
+    body: input.body,
+    in_reply_to: input.inReplyTo,
+  })
+  try {
+    const { stdout } = await execFileAsync(
+      'gh',
+      [
+        'api',
+        '--method',
+        'POST',
+        endpoint,
+        '-H',
+        'Accept: application/vnd.github+json',
+        '--input',
+        '-',
+      ],
+      { encoding: 'utf-8', input: payload, maxBuffer: 5 * 1024 * 1024 },
+    )
+    const result = JSON.parse(stdout) as { id?: number }
+    return { ok: true, id: result.id }
+  } catch (err: any) {
+    const msg = err?.stderr || err?.stdout || err?.message || 'reply failed'
+    return { ok: false, error: String(msg).slice(0, 500) }
   }
 }
 

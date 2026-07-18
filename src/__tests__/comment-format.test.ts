@@ -26,6 +26,7 @@ describe('formatComments', () => {
     expect(out).toContain('</code-review-comments>')
     expect(out).toContain('<file path="src/index.ts">')
     expect(out).toContain('<comment id="c1" line="10" side="additions" status="open" created-at="1970-01-01T00:00:01.000Z">')
+    // no severity attr when omitted
     expect(out).toContain('<code><![CDATA[+ const x = 1]]></code>')
     expect(out).toContain('<body><![CDATA[Consider renaming]]></body>')
   })
@@ -46,6 +47,12 @@ describe('formatComments', () => {
     const out = formatComments([{ ...base, lineNumber: 0 }])
     expect(out).toContain('line="file"')
     expect(out).not.toContain('<code><![CDATA[')
+  })
+
+  it('emits severity attribute when set (skips none)', () => {
+    const out = formatComments([{ ...base, severity: 'blocking' }])
+    expect(out).toContain('severity="blocking"')
+    expect(formatComments([{ ...base, severity: 'none' }])).not.toContain('severity=')
   })
 
   it('renders a line range when startLineNumber differs', () => {

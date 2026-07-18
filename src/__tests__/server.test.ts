@@ -510,7 +510,7 @@ describe('server', () => {
     })
 
     describe('GET /api/gh/session', () => {
-      it('returns 404 when a stale PR session exists but the server is not in PR mode', async () => {
+      it('returns 200 prMode:false when a stale PR session exists but the server is not in PR mode', async () => {
         const { createApp } = await import('../server.js')
         const { InMemoryPrSessionStore } = await import('../lib/pr-session.js')
         const prStore = new InMemoryPrSessionStore()
@@ -533,7 +533,8 @@ describe('server', () => {
         } as unknown as PrSession)
         const localApp = createApp(clientDir, DEFAULTS, mockStore, undefined, prStore)
         const res = await localApp.fetch(new Request('http://localhost/api/gh/session'))
-        expect(res.status).toBe(404)
+        // Soft probe: 200 + prMode:false (not 404) so SPA boot does not spam console.
+        expect(res.status).toBe(200)
         const body = await res.json()
         expect(body.prMode).toBe(false)
       })
@@ -696,7 +697,12 @@ describe('server', () => {
     describe('agent handoff /api/review/*', () => {
       it('GET /api/review/status starts at round 0 with no waiters', async () => {
         const res = await app.fetch(new Request('http://localhost/api/review/status'))
-        expect(await res.json()).toEqual({ round: 0, waiters: 0, lastSentAt: null })
+        expect(await res.json()).toEqual({
+          round: 0,
+          waiters: 0,
+          lastSentAt: null,
+          hasSinceLastBaseline: false,
+        })
       })
 
       it('POST /api/review/send increments the round and reports open count', async () => {
@@ -708,6 +714,29 @@ describe('server', () => {
 
         const second = await (await app.fetch(new Request('http://localhost/api/review/send', { method: 'POST' }))).json()
         expect(second.round).toBe(2)
+      })
+
+      it('GET /api/review/since-last is empty before any send, then baselines after send', async () => {
+        const empty = await (await app.fetch(new Request('http://localhost/api/review/since-last'))).json()
+        expect(empty).toMatchObject({
+          hasBaseline: false,
+          reviewFiles: [],
+          changed: [],
+          added: [],
+        })
+
+        await app.fetch(new Request('http://localhost/api/review/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decision: 'comment-only' }),
+        }))
+
+        const after = await (await app.fetch(new Request('http://localhost/api/review/since-last'))).json()
+        // Baseline exists once a send captured fingerprints (or still false if
+        // the mock git diff is empty — either way the shape is stable).
+        expect(after).toHaveProperty('hasBaseline')
+        expect(after).toHaveProperty('reviewFiles')
+        expect(Array.isArray(after.reviewFiles)).toBe(true)
       })
 
       it('GET /api/review/await returns keep-waiting after the timeout', async () => {

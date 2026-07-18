@@ -41,7 +41,11 @@ export interface PrAuthor {
   avatarUrl?: string
 }
 
-export type PrDecision = 'approve' | 'comment' | 'request-changes'
+/**
+ * - approve / comment / request-changes → GitHub review events
+ * - draft → pending review (omit `event` so GitHub keeps it as PENDING)
+ */
+export type PrDecision = 'approve' | 'comment' | 'request-changes' | 'draft'
 
 /**
  * A full PR review session: the cached diff + metadata + the in-progress

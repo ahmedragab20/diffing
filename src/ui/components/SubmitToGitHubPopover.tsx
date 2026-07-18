@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { GitPullRequest, Pencil, Trash2, Check, X, MessageSquareWarning, AlertCircle, ExternalLink } from 'lucide-react'
+import { GitPullRequest, Pencil, Trash2, Check, X, MessageSquareWarning, AlertCircle, ExternalLink, FilePenLine } from 'lucide-react'
 import type { ReviewComment } from '../../lib/types'
 import type { PrSession, PrDecision } from '../../lib/pr-session'
 import { fileName } from '../utils'
@@ -199,7 +199,11 @@ export function SubmitToGitHubPopover({
             onClick={handleSubmit}
             disabled={!verdict || submitMutation.isPending}
           >
-            {submitMutation.isPending ? 'Submitting…' : 'Submit review'}
+            {submitMutation.isPending
+              ? 'Submitting…'
+              : verdict === 'draft'
+                ? 'Save draft review'
+                : 'Submit review'}
           </button>
         </div>
         <div className="srp-resize-handle" onMouseDown={startResize} role="separator" aria-orientation="horizontal" aria-label="Resize submit panel" tabIndex={0} />
@@ -235,6 +239,13 @@ const VERDICT_OPTIONS: {
     description: 'The author must address the comments before merging.',
     icon: X,
     className: 'plan-verdict-reject',
+  },
+  {
+    value: 'draft',
+    label: 'Save as draft',
+    description: 'Post a PENDING review on GitHub — finish it later in the PR UI.',
+    icon: FilePenLine,
+    className: 'plan-verdict-comment-only',
   },
 ]
 

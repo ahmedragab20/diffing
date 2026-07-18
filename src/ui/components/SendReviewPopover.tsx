@@ -28,7 +28,9 @@ interface SendReviewPopoverProps {
   ) => Promise<unknown>
   sending: boolean
   agentWaiting: boolean
+  waitingAgents?: Array<{ id: string; model?: string; label?: string; connectedAt: number }>
   onCopyComments?: () => Promise<void>
+  onCopyMarkdown?: () => Promise<void>
 }
 
 const VERDICT_OPTIONS: {
@@ -85,7 +87,9 @@ export function SendReviewPopover({
   onSend,
   sending,
   agentWaiting,
+  waitingAgents = [],
   onCopyComments,
+  onCopyMarkdown,
 }: SendReviewPopoverProps) {
   const { haptic, sound } = useFeedback()
   const [open, setOpen] = useState(false)
@@ -169,12 +173,26 @@ export function SendReviewPopover({
         <button
           className="btn btn-primary btn-sm send-review-btn"
           disabled={sending}
-          title={agentWaiting ? 'An agent is connected and waiting' : 'Submit your review to a waiting agent'}
+          title={
+            waitingAgents.length > 0
+              ? `Waiting: ${waitingAgents.map((a) => a.label || a.model || a.id.slice(0, 8)).join(', ')}`
+              : agentWaiting
+                ? 'An agent is connected and waiting'
+                : 'Submit your review to a waiting agent'
+          }
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
           {agentWaiting && <span className="agent-waiting-dot" aria-hidden="true" />}
           <Bot size={14} />
-          <span className="btn-label">{sending ? 'Sending…' : count > 0 ? `Send to agent (${count})` : 'Send to agent'}</span>
+          <span className="btn-label">
+            {sending
+              ? 'Sending…'
+              : waitingAgents.length > 1
+                ? `Send to ${waitingAgents.length} agents${count > 0 ? ` (${count})` : ''}`
+                : count > 0
+                  ? `Send to agent (${count})`
+                  : 'Send to agent'}
+          </span>
         </button>
       }
     >
@@ -200,6 +218,27 @@ export function SendReviewPopover({
           </div>
           <span className="srp-count">{count} comment{count === 1 ? '' : 's'}</span>
         </div>
+
+        {waitingAgents.length > 0 && (
+          <div className="srp-agents" aria-label="Waiting agents">
+            <span className="srp-agents-label">
+              {waitingAgents.length === 1 ? 'Agent waiting' : `${waitingAgents.length} agents waiting`}
+            </span>
+            <ul className="srp-agents-list">
+              {waitingAgents.map((a) => (
+                <li key={a.id} className="srp-agent-chip" title={a.id}>
+                  <span className="agent-waiting-dot" aria-hidden="true" />
+                  <span className="srp-agent-name">
+                    {a.label || a.model || a.id.slice(0, 8)}
+                  </span>
+                  {a.model && a.label && (
+                    <span className="srp-agent-model">{a.model}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="srp-scroll">
         <div className="plan-verdict-options" role="radiogroup" aria-label="Verdict">
@@ -313,14 +352,33 @@ export function SendReviewPopover({
 
         <div className="srp-footer">
           {onCopyComments && (
-            <button
-              className="btn btn-sm"
-              onClick={handleCopy}
-              disabled={count === 0}
-              style={{ marginRight: 'auto' }}
-            >
-              {copied ? 'Copied!' : 'Copy comments'}
-            </button>
+            <div style={{ marginRight: 'auto', display: 'flex', gap: 6 }}>
+              <button
+                className="btn btn-sm"
+                onClick={handleCopy}
+                disabled={count === 0}
+              >
+                {copied ? 'Copied!' : 'Copy XML'}
+              </button>
+              {onCopyMarkdown && (
+                <button
+                  className="btn btn-sm"
+                  onClick={async () => {
+                    try {
+                      await onCopyMarkdown()
+                      setCopied(true)
+                      setTimeout(() => setCopied(false), 1500)
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                  disabled={count === 0}
+                  title="Copy review as Markdown"
+                >
+                  Copy MD
+                </button>
+              )}
+            </div>
           )}
           <button className="btn btn-sm" onClick={() => setOpen(false)} disabled={sending}>
             Cancel

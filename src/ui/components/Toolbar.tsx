@@ -10,6 +10,7 @@ import type {
 import { Popover } from '../primitives/Popover'
 import { Select } from '../primitives/Select'
 import { SendReviewPopover } from '../components/SendReviewPopover'
+import { ReviewHistoryPopover } from '../components/ReviewHistoryPopover'
 import { BrandMark } from './BrandMark'
 import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
 
@@ -56,6 +57,8 @@ interface ToolbarProps {
   autoCollapseLineThreshold: number
   requireViewAllBeforeSend: boolean
   showStatusBar: boolean
+  ignoreSpaceChange: boolean
+  ignoreAllSpace: boolean
   onDiffStyleChange: (style: 'split' | 'unified') => void
   onDiffOptionsChange: (options: DiffOptions) => void
   onDefaultTabSizeChange: (size: number) => void
@@ -75,13 +78,17 @@ interface ToolbarProps {
   onAutoCollapseLineThresholdChange: (v: number) => void
   onRequireViewAllBeforeSendChange: (v: boolean) => void
   onShowStatusBarChange: (v: boolean) => void
+  onIgnoreSpaceChange: (v: boolean) => void
+  onIgnoreAllSpaceChange: (v: boolean) => void
   onResolveAllOpen: () => void
   onOpenUiFontModal: () => void
   onOpenMonoFontModal: () => void
   onOpenSearch: () => void
   onCopyComments: () => Promise<void>
+  onCopyMarkdown?: () => Promise<void>
   onSendToAgent: (decision: ReviewDecision, generalComment?: string, mode?: ReviewMode) => Promise<unknown>
   agentWaiting: boolean
+  waitingAgents?: Array<{ id: string; model?: string; label?: string; connectedAt: number }>
   sending: boolean
   comments: ReviewComment[]
   viewedFileCount: number
@@ -180,6 +187,8 @@ export const Toolbar = memo(function Toolbar({
   autoCollapseLineThreshold,
   requireViewAllBeforeSend,
   showStatusBar,
+  ignoreSpaceChange,
+  ignoreAllSpace,
   onDiffStyleChange,
   onDiffOptionsChange,
   onDefaultTabSizeChange,
@@ -199,13 +208,17 @@ export const Toolbar = memo(function Toolbar({
   onAutoCollapseLineThresholdChange,
   onRequireViewAllBeforeSendChange,
   onShowStatusBarChange,
+  onIgnoreSpaceChange,
+  onIgnoreAllSpaceChange,
   onResolveAllOpen,
   onOpenUiFontModal,
   onOpenMonoFontModal,
   onOpenSearch,
   onCopyComments,
+  onCopyMarkdown,
   onSendToAgent,
   agentWaiting,
+  waitingAgents = [],
   sending,
   comments,
   viewedFileCount,
@@ -228,13 +241,14 @@ export const Toolbar = memo(function Toolbar({
   }, [])
 
   return (
-    <div className="toolbar">
+    <header className="toolbar" role="banner">
       <div className="toolbar-left">
         {onToggleSidebar && (
           <button
             className="toolbar-mobile-toggle"
             onClick={onToggleSidebar}
-            aria-label="Toggle sidebar"
+            aria-label={sidebarCollapsed ? 'Open file tree' : 'Close file tree'}
+            aria-expanded={!sidebarCollapsed}
             title={sidebarCollapsed ? 'Open sidebar' : 'Close sidebar'}
           >
             <Menu size={18} />
@@ -278,23 +292,7 @@ export const Toolbar = memo(function Toolbar({
           )}
         </span>
         {lastSend && lastSend.round > 0 && (
-          <span
-            className="toolbar-last-send"
-            title={
-              lastSend.decision
-                ? `Round ${lastSend.round} · ${lastSend.decision} · ${lastSend.openCount == null ? '?' : lastSend.openCount} open · sent ${new Date(lastSend.sentAt).toLocaleString()}`
-                : `Round ${lastSend.round} · sent ${new Date(lastSend.sentAt).toLocaleString()}`
-            }
-          >
-            <span className="toolbar-last-send-dot" aria-hidden="true" />
-            Round {lastSend.round}
-            {lastSend.decision && (
-              <span className="toolbar-last-send-decision" data-decision={lastSend.decision}>
-                {' · '}
-                {lastSend.decision}
-              </span>
-            )}
-          </span>
+          <ReviewHistoryPopover lastRound={lastSend.round} />
         )}
       </div>
       <div className="toolbar-right">
@@ -506,6 +504,23 @@ export const Toolbar = memo(function Toolbar({
                 Show status bar
               </span>
             </label>
+            <div className="settings-section-label">Whitespace</div>
+            <label className="settings-item">
+              <input
+                type="checkbox"
+                checked={ignoreSpaceChange}
+                onChange={(e) => onIgnoreSpaceChange(e.target.checked)}
+              />
+              Ignore space-change (-b)
+            </label>
+            <label className="settings-item">
+              <input
+                type="checkbox"
+                checked={ignoreAllSpace}
+                onChange={(e) => onIgnoreAllSpaceChange(e.target.checked)}
+              />
+              Ignore all space (-w)
+            </label>
             <div className="settings-item settings-item-spaced">
               <span>Code font</span>
               <button
@@ -595,9 +610,11 @@ export const Toolbar = memo(function Toolbar({
           onSend={onSendToAgent}
           sending={sending}
           agentWaiting={agentWaiting}
+          waitingAgents={waitingAgents}
           onCopyComments={onCopyComments}
+          onCopyMarkdown={onCopyMarkdown}
         />
       </div>
-    </div>
+    </header>
   )
 })

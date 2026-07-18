@@ -69,17 +69,26 @@ async function ghPrFetch(args: string[]): Promise<number> {
     return EXIT_USAGE
   }
   const base = baseUrl()
-  const res = await fetch(`${base}/api/gh/pr/init`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ref }),
-  })
+  // Prefer refresh so in-progress draft comments are preserved. Fall back to
+  // init only when no session is active (refresh 404s).
+  let res = await fetch(`${base}/api/gh/pr/refresh`, { method: 'POST' })
+  if (res.status === 404) {
+    res = await fetch(`${base}/api/gh/pr/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref }),
+    })
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     console.error(`Failed to fetch PR: ${(err as any).error ?? res.statusText}`)
     return 1
   }
-  const result = (await res.json()) as Record<string, unknown>
+  // After refresh, session details live on GET /api/gh/session.
+  const sessionRes = await fetch(`${base}/api/gh/session`)
+  const result = sessionRes.ok
+    ? ((await sessionRes.json()) as Record<string, unknown>)
+    : ((await res.json()) as Record<string, unknown>)
   if (values.json) {
     process.stdout.write(JSON.stringify(result, null, 2) + '\n')
   } else {
@@ -113,8 +122,15 @@ async function ghPrReview(args: string[]): Promise<number> {
     allowPositionals: false,
   })
   const decision = values.decision
-  if (decision !== 'approve' && decision !== 'comment' && decision !== 'request-changes') {
-    console.error('Usage: diffing gh pr-review --decision <approve|comment|request-changes> [--body <text>] [--dry-run]')
+  if (
+    decision !== 'approve' &&
+    decision !== 'comment' &&
+    decision !== 'request-changes' &&
+    decision !== 'draft'
+  ) {
+    console.error(
+      'Usage: diffing gh pr-review --decision <approve|comment|request-changes|draft> [--body <text>] [--dry-run]',
+    )
     return EXIT_USAGE
   }
   const base = baseUrl()

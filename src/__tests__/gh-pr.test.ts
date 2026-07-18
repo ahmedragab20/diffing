@@ -164,11 +164,12 @@ describe("gh-pr endpoints (integration)", () => {
         app = await makeApp(prStore);
     });
 
-    it("GET /api/gh/session returns 404 when no session", async () => {
+    it("GET /api/gh/session returns 200 prMode:false when no session", async () => {
         const res = await app.fetch(
             new Request("http://localhost/api/gh/session"),
         );
-        expect(res.status).toBe(404);
+        // Soft probe for SPA Root redirect — not a hard 404.
+        expect(res.status).toBe(200);
         const body = await res.json();
         expect(body.prMode).toBe(false);
     });
@@ -337,9 +338,15 @@ describe("gh-pr endpoints (integration)", () => {
         expect(body.overview.authors).toEqual([]);
     });
 
-    it("all /api/gh/* routes 404 when no PR session (local flow is byte-identical)", async () => {
+    it("mutating /api/gh/* routes 404 when no PR session; session probe is soft 200", async () => {
+        // Soft probe stays 200 + prMode:false even with empty store.
+        const sessionRes = await app.fetch(
+            new Request("http://localhost/api/gh/session"),
+        );
+        expect(sessionRes.status).toBe(200);
+        expect((await sessionRes.json()).prMode).toBe(false);
+
         const checks: Array<{ path: string; method: string }> = [
-            { path: "/api/gh/session", method: "GET" },
             { path: "/api/gh/pr-session/comments", method: "GET" },
             // /api/gh/submit is POST-only; we only assert it 404s when no session exists.
             { path: "/api/gh/submit", method: "POST" },
@@ -360,5 +367,74 @@ describe("gh-pr endpoints (integration)", () => {
             );
             expect(res.status).toBe(404);
         }
+    });
+
+    it("POST /api/gh/submit dryRun returns payload without marking submitted", async () => {
+        await prStore.set({
+            ...baseSession,
+            comments: [
+                {
+                    id: "c1",
+                    filePath: "src/x.ts",
+                    side: "additions",
+                    lineNumber: 1,
+                    lineContent: "+ x",
+                    body: "nit",
+                    status: "open",
+                    createdAt: 1000,
+                    replies: [],
+                },
+            ],
+        });
+        const res = await app.fetch(
+            new Request("http://localhost/api/gh/submit", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    decision: "comment",
+                    body: "overall",
+                    dryRun: true,
+                }),
+            }),
+        );
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body.ok).toBe(true);
+        expect(body.dryRun).toBe(true);
+        expect(body.payload).toBeDefined();
+        expect(body.payload.event).toBe("COMMENT");
+        expect(body.payload.comments).toHaveLength(1);
+        // Must not stamp submittedAt on a dry run.
+        const after = await prStore.get();
+        expect(after?.submittedAt).toBeUndefined();
+    });
+
+    it("PUT /api/gh/pr-session/comments/:id can resolve a draft comment locally", async () => {
+        await prStore.set({
+            ...baseSession,
+            comments: [
+                {
+                    id: "c1",
+                    filePath: "src/x.ts",
+                    side: "additions",
+                    lineNumber: 1,
+                    lineContent: "",
+                    body: "first",
+                    status: "open",
+                    createdAt: 1000,
+                    replies: [],
+                },
+            ],
+        });
+        const res = await app.fetch(
+            new Request("http://localhost/api/gh/pr-session/comments/c1", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status: "resolved" }),
+            }),
+        );
+        expect(res.status).toBe(200);
+        const after = await prStore.get();
+        expect(after?.comments[0].status).toBe("resolved");
     });
 });

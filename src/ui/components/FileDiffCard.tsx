@@ -14,7 +14,8 @@ import type {
 } from '../hooks/useSettings'
 import { CommentForm } from './CommentForm'
 import { CommentBubble } from './CommentBubble'
-import { SHIKI_THEME_MAP } from '../utils'
+import { DiffMinimap } from './DiffMinimap'
+import { SHIKI_THEME_MAP, scrollToLine } from '../utils'
 
 interface PendingComment {
   side: AnnotationSide
@@ -50,7 +51,15 @@ interface FileDiffCardProps {
    */
   autoCollapseLineThreshold: number
   onViewedChange: (filePath: string, viewed: boolean) => void
-  onAddComment: (filePath: string, side: AnnotationSide, lineNumber: number, lineContent: string, body: string, startLineNumber?: number) => void
+  onAddComment: (
+    filePath: string,
+    side: AnnotationSide,
+    lineNumber: number,
+    lineContent: string,
+    body: string,
+    startLineNumber?: number,
+    severity?: import('../../lib/types').CommentSeverity,
+  ) => void
   onDeleteComment: (id: string) => void
   /**
    * Fired by the header click AFTER the local `collapsed` state has been
@@ -257,7 +266,7 @@ export const FileDiffCard = memo(function FileDiffCard({
             pending!.lineNumber,
             pending!.startLineNumber,
           )}
-          onSubmit={(body) => {
+          onSubmit={(body, severity) => {
             const lineContent = getLineContent(
               pending!.side,
               pending!.lineNumber,
@@ -270,6 +279,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               lineContent,
               body,
               pending!.startLineNumber,
+              severity,
             )
             setPending(null)
             setSelectedRange(null)
@@ -323,6 +333,7 @@ export const FileDiffCard = memo(function FileDiffCard({
       ref={cardRef}
       className={`file-diff-card ${viewed ? 'file-diff-viewed' : ''} ${collapsed ? 'file-diff-collapsed' : ''}`}
       id={id}
+      data-file-path={filePath}
     >
       <div
         className="file-diff-card-header"
@@ -333,45 +344,47 @@ export const FileDiffCard = memo(function FileDiffCard({
         }}
       >
         <div className="file-diff-header-left">
-          <span className="file-diff-collapse-indicator">
+          <span className="file-diff-collapse-indicator" aria-hidden="true">
             {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           </span>
-          <span className="file-diff-name" title={filePath}>
-            {filePath}
-          </span>
-          <button
-            className="file-diff-copy-path-btn"
-            onClick={handleCopyPath}
-            title="Copy file path to clipboard"
-            aria-label="Copy file path to clipboard"
-          >
-            {pathCopyFlash ? <Check size={12} /> : <Copy size={12} />}
-          </button>
-          {getStatusBadge()}
-          {lineAnnotations.length > 0 && (
-            <span
-              className="file-diff-comment-badge"
-              title={`${lineAnnotations.length} inline comment${lineAnnotations.length === 1 ? '' : 's'}`}
+          <div className="file-diff-title-row">
+            <span className="file-diff-name" title={filePath}>
+              {filePath}
+            </span>
+            <button
+              className="file-diff-copy-path-btn"
+              onClick={handleCopyPath}
+              title="Copy file path to clipboard"
+              aria-label="Copy file path to clipboard"
             >
-              <MessageSquare size={10} />
-              {lineAnnotations.length}
-            </span>
-          )}
-          {liveSelectionCount > 0 && (
-            <span className="file-diff-selection-badge" aria-live="polite">
-              {liveSelectionCount} line{liveSelectionCount === 1 ? '' : 's'} selected
-            </span>
-          )}
-          {pathCopyFlash && (
-            <span className="file-diff-permalink-flash" role="status">
-              Copied path
-            </span>
-          )}
-          {permalinkFlash && (
-            <span className="file-diff-permalink-flash" role="status">
-              Copied {permalinkFlash}
-            </span>
-          )}
+              {pathCopyFlash ? <Check size={12} /> : <Copy size={12} />}
+            </button>
+            {getStatusBadge()}
+            {lineAnnotations.length > 0 && (
+              <span
+                className="file-diff-comment-badge"
+                title={`${lineAnnotations.length} inline comment${lineAnnotations.length === 1 ? '' : 's'}`}
+              >
+                <MessageSquare size={10} />
+                {lineAnnotations.length}
+              </span>
+            )}
+            {liveSelectionCount > 0 && (
+              <span className="file-diff-selection-badge" aria-live="polite">
+                {liveSelectionCount} line{liveSelectionCount === 1 ? '' : 's'} selected
+              </span>
+            )}
+            {pathCopyFlash && (
+              <span className="file-diff-permalink-flash" role="status">
+                Copied path
+              </span>
+            )}
+            {permalinkFlash && (
+              <span className="file-diff-permalink-flash" role="status">
+                Copied {permalinkFlash}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="file-diff-header-right" onClick={(e) => e.stopPropagation()}>
@@ -385,14 +398,21 @@ export const FileDiffCard = memo(function FileDiffCard({
                   ? 'Hide unchanged context (use original patch render)'
                   : 'Load full file so unchanged context becomes expandable'
               }
+              aria-label={
+                contentsLoading
+                  ? 'Loading context'
+                  : contextExpanded
+                    ? 'Hide context'
+                    : 'Expand context'
+              }
             >
-              {contentsLoading ? <Loader2 size={11} className="spin" /> : <Maximize2 size={11} />}
+              {contentsLoading ? <Loader2 size={12} className="spin" /> : <Maximize2 size={12} />}
               <span>
                 {contentsLoading
                   ? 'Loading…'
                   : contextExpanded
-                    ? 'Hide Context'
-                    : 'Expand Context'}
+                    ? 'Collapse'
+                    : 'Expand'}
               </span>
             </button>
           )}
@@ -402,9 +422,10 @@ export const FileDiffCard = memo(function FileDiffCard({
               onClick={handleOpenEditor}
               disabled={opening}
               title="Open and edit full file locally"
+              aria-label={opening ? 'Opening file' : 'Edit file'}
             >
-              <Edit3 size={11} />
-              <span>{opening ? 'Opening...' : 'Edit File'}</span>
+              <Edit3 size={12} />
+              <span>{opening ? 'Opening…' : 'Edit'}</span>
             </button>
           )}
           <button
@@ -414,14 +435,19 @@ export const FileDiffCard = memo(function FileDiffCard({
               setShowFileCommentForm(true)
             }}
             title="Comment on this entire file"
+            aria-label="Add file comment"
           >
-            <MessageSquare size={11} />
-            <span>Add Comment</span>
+            <MessageSquare size={12} />
+            <span>Comment</span>
           </button>
-          <label className={`viewed-label ${viewed ? 'viewed-checked' : ''}`}>
+          <label
+            className={`viewed-label ${viewed ? 'viewed-checked' : ''}`}
+            title={viewed ? 'Mark as unviewed' : 'Mark as viewed'}
+          >
             <input
               type="checkbox"
               checked={viewed}
+              aria-label={viewed ? 'Mark as unviewed' : 'Mark as viewed'}
               onChange={(e) => {
                 const next = e.target.checked
                 // Collapse optimistically in the same event as the parent
@@ -433,7 +459,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 onViewedChange(filePath, next)
               }}
             />
-            Viewed
+            <span className="viewed-label-text">Viewed</span>
           </label>
         </div>
       </div>
@@ -565,6 +591,15 @@ export const FileDiffCard = memo(function FileDiffCard({
       })()}
       {!collapsed && (
         <div className="file-diff-card-body">
+          {fileDiff.hunks.length > 0 && (
+            <DiffMinimap
+              fileDiff={fileDiff}
+              filePath={filePath}
+              onJump={(path, line) => {
+                scrollToLine(path, line, 'additions')
+              }}
+            />
+          )}
           {/* File-level comments section */}
           {(fileLevelAnnotations.length > 0 || showFileCommentForm) && (
             <div 
@@ -602,8 +637,8 @@ export const FileDiffCard = memo(function FileDiffCard({
                   <CommentForm
                     draftKey={`file-comment:${filePath}`}
                     lineContent=""
-                    onSubmit={(body) => {
-                      onAddComment(filePath, 'additions', 0, '', body)
+                    onSubmit={(body, severity) => {
+                      onAddComment(filePath, 'additions', 0, '', body, undefined, severity)
                       setShowFileCommentForm(false)
                     }}
                     onCancel={() => setShowFileCommentForm(false)}
@@ -659,11 +694,20 @@ export const FileDiffCard = memo(function FileDiffCard({
                   }
                 },
                 onLineNumberClick: (props) => {
-                  const side = props.annotationSide === 'deletions' ? '-' : '+'
-                  const link = `${filePath}:${side}${props.lineNumber}`
-                  navigator.clipboard?.writeText(link).then(
+                  const side = props.annotationSide === 'deletions' ? 'deletions' : 'additions'
+                  const short = `${filePath}:${side === 'deletions' ? '-' : '+'}${props.lineNumber}`
+                  const params = new URLSearchParams({
+                    file: filePath,
+                    line: String(props.lineNumber),
+                    side,
+                  })
+                  const full =
+                    typeof window !== 'undefined'
+                      ? `${window.location.origin}${window.location.pathname}?${params}`
+                      : short
+                  navigator.clipboard?.writeText(full).then(
                     () => {
-                      setPermalinkFlash(link)
+                      setPermalinkFlash(short)
                       setTimeout(() => setPermalinkFlash(null), 1600)
                     },
                     () => {},
@@ -746,9 +790,9 @@ export const FileDiffCard = memo(function FileDiffCard({
                   <CommentForm
                     draftKey={draftKey}
                     lineContent={getLineContent(pending!.side, pending!.lineNumber, pending!.startLineNumber)}
-                    onSubmit={(body) => {
+                    onSubmit={(body, severity) => {
                       const lineContent = getLineContent(pending!.side, pending!.lineNumber, pending!.startLineNumber)
-                      onAddComment(filePath, pending!.side, pending!.lineNumber, lineContent, body, pending!.startLineNumber)
+                      onAddComment(filePath, pending!.side, pending!.lineNumber, lineContent, body, pending!.startLineNumber, severity)
                       setPending(null)
                       setSelectedRange(null)
                     }}

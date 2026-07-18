@@ -98,6 +98,16 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
               File Comment
             </span>
           )}
+          {comment.outdated && (
+            <span className="comment-outdated-badge" title="Anchored code no longer matches the live diff">
+              <AlertTriangle size={10} /> outdated
+            </span>
+          )}
+          {comment.severity && comment.severity !== 'none' && (
+            <span className="comment-severity-badge" data-severity={comment.severity}>
+              {comment.severity}
+            </span>
+          )}
           {comment.startLineNumber && comment.startLineNumber !== comment.lineNumber && (
             <span
               style={{
@@ -164,6 +174,16 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                     }}
                   >
                     File Comment
+                  </span>
+                )}
+                {comment.outdated && (
+                  <span className="comment-outdated-badge" title="Anchored code no longer matches the live diff">
+                    <AlertTriangle size={10} /> outdated
+                  </span>
+                )}
+                {comment.severity && comment.severity !== 'none' && (
+                  <span className="comment-severity-badge" data-severity={comment.severity}>
+                    {comment.severity}
                   </span>
                 )}
                 {comment.startLineNumber && comment.startLineNumber !== comment.lineNumber && (

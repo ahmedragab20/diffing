@@ -54,6 +54,15 @@ describe('ShortcutsHelpModal', () => {
       expect(screen.getByText('Scroll to Top of diffs')).toBeInTheDocument()
       expect(screen.getByText('Scroll to Bottom of diffs')).toBeInTheDocument()
     })
+
+    it('documents review history, filters, and suggest-change affordances', () => {
+      render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} />)
+
+      expect(screen.getByText(/open review history timeline/i)).toBeInTheDocument()
+      expect(screen.getByText(/File-tree chips/i)).toBeInTheDocument()
+      expect(screen.getByText(/Suggest change/i)).toBeInTheDocument()
+      expect(screen.getByText(/deep permalink/i)).toBeInTheDocument()
+    })
   })
 
   describe('plan mode', () => {

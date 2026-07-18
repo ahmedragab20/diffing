@@ -17,6 +17,8 @@ import {
 import { parseExtensionFilter, matchesExtensionFilter, formatExtensionFilter } from '../lib/extensionFilter'
 import { FileTreeErrorBoundary } from './FileTreeErrorBoundary'
 
+export type FileTreeChipFilter = 'all' | 'unviewed' | 'has-comments' | 'since-last'
+
 interface FileTreeProps {
   files: FileDiffMetadata[]
   activeFile: string | null
@@ -28,6 +30,16 @@ interface FileTreeProps {
   onToggleCollapse?: () => void
   extensionFilter?: string
   onExtensionFilterChange?: (value: string) => void
+  /** Smart filter chips (AND-combined with extension + name search). */
+  chipFilter?: FileTreeChipFilter
+  onChipFilterChange?: (value: FileTreeChipFilter) => void
+  /**
+   * Files that differ from the last handoff baseline. Used by the
+   * "Since last" chip and row decoration.
+   */
+  sinceLastFiles?: Set<string>
+  /** Hide "Since last" when there is no handoff baseline yet. */
+  sinceLastAvailable?: boolean
 }
 
 export const FileTree = memo(function FileTree({
@@ -41,14 +53,29 @@ export const FileTree = memo(function FileTree({
   onToggleCollapse,
   extensionFilter = '',
   onExtensionFilterChange,
+  chipFilter = 'all',
+  onChipFilterChange,
+  sinceLastFiles,
+  sinceLastAvailable = false,
 }: FileTreeProps) {
   const [filter, setFilter] = useState('')
 
   const allowedExtensions = useMemo(() => parseExtensionFilter(extensionFilter), [extensionFilter])
   const filteredFiles = useMemo(() => {
-    if (allowedExtensions.length === 0) return files
-    return files.filter((f) => matchesExtensionFilter(f.name, allowedExtensions))
-  }, [files, allowedExtensions])
+    let list = files
+    if (allowedExtensions.length > 0) {
+      list = list.filter((f) => matchesExtensionFilter(f.name, allowedExtensions))
+    }
+    if (chipFilter === 'unviewed') {
+      list = list.filter((f) => !viewedFiles.has(f.name))
+    } else if (chipFilter === 'has-comments') {
+      list = list.filter((f) => (commentCounts[f.name] ?? 0) > 0)
+    } else if (chipFilter === 'since-last') {
+      const set = sinceLastFiles ?? new Set<string>()
+      list = list.filter((f) => set.has(f.name))
+    }
+    return list
+  }, [files, allowedExtensions, chipFilter, viewedFiles, commentCounts, sinceLastFiles])
 
   // Map files to paths required by @pierre/trees, deduping and resolving
   // file↔directory collisions so the underlying tree model never sees a
@@ -87,34 +114,48 @@ export const FileTree = memo(function FileTree({
 
   // Keep a ref of viewedFiles and commentCounts to avoid recreating renderRowDecoration
   // and maintain absolute freshness on virtualized list updates.
-  const decorationStateRef = useRef({ commentCounts, viewedFiles })
-  decorationStateRef.current = { commentCounts, viewedFiles }
+  const decorationStateRef = useRef({
+    commentCounts,
+    viewedFiles,
+    sinceLastFiles: sinceLastFiles ?? new Set<string>(),
+  })
+  decorationStateRef.current = {
+    commentCounts,
+    viewedFiles,
+    sinceLastFiles: sinceLastFiles ?? new Set<string>(),
+  }
 
   const renderRowDecoration = useCallback<FileTreeRowDecorationRenderer>((context) => {
     const path = context.item.path
-    const { commentCounts: latestComments, viewedFiles: latestViewed } = decorationStateRef.current
+    const {
+      commentCounts: latestComments,
+      viewedFiles: latestViewed,
+      sinceLastFiles: latestSince,
+    } = decorationStateRef.current
     const isViewed = latestViewed.has(path)
     const count = latestComments[path] ?? 0
+    const sinceLast = latestSince.has(path)
 
-    if (isViewed && count > 0) {
-      return {
-        text: `✓ 💬 ${count}`,
-        title: `Viewed, ${count} comment${count > 1 ? 's' : ''}`,
-      }
-    } else if (isViewed) {
-      return {
-        text: `✓`,
-        title: `Viewed`,
-      }
-    } else if (count > 0) {
-      return {
-        text: `💬 ${count}`,
-        title: `${count} comment${count > 1 ? 's' : ''}`,
-      }
+    const parts: string[] = []
+    const titles: string[] = []
+    if (sinceLast) {
+      parts.push('Δ')
+      titles.push('Changed since last review handoff')
     }
-    return null
-  }, 
-  [])
+    if (isViewed) {
+      parts.push('✓')
+      titles.push('Viewed')
+    }
+    if (count > 0) {
+      parts.push(`💬 ${count}`)
+      titles.push(`${count} comment${count > 1 ? 's' : ''}`)
+    }
+    if (parts.length === 0) return null
+    return {
+      text: parts.join(' '),
+      title: titles.join(' · '),
+    }
+  }, [])
 
   const { model } = useFileTree({
     paths,
@@ -231,6 +272,35 @@ export const FileTree = memo(function FileTree({
             )}
           </div>
         </div>
+        {onChipFilterChange && (
+          <div className="ft-chips" role="group" aria-label="Smart file filters">
+            {(
+              [
+                { id: 'all' as const, label: 'All' },
+                { id: 'unviewed' as const, label: 'Unviewed' },
+                { id: 'has-comments' as const, label: 'Comments' },
+                ...(sinceLastAvailable
+                  ? [{ id: 'since-last' as const, label: 'Since last' }]
+                  : []),
+              ] as const
+            ).map((chip) => (
+              <button
+                key={chip.id}
+                type="button"
+                className={`ft-chip ${chipFilter === chip.id ? 'ft-chip-active' : ''}`}
+                aria-pressed={chipFilter === chip.id}
+                title={
+                  chip.id === 'since-last'
+                    ? 'Files added or modified since the last Send to agent'
+                    : undefined
+                }
+                onClick={() => onChipFilterChange(chip.id)}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        )}
         {hiddenFiles > 0 && (
           <div className="ft-filter-status">
             <span className="ft-filter-status-text" title={filterLabel}>
