@@ -25,6 +25,8 @@ const SEVERITY_OPTIONS: { value: CommentSeverity; label: string }[] = [
 interface CommentFormProps {
   initialBody?: string
   lineContent?: string
+  /** Optional range label shown above the form, e.g. "L12–L15 · new". */
+  lineLabel?: string
   draftKey?: string
   /** Called with body + optional severity (omit / none = no severity). */
   onSubmit: (body: string, severity?: CommentSeverity) => void
@@ -36,6 +38,7 @@ interface CommentFormProps {
 export function CommentForm({
   initialBody,
   lineContent,
+  lineLabel,
   draftKey,
   onSubmit,
   onCancel,
@@ -181,6 +184,11 @@ export function CommentForm({
 
   return (
     <div className="comment-form" style={{ padding: '16px' }} role="form" aria-label="Comment form">
+      {lineLabel && (
+        <div className="comment-form-line-label" aria-live="polite">
+          Commenting on <strong>{lineLabel}</strong>
+        </div>
+      )}
       <div
         className="comment-form-tabs"
         role="tablist"

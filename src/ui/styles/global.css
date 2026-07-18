@@ -2652,7 +2652,7 @@ body {
     background: rgba(163, 190, 140, 0.1);
 }
 
-/* Gutter add button */
+/* Gutter add button — larger hit target, always-visible when host shows it */
 .gutter-add-btn {
     position: absolute;
     top: 50%;
@@ -2661,31 +2661,57 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
     border-radius: 50%;
     border: none;
     background: var(--primary);
     color: var(--bg-primary);
-    font-size: 14px;
-    font-weight: bold;
+    font-size: 15px;
+    font-weight: 700;
     cursor: pointer;
     line-height: 1;
     opacity: 0;
+    pointer-events: auto;
     transition:
         opacity var(--transition-fast),
-        background var(--transition-fast);
+        background var(--transition-fast),
+        transform var(--transition-fast);
     box-shadow: var(--shadow-md);
+    z-index: 2;
 }
 
-.gutter-add-btn:hover {
+.gutter-add-btn:hover,
+.gutter-add-btn:focus-visible {
     background: var(--primary-hover);
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.08);
+    outline: none;
 }
 
-/* Show gutter add btn on hover of diff line */
+/* Show gutter add btn on hover of diff line / number column / utility host */
 [data-line]:hover .gutter-add-btn,
-[data-column-number]:hover .gutter-add-btn {
+[data-column-number]:hover .gutter-add-btn,
+[data-gutter-utility-slot]:hover .gutter-add-btn,
+.gutter-add-btn:hover {
     opacity: 1;
+}
+
+.comment-form-line-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin: 0 0 10px;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-weak);
+    width: fit-content;
+}
+.comment-form-line-label strong {
+    color: var(--primary);
+    font-family: var(--font-mono);
+    font-weight: 700;
 }
 
 /* ==========================================================================

@@ -1,4 +1,4 @@
-import { useState, memo, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
+import { useState, memo, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react'
 import { FileDiff, MultiFileDiff } from '@pierre/diffs/react'
 import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide, SelectedLineRange } from '@pierre/diffs'
 import { ChevronDown, ChevronRight, Edit3, MessageSquare, Maximize2, Loader2, Undo2, AlertCircle, X, HelpCircle, GitCommit, Clock, User, Copy, Check } from 'lucide-react'
@@ -16,12 +16,15 @@ import { CommentForm } from './CommentForm'
 import { CommentBubble } from './CommentBubble'
 import { DiffMinimap } from './DiffMinimap'
 import { SHIKI_THEME_MAP, scrollToLine } from '../utils'
+import {
+  pendingFromSelection,
+  pendingFromLine,
+  pendingLineLabel,
+  selectedRangeFromPending,
+  type PendingLineComment,
+} from '../lib/commentSelection'
 
-interface PendingComment {
-  side: AnnotationSide
-  lineNumber: number
-  startLineNumber?: number
-}
+type PendingComment = PendingLineComment
 
 interface FileDiffCardProps {
   id?: string
@@ -101,6 +104,8 @@ export const FileDiffCard = memo(function FileDiffCard({
   const [pending, setPending] = useState<PendingComment | null>(null)
   const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
   const [liveSelectionCount, setLiveSelectionCount] = useState(0)
+  /** Capture gutter hover on pointerdown — click-time getHoveredLine() is racey. */
+  const gutterLineRef = useRef<{ lineNumber: number; side: AnnotationSide } | null>(null)
   const [permalinkFlash, setPermalinkFlash] = useState<string | null>(null)
   const [pathCopyFlash, setPathCopyFlash] = useState(false)
   const lineTotal = fileDiff.additionLines.length + fileDiff.deletionLines.length
@@ -223,8 +228,10 @@ export const FileDiffCard = memo(function FileDiffCard({
   const unsafeCSS = useMemo(() => buildUnsafeCSS(tabSize, fontSize, monoFontFamily), [tabSize, fontSize, monoFontFamily])
 
   const getLineContent = (side: AnnotationSide, lineNumber: number, startLineNumber?: number): string => {
-    const startNum = startLineNumber && startLineNumber !== lineNumber ? startLineNumber : lineNumber
-    const endNum = lineNumber
+    const a = startLineNumber ?? lineNumber
+    const b = lineNumber
+    const startNum = Math.min(a, b)
+    const endNum = Math.max(a, b)
     const resultLines: string[] = []
 
     for (let line = startNum; line <= endNum; line++) {
@@ -244,11 +251,38 @@ export const FileDiffCard = memo(function FileDiffCard({
         }
       }
       if (!found) {
+        // Context / expanded lines aren't in the patch arrays.
         resultLines.push('')
       }
     }
     return resultLines.join('\n')
   }
+
+  const openPending = useCallback((next: PendingComment) => {
+    setPending(next)
+    setSelectedRange(selectedRangeFromPending(next))
+    setLiveSelectionCount(0)
+  }, [])
+
+  const clearPending = useCallback(() => {
+    setPending(null)
+    setSelectedRange(null)
+    setLiveSelectionCount(0)
+    gutterLineRef.current = null
+  }, [])
+
+  // After a new draft opens, scroll its annotation into view (it can land
+  // off-screen when opened near the bottom of a tall file).
+  useEffect(() => {
+    if (!pending) return
+    const id = window.requestAnimationFrame(() => {
+      const el = cardRef.current?.querySelector('.comment-form, [data-annotation-slot]')
+      if (el instanceof HTMLElement) {
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      }
+    })
+    return () => cancelAnimationFrame(id)
+  }, [pending?.side, pending?.lineNumber, pending?.startLineNumber])
 
   const handleOpenEditor = async (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -288,37 +322,31 @@ export const FileDiffCard = memo(function FileDiffCard({
     annotation: DiffLineAnnotation<ReviewComment | { _pending: true }>,
   ) => {
     if ('_pending' in annotation.metadata) {
-      const draftKey = `new:${filePath}:${pending!.side}:${pending!.startLineNumber || pending!.lineNumber}:${pending!.lineNumber}`
+      if (!pending) return null
+      const draftKey = `new:${filePath}:${pending.side}:${pending.startLineNumber || pending.lineNumber}:${pending.lineNumber}`
+      const lineContent = getLineContent(
+        pending.side,
+        pending.lineNumber,
+        pending.startLineNumber,
+      )
       return (
         <CommentForm
           draftKey={draftKey}
-          lineContent={getLineContent(
-            pending!.side,
-            pending!.lineNumber,
-            pending!.startLineNumber,
-          )}
+          lineContent={lineContent}
+          lineLabel={pendingLineLabel(pending)}
           onSubmit={(body, severity) => {
-            const lineContent = getLineContent(
-              pending!.side,
-              pending!.lineNumber,
-              pending!.startLineNumber,
-            )
             onAddComment(
               filePath,
-              pending!.side,
-              pending!.lineNumber,
+              pending.side,
+              pending.lineNumber,
               lineContent,
               body,
-              pending!.startLineNumber,
+              pending.startLineNumber,
               severity,
             )
-            setPending(null)
-            setSelectedRange(null)
+            clearPending()
           }}
-          onCancel={() => {
-            setPending(null)
-            setSelectedRange(null)
-          }}
+          onCancel={clearPending}
         />
       )
     }
@@ -334,16 +362,49 @@ export const FileDiffCard = memo(function FileDiffCard({
     getHoveredLine: () => { lineNumber: number; side: AnnotationSide } | undefined,
   ) => (
     <button
+      type="button"
       className="gutter-add-btn"
-      onClick={() => {
+      title="Add comment on this line"
+      aria-label="Add comment on this line"
+      onPointerDown={(e) => {
+        // Capture while hover is still valid — click-time getHoveredLine() often returns undefined.
+        e.stopPropagation()
         const line = getHoveredLine()
-        if (line) {
-          setPending({ side: line.side, lineNumber: line.lineNumber })
-        }
+        gutterLineRef.current = line ?? null
+      }}
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        const line = gutterLineRef.current ?? getHoveredLine()
+        gutterLineRef.current = null
+        if (line) openPending(pendingFromLine(line.side, line.lineNumber))
       }}
     >
       +
     </button>
+  )
+
+  const handleSelectionStart = useCallback(() => {
+    setSelectedRange(null)
+    setLiveSelectionCount(0)
+  }, [])
+
+  const handleSelectionChange = useCallback((range: SelectedLineRange | null) => {
+    if (range) {
+      setLiveSelectionCount(Math.abs(range.end - range.start) + 1)
+    } else {
+      setLiveSelectionCount(0)
+    }
+  }, [])
+
+  const handleSelectionEnd = useCallback(
+    (range: SelectedLineRange | null) => {
+      setLiveSelectionCount(0)
+      if (!range) return
+      // Open the composer under the selection (works for single-click select + drag).
+      openPending(pendingFromSelection(range))
+    },
+    [openPending],
   )
 
   const allAnnotations: DiffLineAnnotation<ReviewComment | { _pending: true }>[] = [
@@ -705,28 +766,9 @@ export const FileDiffCard = memo(function FileDiffCard({
                 expandUnchanged: false,
                 collapsedContextThreshold,
                 expansionLineCount,
-                onLineSelectionStart: () => {
-                  setSelectedRange(null)
-                  setLiveSelectionCount(0)
-                },
-                onLineSelectionChange: (range) => {
-                  if (range) {
-                    setLiveSelectionCount(Math.abs(range.end - range.start) + 1)
-                  } else {
-                    setLiveSelectionCount(0)
-                  }
-                },
-                onLineSelectionEnd: (range) => {
-                  setLiveSelectionCount(0)
-                  if (range) {
-                    setSelectedRange(range)
-                    setPending({
-                      side: range.endSide || 'additions',
-                      lineNumber: range.end,
-                      startLineNumber: range.start,
-                    })
-                  }
-                },
+                onLineSelectionStart: handleSelectionStart,
+                onLineSelectionChange: handleSelectionChange,
+                onLineSelectionEnd: handleSelectionEnd,
                 onLineNumberClick: (props) => {
                   const side = props.annotationSide === 'deletions' ? 'deletions' : 'additions'
                   const short = `${filePath}:${side === 'deletions' ? '-' : '+'}${props.lineNumber}`
@@ -774,34 +816,24 @@ export const FileDiffCard = memo(function FileDiffCard({
               disableLineNumbers: !showLineNumbers,
               hunkSeparators,
               lineHoverHighlight,
-              onLineSelectionStart: () => {
-                setSelectedRange(null)
-                setLiveSelectionCount(0)
-              },
-              onLineSelectionChange: (range) => {
-                if (range) {
-                  setLiveSelectionCount(Math.abs(range.end - range.start) + 1)
-                } else {
-                  setLiveSelectionCount(0)
-                }
-              },
-              onLineSelectionEnd: (range) => {
-                setLiveSelectionCount(0)
-                if (range) {
-                  setSelectedRange(range)
-                  setPending({
-                    side: range.endSide || 'additions',
-                    lineNumber: range.end,
-                    startLineNumber: range.start,
-                  })
-                }
-              },
+              onLineSelectionStart: handleSelectionStart,
+              onLineSelectionChange: handleSelectionChange,
+              onLineSelectionEnd: handleSelectionEnd,
               onLineNumberClick: (props) => {
-                const side = props.annotationSide === 'deletions' ? '-' : '+'
-                const link = `${filePath}:${side}${props.lineNumber}`
-                navigator.clipboard?.writeText(link).then(
+                const side = props.annotationSide === 'deletions' ? 'deletions' : 'additions'
+                const short = `${filePath}:${side === 'deletions' ? '-' : '+'}${props.lineNumber}`
+                const params = new URLSearchParams({
+                  file: filePath,
+                  line: String(props.lineNumber),
+                  side,
+                })
+                const full =
+                  typeof window !== 'undefined'
+                    ? `${window.location.origin}${window.location.pathname}?${params}`
+                    : short
+                navigator.clipboard?.writeText(full).then(
                   () => {
-                    setPermalinkFlash(link)
+                    setPermalinkFlash(short)
                     setTimeout(() => setPermalinkFlash(null), 1600)
                   },
                   () => {},
@@ -817,46 +849,8 @@ export const FileDiffCard = memo(function FileDiffCard({
             selectedLines={selectedRange}
             lineAnnotations={allAnnotations}
             renderHeaderMetadata={() => null} // Header is disabled
-            renderAnnotation={(annotation) => {
-              if ('_pending' in annotation.metadata) {
-                const draftKey = `new:${filePath}:${pending!.side}:${pending!.startLineNumber || pending!.lineNumber}:${pending!.lineNumber}`
-                return (
-                  <CommentForm
-                    draftKey={draftKey}
-                    lineContent={getLineContent(pending!.side, pending!.lineNumber, pending!.startLineNumber)}
-                    onSubmit={(body, severity) => {
-                      const lineContent = getLineContent(pending!.side, pending!.lineNumber, pending!.startLineNumber)
-                      onAddComment(filePath, pending!.side, pending!.lineNumber, lineContent, body, pending!.startLineNumber, severity)
-                      setPending(null)
-                      setSelectedRange(null)
-                    }}
-                    onCancel={() => {
-                      setPending(null)
-                      setSelectedRange(null)
-                    }}
-                  />
-                )
-              }
-              return (
-                <CommentBubble
-                  comment={annotation.metadata as ReviewComment}
-                  onDelete={onDeleteComment}
-                />
-              )
-            }}
-            renderGutterUtility={(getHoveredLine) => (
-              <button
-                className="gutter-add-btn"
-                onClick={() => {
-                  const line = getHoveredLine()
-                  if (line) {
-                    setPending({ side: line.side, lineNumber: line.lineNumber })
-                  }
-                }}
-              >
-                +
-              </button>
-            )}
+            renderAnnotation={renderAnnotationFn}
+            renderGutterUtility={renderGutter}
           />
           ) : null}
         </div>
