@@ -7,7 +7,10 @@
 A local-first code review tool and double-sided bridge designed for the modern AI coding agent workflow. Review AI-generated changes in a high-fidelity, GitHub-like web UI, leave inline comments, and hand them back to your coding agent to fix in real time — and review the agent's **plan** the same way *before* it writes any code, approving, rejecting, or requesting changes on specific lines and sections.
 
 <img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/c1e12c28-610e-4d68-abb1-3c8dde58560e" />
+<img width="1604" height="1041" alt="image" src="https://github.com/user-attachments/assets/c1f7a525-6948-4cb6-aa02-17cc29f17210" />
 <img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/95a51403-3bce-453c-a831-43a2834c5ed7" />
+<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/3e0638e2-f780-4e14-9a44-ef10bf60d5f9" />
+
 
 ---
 
@@ -740,7 +743,7 @@ For advanced features, internal API endpoints, sequence specifications, and conf
 > - Web API endpoints (`/api/review/await`, `/api/comments`, `/api/plans`, `/api/agent/progress`, …).
 > - Agent guidance: root [`Agents.md`](Agents.md) and installable skills under `skills/`.
 
-Changelog for the latest release: [`CHANGELOG.md`](CHANGELOG.md) (current package version **0.8.0**).
+Changelog for the latest release: [`CHANGELOG.md`](CHANGELOG.md).
 
 
 ---
