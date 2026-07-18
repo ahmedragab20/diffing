@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import { usePlanVersions, usePlanVersion } from '../usePlans.js'
+import { usePlanVersions, usePlanVersion, usePlans } from '../usePlans.js'
 import type { Plan } from '../../../lib/plan-types.js'
 
 // Stub the SSE live bus so it doesn't try to open an EventSource.
@@ -145,5 +145,74 @@ describe('usePlanVersion', () => {
     })
     const { result } = renderHook(() => usePlanVersion('p1', 3), { wrapper: createWrapper() })
     await waitFor(() => expect(result.current.isCurrent).toBe(true))
+  })
+})
+
+describe('usePlans updatePlan / submitPlanVersion', () => {
+  beforeEach(() => mockFetch.mockReset())
+
+  it('updatePlan PUTs body/title and writes the returned plan into the cache', async () => {
+    const updated = { ...plan, body: 'edited', title: 'Edited', updatedAt: 9999 }
+    mockFetch.mockImplementation((url: any, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/plans') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([plan]) })
+      }
+      if (u === '/api/plan-review/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ round: 0, waiters: 0, lastDecidedAt: null }),
+        })
+      }
+      if (u === '/api/plans/p1' && init?.method === 'PUT') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(updated) })
+      }
+      return Promise.resolve({ ok: false, status: 404 })
+    })
+    const { result } = renderHook(() => usePlans(), { wrapper: createWrapper() })
+    await waitFor(() => expect(result.current.plans).toHaveLength(1))
+    await act(async () => {
+      await result.current.updatePlan('p1', { body: 'edited', title: 'Edited' })
+    })
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/plans/p1',
+      expect.objectContaining({ method: 'PUT' }),
+    )
+    await waitFor(() => expect(result.current.getPlan('p1')?.body).toBe('edited'))
+  })
+
+  it('submitPlanVersion POSTs with id and replaces the plan in cache', async () => {
+    const next = {
+      ...plan,
+      version: 4,
+      body: 'v4',
+      decision: 'pending' as const,
+      versions: [
+        ...plan.versions!,
+        { version: 4, body: 'v4', title: 'Plan', createdAt: 3000 },
+      ],
+    }
+    mockFetch.mockImplementation((url: any, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/plans' && (!init || !init.method || init.method === 'GET')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([plan]) })
+      }
+      if (u === '/api/plans' && init?.method === 'POST') {
+        return Promise.resolve({ ok: true, status: 201, json: () => Promise.resolve(next) })
+      }
+      if (u === '/api/plan-review/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ round: 0, waiters: 0, lastDecidedAt: null }),
+        })
+      }
+      return Promise.resolve({ ok: false, status: 404 })
+    })
+    const { result } = renderHook(() => usePlans(), { wrapper: createWrapper() })
+    await waitFor(() => expect(result.current.plans).toHaveLength(1))
+    await act(async () => {
+      await result.current.submitPlanVersion('p1', { title: 'Plan', body: 'v4' })
+    })
+    await waitFor(() => expect(result.current.getPlan('p1')?.version).toBe(4))
   })
 })

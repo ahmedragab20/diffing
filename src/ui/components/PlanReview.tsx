@@ -21,6 +21,10 @@ import {
   MessagesSquare,
   Maximize2,
   Minimize2,
+  Pencil,
+  Save,
+  GitBranch,
+  RotateCcw,
 } from 'lucide-react'
 import type { Plan, PlanComment, PlanDecision, PlanVersion } from '../../lib/plan-types'
 import { sectionTitleForLine, extractPlanLines } from '../../lib/plan-format'
@@ -63,9 +67,22 @@ import {
   PANEL_DEFAULT_H,
   type FloatComposerDraft,
 } from './PlanFloatComposers'
+import { PlanSourceEditor } from './PlanSourceEditor'
+import { faceReadToSourceLine } from '../lib/planLineSync'
+import { ConfirmDialog } from '../primitives/ConfirmDialog'
+import {
+  PlanDiscardEditsDialog,
+  type PlanDiscardChoice,
+} from './PlanDiscardEditsDialog'
+
+type PlanTextSnapshot = { body: string; title: string }
 
 export type PlanViewMode = 'source' | 'rendered' | 'split'
 export { PLAN_UI } from '../lib/planUiState'
+
+type PlanSaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
+
+const AUTOSAVE_MS = 700
 
 interface PlanReviewProps {
   plan: Plan
@@ -77,6 +94,8 @@ interface PlanReviewProps {
   showLineNumbers: boolean
   lineHoverHighlight: LineHoverHighlight
   viewMode: PlanViewMode
+  /** Parent-owned view mode (Source / Read / Split). Used when entering edit. */
+  onViewModeChange?: (mode: PlanViewMode) => void
   editorIDE?: string
   /** When provided, Settings owns the value (still persisted by the parent). */
   tocOpen?: boolean
@@ -133,6 +152,7 @@ export function PlanReview({
   showLineNumbers,
   lineHoverHighlight,
   viewMode,
+  onViewModeChange,
   editorIDE,
   tocOpen: tocOpenProp,
   onTocOpenChange,
@@ -150,6 +170,9 @@ export function PlanReview({
     addPlanReply,
     editPlanReply,
     removePlanReply,
+    updatePlan,
+    submitPlanVersion,
+    submittingPlanVersion,
   } = usePlans()
 
   /** Source-mode only pending annotation form. */
@@ -193,6 +216,42 @@ export function PlanReview({
     [commentsRailOpen, onCommentsRailOpenChange],
   )
   const [openingEditor, setOpeningEditor] = useState(false)
+  /** Live in-page edit of the current plan body/title. */
+  const [editMode, setEditMode] = useState(false)
+  const [draftBody, setDraftBody] = useState(plan.body)
+  const [draftTitle, setDraftTitle] = useState(plan.title)
+  const [saveStatus, setSaveStatus] = useState<PlanSaveStatus>('idle')
+  const [saveError, setSaveError] = useState<string | null>(null)
+  /** When dirty and an agent resubmits, hold the new version for the conflict banner. */
+  const [conflictVersion, setConflictVersion] = useState<number | null>(null)
+  const [saveAsVersionOpen, setSaveAsVersionOpen] = useState(false)
+  const [discardEditsOpen, setDiscardEditsOpen] = useState(false)
+  const [discardingEdits, setDiscardingEdits] = useState(false)
+  /** Shown after exiting edit when session edits were (auto)saved into the plan. */
+  const [exitSavedNotice, setExitSavedNotice] = useState(false)
+  const [activeEditLine, setActiveEditLine] = useState(1)
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Last successfully saved (autosave) snapshot — used for dirty detection. */
+  const editBaselineRef = useRef<{ body: string; title: string; version: number }>({
+    body: plan.body,
+    title: plan.title,
+    version: plan.version,
+  })
+  /**
+   * Snapshot when *this* edit session began. “Discard recent” restores here
+   * (including undoing autosaves from the current session).
+   */
+  const [sessionOrigin, setSessionOrigin] = useState<PlanTextSnapshot>({
+    body: plan.body,
+    title: plan.title,
+  })
+  /**
+   * Plan body/title when the user first entered edit for this plan version.
+   * Survives exit/re-enter so “Roll back to original” remains available.
+   * Cleared when plan id or version changes.
+   */
+  const [versionOriginal, setVersionOriginal] = useState<PlanTextSnapshot | null>(null)
+  const flushAutosaveRef = useRef<() => Promise<void>>(async () => {})
   /** Floating "Add comment" after selecting text in the rendered pane. */
   const [selectionPopup, setSelectionPopup] = useState<{
     x: number
@@ -240,23 +299,59 @@ export function PlanReview({
   const [viewingBody, setViewingBody] = useState<string>(plan.body)
   const [viewingTitle, setViewingTitle] = useState<string>(plan.title)
 
+  // Version / plan identity change invalidates the cross-session original.
+  const versionOriginalKeyRef = useRef(`${plan.id}:${plan.version}`)
+  useEffect(() => {
+    const key = `${plan.id}:${plan.version}`
+    if (versionOriginalKeyRef.current !== key) {
+      versionOriginalKeyRef.current = key
+      setVersionOriginal(null)
+      setExitSavedNotice(false)
+    }
+  }, [plan.id, plan.version])
+
   // When the server pushes a new version (live SSE), keep the viewer's
   // position in sync: if they were on the previous current, auto-bump them
   // to the new current; otherwise leave them where they are.
+  // While editing with unsaved draft changes, surface a conflict instead of
+  // clobbering the draft.
   const lastSyncedCurrentRef = useRef<number>(plan.version)
   useEffect(() => {
-    const wasOnCurrent = viewingVersion === lastSyncedCurrentRef.current
-    if (plan.version !== lastSyncedCurrentRef.current && wasOnCurrent) {
+    if (plan.version === lastSyncedCurrentRef.current) return
+    const prev = lastSyncedCurrentRef.current
+    lastSyncedCurrentRef.current = plan.version
+    const wasOnCurrent = viewingVersion === prev
+    const dirty =
+      editMode &&
+      (draftBody !== editBaselineRef.current.body || draftTitle !== editBaselineRef.current.title)
+    if (editMode && dirty) {
+      setConflictVersion(plan.version)
+      return
+    }
+    if (editMode && !dirty) {
+      // Accept server body into the draft (agent resubmit while idle in editor).
+      setDraftBody(plan.body)
+      setDraftTitle(plan.title)
+      editBaselineRef.current = { body: plan.body, title: plan.title, version: plan.version }
+      setSessionOrigin({ body: plan.body, title: plan.title })
+      setVersionOriginal(null)
+      setSaveStatus('idle')
+      setConflictVersion(null)
+    }
+    if (wasOnCurrent) {
       setViewingVersion(plan.version)
     }
-    lastSyncedCurrentRef.current = plan.version
-  }, [plan.version, viewingVersion])
+  }, [plan.version, plan.body, plan.title, viewingVersion, editMode, draftBody, draftTitle])
 
   // Resolve the viewed version's body+title. Cache fast path: the same body
   // lives in `plan.versions[]`. Falls back to the network only if the
   // in-memory copy is missing (defensive — shouldn't happen in practice).
+  // Skip overwriting while edit mode owns the draft (current version only).
   useEffect(() => {
     let cancelled = false
+    if (editMode && viewingVersion === plan.version) {
+      return
+    }
     if (viewingVersion === plan.version) {
       setViewingBody(plan.body)
       setViewingTitle(plan.title)
@@ -279,7 +374,7 @@ export function PlanReview({
     return () => {
       cancelled = true
     }
-  }, [viewingVersion, plan.version, plan.body, plan.title, plan.id, versions])
+  }, [viewingVersion, plan.version, plan.body, plan.title, plan.id, versions, editMode])
 
   // Switching versions invalidates in-flight selection/pending/float drafts.
   useEffect(() => {
@@ -290,6 +385,42 @@ export function PlanReview({
   }, [viewingVersion])
 
   const isHistorical = viewingVersion !== plan.version
+  const canEdit = !isHistorical
+  const displayBody = editMode && canEdit ? draftBody : viewingBody
+  const displayTitle = editMode && canEdit ? draftTitle : viewingTitle
+  const isDirty =
+    editMode &&
+    (draftBody !== editBaselineRef.current.body || draftTitle !== editBaselineRef.current.title)
+  /** Changes vs this edit session start (includes in-session autosaves). */
+  const hasRecentEdits =
+    editMode &&
+    (draftBody !== sessionOrigin.body ||
+      draftTitle !== sessionOrigin.title ||
+      plan.body !== sessionOrigin.body ||
+      plan.title !== sessionOrigin.title)
+  /**
+   * Plan has drifted from the first-enter snapshot for this version
+   * (true after exit+re-enter with saved work, or mid-session after autosave
+   * when original was captured at first enter — then recent covers it unless
+   * original === session).
+   */
+  const hasOriginalRollback =
+    editMode &&
+    !!versionOriginal &&
+    (draftBody !== versionOriginal.body ||
+      draftTitle !== versionOriginal.title ||
+      plan.body !== versionOriginal.body ||
+      plan.title !== versionOriginal.title)
+  /** Original and session start differ → re-entered after prior saved edits. */
+  const originalDiffersFromSession =
+    !!versionOriginal &&
+    (versionOriginal.body !== sessionOrigin.body || versionOriginal.title !== sessionOrigin.title)
+  /**
+   * Dual choice only when the user re-entered (original ≠ session) and also
+   * has newer session edits. Otherwise a single-action discard/rollback.
+   */
+  const discardIsDual = originalDiffersFromSession && hasRecentEdits && hasOriginalRollback
+  const canDiscard = hasRecentEdits || hasOriginalRollback
   const versionOptions = useMemo(
     () =>
       versions.map((v) => ({
@@ -327,7 +458,7 @@ export function PlanReview({
   const openCount = comments.filter((c) => c.status === 'open').length
   const totalCommentCount = allComments.length
 
-  const lineRange = (start: number | undefined, end: number) => extractPlanLines(viewingBody, start ?? end, end)
+  const lineRange = (start: number | undefined, end: number) => extractPlanLines(displayBody, start ?? end, end)
 
   const openSourcePending = useCallback((next: PendingComment) => {
     const normalized = linePendingToPlan(planToLinePending(next))
@@ -347,9 +478,9 @@ export function PlanReview({
   }, [])
 
   const planLineBounds = useMemo(() => {
-    const total = viewingBody.replace(/\r\n/g, '\n').split('\n').length
+    const total = displayBody.replace(/\r\n/g, '\n').split('\n').length
     return { min: 1, max: Math.max(1, total) }
-  }, [viewingBody])
+  }, [displayBody])
 
   const commitSourceComment = (
     p: PendingComment,
@@ -363,7 +494,7 @@ export function PlanReview({
       lineNumber: p.lineNumber,
       startLineNumber: p.startLineNumber,
       lineContent: exactLines,
-      sectionTitle: sectionTitleForLine(viewingBody, start),
+      sectionTitle: sectionTitleForLine(displayBody, start),
       body,
       severity: severity && severity !== 'none' ? severity : undefined,
       createdAtPlanVersion: viewingVersion,
@@ -377,8 +508,8 @@ export function PlanReview({
    */
   const buildAgentLineContent = useCallback(
     (startLine: number, endLine: number) => {
-      const exact = extractPlanLines(viewingBody, startLine, endLine)
-      const lines = viewingBody.replace(/\r\n/g, '\n').split('\n')
+      const exact = extractPlanLines(displayBody, startLine, endLine)
+      const lines = displayBody.replace(/\r\n/g, '\n').split('\n')
       const from = Math.max(1, startLine - 1)
       const to = Math.min(lines.length, endLine + 1)
       if (from === startLine && to === endLine) return exact
@@ -389,7 +520,7 @@ export function PlanReview({
       }
       return parts.join('\n')
     },
-    [viewingBody],
+    [displayBody],
   )
 
   const commitFloatComment = useCallback(
@@ -405,13 +536,13 @@ export function PlanReview({
         startLineNumber: draft.startLineNumber,
         lineContent: draft.sourceContext || draft.exactLines,
         selectedQuote: draft.selectedQuote.trim() || undefined,
-        sectionTitle: draft.sectionTitle ?? sectionTitleForLine(viewingBody, start),
+        sectionTitle: draft.sectionTitle ?? sectionTitleForLine(displayBody, start),
         body,
         severity: severity && severity !== 'none' ? severity : undefined,
         createdAtPlanVersion: viewingVersion,
       })
     },
-    [addPlanComment, plan.id, viewingBody, viewingVersion],
+    [addPlanComment, plan.id, displayBody, viewingVersion],
   )
 
   const annotations: LineAnnotation<PlanAnnotationMeta>[] = useMemo(() => {
@@ -498,16 +629,320 @@ export function PlanReview({
     return `…/${parts.slice(-3).join('/')}`
   }, [copyablePath])
 
-  const outline = useMemo(() => buildPlanOutline(viewingBody), [viewingBody])
+  const outline = useMemo(() => buildPlanOutline(displayBody), [displayBody])
   const wordCount = useMemo(() => {
-    const t = viewingBody.trim()
+    const t = displayBody.trim()
     if (!t) return 0
     return t.split(/\s+/).length
-  }, [viewingBody])
+  }, [displayBody])
   const lineCount = useMemo(
-    () => (viewingBody ? viewingBody.replace(/\r\n/g, '\n').split('\n').length : 0),
-    [viewingBody],
+    () => (displayBody ? displayBody.replace(/\r\n/g, '\n').split('\n').length : 0),
+    [displayBody],
   )
+
+  const enterEditMode = useCallback(() => {
+    if (viewingVersion !== plan.version) return
+    const snap: PlanTextSnapshot = { body: plan.body, title: plan.title }
+    setDraftBody(snap.body)
+    setDraftTitle(snap.title)
+    editBaselineRef.current = { body: snap.body, title: snap.title, version: plan.version }
+    setSessionOrigin(snap)
+    // First enter for this plan version pins the “original” for rollback.
+    setVersionOriginal((prev) => prev ?? snap)
+    setSaveStatus('idle')
+    setSaveError(null)
+    setConflictVersion(null)
+    setDiscardEditsOpen(false)
+    setExitSavedNotice(false)
+    setEditMode(true)
+    setPending(null)
+    setSelectedRange(null)
+    setFloatComposers([])
+    setSelectionPopup(null)
+    if (zenMode) setZen(false)
+    if (viewMode !== 'split') onViewModeChange?.('split')
+  }, [viewingVersion, plan.version, plan.body, plan.title, zenMode, setZen, viewMode, onViewModeChange])
+
+  const exitEditMode = useCallback(async () => {
+    const sessionHadChanges =
+      draftBody !== sessionOrigin.body ||
+      draftTitle !== sessionOrigin.title ||
+      plan.body !== sessionOrigin.body ||
+      plan.title !== sessionOrigin.title
+    // Flush any pending autosave before leaving.
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current)
+      autosaveTimerRef.current = null
+    }
+    await flushAutosaveRef.current()
+    // Prefer the draft we just flushed (plan prop may lag a frame behind cache).
+    setViewingBody(draftBody)
+    setViewingTitle(draftTitle.trim() || 'Untitled plan')
+    setEditMode(false)
+    setSaveStatus('idle')
+    setSaveError(null)
+    setConflictVersion(null)
+    setDiscardEditsOpen(false)
+    // Tell the user saved edits become the re-entry baseline (session origin
+    // resets next time), while “original” rollback remains available.
+    if (sessionHadChanges) setExitSavedNotice(true)
+  }, [draftBody, draftTitle, sessionOrigin, plan.body, plan.title])
+
+  const discardConflictAndLoad = useCallback(() => {
+    setDraftBody(plan.body)
+    setDraftTitle(plan.title)
+    editBaselineRef.current = { body: plan.body, title: plan.title, version: plan.version }
+    setSessionOrigin({ body: plan.body, title: plan.title })
+    setVersionOriginal(null)
+    setConflictVersion(null)
+    setSaveStatus('idle')
+    setSaveError(null)
+    setViewingVersion(plan.version)
+  }, [plan.body, plan.title, plan.version])
+
+  /** Restore plan (+ draft) to a snapshot, persisting via PUT when needed. */
+  const restorePlanSnapshot = useCallback(
+    async (target: PlanTextSnapshot) => {
+      if (!editMode) return
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current)
+        autosaveTimerRef.current = null
+      }
+      setDiscardingEdits(true)
+      setSaveError(null)
+      try {
+        setDraftBody(target.body)
+        setDraftTitle(target.title)
+        if (plan.body !== target.body || plan.title !== target.title) {
+          setSaveStatus('saving')
+          const updated = await updatePlan(plan.id, {
+            body: target.body,
+            title: target.title,
+          })
+          editBaselineRef.current = {
+            body: updated.body,
+            title: updated.title,
+            version: updated.version,
+          }
+          setViewingBody(updated.body)
+          setViewingTitle(updated.title)
+          setSessionOrigin({ body: updated.body, title: updated.title })
+        } else {
+          editBaselineRef.current = {
+            body: target.body,
+            title: target.title,
+            version: plan.version,
+          }
+          setViewingBody(target.body)
+          setViewingTitle(target.title)
+          setSessionOrigin({ body: target.body, title: target.title })
+        }
+        setSaveStatus('idle')
+        setDiscardEditsOpen(false)
+        setExitSavedNotice(false)
+      } catch (err) {
+        setSaveStatus('error')
+        setSaveError(err instanceof Error ? err.message : 'Failed to discard edits')
+      } finally {
+        setDiscardingEdits(false)
+      }
+    },
+    [editMode, plan.body, plan.title, plan.id, plan.version, updatePlan],
+  )
+
+  const handleDiscardChoice = useCallback(
+    async (choice: PlanDiscardChoice) => {
+      if (choice === 'recent') {
+        await restorePlanSnapshot(sessionOrigin)
+        return
+      }
+      if (versionOriginal) {
+        await restorePlanSnapshot(versionOriginal)
+      }
+    },
+    [restorePlanSnapshot, sessionOrigin, versionOriginal],
+  )
+
+  const openDiscardDialog = useCallback(() => {
+    if (!editMode || !canDiscard || discardingEdits || saveStatus === 'saving') return
+    setDiscardEditsOpen(true)
+  }, [editMode, canDiscard, discardingEdits, saveStatus])
+
+  const flushAutosave = useCallback(async () => {
+    if (!editMode) return
+    const body = draftBody
+    const title = draftTitle.trim() || 'Untitled plan'
+    if (!body.trim()) {
+      setSaveStatus('error')
+      setSaveError('Plan body cannot be empty')
+      return
+    }
+    if (body === editBaselineRef.current.body && title === editBaselineRef.current.title) {
+      setSaveStatus((s) => (s === 'dirty' ? 'saved' : s))
+      return
+    }
+    setSaveStatus('saving')
+    setSaveError(null)
+    try {
+      const updated = await updatePlan(plan.id, { body, title })
+      editBaselineRef.current = {
+        body: updated.body,
+        title: updated.title,
+        version: updated.version,
+      }
+      setViewingBody(updated.body)
+      setViewingTitle(updated.title)
+      setSaveStatus('saved')
+    } catch (err) {
+      setSaveStatus('error')
+      setSaveError(err instanceof Error ? err.message : 'Save failed')
+    }
+  }, [editMode, draftBody, draftTitle, updatePlan, plan.id])
+
+  flushAutosaveRef.current = flushAutosave
+
+  // Debounced autosave while editing.
+  useEffect(() => {
+    if (!editMode) return
+    const title = draftTitle.trim() || 'Untitled plan'
+    const dirty =
+      draftBody !== editBaselineRef.current.body || title !== editBaselineRef.current.title
+    if (!dirty) return
+    if (!draftBody.trim()) {
+      setSaveStatus('error')
+      setSaveError('Plan body cannot be empty')
+      return
+    }
+    setSaveStatus('dirty')
+    setSaveError(null)
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+    autosaveTimerRef.current = setTimeout(() => {
+      autosaveTimerRef.current = null
+      void flushAutosave()
+    }, AUTOSAVE_MS)
+    return () => {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current)
+        autosaveTimerRef.current = null
+      }
+    }
+  }, [editMode, draftBody, draftTitle, flushAutosave])
+
+  // Warn on tab close with unsaved edits.
+  useEffect(() => {
+    if (!editMode || !isDirty) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [editMode, isDirty])
+
+  const handleSaveAsNewVersion = useCallback(async () => {
+    const body = draftBody
+    const title = draftTitle.trim() || 'Untitled plan'
+    if (!body.trim()) {
+      setSaveStatus('error')
+      setSaveError('Plan body cannot be empty')
+      setSaveAsVersionOpen(false)
+      return
+    }
+    setSaveAsVersionOpen(false)
+    setSaveStatus('saving')
+    setSaveError(null)
+    try {
+      // Flush in-place first is unnecessary — upsert creates a new version
+      // from the draft directly.
+      const updated = await submitPlanVersion(plan.id, {
+        title,
+        body,
+        source: plan.source,
+        model: plan.model,
+      })
+      const snap: PlanTextSnapshot = { body: updated.body, title: updated.title }
+      editBaselineRef.current = {
+        body: snap.body,
+        title: snap.title,
+        version: updated.version,
+      }
+      // New version: reset session + original to this snapshot.
+      setSessionOrigin(snap)
+      setVersionOriginal(snap)
+      versionOriginalKeyRef.current = `${plan.id}:${updated.version}`
+      setDraftBody(snap.body)
+      setDraftTitle(snap.title)
+      setViewingBody(snap.body)
+      setViewingTitle(snap.title)
+      setViewingVersion(updated.version)
+      setConflictVersion(null)
+      setExitSavedNotice(false)
+      setSaveStatus('saved')
+    } catch (err) {
+      setSaveStatus('error')
+      setSaveError(err instanceof Error ? err.message : 'Save as new version failed')
+    }
+  }, [draftBody, draftTitle, submitPlanVersion, plan.id, plan.source, plan.model])
+
+  // Split edit: face *only* the Read overflow pane to the active Source line.
+  // Never window.scrollTo — that yanks Source with the page and fights the caret.
+  useEffect(() => {
+    if (!editMode || viewMode !== 'split') return
+    let raf = 0
+    const run = () => {
+      raf = 0
+      const root = renderedRef.current
+      if (!root) return
+      const pane =
+        (root.closest('.plan-rendered-layout') as HTMLElement | null) ??
+        (root.parentElement as HTMLElement | null)
+      faceReadToSourceLine(root, activeEditLine, {
+        scrollContainer: pane,
+        onlyIfOutOfView: true,
+        behavior: 'auto',
+      })
+    }
+    raf = requestAnimationFrame(run)
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+    }
+    // Intentionally omit displayBody: re-facing on every keystroke fights the
+    // caret and reflows while typing.
+  }, [editMode, viewMode, activeEditLine])
+
+  // Keyboard: e toggles edit; ⌘/Ctrl+S flushes autosave.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase()
+      const inField =
+        tag === 'input' ||
+        tag === 'textarea' ||
+        tag === 'select' ||
+        !!target?.isContentEditable
+
+      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+        if (!editMode) return
+        e.preventDefault()
+        if (autosaveTimerRef.current) {
+          clearTimeout(autosaveTimerRef.current)
+          autosaveTimerRef.current = null
+        }
+        void flushAutosave()
+        return
+      }
+
+      if (e.key === 'e' || e.key === 'E') {
+        if (inField) return
+        if (e.metaKey || e.ctrlKey || e.altKey) return
+        e.preventDefault()
+        if (editMode) void exitEditMode()
+        else if (canEdit) enterEditMode()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [editMode, canEdit, enterEditMode, exitEditMode, flushAutosave])
 
   const flashCopy = useCallback((label: string) => {
     setCopyFlash(label)
@@ -582,7 +1017,7 @@ export function PlanReview({
    *   does not yank the chip away). `sync` — full sync, may clear the chip.
    */
   const evaluateRenderedSelection = useCallback((mode: 'update' | 'sync' = 'sync') => {
-    if (isHistorical) {
+    if (isHistorical || editMode) {
       if (mode === 'sync') setSelectionPopup(null)
       return
     }
@@ -607,7 +1042,7 @@ export function PlanReview({
     // Prefer mapped source lines; if mapping fails, still show the chip
     // so highlight → Add comment always has a path forward.
     const mapped =
-      mapSelectionToLines(viewingBody, text) ??
+      mapSelectionToLines(displayBody, text) ??
       ({
         text: text.replace(/\s+/g, ' ').trim(),
         startLine: 1,
@@ -649,12 +1084,12 @@ export function PlanReview({
       endLine: mapped.endLine,
       text: mapped.text,
     })
-  }, [viewingBody, isHistorical])
+  }, [displayBody, isHistorical, editMode])
 
   // Document-level listeners so we never miss reverse selections, releases
   // outside the pane, or keyboard Shift+Arrow selections.
   useEffect(() => {
-    if (isHistorical || !showRendered) return
+    if (isHistorical || editMode || !showRendered) return
 
     let selTimer: ReturnType<typeof setTimeout> | 0 = 0
     const schedule = (mode: 'update' | 'sync') => {
@@ -692,7 +1127,7 @@ export function PlanReview({
       document.removeEventListener('keyup', onKeyUp, true)
       document.removeEventListener('selectionchange', onSelectionChange)
     }
-  }, [isHistorical, showRendered, evaluateRenderedSelection])
+  }, [isHistorical, editMode, showRendered, evaluateRenderedSelection])
 
   const startCommentFromSelection = useCallback(() => {
     if (!selectionPopup) return
@@ -717,7 +1152,7 @@ export function PlanReview({
 
     const start = selectionPopup.startLine
     const end = selectionPopup.endLine
-    const exact = extractPlanLines(viewingBody, start, end)
+    const exact = extractPlanLines(displayBody, start, end)
     const draft: FloatComposerDraft = {
       id: crypto.randomUUID(),
       lineNumber: end,
@@ -725,7 +1160,7 @@ export function PlanReview({
       selectedQuote: selectionPopup.text,
       exactLines: exact,
       sourceContext: buildAgentLineContent(start, end),
-      sectionTitle: sectionTitleForLine(viewingBody, start),
+      sectionTitle: sectionTitleForLine(displayBody, start),
       panelPos: pos,
       panelSize: { width: PANEL_DEFAULT_W, height: PANEL_DEFAULT_H },
       minimized: false,
@@ -736,15 +1171,30 @@ export function PlanReview({
     setSelectionPopup(null)
     // Keep the native selection until the next user interaction would clear it;
     // our page-space overlays also keep the highlight visible after selection drops.
-  }, [selectionPopup, floatComposers.length, viewingBody, buildAgentLineContent])
+  }, [selectionPopup, floatComposers.length, displayBody, buildAgentLineContent])
 
-  // Esc: dismiss Add-comment chip first; then exit zen if active.
+  // Esc: dismiss chip → (edit) open discard if anything to discard → exit zen.
+  // Works even when focus is in the source textarea so discard is keyboard-accessible.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      if (discardEditsOpen || saveAsVersionOpen) return // Modal owns Escape
       if (selectionPopup) {
         e.preventDefault()
         setSelectionPopup(null)
+        return
+      }
+      if (editMode) {
+        if (canDiscard && !discardingEdits && saveStatus !== 'saving') {
+          e.preventDefault()
+          e.stopPropagation()
+          setDiscardEditsOpen(true)
+          return
+        }
+        // Nothing to discard — leave edit mode (flush on exit).
+        e.preventDefault()
+        e.stopPropagation()
+        void exitEditMode()
         return
       }
       if (zenActive) {
@@ -754,7 +1204,18 @@ export function PlanReview({
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [selectionPopup, zenActive, setZen])
+  }, [
+    selectionPopup,
+    zenActive,
+    setZen,
+    editMode,
+    canDiscard,
+    discardingEdits,
+    saveStatus,
+    discardEditsOpen,
+    saveAsVersionOpen,
+    exitEditMode,
+  ])
 
   // Dismiss only the lightweight chip on scroll (not open composers).
   useEffect(() => {
@@ -819,10 +1280,23 @@ export function PlanReview({
     document.addEventListener('mouseup', handleUp)
   }, [])
 
-  const sourcePanel = (
+  const sourcePanel = editMode ? (
+    <div className="plan-file plan-file-editing">
+      <PlanSourceEditor
+        value={draftBody}
+        onChange={setDraftBody}
+        onActiveLineChange={setActiveEditLine}
+        fontSize={fontSize}
+        monoFontFamily={monoFontFamily}
+        defaultTabSize={defaultTabSize}
+        lineWrap={lineWrap}
+        showLineNumbers={showLineNumbers}
+      />
+    </div>
+  ) : (
     <div className="plan-file">
       <DiffsFile<PlanAnnotationMeta>
-        file={{ name: plan.sourcePath?.split(/[/\\]/).pop() || 'PLAN.md', contents: viewingBody, lang: 'markdown' }}
+        file={{ name: plan.sourcePath?.split(/[/\\]/).pop() || 'PLAN.md', contents: displayBody, lang: 'markdown' }}
         options={{
           disableFileHeader: true,
           enableGutterUtility: true,
@@ -921,7 +1395,7 @@ export function PlanReview({
       >
         {/* React-owned sections + comments (no DOM injection — survives mode switches). */}
         <PlanReadInlineComments
-          body={viewingBody}
+          body={displayBody}
           outline={outline}
           comments={lineComments}
           onResolve={(id) => resolvePlanComment(plan.id, id)}
@@ -945,40 +1419,75 @@ export function PlanReview({
   )
 
   const floatingSelectionComposers =
-    showRendered && floatComposers.length > 0 ? (
+    showRendered && !editMode && floatComposers.length > 0 ? (
       <PlanFloatComposers
         planId={plan.id}
         composers={floatComposers}
         onChange={setFloatComposers}
         onSubmit={commitFloatComment}
-        planBody={viewingBody}
+        planBody={displayBody}
         buildSourceContext={buildAgentLineContent}
         renderedRootRef={renderedRef}
         layoutEpoch={floatLayoutEpoch}
       />
     ) : null
 
+  const saveStatusLabel =
+    saveStatus === 'saving'
+      ? 'Saving…'
+      : saveStatus === 'saved'
+        ? 'Saved'
+        : saveStatus === 'dirty'
+          ? 'Unsaved'
+          : saveStatus === 'error'
+            ? saveError || 'Save failed'
+            : null
+
   return (
-    <div className={`plan-review ${zenActive ? 'plan-review-zen' : ''} ${isReadOnly ? 'plan-review-read' : ''}`}>
+    <div
+      className={`plan-review ${zenActive ? 'plan-review-zen' : ''} ${isReadOnly ? 'plan-review-read' : ''} ${
+        editMode ? 'plan-review-editing' : ''
+      }`}
+    >
       <header className="plan-review-head" ref={headRef}>
         <div className="plan-review-head-main">
           <div className="plan-review-title-row">
-            <h2 className="plan-review-title" title={viewingTitle}>
-              {viewingTitle}
-              {isHistorical && viewingTitle !== plan.title && (
-                <span
-                  className="plan-review-title-historical"
-                  title={`Currently submitted title: ${plan.title}`}
-                >
-                  {' '}
-                  · was “{plan.title}”
-                </span>
-              )}
-            </h2>
+            {editMode ? (
+              <input
+                className="plan-review-title-input"
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+                aria-label="Plan title"
+                placeholder="Untitled plan"
+              />
+            ) : (
+              <h2 className="plan-review-title" title={displayTitle}>
+                {displayTitle}
+                {isHistorical && displayTitle !== plan.title && (
+                  <span
+                    className="plan-review-title-historical"
+                    title={`Currently submitted title: ${plan.title}`}
+                  >
+                    {' '}
+                    · was “{plan.title}”
+                  </span>
+                )}
+              </h2>
+            )}
             <span className={`plan-badge ${decision.className}`}>
               <DecisionIcon size={12} aria-hidden="true" />
               {decision.label}
             </span>
+            {editMode && saveStatusLabel && (
+              <span
+                className={`plan-review-chip plan-review-save-status plan-review-save-status-${saveStatus}`}
+                role="status"
+                title={saveError ?? undefined}
+              >
+                {saveStatus === 'saving' && <Loader2 size={11} className="spin" aria-hidden="true" />}
+                {saveStatusLabel}
+              </span>
+            )}
           </div>
 
           <div className="plan-review-meta">
@@ -989,7 +1498,15 @@ export function PlanReview({
                 <History size={12} aria-hidden="true" className="plan-review-version-switcher-icon" />
                 <Select
                   value={String(viewingVersion)}
-                  onValueChange={(v) => setViewingVersion(Number(v))}
+                  onValueChange={(v) => {
+                    const next = Number(v)
+                    if (editMode && next !== plan.version) {
+                      // Leave edit mode before browsing history (flush first).
+                      void exitEditMode().then(() => setViewingVersion(next))
+                      return
+                    }
+                    setViewingVersion(next)
+                  }}
                   options={versionOptions}
                   ariaLabel="Plan version"
                 />
@@ -1081,7 +1598,7 @@ export function PlanReview({
             <button
               type="button"
               className="plan-icon-btn"
-              onClick={() => copyText(viewingBody, 'Markdown copied')}
+              onClick={() => copyText(displayBody, 'Markdown copied')}
               aria-label="Copy plan markdown"
             >
               <FileText size={14} />
@@ -1099,6 +1616,95 @@ export function PlanReview({
                 {openingEditor ? <Loader2 size={14} className="spin" /> : <ExternalLink size={14} />}
               </button>
             </Tooltip>
+          )}
+          {canEdit && (
+            <Tooltip
+              content={
+                editMode
+                  ? 'Done editing (e) — autosave flushes on exit'
+                  : 'Edit plan live (e)'
+              }
+              side="bottom"
+            >
+              <button
+                type="button"
+                className={`plan-icon-btn ${editMode ? 'is-active' : ''} ${isDirty ? 'is-dirty' : ''}`}
+                onClick={() => {
+                  if (editMode) void exitEditMode()
+                  else enterEditMode()
+                }}
+                aria-pressed={editMode}
+                aria-label={editMode ? 'Done editing plan' : 'Edit plan'}
+              >
+                <Pencil size={14} />
+              </button>
+            </Tooltip>
+          )}
+          {editMode && (
+            <>
+              <Tooltip content="Save now (⌘S)" side="bottom">
+                <button
+                  type="button"
+                  className="plan-icon-btn"
+                  onClick={() => {
+                    if (autosaveTimerRef.current) {
+                      clearTimeout(autosaveTimerRef.current)
+                      autosaveTimerRef.current = null
+                    }
+                    void flushAutosave()
+                  }}
+                  disabled={saveStatus === 'saving' || submittingPlanVersion || discardingEdits}
+                  aria-label="Save plan now"
+                >
+                  <Save size={14} />
+                </button>
+              </Tooltip>
+              <Tooltip content="Save as new version — bumps version and reopens review" side="bottom">
+                <button
+                  type="button"
+                  className="plan-icon-btn"
+                  onClick={() => setSaveAsVersionOpen(true)}
+                  disabled={
+                    saveStatus === 'saving' ||
+                    submittingPlanVersion ||
+                    discardingEdits ||
+                    !draftBody.trim()
+                  }
+                  aria-label="Save as new version"
+                >
+                  {submittingPlanVersion ? (
+                    <Loader2 size={14} className="spin" />
+                  ) : (
+                    <GitBranch size={14} />
+                  )}
+                </button>
+              </Tooltip>
+              <Tooltip
+                content={
+                  discardIsDual
+                    ? 'Discard edits (Esc) — recent session or roll back to original'
+                    : hasOriginalRollback && !hasRecentEdits
+                      ? 'Roll back to original (Esc) — before you started editing this version'
+                      : 'Discard edits (Esc) — restore to start of this edit session'
+                }
+                side="bottom"
+              >
+                <button
+                  type="button"
+                  className="plan-icon-btn plan-icon-btn-danger"
+                  onClick={openDiscardDialog}
+                  disabled={!canDiscard || discardingEdits || saveStatus === 'saving'}
+                  aria-label="Discard edits"
+                  title="Esc"
+                >
+                  {discardingEdits ? (
+                    <Loader2 size={14} className="spin" />
+                  ) : (
+                    <RotateCcw size={14} />
+                  )}
+                </button>
+              </Tooltip>
+            </>
           )}
           <span className="plan-action-divider" aria-hidden="true" />
           {isReadOnly && (
@@ -1198,6 +1804,86 @@ export function PlanReview({
           >
             <ArrowLeft size={11} aria-hidden="true" />
             Back to current
+          </button>
+        </div>
+      )}
+
+      {editMode && (
+        <div className="plan-review-edit-banner" role="status">
+          <Pencil size={14} aria-hidden="true" />
+          <span>
+            Editing live — changes autosave to the current version
+            {totalCommentCount > 0
+              ? '. Line anchors on existing comments may shift if you insert or delete lines.'
+              : '.'}{' '}
+            New comments are disabled until you finish editing.
+            {originalDiffersFromSession
+              ? ' Prior session edits are saved; Esc or Discard can roll back further.'
+              : ' Esc opens discard.'}
+          </span>
+          {canDiscard && (
+            <button
+              type="button"
+              className="plan-review-edit-banner-discard"
+              onClick={openDiscardDialog}
+              disabled={discardingEdits || saveStatus === 'saving'}
+            >
+              <RotateCcw size={11} aria-hidden="true" />
+              {hasOriginalRollback && !hasRecentEdits ? 'Roll back to original' : 'Discard edits'}
+              <kbd className="plan-review-edit-banner-kbd">Esc</kbd>
+            </button>
+          )}
+          {editMode && viewMode === 'rendered' && (
+            <button
+              type="button"
+              className="plan-review-historical-banner-back"
+              onClick={() => onViewModeChange?.('split')}
+            >
+              Show source
+            </button>
+          )}
+        </div>
+      )}
+
+      {!editMode && exitSavedNotice && (
+        <div className="plan-review-exit-saved-banner" role="status">
+          <Save size={14} aria-hidden="true" />
+          <span>
+            <strong>Edits saved</strong> to this version. They are now the starting point the next
+            time you press Edit. Use <strong>Discard</strong> after re-entering edit to roll back
+            to the plan as it was before you started editing this version.
+          </span>
+          <button
+            type="button"
+            className="plan-review-exit-saved-banner-dismiss"
+            onClick={() => setExitSavedNotice(false)}
+            aria-label="Dismiss saved-edits notice"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {conflictVersion != null && (
+        <div className="plan-review-conflict-banner" role="alert">
+          <MessageSquareWarning size={14} aria-hidden="true" />
+          <span>
+            Agent submitted <strong>v{conflictVersion}</strong> while you have unsaved edits.
+            Keep your draft, or discard and load the new version.
+          </span>
+          <button
+            type="button"
+            className="plan-review-historical-banner-back"
+            onClick={() => setConflictVersion(null)}
+          >
+            Keep editing
+          </button>
+          <button
+            type="button"
+            className="plan-review-historical-banner-back"
+            onClick={discardConflictAndLoad}
+          >
+            Discard &amp; load
           </button>
         </div>
       )}
@@ -1336,7 +2022,7 @@ export function PlanReview({
         )}
       </div>
 
-      {selectionPopup && (
+      {selectionPopup && !editMode && (
         <button
           type="button"
           className={`plan-selection-popup plan-selection-popup-${selectionPopup.placement}`}
@@ -1361,6 +2047,30 @@ export function PlanReview({
         isOpen={!!previewFilePath}
         filePath={previewFilePath}
         onClose={() => setPreviewFilePath(null)}
+      />
+
+      <ConfirmDialog
+        open={saveAsVersionOpen}
+        title="Save as new version?"
+        description={`Creates v${plan.version + 1} from your current draft and reopens the plan for review (decision becomes pending). In-place autosave does not create a version.`}
+        confirmLabel="Save as new version"
+        cancelLabel="Cancel"
+        variant="primary"
+        onConfirm={() => {
+          void handleSaveAsNewVersion()
+        }}
+        onCancel={() => setSaveAsVersionOpen(false)}
+      />
+
+      <PlanDiscardEditsDialog
+        open={discardEditsOpen}
+        canDiscardRecent={hasRecentEdits}
+        canRollbackOriginal={hasOriginalRollback && originalDiffersFromSession}
+        onChoose={(choice) => {
+          void handleDiscardChoice(choice)
+        }}
+        onCancel={() => setDiscardEditsOpen(false)}
+        busy={discardingEdits}
       />
     </div>
   )

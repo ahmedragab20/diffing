@@ -221,6 +221,78 @@ export function usePlans() {
     },
   })
 
+  /**
+   * In-place edit of the current plan body/title (no version bump, decision
+   * preserved). Used by the plan-page live editor autosave.
+   */
+  const updatePlanMutation = useMutation({
+    mutationFn: async ({
+      planId,
+      title,
+      body,
+      source,
+      model,
+    }: {
+      planId: string
+      title?: string
+      body?: string
+      source?: string
+      model?: string
+    }) => {
+      const res = await fetch(`/api/plans/${planId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, body, source, model }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(
+          typeof (err as { error?: string }).error === 'string'
+            ? (err as { error: string }).error
+            : `Failed to update plan (${res.status})`,
+        )
+      }
+      return res.json() as Promise<Plan>
+    },
+    onSuccess: writePlan,
+  })
+
+  /**
+   * Human "Save as new version" — same as agent resubmit: bumps version and
+   * resets decision to pending.
+   */
+  const submitPlanVersionMutation = useMutation({
+    mutationFn: async ({
+      planId,
+      title,
+      body,
+      source,
+      model,
+    }: {
+      planId: string
+      title: string
+      body: string
+      source?: string
+      model?: string
+    }) => {
+      const res = await fetch('/api/plans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: planId, title, body, source, model }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(
+          typeof (err as { error?: string }).error === 'string'
+            ? (err as { error: string }).error
+            : `Failed to save plan version (${res.status})`,
+        )
+      }
+      return res.json() as Promise<Plan>
+    },
+    onSuccess: writePlan,
+  })
+
   return {
     plans,
     getPlan: useCallback((id: string) => plans.find((p) => p.id === id) ?? null, [plans]),
@@ -254,6 +326,18 @@ export function usePlans() {
       [removeReplyMutation.mutate],
     ),
     removePlan: useCallback((planId: string) => removePlanMutation.mutate(planId), [removePlanMutation.mutate]),
+    updatePlan: useCallback(
+      (planId: string, fields: { title?: string; body?: string; source?: string; model?: string }) =>
+        updatePlanMutation.mutateAsync({ planId, ...fields }),
+      [updatePlanMutation.mutateAsync],
+    ),
+    submitPlanVersion: useCallback(
+      (planId: string, fields: { title: string; body: string; source?: string; model?: string }) =>
+        submitPlanVersionMutation.mutateAsync({ planId, ...fields }),
+      [submitPlanVersionMutation.mutateAsync],
+    ),
+    updatingPlan: updatePlanMutation.isPending,
+    submittingPlanVersion: submitPlanVersionMutation.isPending,
     submitDecision: useCallback(
       (planId: string, decision: PlanDecision, decisionComment?: string, mode?: PlanMode) =>
         decisionMutation.mutateAsync({ planId, decision, decisionComment, mode }),

@@ -7102,6 +7102,133 @@ file-tree,
     filter: brightness(1.05);
 }
 
+/* Plan edit discard — choice cards (dual: recent vs original) */
+.ui-modal-popup.plan-discard-dialog {
+    width: min(440px, calc(100vw - 32px));
+}
+.plan-discard-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.plan-discard-choice {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+    padding: 12px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-family: inherit;
+    transition:
+        border-color var(--transition-fast),
+        background var(--transition-fast),
+        box-shadow var(--transition-fast);
+}
+.plan-discard-choice:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--primary) 6%, var(--bg-secondary));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.plan-discard-choice:focus-visible {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 28%, transparent);
+}
+.plan-discard-choice:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+.plan-discard-choice-danger:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--feedback-danger-border, #e05) 70%, transparent);
+    background: var(--feedback-danger-bg, color-mix(in srgb, #e05 10%, var(--bg-secondary)));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--feedback-danger-border, #e05) 25%, transparent);
+}
+.plan-discard-choice-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+.plan-discard-choice-danger .plan-discard-choice-icon {
+    color: var(--feedback-danger-text, #e05);
+    background: color-mix(in srgb, var(--feedback-danger-text, #e05) 12%, var(--bg-secondary));
+}
+.plan-discard-choice-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.plan-discard-choice-title {
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+.plan-discard-choice-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+}
+.plan-discard-footer {
+    align-items: center;
+}
+.plan-discard-footer .confirm-dialog-cancel {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+/* Post-exit notice: autosaved edits are now the plan baseline */
+.plan-review-exit-saved-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 12px 20px 0;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+    background: color-mix(in srgb, var(--primary) 7%, var(--bg-secondary));
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    line-height: 1.45;
+}
+.plan-review-exit-saved-banner > span {
+    flex: 1;
+    min-width: 0;
+}
+.plan-review-exit-saved-banner strong {
+    font-weight: 650;
+}
+.plan-review-exit-saved-banner-dismiss {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    font-family: inherit;
+}
+.plan-review-exit-saved-banner-dismiss:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+}
+
 .ui-modal-backdrop {
     position: fixed;
     inset: 0;
@@ -9740,6 +9867,128 @@ button.toolbar-last-send-btn:hover {
 .plan-review-historical-banner-back:hover {
     background: color-mix(in srgb, var(--warning) 12%, transparent);
 }
+.plan-review-edit-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 20px 0;
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+    background: color-mix(in srgb, var(--primary) 8%, var(--bg-secondary));
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+}
+.plan-review-edit-banner > span {
+    flex: 1;
+}
+.plan-review-edit-banner-discard {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border-radius: var(--radius-pill);
+    border: 1px solid color-mix(in srgb, var(--danger, #e05) 45%, transparent);
+    background: transparent;
+    color: var(--danger, #e05);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    flex-shrink: 0;
+}
+.plan-review-edit-banner-discard:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger, #e05) 12%, transparent);
+}
+.plan-review-edit-banner-discard:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.plan-review-edit-banner-kbd {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 4px;
+    padding: 0 5px;
+    border-radius: 4px;
+    border: 1px solid color-mix(in srgb, var(--danger, #e05) 35%, transparent);
+    background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+    font-size: 10px;
+    font-weight: 600;
+    font-family: inherit;
+    line-height: 1.5;
+    opacity: 0.9;
+}
+.plan-icon-btn-danger:hover:not(:disabled) {
+    color: var(--danger, #e05);
+    background: color-mix(in srgb, var(--danger, #e05) 12%, transparent);
+}
+.plan-review-conflict-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 12px 20px 0;
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, var(--danger, #e05) 45%, transparent);
+    background: var(--feedback-error-bg, color-mix(in srgb, #e05 10%, var(--bg-secondary)));
+    color: var(--feedback-error-text, var(--text-primary));
+    font-size: var(--text-sm);
+}
+.plan-review-conflict-banner > span {
+    flex: 1;
+    min-width: 12rem;
+}
+.plan-review-title-input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    font-size: 1.15rem;
+    font-weight: 650;
+    line-height: 1.3;
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-normal);
+    border-radius: var(--radius-md);
+    padding: 4px 10px;
+    outline: none;
+}
+.plan-review-title-input:focus {
+    border-color: color-mix(in srgb, var(--primary) 55%, var(--border-normal));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.plan-review-save-status {
+    gap: 5px;
+}
+.plan-review-save-status-dirty {
+    color: var(--warning, #c90);
+    border-color: color-mix(in srgb, var(--warning, #c90) 40%, transparent);
+}
+.plan-review-save-status-saving {
+    color: var(--text-secondary);
+}
+.plan-review-save-status-saved {
+    color: var(--success, #2a8);
+    border-color: color-mix(in srgb, var(--success, #2a8) 40%, transparent);
+}
+.plan-review-save-status-error {
+    color: var(--danger, #e05);
+    border-color: color-mix(in srgb, var(--danger, #e05) 40%, transparent);
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.plan-icon-btn.is-dirty::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--warning, #c90);
+}
 .plan-decision-banner {
     display: flex;
     align-items: flex-start;
@@ -10856,8 +11105,116 @@ button.toolbar-last-send-btn:hover {
 .plan-file diffs-container {
     width: 100%;
 }
+.plan-file-editing {
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+}
 .plan-file-hint {
     display: none;
+}
+
+/* Live plan source editor (edit mode) */
+.plan-source-editor {
+    display: flex;
+    flex: 1;
+    min-height: 280px;
+    height: 100%;
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-secondary);
+    border: none;
+    overflow: hidden;
+    font-family: var(--plan-editor-font-family, ui-monospace, monospace);
+    font-size: var(--plan-editor-font-size, 13px);
+    line-height: var(--plan-editor-line-height, 22px);
+    tab-size: var(--plan-editor-tab-size, 2);
+}
+.plan-source-editor-gutter {
+    flex: 0 0 var(--plan-editor-gutter-ch, 3.5ch);
+    overflow: hidden;
+    background: color-mix(in srgb, var(--bg-primary) 70%, var(--bg-secondary));
+    border-right: 1px solid var(--border-weak);
+    user-select: none;
+    color: var(--text-muted);
+    text-align: right;
+    padding: 12px 0;
+}
+.plan-source-editor-gutter-text {
+    margin: 0;
+    padding: 0 10px 0 8px;
+    font: inherit;
+    line-height: inherit;
+    white-space: pre;
+    opacity: 0.65;
+}
+.plan-source-editor-textarea {
+    flex: 1;
+    min-width: 0;
+    min-height: 100%;
+    resize: none;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    line-height: inherit;
+    tab-size: inherit;
+    padding: 12px 14px 32px;
+    box-sizing: border-box;
+    caret-color: var(--primary);
+}
+.plan-source-editor-textarea.is-wrap {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow-x: hidden;
+}
+.plan-source-editor-textarea.is-scroll {
+    white-space: pre;
+    overflow-x: auto;
+}
+.plan-source-editor-textarea:focus {
+    outline: none;
+}
+/*
+ * Edit + Split: lock both panes to the remaining viewport so each scrolls
+ * independently. Face-sync then only moves the Read pane, never the page
+ * (which previously yanked the Source caret).
+ */
+.plan-review-editing .plan-review-body {
+    flex: 1;
+    min-height: 0;
+    /* Body scrolls only via panes — keep sticky header stable while editing. */
+    overflow: hidden;
+}
+.plan-review-editing .plan-content-split {
+    flex: 1;
+    min-height: 0;
+    /* Fallback height when flex chain is loose; still works with sticky head. */
+    height: calc(100vh - var(--toolbar-height) - 9.5rem);
+    max-height: calc(100vh - var(--toolbar-height) - 9.5rem);
+    overflow: hidden;
+    align-items: stretch;
+}
+.plan-review-editing .plan-content-split .plan-file,
+.plan-review-editing .plan-content-split .plan-rendered-layout {
+    min-height: 0;
+    height: 100%;
+    max-height: 100%;
+    overflow: auto;
+}
+.plan-review-editing .plan-content-split .plan-file-editing {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* textarea owns vertical scroll */
+}
+.plan-review-editing .plan-source-editor {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
 }
 
 /* Empty state */

@@ -795,6 +795,7 @@ export function PlanReviewApp() {
                 showLineNumbers={settings.showLineNumbers}
                 lineHoverHighlight={settings.lineHoverHighlight}
                 viewMode={viewMode}
+                onViewModeChange={handleViewModeChange}
                 editorIDE={settings.editorIDE}
                 tocOpen={tocOpen}
                 onTocOpenChange={handleTocOpenChange}

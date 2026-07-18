@@ -27,6 +27,7 @@ vi.mock('lucide-react', () => {
     'Pencil', 'Trash2', 'CornerDownRight', 'CheckCircle2', 'Circle',
     'ChevronDown', 'ChevronRight', 'User', 'AlertTriangle', 'Reply',
     'MoreHorizontal', 'Send', 'Edit2', 'Edit3', 'GripVertical', 'Minus',
+    'Save', 'GitBranch', 'RotateCcw',
     // CommentForm severity select
     'AlertOctagon', 'CircleDot', 'HelpCircle', 'Sparkles',
   ]
@@ -112,6 +113,9 @@ describe('PlanReview version switcher', () => {
       addPlanReply: vi.fn(),
       editPlanReply: vi.fn(),
       removePlanReply: vi.fn(),
+      updatePlan: vi.fn().mockResolvedValue(basePlan),
+      submitPlanVersion: vi.fn().mockResolvedValue(basePlan),
+      submittingPlanVersion: false,
       submitDecision: vi.fn(),
       submitting: false,
       agentWaiting: false,
@@ -167,6 +171,128 @@ describe('PlanReview version switcher', () => {
       expect(screen.getAllByText('old feedback').length).toBeGreaterThan(0)
       expect(screen.queryByText('new feedback')).not.toBeInTheDocument()
     })
+  })
+
+  it('enters edit mode with a source editor and live draft', async () => {
+    const onViewModeChange = vi.fn()
+    render(
+      <PlanReview plan={basePlan} {...baseProps} onViewModeChange={onViewModeChange} />,
+      { wrapper: createWrapper() },
+    )
+    fireEvent.click(screen.getByRole('button', { name: /edit plan/i }))
+    expect(onViewModeChange).toHaveBeenCalledWith('split')
+    const editor = await screen.findByLabelText('Plan source editor')
+    expect(editor).toBeInTheDocument()
+    expect(screen.getByLabelText('Plan title')).toHaveValue('My Plan')
+    fireEvent.change(editor, { target: { value: '# edited draft' } })
+    expect(screen.getByLabelText('Plan source editor')).toHaveValue('# edited draft')
+    expect(screen.getByText(/Editing live/i)).toBeInTheDocument()
+  })
+
+  it('discards recent session edits and restores the session start body', async () => {
+    const updatePlan = vi.fn().mockResolvedValue(basePlan)
+    mockUsePlans.mockReturnValue({
+      addPlanComment: vi.fn(),
+      editPlanComment: vi.fn(),
+      resolvePlanComment: vi.fn(),
+      unresolvePlanComment: vi.fn(),
+      removePlanComment: vi.fn(),
+      addPlanReply: vi.fn(),
+      editPlanReply: vi.fn(),
+      removePlanReply: vi.fn(),
+      updatePlan,
+      submitPlanVersion: vi.fn().mockResolvedValue(basePlan),
+      submittingPlanVersion: false,
+      submitDecision: vi.fn(),
+      submitting: false,
+      agentWaiting: false,
+    })
+    render(<PlanReview plan={basePlan} {...baseProps} />, { wrapper: createWrapper() })
+    fireEvent.click(screen.getByRole('button', { name: /edit plan/i }))
+    const editor = await screen.findByLabelText('Plan source editor')
+    fireEvent.change(editor, { target: { value: '# totally different' } })
+    expect(screen.getByLabelText('Plan source editor')).toHaveValue('# totally different')
+
+    // Banner + toolbar both expose discard once there are session edits.
+    const discardButtons = screen.getAllByRole('button', { name: /discard edits/i })
+    expect(discardButtons.length).toBeGreaterThan(0)
+    fireEvent.click(discardButtons[0])
+
+    // Single-action confirm (first session — original === session start)
+    const confirm = await screen.findByRole('button', { name: /^Discard all edits$/i })
+    fireEvent.click(confirm)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Plan source editor')).toHaveValue('# v3 body')
+    })
+    // No server write when plan body already matches origin (unsaved-only discard).
+    expect(updatePlan).not.toHaveBeenCalled()
+  })
+
+  it('after exit+re-enter, can roll back to the pre-edit original', async () => {
+    const updatePlan = vi.fn(async (_id: string, fields: { body?: string; title?: string }) => ({
+      ...basePlan,
+      body: fields.body ?? basePlan.body,
+      title: fields.title ?? basePlan.title,
+    }))
+    mockUsePlans.mockReturnValue({
+      addPlanComment: vi.fn(),
+      editPlanComment: vi.fn(),
+      resolvePlanComment: vi.fn(),
+      unresolvePlanComment: vi.fn(),
+      removePlanComment: vi.fn(),
+      addPlanReply: vi.fn(),
+      editPlanReply: vi.fn(),
+      removePlanReply: vi.fn(),
+      updatePlan,
+      submitPlanVersion: vi.fn().mockResolvedValue(basePlan),
+      submittingPlanVersion: false,
+      submitDecision: vi.fn(),
+      submitting: false,
+      agentWaiting: false,
+    })
+    const wrapper = createWrapper()
+    const { rerender } = render(<PlanReview plan={basePlan} {...baseProps} />, { wrapper })
+    fireEvent.click(screen.getByRole('button', { name: /edit plan/i }))
+    const editor = await screen.findByLabelText('Plan source editor')
+    fireEvent.change(editor, { target: { value: '# autosaved body' } })
+
+    // Exit edit (Done) — shows the saved-edits notice.
+    fireEvent.click(screen.getByRole('button', { name: /done editing plan/i }))
+    await waitFor(() => {
+      expect(screen.getByText(/Edits saved/i)).toBeInTheDocument()
+    })
+
+    // Parent would re-render with autosaved plan body after cache write.
+    const editedPlan: Plan = { ...basePlan, body: '# autosaved body', title: 'My Plan' }
+    rerender(<PlanReview plan={editedPlan} {...baseProps} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /edit plan/i }))
+    await screen.findByLabelText('Plan source editor')
+    expect(screen.getByLabelText('Plan source editor')).toHaveValue('# autosaved body')
+
+    // Discard enabled for original rollback even with a clean session.
+    const rollbackBtn = screen.getByRole('button', { name: /roll back to original/i })
+    fireEvent.click(rollbackBtn)
+    const confirm = await screen.findByRole('button', { name: /^Roll back to original$/i })
+    fireEvent.click(confirm)
+
+    await waitFor(() => {
+      expect(updatePlan).toHaveBeenCalledWith(
+        'p1',
+        expect.objectContaining({ body: '# v3 body', title: 'My Plan' }),
+      )
+    })
+  })
+
+  it('does not show edit control when viewing a historical version', async () => {
+    render(<PlanReview plan={basePlan} {...baseProps} />, { wrapper: createWrapper() })
+    const select = screen.getByLabelText('Plan version') as HTMLSelectElement
+    fireEvent.change(select, { target: { value: '1' } })
+    await waitFor(() => {
+      expect(screen.getByText(/Viewing/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('button', { name: /edit plan/i })).not.toBeInTheDocument()
   })
 
   it('exposes Copy path controls that write the absolute sourcePath', async () => {

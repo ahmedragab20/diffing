@@ -100,6 +100,57 @@ describe('plan endpoints', () => {
     expect(await store.getAll()).toHaveLength(1)
   })
 
+  it('PUT /api/plans/:id edits body/title in place (no version bump, decision kept)', async () => {
+    const first = await (await postPlan(app, { title: 'P', body: PLAN_BODY })).json()
+    await app.fetch(new Request(`http://localhost/api/plans/${first.id}/decision`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'approved', decisionComment: 'looks good' }),
+    }))
+    const res = await app.fetch(new Request(`http://localhost/api/plans/${first.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'P polished', body: PLAN_BODY + 'tweaked\n' }),
+    }))
+    expect(res.status).toBe(200)
+    const updated = await res.json()
+    expect(updated.id).toBe(first.id)
+    expect(updated.version).toBe(1)
+    expect(updated.decision).toBe('approved')
+    expect(updated.decisionComment).toBe('looks good')
+    expect(updated.title).toBe('P polished')
+    expect(updated.body).toContain('tweaked')
+    expect(updated.versions[updated.versions.length - 1].body).toContain('tweaked')
+  })
+
+  it('PUT /api/plans/:id returns 404 for a missing plan', async () => {
+    const res = await app.fetch(new Request('http://localhost/api/plans/nope', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: 'x' }),
+    }))
+    expect(res.status).toBe(404)
+  })
+
+  it('POST save-as-new-version after PUT still bumps version from the current body', async () => {
+    const first = await (await postPlan(app, { title: 'P', body: PLAN_BODY })).json()
+    await app.fetch(new Request(`http://localhost/api/plans/${first.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: PLAN_BODY + 'live edit\n' }),
+    }))
+    const res = await postPlan(app, {
+      id: first.id,
+      title: 'P',
+      body: PLAN_BODY + 'live edit\nversioned\n',
+    })
+    expect(res.status).toBe(201)
+    const next = await res.json()
+    expect(next.version).toBe(2)
+    expect(next.decision).toBe('pending')
+    expect(next.body).toContain('versioned')
+    expect(next.versions).toHaveLength(2)
+  })
+
   it('GET /api/plans/:id returns the plan or 404', async () => {
     const plan = await (await postPlan(app, { title: 'P', body: PLAN_BODY })).json()
     expect((await app.fetch(new Request(`http://localhost/api/plans/${plan.id}`))).status).toBe(200)

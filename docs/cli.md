@@ -1306,7 +1306,13 @@ verdict reset to `pending`). Returns the plan (201).
   ```
 
 #### `PUT /api/plans/:id` / `DELETE /api/plans/:id`
-Updates a plan's `title`/`body`/`source`/`model`, or deletes a plan.
+Updates a plan's `title`/`body`/`source`/`model` **in place**, or deletes a plan.
+
+`PUT` is the live plan-page editor path: it mutates the current version only
+(no version bump, decision preserved) and rewrites the tail of `versions[]`
+plus the on-disk `plan-sources/<id>.md` mirror. The UI autosaves via `PUT` and
+uses **`POST /api/plans` with the same `id`** for an explicit “Save as new
+version” (version bump + decision → `pending`), matching agent resubmit.
 
 #### `POST /api/plans/:id/comments`
 Adds an inline comment. `lineNumber: 0` marks a whole-plan comment; `startLineNumber`

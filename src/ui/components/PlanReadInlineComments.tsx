@@ -47,9 +47,17 @@ export function PlanReadInlineComments({
 
   // No headings / empty: single markdown block + trailing comments.
   if (segments.length === 0) {
+    const totalLines = Math.max(1, body.replace(/\r\n/g, '\n').split('\n').length)
     return (
       <>
-        <Markdown content={body} />
+        <div
+          className="plan-read-segment"
+          data-plan-segment="body"
+          data-plan-source-start={1}
+          data-plan-source-end={totalLines}
+        >
+          <Markdown content={body} />
+        </div>
         {lineComments.map((c) => (
           <div key={c.id} className="plan-read-comment-host" data-plan-read-comment-host={c.id}>
             <div className="plan-read-comment-slot">
@@ -73,7 +81,13 @@ export function PlanReadInlineComments({
   return (
     <>
       {segments.map((seg) => (
-        <div key={seg.key} className="plan-read-segment" data-plan-segment={seg.key}>
+        <div
+          key={seg.key}
+          className="plan-read-segment"
+          data-plan-segment={seg.key}
+          data-plan-source-start={seg.startLine}
+          data-plan-source-end={seg.endLine}
+        >
           {seg.markdown.trim().length > 0 && <Markdown content={seg.markdown} />}
           {seg.comments.map((c) => (
             <div
