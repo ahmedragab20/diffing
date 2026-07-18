@@ -8,7 +8,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Span;
-use ratatui::widgets::{Block, Borders, List, StatefulWidget, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, List, StatefulWidget, Widget};
 
 use crate::themes::Palette;
 use crate::ui::comment_thread::render_tracker_row;
@@ -22,7 +22,10 @@ pub struct TrackerState {
 
 impl TrackerState {
     pub fn new() -> Self {
-        Self { cursor: 0, scroll: 0 }
+        Self {
+            cursor: 0,
+            scroll: 0,
+        }
     }
 
     pub fn move_cursor(&mut self, delta: isize, total: usize) {
@@ -62,6 +65,8 @@ pub fn render_tracker(
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(Style::default().bg(palette.panel))
         .border_style(Style::default().fg(palette.border))
         .title(Span::styled(TRACKER_TITLE, Style::default().fg(palette.fg)));
     let inner = block.inner(area);

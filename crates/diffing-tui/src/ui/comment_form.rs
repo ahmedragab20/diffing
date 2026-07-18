@@ -10,7 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap};
 use tui_textarea::TextArea;
 
 use crate::themes::Palette;
@@ -83,21 +83,18 @@ impl CommentFormState {
     }
 }
 
-pub fn render_form(
-    form: &mut CommentFormState,
-    area: Rect,
-    palette: &Palette,
-    buf: &mut Buffer,
-) {
+pub fn render_form(form: &mut CommentFormState, area: Rect, palette: &Palette, buf: &mut Buffer) {
     // Modal box: 80% width, 60% height, centered.
     let popup = centered_rect(80, 60, area);
     // Dim the area behind the popup with a default-styled block.
-    let dim = Block::default().style(Style::default().bg(palette.bg));
+    let dim = Block::default().style(Style::default().bg(palette.bg).fg(palette.dim));
     dim.render(area, buf);
     Clear.render(popup, buf);
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(Style::default().bg(palette.elevated))
         .border_style(Style::default().fg(palette.accent))
         .title(Span::styled(
             format!(" {} ", form.target_label),
@@ -108,19 +105,22 @@ pub fn render_form(
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(inner);
     // Body — the textarea.
     let body = chunks[0];
     let footer = chunks[1];
 
     // Style the textarea border-less inside the modal.
-    form.textarea.set_style(Style::default().fg(palette.fg).bg(palette.bg));
-    form.textarea.set_cursor_line_style(Style::default().add_modifier(Modifier::UNDERLINED));
-    form.textarea.set_cursor_style(Style::default().fg(palette.fg).add_modifier(Modifier::REVERSED));
+    form.textarea
+        .set_style(Style::default().fg(palette.fg).bg(palette.elevated));
+    form.textarea
+        .set_cursor_line_style(Style::default().add_modifier(Modifier::UNDERLINED));
+    form.textarea.set_cursor_style(
+        Style::default()
+            .fg(palette.fg)
+            .add_modifier(Modifier::REVERSED),
+    );
     let ta_widget = &form.textarea;
     ta_widget.render(body, buf);
 

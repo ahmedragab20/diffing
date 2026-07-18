@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, StatefulWidget, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, StatefulWidget, Widget};
 
 use crate::themes::Palette;
 use crate::ui::file_tree::{FileNodeKind, FileTree};
@@ -21,10 +21,16 @@ pub fn render_file_tree(
     _files: &[FileDiff],
     buf: &mut Buffer,
 ) {
-    let border_color = if focused { palette.border_focused } else { palette.border };
+    let border_color = if focused {
+        palette.border_focused
+    } else {
+        palette.border
+    };
     let title_style = Style::default().fg(palette.fg).add_modifier(Modifier::BOLD);
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(Style::default().bg(palette.panel))
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(FILE_TREE_TITLE, title_style));
     let inner = block.inner(area);
@@ -38,8 +44,11 @@ pub fn render_file_tree(
         .take(body_height)
         .map(|node| build_item(node, tree, focused, palette))
         .collect();
-    let list = List::new(items)
-        .highlight_style(Style::default().bg(palette.selection_bg).add_modifier(Modifier::BOLD));
+    let list = List::new(items).highlight_style(
+        Style::default()
+            .bg(palette.selection_bg)
+            .add_modifier(Modifier::BOLD),
+    );
     let mut state = ratatui::widgets::ListState::default();
     let visible_cursor = tree.cursor.saturating_sub(scroll);
     if visible_cursor < body_height {
@@ -56,7 +65,10 @@ fn build_item<'a>(
 ) -> ListItem<'a> {
     let indent = "  ".repeat(node.depth);
     let (kind_str, kind_color) = match node.kind {
-        FileNodeKind::Dir => ("▼ ".to_string(), palette.accent),
+        FileNodeKind::Dir => (
+            if node.expanded { "▼ " } else { "▶ " }.to_string(),
+            palette.accent,
+        ),
         FileNodeKind::File => {
             let marker_color = match node.change_marker {
                 'M' => palette.accent,
@@ -70,9 +82,15 @@ fn build_item<'a>(
         }
     };
     let is_cursor = node.name.as_str()
-        == tree.nodes[tree.cursor.min(tree.nodes.len().saturating_sub(1))].name.as_str();
+        == tree.nodes[tree.cursor.min(tree.nodes.len().saturating_sub(1))]
+            .name
+            .as_str();
     let cursor_marker = if is_cursor { "▶ " } else { "  " };
-    let cursor_color = if is_cursor && focused { palette.accent } else { palette.dim };
+    let cursor_color = if is_cursor && focused {
+        palette.accent
+    } else {
+        palette.dim
+    };
     let viewed_dot = if node.viewed { " ✓" } else { "" };
 
     let mut spans: Vec<Span<'a>> = vec![

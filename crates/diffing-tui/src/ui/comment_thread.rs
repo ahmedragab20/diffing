@@ -8,17 +8,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, ListItem, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, ListItem, Paragraph, Widget, Wrap};
 
 use crate::themes::Palette;
 
 #[allow(dead_code)]
-pub fn render_thread(
-    comment: &ReviewComment,
-    area: Rect,
-    palette: &Palette,
-    buf: &mut Buffer,
-) {
+pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf: &mut Buffer) {
     let status_color = match comment.status {
         CommentStatus::Open => palette.accent,
         CommentStatus::Resolved => palette.dim,
@@ -30,12 +25,12 @@ pub fn render_thread(
     let title = format!(" {} · {} ", comment.file_path, status_label);
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(Style::default().bg(palette.elevated))
         .border_style(Style::default().fg(status_color))
         .title(Span::styled(
             title,
-            Style::default()
-                .fg(palette.fg)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
     block.render(area, buf);
@@ -105,10 +100,7 @@ pub fn render_tracker_row(
         String::new()
     };
     let mut spans: Vec<Span<'static>> = vec![
-        Span::styled(
-            format!("{marker} "),
-            Style::default().fg(marker_color),
-        ),
+        Span::styled(format!("{marker} "), Style::default().fg(marker_color)),
         Span::styled(
             format!("{:<24}", truncate(&line, 24)),
             Style::default().fg(palette.comment),
@@ -122,7 +114,9 @@ pub fn render_tracker_row(
             0,
             Span::styled(
                 "▶ ".to_string(),
-                Style::default().fg(palette.accent).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
             ),
         );
     } else {

@@ -68,9 +68,7 @@ pub fn render_toast(toast: &Toast, area: Rect, palette: &Palette, buf: &mut Buff
         .border_style(Style::default().fg(border_color));
     Paragraph::new(Line::from(Span::styled(
         format!(" {} ", toast.message),
-        Style::default()
-            .fg(palette.fg)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
     )))
     .wrap(Wrap { trim: false })
     .render(area, buf);

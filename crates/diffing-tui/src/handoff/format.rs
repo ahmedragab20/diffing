@@ -249,7 +249,11 @@ mod tests {
 
     #[test]
     fn wraps_comments_in_envelope() {
-        let out = format_comments(&[sample_comment("c1", "rename", CommentStatus::Open)], None, None);
+        let out = format_comments(
+            &[sample_comment("c1", "rename", CommentStatus::Open)],
+            None,
+            None,
+        );
         assert!(out.contains("<code-review-comments>"));
         assert!(out.contains("</code-review-comments>"));
         assert!(out.contains("<file path=\"src/index.ts\">"));
@@ -271,7 +275,11 @@ mod tests {
 
     #[test]
     fn omits_general_when_blank() {
-        let out = format_comments(&[sample_comment("c1", "x", CommentStatus::Open)], Some("   "), None);
+        let out = format_comments(
+            &[sample_comment("c1", "x", CommentStatus::Open)],
+            Some("   "),
+            None,
+        );
         assert!(!out.contains("<general-comment>"));
     }
 
@@ -317,7 +325,11 @@ mod tests {
 
     #[test]
     fn omits_decision_when_not_given() {
-        let out = format_comments(&[sample_comment("c1", "x", CommentStatus::Open)], None, None);
+        let out = format_comments(
+            &[sample_comment("c1", "x", CommentStatus::Open)],
+            None,
+            None,
+        );
         assert!(!out.contains("decision="));
         // The instructions mention `<decision-summary>` as prose; the actual
         // emitted element is a self-contained `<decision-summary><![CDATA[...

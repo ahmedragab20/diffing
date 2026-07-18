@@ -16,7 +16,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap};
 use tui_textarea::TextArea;
 
 use diffing_core::comments::{CommentStatus, ReviewComment};
@@ -45,6 +45,82 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[derive(Debug, Clone)]
+pub struct SendReviewRegions {
+    pub popup: Rect,
+    pub verdict_rows: Vec<(Rect, ReviewDecision)>,
+    verdict_panel: Rect,
+    general_panel: Rect,
+    pub general: Rect,
+    pub preview: Option<Rect>,
+    preview_panel: Option<Rect>,
+    footer: Rect,
+    compact: bool,
+}
+
+/// Shared geometry for rendering and mouse hit-testing.
+pub fn send_review_regions(area: Rect) -> SendReviewRegions {
+    let compact = area.width < 100;
+    let popup = if compact {
+        Rect::new(
+            area.x + 2.min(area.width),
+            area.y + 1.min(area.height),
+            area.width.saturating_sub(4),
+            area.height.saturating_sub(2),
+        )
+    } else {
+        centered_rect(85, 80, area)
+    };
+    let inner = Block::default().borders(Borders::ALL).inner(popup);
+    let chunks = if compact {
+        vec![inner, Rect::default()]
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .split(inner)
+            .to_vec()
+    };
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(5),
+            Constraint::Min(4),
+            Constraint::Length(1),
+        ])
+        .split(chunks[0]);
+    let verdict_panel = left_chunks[0];
+    let general_panel = left_chunks[1];
+    let verdict_inner = Block::default().borders(Borders::ALL).inner(verdict_panel);
+    let verdict_rows = ReviewDecision::ALL
+        .iter()
+        .enumerate()
+        .filter_map(|(index, decision)| {
+            (index < verdict_inner.height as usize).then_some((
+                Rect::new(
+                    verdict_inner.x,
+                    verdict_inner.y + index as u16,
+                    verdict_inner.width,
+                    1,
+                ),
+                *decision,
+            ))
+        })
+        .collect();
+
+    SendReviewRegions {
+        popup,
+        verdict_rows,
+        verdict_panel,
+        general_panel,
+        general: Block::default().borders(Borders::ALL).inner(general_panel),
+        preview: (!compact).then(|| Block::default().borders(Borders::ALL).inner(chunks[1])),
+        preview_panel: (!compact).then_some(chunks[1]),
+        footer: left_chunks[2],
+        compact,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,38 +171,22 @@ pub fn render_send_popover(
     files: &[FileDiff],
     buf: &mut Buffer,
 ) {
-    let popup = centered_rect(85, 80, area);
-    let dim = Block::default().style(Style::default().bg(palette.bg));
+    let regions = send_review_regions(area);
+    let popup = regions.popup;
+    let dim = Block::default().style(Style::default().bg(palette.bg).fg(palette.dim));
     dim.render(area, buf);
     Clear.render(popup, buf);
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(Style::default().bg(palette.elevated))
         .border_style(Style::default().fg(palette.accent))
         .title(Span::styled(
             " send review to agent ",
             Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
         ));
-    let inner = block.inner(popup);
     block.render(popup, buf);
-
-    // Two-column layout: controls on the left, preview on the right.
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(inner);
-    let left = chunks[0];
-    let right = chunks[1];
-
-    // ── Left: verdict radios + general comment + footer ──
-    let left_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),  // verdict
-            Constraint::Min(4),     // general
-            Constraint::Length(1),  // footer
-        ])
-        .split(left);
 
     // Verdict radios
     let verdict_lines: Vec<Line> = ReviewDecision::ALL
@@ -134,7 +194,11 @@ pub fn render_send_popover(
         .map(|d| {
             let is_selected = *d == state.verdict;
             let marker = if is_selected { "●" } else { "○" };
-            let color = if is_selected { palette.accent } else { palette.dim };
+            let color = if is_selected {
+                palette.accent
+            } else {
+                palette.dim
+            };
             let style = if is_selected {
                 Style::default().fg(color).add_modifier(Modifier::BOLD)
             } else {
@@ -145,43 +209,87 @@ pub fn render_send_popover(
         .collect();
     let verdict_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(if state.focused == SendField::Verdict { palette.accent } else { palette.border }))
-        .title(Span::styled(" verdict (Tab to switch, ←→ to change) ", Style::default().fg(palette.fg)));
-    let verdict_inner = verdict_block.inner(left_chunks[0]);
-    verdict_block.render(left_chunks[0], buf);
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if state.focused == SendField::Verdict {
+            palette.accent
+        } else {
+            palette.border
+        }))
+        .title(Span::styled(
+            if regions.compact {
+                " verdict · click or ←→ "
+            } else {
+                " verdict (Tab to switch, ←→ to change) "
+            },
+            Style::default().fg(palette.fg),
+        ));
+    let verdict_inner = verdict_block.inner(regions.verdict_panel);
+    verdict_block.render(regions.verdict_panel, buf);
     Paragraph::new(verdict_lines)
         .alignment(Alignment::Left)
         .render(verdict_inner, buf);
 
     // General comment textarea
-    state.general.set_style(Style::default().fg(palette.fg).bg(palette.bg));
-    state.general.set_cursor_line_style(Style::default().add_modifier(Modifier::UNDERLINED));
-    state.general.set_cursor_style(Style::default().fg(palette.fg).add_modifier(Modifier::REVERSED));
+    state
+        .general
+        .set_style(Style::default().fg(palette.fg).bg(palette.elevated));
+    state
+        .general
+        .set_cursor_line_style(Style::default().add_modifier(Modifier::UNDERLINED));
+    state.general.set_cursor_style(
+        Style::default()
+            .fg(palette.fg)
+            .add_modifier(Modifier::REVERSED),
+    );
     let general_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(if state.focused == SendField::General { palette.accent } else { palette.border }))
-        .title(Span::styled(" general comment ", Style::default().fg(palette.fg)));
-    let general_inner = general_block.inner(left_chunks[1]);
-    general_block.render(left_chunks[1], buf);
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if state.focused == SendField::General {
+            palette.accent
+        } else {
+            palette.border
+        }))
+        .title(Span::styled(
+            " general comment ",
+            Style::default().fg(palette.fg),
+        ));
+    let general_inner = general_block.inner(regions.general_panel);
+    general_block.render(regions.general_panel, buf);
     (&state.general).render(general_inner, buf);
 
     // Footer: hint + counts
-    let open_count = comments.iter().filter(|c| c.status == CommentStatus::Open).count();
+    let open_count = comments
+        .iter()
+        .filter(|c| c.status == CommentStatus::Open)
+        .count();
     let total = comments.len();
-    let footer = format!(
-        " ↑/↓: focus · ←/→: verdict · {} files · {} cmts ({} open) · Ctrl-S: send · Esc: cancel",
-        files.len(),
-        total,
-        open_count
-    );
+    let footer = if regions.compact {
+        format!(
+            "{} files · {} comments ({} open) · Ctrl-S send · Esc cancel",
+            files.len(),
+            total,
+            open_count
+        )
+    } else {
+        format!(
+            " ↑/↓: focus · ←/→: verdict · {} files · {} cmts ({} open) · Ctrl-S: send · Esc: cancel",
+            files.len(),
+            total,
+            open_count
+        )
+    };
     Paragraph::new(Line::from(Span::styled(
         footer,
         Style::default().fg(palette.dim),
     )))
     .alignment(Alignment::Center)
-    .render(left_chunks[2], buf);
+    .render(regions.footer, buf);
 
     // ── Right: live XML preview ──
+    let (Some(preview_panel), Some(preview_inner)) = (regions.preview_panel, regions.preview)
+    else {
+        return;
+    };
     let xml = format_comments(comments, Some(&state.body()), Some(state.verdict));
     let preview_lines: Vec<Line> = if xml.is_empty() {
         vec![Line::from(Span::styled(
@@ -190,7 +298,7 @@ pub fn render_send_popover(
         ))]
     } else {
         xml.lines()
-            .take((right.height.saturating_sub(2)) as usize)
+            .take(preview_inner.height as usize)
             .map(|l| {
                 let s = Style::default().fg(palette.fg);
                 Line::from(Span::styled(l.to_string(), s))
@@ -199,10 +307,13 @@ pub fn render_send_popover(
     };
     let preview_block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(palette.border))
-        .title(Span::styled(" preview (xml sent to agent) ", Style::default().fg(palette.fg)));
-    let preview_inner = preview_block.inner(right);
-    preview_block.render(right, buf);
+        .title(Span::styled(
+            " preview (xml sent to agent) ",
+            Style::default().fg(palette.fg),
+        ));
+    preview_block.render(preview_panel, buf);
     Paragraph::new(preview_lines)
         .wrap(Wrap { trim: false })
         .scroll((0, state.preview_scroll))
@@ -296,5 +407,27 @@ mod tests {
         let s = SendReviewState::new();
         assert_eq!(s.verdict, ReviewDecision::ChangesRequested);
         assert_eq!(s.focused, SendField::Verdict);
+    }
+
+    #[test]
+    fn mouse_regions_expose_every_verdict_and_text_panel() {
+        let regions = send_review_regions(Rect::new(0, 0, 120, 40));
+        assert_eq!(regions.verdict_rows.len(), ReviewDecision::ALL.len());
+        assert!(regions.general.width > 0);
+        assert!(regions.general.height > 0);
+        assert!(regions.preview.unwrap().width > regions.general.width);
+        for (index, (_, decision)) in regions.verdict_rows.iter().enumerate() {
+            assert_eq!(*decision, ReviewDecision::ALL[index]);
+        }
+    }
+
+    #[test]
+    fn compact_modal_keeps_controls_wide_and_hides_verbose_preview() {
+        let regions = send_review_regions(Rect::new(0, 0, 80, 24));
+        assert!(regions.compact);
+        assert_eq!(regions.popup.width, 76);
+        assert!(regions.general.width > 70);
+        assert!(regions.preview.is_none());
+        assert_eq!(regions.verdict_rows.len(), ReviewDecision::ALL.len());
     }
 }

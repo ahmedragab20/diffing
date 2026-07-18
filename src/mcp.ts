@@ -494,6 +494,14 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     return requestSessionJson<T>(requireWebSession(), path, init)
   }
 
+  function requireTuiSession(): ReturnType<typeof requireWebSession> {
+    const session = requireWebSession()
+    if (session.lock.mode !== 'tui') {
+      throw new Error('This bounded diff-inspection tool requires an active `diffing --tui` session.')
+    }
+    return session
+  }
+
   async function seedReviewCursor(
     session: ReturnType<typeof requireWebSession>,
     signal?: AbortSignal,
@@ -746,6 +754,100 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
       ...(typeof diff.truncated === 'number' ? { truncated: diff.truncated } : {}),
     }
     return textResult(diff.patch || '(The active diff is empty.)', structured)
+  })
+
+  server.registerTool('diff_summary', {
+    title: 'Summarize the native TUI diff',
+    description: 'Return bounded totals and change-kind counts from the TUI sparse index without transferring the patch.',
+    inputSchema: {},
+    outputSchema: { result: z.unknown() },
+    annotations: READ_ONLY,
+  }, async () => {
+    const session = requireTuiSession()
+    const result = await requestSessionJson<Record<string, unknown>>(session, '/api/diff/summary')
+    return textResult(JSON.stringify(result), { result })
+  })
+
+  server.registerTool('diff_files', {
+    title: 'Page changed files from the native TUI',
+    description: 'Return a bounded page of changed-file metadata with an opaque numeric continuation cursor.',
+    inputSchema: {
+      cursor: z.number().int().nonnegative().optional(),
+      limit: z.number().int().positive().max(1000).optional(),
+    },
+    outputSchema: { result: z.unknown() },
+    annotations: READ_ONLY,
+  }, async ({ cursor = 0, limit = 100 }) => {
+    const session = requireTuiSession()
+    const result = await requestSessionJson<Record<string, unknown>>(
+      session,
+      `/api/diff/files?cursor=${cursor}&limit=${limit}`,
+    )
+    return textResult(JSON.stringify(result), { result })
+  })
+
+  server.registerTool('diff_hunks', {
+    title: 'Page hunk metadata from the native TUI',
+    description: 'Return bounded hunk metadata for one file index. Pass generation from diff_summary to reject stale navigation.',
+    inputSchema: {
+      file: z.number().int().nonnegative(),
+      generation: z.number().int().nonnegative().optional(),
+      cursor: z.number().int().nonnegative().optional(),
+      limit: z.number().int().positive().max(1000).optional(),
+    },
+    outputSchema: { result: z.unknown() },
+    annotations: READ_ONLY,
+  }, async ({ file, generation, cursor = 0, limit = 100 }) => {
+    const session = requireTuiSession()
+    const query = new URLSearchParams({ file: String(file), cursor: String(cursor), limit: String(limit) })
+    if (generation !== undefined) query.set('generation', String(generation))
+    const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/hunks?${query}`)
+    return textResult(JSON.stringify(result), { result })
+  })
+
+  server.registerTool('diff_slice', {
+    title: 'Read a bounded native TUI diff slice',
+    description: 'Read exact logical rows for one file with strict line and byte budgets; use nextRow to continue.',
+    inputSchema: {
+      file: z.number().int().nonnegative(),
+      start: z.number().int().nonnegative().optional(),
+      generation: z.number().int().nonnegative().optional(),
+      maxLines: z.number().int().positive().max(1000).optional(),
+      maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional(),
+    },
+    outputSchema: { result: z.unknown() },
+    annotations: READ_ONLY,
+  }, async ({ file, start = 0, generation, maxLines = 120, maxBytes = 256 * 1024 }) => {
+    const session = requireTuiSession()
+    const query = new URLSearchParams({
+      file: String(file), start: String(start), maxLines: String(maxLines), maxBytes: String(maxBytes),
+    })
+    if (generation !== undefined) query.set('generation', String(generation))
+    const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/slice?${query}`)
+    return textResult(JSON.stringify(result), { result })
+  })
+
+  server.registerTool('diff_search', {
+    title: 'Search the native TUI diff',
+    description: 'Search changed paths and content with bounded hits/bytes and generation-safe continuation coordinates.',
+    inputSchema: {
+      query: z.string().min(1),
+      generation: z.number().int().nonnegative().optional(),
+      file: z.number().int().nonnegative().optional(),
+      row: z.number().int().nonnegative().optional(),
+      limit: z.number().int().positive().max(1000).optional(),
+      maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional(),
+    },
+    outputSchema: { result: z.unknown() },
+    annotations: READ_ONLY,
+  }, async ({ query, generation, file = 0, row = 0, limit = 100, maxBytes = 256 * 1024 }) => {
+    const session = requireTuiSession()
+    const params = new URLSearchParams({
+      q: query, file: String(file), row: String(row), limit: String(limit), maxBytes: String(maxBytes),
+    })
+    if (generation !== undefined) params.set('generation', String(generation))
+    const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/search?${params}`)
+    return textResult(JSON.stringify(result), { result })
   })
 
   server.registerTool('create_comment', {

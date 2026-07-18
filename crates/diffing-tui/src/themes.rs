@@ -1,61 +1,74 @@
-//! Color palettes for the TUI. 8 themes, all built from 256-color and
-//! truecolor escapes that crossterm supports out of the box.
+//! Terminal palettes derived from the web UI's theme CSS.
+//!
+//! The CSS is embedded in the native binary and parsed once. This keeps the
+//! browser and terminal theme catalogs aligned without a network dependency or
+//! a second hand-maintained list.
 
+use std::collections::HashSet;
+
+use once_cell::sync::Lazy;
 use ratatui::style::Color;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ThemeName {
-    #[default]
-    GithubDark,
-    Nord,
-    Dracula,
-    Monokai,
-    TokyoNight,
-    CatppuccinMocha,
-    GruvboxDark,
-    SolarizedDark,
+const WEB_THEME_CSS: &str = include_str!("../../../src/ui/styles/global.css");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThemeName(u16);
+
+#[derive(Debug, Clone)]
+pub struct ThemeDefinition {
+    pub id: String,
+    pub name: String,
+    pub light: bool,
+    pub palette: Palette,
 }
+
+static THEMES: Lazy<Vec<ThemeDefinition>> = Lazy::new(parse_theme_catalog);
+static THEME_NAMES: Lazy<Vec<ThemeName>> = Lazy::new(|| {
+    (0..THEMES.len())
+        .map(|index| ThemeName(index as u16))
+        .collect()
+});
 
 impl ThemeName {
-    pub const ALL: &'static [ThemeName] = &[
-        ThemeName::Nord,
-        ThemeName::GithubDark,
-        ThemeName::Dracula,
-        ThemeName::Monokai,
-        ThemeName::TokyoNight,
-        ThemeName::CatppuccinMocha,
-        ThemeName::GruvboxDark,
-        ThemeName::SolarizedDark,
-    ];
+    #[allow(non_upper_case_globals)]
+    #[cfg(test)]
+    pub const GithubDark: ThemeName = ThemeName(7);
 
-    pub fn label(self) -> &'static str {
-        match self {
-            ThemeName::Nord => "nord",
-            ThemeName::GithubDark => "github-dark",
-            ThemeName::Dracula => "dracula",
-            ThemeName::Monokai => "monokai",
-            ThemeName::TokyoNight => "tokyo-night",
-            ThemeName::CatppuccinMocha => "catppuccin-mocha",
-            ThemeName::GruvboxDark => "gruvbox-dark",
-            ThemeName::SolarizedDark => "solarized-dark",
-        }
+    pub fn all() -> &'static [ThemeName] {
+        THEME_NAMES.as_slice()
     }
 
-    #[allow(dead_code)]
+    pub fn label(self) -> &'static str {
+        &THEMES[self.0 as usize].id
+    }
+
+    pub fn display_name(self) -> &'static str {
+        &THEMES[self.0 as usize].name
+    }
+
+    pub fn is_light(self) -> bool {
+        THEMES[self.0 as usize].light
+    }
+
     pub fn from_label(label: &str) -> Option<ThemeName> {
-        Self::ALL.iter().copied().find(|t| t.label() == label)
+        THEMES
+            .iter()
+            .position(|theme| theme.id == label)
+            .map(|index| ThemeName(index as u16))
     }
 }
 
-impl Default for Palette {
+impl Default for ThemeName {
     fn default() -> Self {
-        Palette::for_theme(ThemeName::default())
+        Self::from_label("github-dark").unwrap_or(ThemeName(0))
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub bg: Color,
+    pub panel: Color,
+    pub elevated: Color,
     pub fg: Color,
     pub dim: Color,
     pub accent: Color,
@@ -64,8 +77,6 @@ pub struct Palette {
     pub added_bg: Color,
     pub removed_bg: Color,
     pub gutter: Color,
-    #[allow(dead_code)]
-    pub gutter_focused: Color,
     pub selection_bg: Color,
     pub border: Color,
     pub border_focused: Color,
@@ -73,186 +84,160 @@ pub struct Palette {
     pub status_bar_bg: Color,
 }
 
+impl Default for Palette {
+    fn default() -> Self {
+        Self::for_theme(ThemeName::default())
+    }
+}
+
 impl Palette {
     pub fn for_theme(name: ThemeName) -> Self {
-        match name {
-            ThemeName::Nord => nord(),
-            ThemeName::GithubDark => github_dark(),
-            ThemeName::Dracula => dracula(),
-            ThemeName::Monokai => monokai(),
-            ThemeName::TokyoNight => tokyo_night(),
-            ThemeName::CatppuccinMocha => catppuccin_mocha(),
-            ThemeName::GruvboxDark => gruvbox_dark(),
-            ThemeName::SolarizedDark => solarized_dark(),
+        THEMES
+            .get(name.0 as usize)
+            .map(|theme| theme.palette)
+            .unwrap_or_else(|| THEMES[0].palette)
+    }
+}
+
+fn parse_theme_catalog() -> Vec<ThemeDefinition> {
+    let mut themes = Vec::new();
+    let mut seen = HashSet::new();
+    let marker = "[data-theme=\"";
+    let mut remainder = WEB_THEME_CSS;
+    while let Some(start) = remainder.find(marker) {
+        remainder = &remainder[start + marker.len()..];
+        let Some(id_end) = remainder.find("\"]") else {
+            break;
+        };
+        let id = &remainder[..id_end];
+        let Some(open) = remainder[id_end..].find('{') else {
+            break;
+        };
+        let block_start = id_end + open + 1;
+        let Some(close) = remainder[block_start..].find('}') else {
+            break;
+        };
+        let block = &remainder[block_start..block_start + close];
+        remainder = &remainder[block_start + close + 1..];
+        if !seen.insert(id.to_string()) {
+            continue;
+        }
+        if let Some(theme) = parse_theme(id, block) {
+            themes.push(theme);
         }
     }
+    assert!(!themes.is_empty(), "embedded web theme catalog is empty");
+    themes
 }
 
-fn hex(hex: u32) -> Color {
-    let r = ((hex >> 16) & 0xff) as u8;
-    let g = ((hex >> 8) & 0xff) as u8;
-    let b = (hex & 0xff) as u8;
-    Color::Rgb(r, g, b)
+fn parse_theme(id: &str, block: &str) -> Option<ThemeDefinition> {
+    let bg = css_color(block, "bg-primary")?;
+    let panel = css_color(block, "bg-secondary").unwrap_or(bg);
+    let elevated = css_color(block, "bg-tertiary").unwrap_or_else(|| blend(panel, bg, 0.5));
+    let fg = css_color(block, "text-primary")?;
+    let dim = css_color(block, "text-muted").unwrap_or_else(|| blend(fg, bg, 0.55));
+    let accent = css_color(block, "border-focus")
+        .or_else(|| css_color(block, "primary"))
+        .unwrap_or(fg);
+    let added = css_color(block, "feedback-success-text")
+        .or_else(|| css_color(block, "success"))
+        .unwrap_or(Color::Rgb(63, 185, 80));
+    let removed = css_color(block, "feedback-danger-text")
+        .or_else(|| css_color(block, "danger"))
+        .unwrap_or(Color::Rgb(248, 81, 73));
+    let border = css_color(block, "border-color")
+        .or_else(|| css_color(block, "border-normal"))
+        .unwrap_or(elevated);
+    let comment = css_color(block, "comment-border").unwrap_or(accent);
+    let light = relative_luminance(bg) > relative_luminance(fg);
+    Some(ThemeDefinition {
+        id: id.to_string(),
+        name: display_name(id),
+        light,
+        palette: Palette {
+            bg,
+            panel,
+            elevated,
+            fg,
+            dim,
+            accent,
+            added,
+            removed,
+            added_bg: blend(added, bg, if light { 0.12 } else { 0.18 }),
+            removed_bg: blend(removed, bg, if light { 0.10 } else { 0.18 }),
+            gutter: dim,
+            selection_bg: blend(accent, bg, if light { 0.16 } else { 0.28 }),
+            border,
+            border_focused: accent,
+            comment,
+            status_bar_bg: panel,
+        },
+    })
 }
 
-fn nord() -> Palette {
-    Palette {
-        bg: hex(0x2e3440),
-        fg: hex(0xd8dee9),
-        dim: hex(0x4c566a),
-        accent: hex(0x88c0d0),
-        added: hex(0xa3be8c),
-        removed: hex(0xbf616a),
-        added_bg: hex(0x3b4252),
-        removed_bg: hex(0x3b4252),
-        gutter: hex(0x4c566a),
-        gutter_focused: hex(0x88c0d0),
-        selection_bg: hex(0x434c5e),
-        border: hex(0x434c5e),
-        border_focused: hex(0x88c0d0),
-        comment: hex(0x616e88),
-        status_bar_bg: hex(0x3b4252),
+fn css_color(block: &str, property: &str) -> Option<Color> {
+    let prefix = format!("--{property}:");
+    let value = block
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(&prefix))?
+        .split(';')
+        .next()?
+        .trim();
+    parse_hex(value)
+}
+
+fn parse_hex(value: &str) -> Option<Color> {
+    let hex = value.strip_prefix('#')?;
+    let (r, g, b) = match hex.len() {
+        3 => {
+            let mut chars = hex.chars();
+            let r = chars.next()?.to_digit(16)? as u8 * 17;
+            let g = chars.next()?.to_digit(16)? as u8 * 17;
+            let b = chars.next()?.to_digit(16)? as u8 * 17;
+            (r, g, b)
+        }
+        6 => (
+            u8::from_str_radix(&hex[0..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..6], 16).ok()?,
+        ),
+        _ => return None,
+    };
+    Some(Color::Rgb(r, g, b))
+}
+
+fn rgb(color: Color) -> (u8, u8, u8) {
+    match color {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (128, 128, 128),
     }
 }
 
-fn github_dark() -> Palette {
-    Palette {
-        bg: hex(0x0d1117),
-        fg: hex(0xc9d1d9),
-        dim: hex(0x484f58),
-        accent: hex(0x58a6ff),
-        added: hex(0x3fb950),
-        removed: hex(0xf85149),
-        added_bg: hex(0x033a16),
-        removed_bg: hex(0x67060c),
-        gutter: hex(0x484f58),
-        gutter_focused: hex(0x58a6ff),
-        selection_bg: hex(0x1f6feb),
-        border: hex(0x30363d),
-        border_focused: hex(0x58a6ff),
-        comment: hex(0x8b949e),
-        status_bar_bg: hex(0x161b22),
-    }
+fn blend(foreground: Color, background: Color, amount: f32) -> Color {
+    let (fr, fg, fb) = rgb(foreground);
+    let (br, bg, bb) = rgb(background);
+    let channel =
+        |front: u8, back: u8| (back as f32 + (front as f32 - back as f32) * amount).round() as u8;
+    Color::Rgb(channel(fr, br), channel(fg, bg), channel(fb, bb))
 }
 
-fn dracula() -> Palette {
-    Palette {
-        bg: hex(0x282a36),
-        fg: hex(0xf8f8f2),
-        dim: hex(0x44475a),
-        accent: hex(0xbd93f9),
-        added: hex(0x50fa7b),
-        removed: hex(0xff5555),
-        added_bg: hex(0x1e3a2a),
-        removed_bg: hex(0x4a1f1f),
-        gutter: hex(0x6272a4),
-        gutter_focused: hex(0xbd93f9),
-        selection_bg: hex(0x44475a),
-        border: hex(0x44475a),
-        border_focused: hex(0xbd93f9),
-        comment: hex(0x6272a4),
-        status_bar_bg: hex(0x21222c),
-    }
+fn relative_luminance(color: Color) -> f32 {
+    let (r, g, b) = rgb(color);
+    0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32
 }
 
-fn monokai() -> Palette {
-    Palette {
-        bg: hex(0x272822),
-        fg: hex(0xf8f8f2),
-        dim: hex(0x75715e),
-        accent: hex(0x66d9ef),
-        added: hex(0xa6e22e),
-        removed: hex(0xf92672),
-        added_bg: hex(0x1e3a1e),
-        removed_bg: hex(0x4a1f2a),
-        gutter: hex(0x75715e),
-        gutter_focused: hex(0x66d9ef),
-        selection_bg: hex(0x3e3d32),
-        border: hex(0x3e3d32),
-        border_focused: hex(0x66d9ef),
-        comment: hex(0x75715e),
-        status_bar_bg: hex(0x1e1f1c),
-    }
-}
-
-fn tokyo_night() -> Palette {
-    Palette {
-        bg: hex(0x1a1b26),
-        fg: hex(0xc0caf5),
-        dim: hex(0x414868),
-        accent: hex(0x7aa2f7),
-        added: hex(0x9ece6a),
-        removed: hex(0xf7768e),
-        added_bg: hex(0x1f2a3a),
-        removed_bg: hex(0x3a1f2a),
-        gutter: hex(0x414868),
-        gutter_focused: hex(0x7aa2f7),
-        selection_bg: hex(0x28344a),
-        border: hex(0x292e42),
-        border_focused: hex(0x7aa2f7),
-        comment: hex(0x565f89),
-        status_bar_bg: hex(0x16161e),
-    }
-}
-
-fn catppuccin_mocha() -> Palette {
-    Palette {
-        bg: hex(0x1e1e2e),
-        fg: hex(0xcdd6f4),
-        dim: hex(0x45475a),
-        accent: hex(0x89b4fa),
-        added: hex(0xa6e3a1),
-        removed: hex(0xf38ba8),
-        added_bg: hex(0x22303b),
-        removed_bg: hex(0x3a2a32),
-        gutter: hex(0x585b70),
-        gutter_focused: hex(0x89b4fa),
-        selection_bg: hex(0x313244),
-        border: hex(0x313244),
-        border_focused: hex(0x89b4fa),
-        comment: hex(0x6c7086),
-        status_bar_bg: hex(0x181825),
-    }
-}
-
-fn gruvbox_dark() -> Palette {
-    Palette {
-        bg: hex(0x282828),
-        fg: hex(0xebdbb2),
-        dim: hex(0x504945),
-        accent: hex(0x83a598),
-        added: hex(0xb8bb26),
-        removed: hex(0xfb4934),
-        added_bg: hex(0x32302f),
-        removed_bg: hex(0x3a2a2a),
-        gutter: hex(0x7c6f64),
-        gutter_focused: hex(0x83a598),
-        selection_bg: hex(0x3c3836),
-        border: hex(0x3c3836),
-        border_focused: hex(0x83a598),
-        comment: hex(0xa89984),
-        status_bar_bg: hex(0x1d2021),
-    }
-}
-
-fn solarized_dark() -> Palette {
-    Palette {
-        bg: hex(0x002b36),
-        fg: hex(0x93a1a1),
-        dim: hex(0x073642),
-        accent: hex(0x268bd2),
-        added: hex(0x859900),
-        removed: hex(0xdc322f),
-        added_bg: hex(0x073642),
-        removed_bg: hex(0x073642),
-        gutter: hex(0x586e75),
-        gutter_focused: hex(0x268bd2),
-        selection_bg: hex(0x073642),
-        border: hex(0x073642),
-        border_focused: hex(0x268bd2),
-        comment: hex(0x586e75),
-        status_bar_bg: hex(0x001f27),
-    }
+fn display_name(id: &str) -> String {
+    id.split('-')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -260,26 +245,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_themes_have_distinct_palettes() {
-        let palettes: Vec<Palette> = ThemeName::ALL
-            .iter()
-            .map(|t| Palette::for_theme(*t))
-            .collect();
-        for (i, a) in palettes.iter().enumerate() {
-            for b in &palettes[i + 1..] {
-                assert_ne!(
-                    format!("{:?}", a),
-                    format!("{:?}", b),
-                    "palettes must differ"
-                );
-            }
+    fn catalog_contains_every_unique_web_theme() {
+        assert_eq!(ThemeName::all().len(), 52);
+        for required in [
+            "github-dark",
+            "github-light",
+            "catppuccin-mocha",
+            "material-theme-palenight",
+            "rose-pine-dawn",
+            "vitesse-light",
+            "dawnfox",
+        ] {
+            assert!(
+                ThemeName::from_label(required).is_some(),
+                "missing {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_theme_has_readable_foreground_and_distinct_surfaces() {
+        for theme in ThemeName::all() {
+            let palette = Palette::for_theme(*theme);
+            let contrast = (relative_luminance(palette.fg) - relative_luminance(palette.bg)).abs();
+            assert!(contrast >= 45.0, "low contrast for {}", theme.label());
+            assert_ne!(
+                rgb(palette.panel),
+                rgb(palette.fg),
+                "bad panel for {}",
+                theme.label()
+            );
         }
     }
 
     #[test]
     fn label_round_trip() {
-        for t in ThemeName::ALL {
-            assert_eq!(ThemeName::from_label(t.label()), Some(*t));
+        for theme in ThemeName::all() {
+            assert_eq!(ThemeName::from_label(theme.label()), Some(*theme));
         }
     }
 }

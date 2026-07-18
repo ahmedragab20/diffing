@@ -7,23 +7,23 @@
 //! (`diffing await-review`, `diffing plan await`, `diffing mcp`) can
 //! discover.
 //!
-//! Today this binary handles clap arg parsing, lockfile write/cleanup,
-//! raw-mode TUI boot/shutdown, and a placeholder "diffing TUI" screen with
-//! a spinner. Diff rendering, comments, search, plans, settings, and the
-//! optional GPU render backend are added in subsequent commits.
+//! The renderer consumes a disk-backed sparse diff index, while a
+//! capability-scoped loopback API exposes the same bounded views to headless
+//! agents and CLI/MCP clients.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use diffing_core::diff::{parse_patch, run_git_diff};
 use tracing_subscriber::EnvFilter;
 
+mod agent_api;
 mod app;
 mod diff;
 mod handoff;
 mod keys;
+mod persistence;
 mod server_lock;
 mod themes;
 mod tui;
@@ -68,34 +68,42 @@ fn real_main() -> Result<()> {
         .context("--repo path is not valid UTF-8")?
         .to_string();
 
+    if let Some(existing) = server_lock::read_server_lock(&repo_root_str) {
+        if server_lock::is_lock_alive(&existing) && existing.pid != std::process::id() {
+            anyhow::bail!(
+                "another diffing {} session is already running for this repo (pid {})",
+                existing.mode.as_deref().unwrap_or("web"),
+                existing.pid
+            );
+        }
+        server_lock::remove_server_lock(&repo_root_str)?;
+    }
+
+    // Indexing happens on a worker and publishes usable partial generations,
+    // so even a million-line diff does not delay terminal startup.
+    let mut app = app::App::new(PathBuf::from(&repo_root_str), args.git_diff_args)
+        .with_context(|| format!("initialising diffing-tui for {}", repo_root_str))?;
+
     let lock = server_lock::ServerLock {
-        port: 0,
+        port: app.agent_api.port,
         host: "127.0.0.1".to_string(),
         pid: std::process::id(),
         repo_root: repo_root_str.clone(),
         started_at: now_ms(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         mode: Some("tui".to_string()),
+        capability: Some(app.agent_api.capability.clone()),
     };
     let lock_path = server_lock::write_server_lock(&repo_root_str, &lock)
         .with_context(|| format!("writing server.json for {}", repo_root_str))?;
-    tracing::info!(path = %lock_path.display(), "wrote server.json (mode=tui)");
-
-    // Run git diff and parse the patch text.
-    let patch_text = run_git_diff(&repo_root_str, &args.git_diff_args)
-        .with_context(|| format!("running git diff in {}", repo_root_str))?;
-    let files = parse_patch(&patch_text).context("parsing git diff output")?;
-    tracing::info!(file_count = files.len(), "parsed diff");
-
-    let mut app = app::App::new(PathBuf::from(&repo_root_str), files)
-        .with_context(|| format!("initialising diffing-tui for {}", repo_root_str))?;
+    tracing::info!(path = %lock_path.display(), port = lock.port, "wrote server.json (mode=tui)");
 
     let tui_result = tui::run(&repo_root_str, &mut app);
 
     if let Err(ref e) = tui_result {
         tracing::warn!(error = %e, "TUI loop exited with error");
     }
-    if let Err(e) = server_lock::remove_server_lock(&repo_root_str) {
+    if let Err(e) = server_lock::remove_server_lock_if_owned(&repo_root_str, &lock) {
         tracing::warn!(error = %e, "failed to remove server.json on exit");
     } else {
         tracing::info!("removed server.json");

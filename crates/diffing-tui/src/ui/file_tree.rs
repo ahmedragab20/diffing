@@ -5,6 +5,7 @@
 //! later phase. Each file node carries its index into the original
 //! `files` vec so the main view can jump to the corresponding diff.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use diffing_core::diff::FileDiff;
@@ -17,7 +18,6 @@ pub struct FileNode {
     pub depth: usize,
     pub kind: FileNodeKind,
     pub file_diff_idx: Option<usize>,
-    #[allow(dead_code)]
     pub expanded: bool,
     pub viewed: bool,
     #[allow(dead_code)]
@@ -34,6 +34,9 @@ pub enum FileNodeKind {
 pub struct FileTree {
     pub nodes: Vec<FileNode>,
     pub cursor: usize,
+    all_nodes: Vec<FileNode>,
+    file_positions: HashMap<usize, usize>,
+    collapsed: std::collections::HashSet<PathBuf>,
 }
 
 impl FileTree {
@@ -43,12 +46,14 @@ impl FileTree {
         // appear in the diff. This matches `git diff` output ordering.
         let mut dir_order: Vec<PathBuf> = Vec::new();
         let mut dir_files: Vec<Vec<usize>> = Vec::new();
+        let mut dir_positions: HashMap<PathBuf, usize> = HashMap::new();
         for (i, f) in files.iter().enumerate() {
             let path = f.display_path().to_path_buf();
             let parent = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-            if let Some(pos) = dir_order.iter().position(|d| d == &parent) {
+            if let Some(pos) = dir_positions.get(&parent).copied() {
                 dir_files[pos].push(i);
             } else {
+                dir_positions.insert(parent.clone(), dir_order.len());
                 dir_order.push(parent);
                 dir_files.push(vec![i]);
             }
@@ -96,7 +101,15 @@ impl FileTree {
             .iter()
             .position(|n| n.kind == FileNodeKind::File)
             .unwrap_or(0);
-        Self { nodes, cursor }
+        let mut tree = Self {
+            all_nodes: nodes.clone(),
+            nodes,
+            cursor,
+            file_positions: HashMap::new(),
+            collapsed: std::collections::HashSet::new(),
+        };
+        tree.rebuild_positions();
+        tree
     }
 
     pub fn selected_file_idx(&self) -> Option<usize> {
@@ -119,22 +132,90 @@ impl FileTree {
     }
 
     pub fn jump_to_file(&mut self, file_idx: usize) {
-        if let Some(pos) = self
-            .nodes
-            .iter()
-            .position(|n| n.file_diff_idx == Some(file_idx))
-        {
-            self.cursor = pos;
+        if let Some(position) = self.file_positions.get(&file_idx) {
+            self.cursor = *position;
         }
     }
 
-    /// Mark a file as viewed/unviewed. Affects only the file node, not dirs.
-    pub fn toggle_viewed(&mut self) {
-        if let Some(node) = self.nodes.get_mut(self.cursor) {
-            if node.kind == FileNodeKind::File {
-                node.viewed = !node.viewed;
+    pub fn collapse_selected(&mut self) {
+        let Some(node) = self.nodes.get(self.cursor) else {
+            return;
+        };
+        if node.kind != FileNodeKind::Dir {
+            return;
+        }
+        self.collapsed.insert(node.path.clone());
+        self.rebuild_visible(Some(node.path.clone()));
+    }
+
+    pub fn expand_selected(&mut self) {
+        let Some(node) = self.nodes.get(self.cursor) else {
+            return;
+        };
+        if node.kind != FileNodeKind::Dir {
+            return;
+        }
+        self.collapsed.remove(&node.path);
+        self.rebuild_visible(Some(node.path.clone()));
+    }
+
+    pub fn toggle_selected(&mut self) {
+        let Some(node) = self.nodes.get(self.cursor) else {
+            return;
+        };
+        if node.kind != FileNodeKind::Dir {
+            return;
+        }
+        if self.collapsed.contains(&node.path) {
+            self.expand_selected();
+        } else {
+            self.collapse_selected();
+        }
+    }
+
+    pub fn set_viewed(&mut self, file_idx: usize, viewed: bool) {
+        for node in self
+            .nodes
+            .iter_mut()
+            .chain(self.all_nodes.iter_mut())
+            .filter(|node| node.file_diff_idx == Some(file_idx))
+        {
+            node.viewed = viewed;
+        }
+    }
+
+    fn rebuild_visible(&mut self, selected_path: Option<PathBuf>) {
+        self.nodes = self
+            .all_nodes
+            .iter()
+            .filter(|node| {
+                node.kind == FileNodeKind::Dir
+                    || !self
+                        .collapsed
+                        .iter()
+                        .any(|directory| node.path.starts_with(directory))
+            })
+            .cloned()
+            .collect();
+        for node in &mut self.nodes {
+            if node.kind == FileNodeKind::Dir {
+                node.expanded = !self.collapsed.contains(&node.path);
             }
         }
+        self.cursor = selected_path
+            .as_ref()
+            .and_then(|path| self.nodes.iter().position(|node| &node.path == path))
+            .unwrap_or_else(|| self.cursor.min(self.nodes.len().saturating_sub(1)));
+        self.rebuild_positions();
+    }
+
+    fn rebuild_positions(&mut self) {
+        self.file_positions = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(position, node)| node.file_diff_idx.map(|index| (index, position)))
+            .collect();
     }
 }
 
@@ -221,5 +302,23 @@ mod tests {
         assert_eq!(change_marker_for(&fd("x", ChangeKind::Added)), 'A');
         assert_eq!(change_marker_for(&fd("x", ChangeKind::Deleted)), 'D');
         assert_eq!(change_marker_for(&fd("x", ChangeKind::Renamed)), 'R');
+    }
+
+    #[test]
+    fn directories_collapse_without_losing_file_positions() {
+        let files = vec![
+            fd("src/a.rs", ChangeKind::Modified),
+            fd("src/b.rs", ChangeKind::Added),
+            fd("README.md", ChangeKind::Modified),
+        ];
+        let mut tree = FileTree::build(&files);
+        tree.cursor = 0;
+        tree.collapse_selected();
+        assert_eq!(tree.nodes.len(), 2);
+        assert!(!tree.nodes[0].expanded);
+        tree.expand_selected();
+        assert_eq!(tree.nodes.len(), 4);
+        tree.jump_to_file(1);
+        assert_eq!(tree.selected_file_idx(), Some(1));
     }
 }

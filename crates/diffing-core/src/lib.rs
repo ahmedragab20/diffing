@@ -11,6 +11,7 @@
 
 pub mod comments;
 pub mod diff;
+pub mod index;
 pub mod storage;
 
 use std::path::{Path, PathBuf};

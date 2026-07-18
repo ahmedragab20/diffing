@@ -24,20 +24,24 @@ pub struct ServerLock {
     /// Absent on legacy writes (treated as `"web"`).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mode: Option<String>,
-}
-
-pub fn read_server_lock(repo_root: &str) -> Option<ServerLock> {
-    let path = lock_path(repo_root);
-    let raw = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&raw).ok()
+    /// Random bearer capability required by the TUI's loopback API.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub capability: Option<String>,
 }
 
 pub fn write_server_lock(repo_root: &str, lock: &ServerLock) -> Result<PathBuf> {
     let path = lock_path(repo_root);
     ensure_dir(&path).with_context(|| format!("preparing parent of {}", path.display()))?;
     let json = serde_json::to_string_pretty(lock).context("serializing server.json")?;
-    std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
+    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    std::fs::write(&temporary, json).with_context(|| format!("writing {}", temporary.display()))?;
+    std::fs::rename(&temporary, &path).with_context(|| format!("publishing {}", path.display()))?;
     Ok(path)
+}
+
+pub fn read_server_lock(repo_root: &str) -> Option<ServerLock> {
+    let raw = std::fs::read_to_string(lock_path(repo_root)).ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 pub fn remove_server_lock(repo_root: &str) -> Result<()> {
@@ -47,6 +51,19 @@ pub fn remove_server_lock(repo_root: &str) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(anyhow::anyhow!("removing {}: {}", path.display(), e)),
     }
+}
+
+/// Remove the discovery record only if it still belongs to this TUI. This
+/// avoids deleting a replacement session that started while shutdown was in
+/// progress.
+pub fn remove_server_lock_if_owned(repo_root: &str, owner: &ServerLock) -> Result<()> {
+    let Some(current) = read_server_lock(repo_root) else {
+        return Ok(());
+    };
+    if current.pid != owner.pid || current.capability != owner.capability {
+        return Ok(());
+    }
+    remove_server_lock(repo_root)
 }
 
 /// True if the process named by the lock is still alive. Uses
@@ -79,13 +96,7 @@ pub fn is_lock_alive(lock: &ServerLock) -> bool {
 fn is_pid_alive_windows(pid: u32) -> bool {
     use std::process::Command;
     let output = Command::new("tasklist")
-        .args([
-            "/NH",
-            "/FO",
-            "CSV",
-            "/FI",
-            &format!("PID eq {}", pid),
-        ])
+        .args(["/NH", "/FO", "CSV", "/FI", &format!("PID eq {}", pid)])
         .output();
     match output {
         Ok(out) if out.status.success() => {
@@ -121,6 +132,7 @@ mod tests {
             started_at: 1_700_000_000_000,
             version: "0.1.0".to_string(),
             mode: Some("tui".to_string()),
+            capability: Some("test-capability".to_string()),
         }
     }
 
@@ -168,6 +180,20 @@ mod tests {
         write_server_lock(repo, &sample_lock()).unwrap();
         remove_server_lock(repo).unwrap();
         remove_server_lock(repo).unwrap();
+    }
+
+    #[test]
+    fn owned_cleanup_preserves_a_replacement_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_str().unwrap();
+        let original = sample_lock();
+        write_server_lock(repo, &original).unwrap();
+        let mut replacement = original.clone();
+        replacement.pid += 1;
+        replacement.capability = Some("replacement".to_string());
+        write_server_lock(repo, &replacement).unwrap();
+        remove_server_lock_if_owned(repo, &original).unwrap();
+        assert_eq!(read_server_lock(repo).unwrap().pid, replacement.pid);
     }
 
     // ── Windows liveness probe ────────────────────────────────────────────

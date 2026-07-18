@@ -16,12 +16,38 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use notify::{RecursiveMode, Watcher};
+use notify::{Event, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 
 pub struct CommentsWatcher {
     _debouncer: Debouncer<notify::RecommendedWatcher, FileIdMap>,
     rx: Receiver<DebounceEventResult>,
+}
+
+pub struct RepoWatcher {
+    _watcher: notify::RecommendedWatcher,
+    rx: Receiver<notify::Result<Event>>,
+}
+
+impl RepoWatcher {
+    pub fn start(repo_root: &Path) -> Result<Self> {
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |event| {
+            let _ = tx.send(event);
+        })
+        .context("creating repository watcher")?;
+        watcher
+            .watch(repo_root, RecursiveMode::Recursive)
+            .with_context(|| format!("watching repository {}", repo_root.display()))?;
+        Ok(Self {
+            _watcher: watcher,
+            rx,
+        })
+    }
+
+    pub fn try_recv(&self) -> Option<notify::Result<Event>> {
+        self.rx.try_recv().ok()
+    }
 }
 
 impl CommentsWatcher {
@@ -31,10 +57,14 @@ impl CommentsWatcher {
     /// to stop the background thread.
     pub fn start(dir: &Path) -> Result<Self> {
         let (tx, rx) = mpsc::channel::<DebounceEventResult>();
-        let mut debouncer = new_debouncer(Duration::from_millis(200), None, move |res: DebounceEventResult| {
-            // Best-effort: if the receiver is gone, swallow the error.
-            let _ = tx.send(res);
-        })
+        let mut debouncer = new_debouncer(
+            Duration::from_millis(200),
+            None,
+            move |res: DebounceEventResult| {
+                // Best-effort: if the receiver is gone, swallow the error.
+                let _ = tx.send(res);
+            },
+        )
         .context("creating notify debouncer")?;
         debouncer
             .watcher()
@@ -63,7 +93,8 @@ mod tests {
     fn tempdir() -> std::path::PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("diffing-live-test-{}-{n}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("diffing-live-test-{}-{n}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -101,6 +132,10 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        assert!(saw, "watcher did not fire for {} (events: timeout)", path.display());
+        assert!(
+            saw,
+            "watcher did not fire for {} (events: timeout)",
+            path.display()
+        );
     }
 }

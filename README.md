@@ -158,7 +158,7 @@ A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), 
 > workflows; please open an issue before depending on the TUI for CI / agent
 > automation. The web review flow, plan review, and PR review are unaffected.
 
-`diffing --tui` opens an **opt-in native-Rust terminal interface** that mirrors the web review dashboard — no browser, no Electron, no port. It's a leaf renderer in a new `crates/diffing-tui/` binary: the Node CLI is still the single source of truth for arg parsing, lockfile discovery, and agent handoff, and the TUI reads the same `~/.diffing/<repo>/*` state on disk and writes a `server.json` with `mode: "tui"`.
+`diffing --tui` opens an **opt-in native-Rust terminal interface** that mirrors the local code-review workflow — no browser or Electron. The renderer and headless tools share one sparse diff index. A random-port loopback API is published through `server.json` with `mode: "tui"` and a per-session capability, so local agents can inspect a large diff without receiving the whole patch.
 
 The default `diffing` behaviour is **byte-identical** with and without `--tui` — the TUI is strictly opt-in. If the env cannot support a TUI (piped stdin, CI, no raw mode) or the binary is missing, you get a one-line stderr note and the normal `git diff` output. The web mode is also unaffected by the TUI build; the same `diffing` install serves either.
 
@@ -174,15 +174,26 @@ diffing --tui -- -- src/            # Limit a TUI review to a directory
 
 **Features**
 
-- **Unified diff render** with a virtualised file card, syntect highlighter, and the same 8 Shiki-compatible colour themes as the web UI.
-- **Vim-style file tree & keymap** — `j/k/gg/G/J/K/Tab/w/t/m/?/` motions, plus `c` (new comment), `e/r/x` (edit / reply / resolve), `]`/`[` (next / previous thread), `?` (help).
+- **Disk-backed streaming index** — Git output is parsed as bytes into sparse file/hunk/checkpoint metadata. The first partial generation is usable during ingestion; neither the TUI nor an agent needs to retain the full patch in memory.
+- **Viewport-only rendering** — only visible rows are sought, decoded, syntax-highlighted, and converted to terminal cells. Unified and split layouts, horizontal scrolling, wrapping, binary markers, untracked files, and live working-tree refresh are supported.
+- **Vim-style file tree & keymap** — numeric counts plus `j/k`, `gg/G`, `Ctrl-d/u`, `J/K`, `]h/[h`, `]c/[c`, `zz`, `h/l`, `/`, `n/N`, `:`, `Tab`, `v`, `w`, `m`, `t`, and `?`. `Esc` cancels a mode; `q` or `Ctrl-C` quits.
 - **Full comment CRUD** — mirrors `src/lib/comments.ts` byte-for-byte; the comment tracker at the bottom lists open / replied / resolved threads with click-to-jump navigation.
 - **Multi-line `tui-textarea` form** with markdown rendering in the preview pane.
 - **Live updates** via `notify` watcher on `comments.json` and the repo working tree — write a comment in another window and it appears immediately.
-- **Send review & agent handoff** — verdict radios + general-comment popover with a live XML preview. Submits via the same `format_comments` envelope as the web UI, copies to clipboard (`pbcopy` / `wl-copy` / `xclip` / `xsel` / `clip.exe`), and persists `pending-review.xml`. The agent-status indicator in the status bar mirrors the web UI's "Send to agent" connection dot.
+- **Send review & agent handoff** — verdict radios + general-comment popover with a live XML preview. `Ctrl-S` persists the review, copies it to the clipboard when available, and immediately wakes every `diffing await-review` waiter. The status bar reports real waiter state.
+- **Headless, token-bounded inspection** — `diffing inspect summary|files|hunks|slice|search` and the equivalent MCP tools page the same index with strict row/byte limits, generation checks, and compact JSON. Every request is loopback-only and requires the session capability.
 - **Cross-platform** — macOS, Linux, and Windows are all first-class. The TUI liveness probe uses `kill(pid, 0)` on Unix and `tasklist /NH /FO CSV` on Windows. Clipboard works on Wayland (`wl-copy`), X11 (`xclip` / `xsel`), macOS (`pbcopy`), and Windows (`clip.exe` / PowerShell `Set-Clipboard`).
 
-**Caveat** — the TUI's "Send to agent" writes the review to disk + clipboard but does not actively unblock a long-polling `diffing await-review`; that requires a Node-side change in a follow-up. The web UI's send button remains the supported native handoff path. The `pending-review.xml` is still produced and the review session is still round-incremented — only the long-poll wake-up is missing.
+The synthetic one-million-line benchmark (50.8 MiB patch) currently reaches a usable partial snapshot in under 1 ms, completes indexing in 47–152 ms, serves viewport reads at 30 µs p95, and peaks at about 54 MiB RSS on the development machine. Run it with `DIFFING_BENCH_LINES=1000000 cargo bench -p diffing-core --bench diff_index`; results vary by machine and filesystem cache.
+
+Headless examples:
+
+```bash
+diffing inspect summary
+diffing inspect files --limit 100
+diffing inspect slice --file 0 --start 0 --max-lines 120 --max-bytes 262144
+diffing inspect search "unsafe" --limit 25
+```
 
 **Building the binary locally**
 

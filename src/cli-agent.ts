@@ -701,6 +701,110 @@ async function completion(args: string[]): Promise<number> {
   return EXIT_OK
 }
 
+async function inspect(args: string[]): Promise<number> {
+  let parsed: ReturnType<typeof parseArgs>
+  try {
+    parsed = parseArgs({
+      args,
+      options: {
+        cursor: { type: 'string' },
+        limit: { type: 'string' },
+        file: { type: 'string' },
+        generation: { type: 'string' },
+        start: { type: 'string' },
+        row: { type: 'string' },
+        query: { type: 'string', short: 'q' },
+        'max-lines': { type: 'string' },
+        'max-bytes': { type: 'string' },
+        pretty: { type: 'boolean' },
+        help: { type: 'boolean', short: 'h' },
+      },
+      allowPositionals: true,
+    })
+  } catch (error: any) {
+    console.error(error?.message ?? error)
+    return EXIT_USAGE
+  }
+
+  const [resource, positionalQuery, ...extra] = parsed.positionals
+  if (parsed.values.help || !resource || extra.length > 0) {
+    console.error(`Usage: diffing inspect <summary|files|hunks|slice|search> [options]
+
+Read bounded data from a running native TUI without transferring the full patch.
+  files   [--cursor N] [--limit N]
+  hunks   --file N [--cursor N] [--limit N] [--generation N]
+  slice   --file N [--start N] [--max-lines N] [--max-bytes N] [--generation N]
+  search  <text>|--query <text> [--file N] [--row N] [--limit N] [--max-bytes N]
+
+Add --pretty for indented JSON.`)
+    return parsed.values.help ? EXIT_OK : EXIT_USAGE
+  }
+
+  const endpoint = new Map([
+    ['summary', '/api/diff/summary'],
+    ['files', '/api/diff/files'],
+    ['hunks', '/api/diff/hunks'],
+    ['slice', '/api/diff/slice'],
+    ['search', '/api/diff/search'],
+  ]).get(resource)
+  if (!endpoint) {
+    console.error(`Unknown inspect resource: ${resource}`)
+    return EXIT_USAGE
+  }
+
+  const params = new URLSearchParams()
+  const numberOptions: Array<[keyof typeof parsed.values, string]> = [
+    ['cursor', 'cursor'],
+    ['limit', 'limit'],
+    ['file', 'file'],
+    ['generation', 'generation'],
+    ['start', 'start'],
+    ['row', 'row'],
+    ['max-lines', 'maxLines'],
+    ['max-bytes', 'maxBytes'],
+  ]
+  for (const [option, parameter] of numberOptions) {
+    const value = parsed.values[option]
+    if (typeof value !== 'string') continue
+    if (!/^\d+$/.test(value)) {
+      console.error(`--${option} must be a non-negative integer`)
+      return EXIT_USAGE
+    }
+    params.set(parameter, value)
+  }
+  if ((resource === 'hunks' || resource === 'slice') && !params.has('file')) {
+    console.error(`diffing inspect ${resource}: --file is required`)
+    return EXIT_USAGE
+  }
+  if (resource === 'search') {
+    const query = parsed.values.query ?? positionalQuery
+    if (!query) {
+      console.error('diffing inspect search: provide search text or --query')
+      return EXIT_USAGE
+    }
+    params.set('q', query)
+  } else if (positionalQuery) {
+    console.error(`diffing inspect ${resource}: unexpected argument ${positionalQuery}`)
+    return EXIT_USAGE
+  }
+
+  const base = baseUrl()
+  let response: Response
+  try {
+    response = await apiFetch(`${base}${endpoint}${params.size ? `?${params}` : ''}`)
+  } catch (error: any) {
+    console.error(`Failed to reach diffing TUI: ${error?.message ?? error}`)
+    return EXIT_NO_SERVER
+  }
+  const body = await response.json().catch(() => ({ error: response.statusText }))
+  if (!response.ok) {
+    console.error((body as any).error ?? response.statusText)
+    return response.status === 404 ? EXIT_NOT_FOUND : 1
+  }
+  process.stdout.write(JSON.stringify(body, null, parsed.values.pretty ? 2 : undefined) + '\n')
+  return EXIT_OK
+}
+
 async function progress(args: string[]): Promise<number> {
   const { values } = parseArgs({
     args,
@@ -770,6 +874,8 @@ export async function runSubcommand(name: string, args: string[]): Promise<numbe
       return completion(args)
     case 'progress':
       return progress(args)
+    case 'inspect':
+      return inspect(args)
     default:
       console.error(`Unknown subcommand: ${name}`)
       return EXIT_USAGE

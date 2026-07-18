@@ -8,6 +8,9 @@
 //! The `Line` API is allocation-free per call: it returns styled spans that
 //! can be wrapped in `ratatui::text::Span` and composed into a `Line`.
 
+use std::collections::{HashMap, VecDeque};
+use std::sync::Mutex;
+
 use once_cell::sync::Lazy;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
@@ -18,6 +21,51 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newlines);
 static THEME: Lazy<Theme> =
     Lazy::new(|| ThemeSet::load_defaults().themes["InspiredGitHub"].clone());
+static CACHE: Lazy<Mutex<HighlightCache>> = Lazy::new(|| Mutex::new(HighlightCache::default()));
+const MAX_CACHE_ENTRIES: usize = 4_096;
+const MAX_CACHE_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Default)]
+struct HighlightCache {
+    entries: HashMap<(String, String), Vec<StyledSpan>>,
+    order: VecDeque<(String, String)>,
+    bytes: usize,
+}
+
+impl HighlightCache {
+    fn get(&self, path: &str, content: &str) -> Option<Vec<StyledSpan>> {
+        self.entries
+            .get(&(path.to_string(), content.to_string()))
+            .cloned()
+    }
+
+    fn insert(&mut self, path: &str, content: &str, spans: Vec<StyledSpan>) {
+        let key = (path.to_string(), content.to_string());
+        if self.entries.contains_key(&key) {
+            return;
+        }
+        let bytes = key.0.len()
+            + key.1.len()
+            + spans.iter().map(|span| span.text.len() + 32).sum::<usize>();
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.order.push_back(key.clone());
+        self.entries.insert(key, spans);
+        while self.entries.len() > MAX_CACHE_ENTRIES || self.bytes > MAX_CACHE_BYTES {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(removed) = self.entries.remove(&oldest) {
+                let removed_bytes = oldest.0.len()
+                    + oldest.1.len()
+                    + removed
+                        .iter()
+                        .map(|span| span.text.len() + 32)
+                        .sum::<usize>();
+                self.bytes = self.bytes.saturating_sub(removed_bytes);
+            }
+        }
+    }
+}
 
 /// One styled span within a highlighted line. Cheap to construct and pass
 /// around; the renderer converts to a `ratatui::text::Span`.
@@ -83,6 +131,19 @@ fn language_for_extension(ext: &str) -> &'static str {
 /// whitespace so the caller can compose them into a `ratatui::text::Line`
 /// at any width.
 pub fn highlight_line(path: &str, content: &str) -> Vec<StyledSpan> {
+    if let Ok(cache) = CACHE.lock() {
+        if let Some(spans) = cache.get(path, content) {
+            return spans;
+        }
+    }
+    let spans = highlight_uncached(path, content);
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(path, content, spans.clone());
+    }
+    spans
+}
+
+fn highlight_uncached(path: &str, content: &str) -> Vec<StyledSpan> {
     let syntax = syntax_for_path(path);
     // `LinesWithEndings` is what `syntect` expects: it wants lines *with*
     // their trailing newline so it can keep its parser state across lines.

@@ -5,7 +5,11 @@
 //! the reviewed consumer repo. Both sides read and write the same files,
 //! so the TUI can edit a comment while the web UI is open, or vice versa.
 
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -45,7 +49,11 @@ pub struct ReviewComment {
     pub side: CommentSide,
     #[serde(rename = "lineNumber")]
     pub line_number: u32,
-    #[serde(rename = "startLineNumber", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "startLineNumber",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub start_line_number: Option<u32>,
     #[serde(rename = "lineContent")]
     pub line_content: String,
@@ -61,6 +69,7 @@ pub enum NewComment<'a> {
     Inline {
         file_path: &'a str,
         side: CommentSide,
+        start_line_number: Option<u32>,
         line_number: u32,
         line_content: &'a str,
         body: &'a str,
@@ -92,6 +101,10 @@ impl FileCommentStore {
     }
 
     pub fn load(&self) -> Result<Vec<ReviewComment>> {
+        self.load_unlocked()
+    }
+
+    fn load_unlocked(&self) -> Result<Vec<ReviewComment>> {
         match std::fs::read_to_string(&self.path) {
             Ok(s) => Ok(serde_json::from_str(&s).context("parsing comments.json")?),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -100,9 +113,28 @@ impl FileCommentStore {
     }
 
     pub fn save(&self, comments: &[ReviewComment]) -> Result<()> {
-        ensure_dir(&self.path).with_context(|| format!("preparing parent of {}", self.path.display()))?;
+        self.with_lock(|| self.save_unlocked(comments))
+    }
+
+    fn save_unlocked(&self, comments: &[ReviewComment]) -> Result<()> {
+        ensure_dir(&self.path)
+            .with_context(|| format!("preparing parent of {}", self.path.display()))?;
         let json = serde_json::to_string_pretty(comments).context("serializing comments.json")?;
-        std::fs::write(&self.path, json).with_context(|| format!("writing {}", self.path.display()))?;
+        let temp_path =
+            self.path
+                .with_extension(format!("json.{}.{}.tmp", std::process::id(), now_nanos()));
+        let mut temp = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_path)
+            .with_context(|| format!("creating {}", temp_path.display()))?;
+        temp.write_all(json.as_bytes())?;
+        temp.sync_all()?;
+        drop(temp);
+        if let Err(error) = std::fs::rename(&temp_path, &self.path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(error).with_context(|| format!("writing {}", self.path.display()));
+        }
         // Mirror the Node side: also drop a sibling `repo_path.txt` so a
         // stray storage dir from a different repo can be detected.
         if let Some(parent) = self.path.parent() {
@@ -112,76 +144,170 @@ impl FileCommentStore {
     }
 
     pub fn add(&self, comment: NewComment<'_>, now_ms: u64) -> Result<ReviewComment> {
-        let mut comments = self.load()?;
-        let id = new_uuid();
-        let (file_path, side, line_number, line_content, body) = match comment {
-            NewComment::Inline { file_path, side, line_number, line_content, body } => {
-                (file_path.to_string(), side, line_number, line_content.to_string(), body.to_string())
-            }
-            NewComment::FileLevel { file_path, body } => {
-                (file_path.to_string(), CommentSide::Additions, 0, String::new(), body.to_string())
-            }
-        };
-        let new = ReviewComment {
-            id,
-            file_path,
-            side,
-            line_number,
-            start_line_number: None,
-            line_content,
-            body,
-            status: CommentStatus::Open,
-            created_at: now_ms,
-            replies: Vec::new(),
-        };
-        comments.push(new.clone());
-        self.save(&comments)?;
-        Ok(new)
+        self.with_lock(|| {
+            let mut comments = self.load_unlocked()?;
+            let id = new_uuid();
+            let (file_path, side, start_line_number, line_number, line_content, body) =
+                match comment {
+                    NewComment::Inline {
+                        file_path,
+                        side,
+                        start_line_number,
+                        line_number,
+                        line_content,
+                        body,
+                    } => (
+                        file_path.to_string(),
+                        side,
+                        start_line_number,
+                        line_number,
+                        line_content.to_string(),
+                        body.to_string(),
+                    ),
+                    NewComment::FileLevel { file_path, body } => (
+                        file_path.to_string(),
+                        CommentSide::Additions,
+                        None,
+                        0,
+                        String::new(),
+                        body.to_string(),
+                    ),
+                };
+            let new = ReviewComment {
+                id,
+                file_path,
+                side,
+                line_number,
+                start_line_number,
+                line_content,
+                body,
+                status: CommentStatus::Open,
+                created_at: now_ms,
+                replies: Vec::new(),
+            };
+            comments.push(new.clone());
+            self.save_unlocked(&comments)?;
+            Ok(new)
+        })
     }
 
-    pub fn update(&self, id: &str, body: Option<&str>, status: Option<CommentStatus>) -> Result<Option<ReviewComment>> {
-        let mut comments = self.load()?;
-        let Some(c) = comments.iter_mut().find(|c| c.id == id) else {
-            return Ok(None);
-        };
-        if let Some(b) = body {
-            c.body = b.to_string();
-        }
-        if let Some(s) = status {
-            c.status = s;
-        }
-        let updated = c.clone();
-        self.save(&comments)?;
-        Ok(Some(updated))
+    pub fn update(
+        &self,
+        id: &str,
+        body: Option<&str>,
+        status: Option<CommentStatus>,
+    ) -> Result<Option<ReviewComment>> {
+        self.with_lock(|| {
+            let mut comments = self.load_unlocked()?;
+            let Some(c) = comments.iter_mut().find(|c| c.id == id) else {
+                return Ok(None);
+            };
+            if let Some(b) = body {
+                c.body = b.to_string();
+            }
+            if let Some(s) = status {
+                c.status = s;
+            }
+            let updated = c.clone();
+            self.save_unlocked(&comments)?;
+            Ok(Some(updated))
+        })
     }
 
     pub fn remove(&self, id: &str) -> Result<bool> {
-        let mut comments = self.load()?;
-        let before = comments.len();
-        comments.retain(|c| c.id != id);
-        let removed = comments.len() != before;
-        if removed {
-            self.save(&comments)?;
-        }
-        Ok(removed)
+        self.with_lock(|| {
+            let mut comments = self.load_unlocked()?;
+            let before = comments.len();
+            comments.retain(|c| c.id != id);
+            let removed = comments.len() != before;
+            if removed {
+                self.save_unlocked(&comments)?;
+            }
+            Ok(removed)
+        })
     }
 
-    pub fn add_reply(&self, comment_id: &str, body: &str, role: Option<&str>, model: Option<&str>, now_ms: u64) -> Result<Option<ReviewComment>> {
-        let mut comments = self.load()?;
-        let Some(c) = comments.iter_mut().find(|c| c.id == comment_id) else {
-            return Ok(None);
-        };
-        c.replies.push(CommentReply {
-            id: new_uuid(),
-            body: body.to_string(),
-            created_at: now_ms,
-            role: role.map(String::from),
-            model: model.map(String::from),
-        });
-        let updated = c.clone();
-        self.save(&comments)?;
-        Ok(Some(updated))
+    pub fn add_reply(
+        &self,
+        comment_id: &str,
+        body: &str,
+        role: Option<&str>,
+        model: Option<&str>,
+        now_ms: u64,
+    ) -> Result<Option<ReviewComment>> {
+        self.with_lock(|| {
+            let mut comments = self.load_unlocked()?;
+            let Some(c) = comments.iter_mut().find(|c| c.id == comment_id) else {
+                return Ok(None);
+            };
+            c.replies.push(CommentReply {
+                id: new_uuid(),
+                body: body.to_string(),
+                created_at: now_ms,
+                role: role.map(String::from),
+                model: model.map(String::from),
+            });
+            let updated = c.clone();
+            self.save_unlocked(&comments)?;
+            Ok(Some(updated))
+        })
     }
+
+    fn with_lock<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        ensure_dir(&self.path)
+            .with_context(|| format!("preparing parent of {}", self.path.display()))?;
+        let lock_path = self.path.with_extension("json.lock");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&lock_path)
+            {
+                Ok(mut file) => {
+                    let _ = writeln!(file, "{}", std::process::id());
+                    let _guard = CommentLock { path: lock_path };
+                    return operation();
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    remove_stale_lock(&lock_path);
+                    if Instant::now() >= deadline {
+                        anyhow::bail!("timed out acquiring {}", lock_path.display());
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => return Err(error).context("acquiring comment store lock"),
+            }
+        }
+    }
+}
+
+struct CommentLock {
+    path: PathBuf,
+}
+
+impl Drop for CommentLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn remove_stale_lock(path: &Path) {
+    let stale = std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .is_some_and(|age| age > Duration::from_secs(30));
+    if stale {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn now_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
 }
 
 /// Generate a UUID v4 string. Uses `/dev/urandom` on Unix platforms; on
@@ -237,6 +363,7 @@ mod tests {
         NewComment::Inline {
             file_path: "src/a.rs",
             side: CommentSide::Additions,
+            start_line_number: None,
             line_number: 42,
             line_content: "let x = 1;",
             body,
@@ -254,10 +381,8 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "diffing-comments-test-{}-{n}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("diffing-comments-test-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -293,7 +418,10 @@ mod tests {
         // next to `comments.json` inside that subdir.
         let sibling = store.path.parent().unwrap().join("repo_path.txt");
         assert!(sibling.exists(), "expected {sibling:?} to exist");
-        assert_eq!(std::fs::read_to_string(&sibling).unwrap(), dir.to_str().unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&sibling).unwrap(),
+            dir.to_str().unwrap()
+        );
     }
 
     #[test]
@@ -371,5 +499,34 @@ mod tests {
         assert!(raw.contains("\"createdAt\""), "got: {raw}");
         assert!(raw.contains("\"side\": \"additions\""), "got: {raw}");
         assert!(raw.contains("\"status\": \"open\""), "got: {raw}");
+    }
+
+    #[test]
+    fn concurrent_writers_do_not_lose_comments() {
+        let dir = tempdir();
+        let repo = dir.to_string_lossy().into_owned();
+        let mut workers = Vec::new();
+        for worker in 0..4 {
+            let repo = repo.clone();
+            workers.push(std::thread::spawn(move || {
+                let store = FileCommentStore::new(&repo);
+                for index in 0..25 {
+                    store
+                        .add(
+                            NewComment::FileLevel {
+                                file_path: "src/concurrent.rs",
+                                body: &format!("worker {worker} comment {index}"),
+                            },
+                            index,
+                        )
+                        .unwrap();
+                }
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let comments = FileCommentStore::new(&repo).load().unwrap();
+        assert_eq!(comments.len(), 100);
     }
 }

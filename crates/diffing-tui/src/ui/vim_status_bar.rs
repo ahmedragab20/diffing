@@ -7,12 +7,17 @@ use ratatui::text::{Line, Span};
 
 use crate::themes::Palette;
 
+pub struct StatusBarContext<'a> {
+    pub mode: &'a str,
+    pub current_file: Option<&'a str>,
+    pub file_idx: usize,
+    pub file_count: usize,
+    pub hint: &'a str,
+}
+
 pub fn render_status_bar(
     area: Rect,
-    mode: &str,
-    current_file: Option<&str>,
-    file_idx: usize,
-    file_count: usize,
+    context: StatusBarContext<'_>,
     palette: &Palette,
     buf: &mut Buffer,
 ) {
@@ -31,23 +36,22 @@ pub fn render_status_bar(
     let mut spans: Vec<Span<'static>> = vec![
         Span::styled("─".to_string(), dim),
         Span::styled(" ".to_string(), bg),
-        Span::styled(format!(" {} ", mode), accent),
+        Span::styled(format!(" {} ", context.mode), accent),
         Span::styled(" ".to_string(), bg),
     ];
-    if let Some(f) = current_file {
+    if let Some(f) = context.current_file {
         spans.push(Span::styled(f.to_string(), file_style));
     } else {
         spans.push(Span::styled("(no file)", dim));
     }
     spans.push(Span::styled(" ".to_string(), bg));
     spans.push(Span::styled(
-        format!("  {}/{}", file_idx + 1, file_count.max(1)),
+        format!("  {}/{}", context.file_idx + 1, context.file_count.max(1)),
         dim,
     ));
     spans.push(Span::styled(" ".to_string(), bg));
     // Keymap hint.
-    let hint = "  j/k:scroll  J/K:file  Tab:focus  w:wrap  ?:help  q:quit";
-    spans.push(Span::styled(hint.to_string(), dim));
+    spans.push(Span::styled(format!("  {}", context.hint), dim));
 
     let line = Line::from(spans);
     let mut cx = area.x;
@@ -74,7 +78,18 @@ mod tests {
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
-        render_status_bar(area, "NORMAL", Some("src/a.rs"), 0, 3, &palette, &mut buf);
+        render_status_bar(
+            area,
+            StatusBarContext {
+                mode: "NORMAL",
+                current_file: Some("src/a.rs"),
+                file_idx: 0,
+                file_count: 3,
+                hint: "j/k move",
+            },
+            &palette,
+            &mut buf,
+        );
         // No assertions beyond "didn't panic"; visual output is the contract.
     }
 }
