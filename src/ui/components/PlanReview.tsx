@@ -99,11 +99,14 @@ export function PlanReview({
   const [selectionPopup, setSelectionPopup] = useState<{
     x: number
     y: number
+    /** Prefer below the selection so the chip doesn't cover the highlight. */
+    placement: 'above' | 'below'
     startLine: number
     endLine: number
     text: string
   } | null>(null)
   const renderedRef = useRef<HTMLDivElement>(null)
+  const headRef = useRef<HTMLDivElement>(null)
   const showSource = viewMode === 'source' || viewMode === 'split'
   const showRendered = viewMode === 'rendered' || viewMode === 'split'
 
@@ -328,18 +331,35 @@ export function PlanReview({
     }
   }, [copyablePath, editorIDE])
 
+  /**
+   * Scroll a heading/comment into view, accounting for the sticky toolbar +
+   * plan header so the target lands just below them (not under or past them).
+   */
+  const scrollToPlanElement = useCallback((el: HTMLElement, align: 'start' | 'center' = 'start') => {
+    if (align === 'center') {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
+    const toolbar =
+      document.querySelector<HTMLElement>('.plan-app-toolbar') ??
+      document.querySelector<HTMLElement>('.toolbar')
+    const head = headRef.current
+    const sticky = (toolbar?.offsetHeight ?? 60) + (head?.offsetHeight ?? 0) + 12
+    const top = el.getBoundingClientRect().top + window.scrollY - sticky
+    window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+  }, [])
+
   const jumpToComment = useCallback((commentId: string, lineNumber: number) => {
     const el = document.getElementById(`plan-comment-${commentId}`)
     if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      scrollToPlanElement(el, 'center')
       el.classList.add('plan-comment-flash')
       window.setTimeout(() => el.classList.remove('plan-comment-flash'), 1400)
       return
     }
-    // Fallback: scroll source line if visible
     const lineEl = document.querySelector(`[data-plan-line="${lineNumber}"]`)
-    lineEl?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [])
+    if (lineEl instanceof HTMLElement) scrollToPlanElement(lineEl, 'center')
+  }, [scrollToPlanElement])
 
   const handleRenderedMouseUp = useCallback(() => {
     if (isHistorical) return
@@ -361,10 +381,25 @@ export function PlanReview({
       return
     }
     const range = sel.getRangeAt(0)
-    const rect = range.getBoundingClientRect()
+    // Prefer the last client rect so multi-line selections pin the chip
+    // under the final line (avoids covering the highlight).
+    const rects = range.getClientRects()
+    const first = rects[0] ?? range.getBoundingClientRect()
+    const last = rects[rects.length - 1] ?? first
+    const popupH = 36
+    const gap = 10
+    const spaceBelow = window.innerHeight - last.bottom
+    const placement: 'above' | 'below' =
+      spaceBelow < popupH + gap + 8 && first.top > popupH + gap + 8 ? 'above' : 'below'
+    const x = Math.min(
+      Math.max(72, (last.left + last.right) / 2),
+      window.innerWidth - 72,
+    )
+    const y = placement === 'below' ? last.bottom + gap : first.top - gap
     setSelectionPopup({
-      x: Math.min(rect.left + rect.width / 2, window.innerWidth - 80),
-      y: Math.max(8, rect.top - 8),
+      x,
+      y,
+      placement,
       startLine: mapped.startLine,
       endLine: mapped.endLine,
       text: mapped.text,
@@ -385,6 +420,15 @@ export function PlanReview({
     )
     setSelectionPopup(null)
     window.getSelection()?.removeAllRanges()
+  }, [selectionPopup])
+
+  // Dismiss the floating chip when the user scrolls — fixed positioning would
+  // otherwise drift away from the selection and look like an overlap bug.
+  useEffect(() => {
+    if (!selectionPopup) return
+    const dismiss = () => setSelectionPopup(null)
+    window.addEventListener('scroll', dismiss, { passive: true, capture: true })
+    return () => window.removeEventListener('scroll', dismiss, true)
   }, [selectionPopup])
 
   const reviewUrl =
@@ -464,10 +508,8 @@ export function PlanReview({
                   href={`#${item.id}`}
                   onClick={(e) => {
                     e.preventDefault()
-                    document.getElementById(item.id)?.scrollIntoView({
-                      behavior: 'smooth',
-                      block: 'start',
-                    })
+                    const target = document.getElementById(item.id)
+                    if (target) scrollToPlanElement(target, 'start')
                     if (typeof history !== 'undefined') {
                       history.replaceState(null, '', `#${item.id}`)
                     }
@@ -518,7 +560,7 @@ export function PlanReview({
 
   return (
     <div className="plan-review">
-      <div className="plan-review-head">
+      <div className="plan-review-head" ref={headRef}>
         <div className="plan-review-head-main">
           <h2 className="plan-review-title" title={viewingTitle}>
             {viewingTitle}
@@ -816,12 +858,12 @@ export function PlanReview({
       {selectionPopup && (
         <button
           type="button"
-          className="plan-selection-popup"
+          className={`plan-selection-popup plan-selection-popup-${selectionPopup.placement}`}
           style={{ left: selectionPopup.x, top: selectionPopup.y }}
           onMouseDown={(e) => e.preventDefault()}
           onClick={startCommentFromSelection}
         >
-          <MessageSquarePlus size={13} />
+          <MessageSquarePlus size={13} aria-hidden="true" />
           Add comment
           <span className="plan-selection-popup-lines">
             L{selectionPopup.startLine}

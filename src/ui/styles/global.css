@@ -9109,8 +9109,7 @@ button.toolbar-last-send-btn:hover {
 }
 .plan-selection-popup {
     position: fixed;
-    z-index: 40;
-    transform: translate(-50%, -100%);
+    z-index: 100;
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -9125,6 +9124,17 @@ button.toolbar-last-send-btn:hover {
     font-family: inherit;
     box-shadow: var(--shadow-lg);
     cursor: pointer;
+    /* Isolate from text so the chip never paints under the highlight */
+    pointer-events: auto;
+    white-space: nowrap;
+}
+/* Below selection (default): anchor is top of chip at last-rect bottom + gap */
+.plan-selection-popup-below {
+    transform: translate(-50%, 0);
+}
+/* Above selection: anchor is bottom of chip at first-rect top − gap */
+.plan-selection-popup-above {
+    transform: translate(-50%, -100%);
 }
 .plan-selection-popup:hover {
     background: var(--accent-subtle);
@@ -9296,7 +9306,9 @@ button.toolbar-last-send-btn:hover {
 }
 .md-heading {
     position: relative;
-    scroll-margin-top: calc(var(--toolbar-height) + 24px);
+    /* Fallback when CSS scroll is used; JS scrollToPlanElement measures sticky
+       toolbar + plan head for the real offset. Generous to avoid under-scroll. */
+    scroll-margin-top: calc(var(--toolbar-height) + 100px);
 }
 .md-heading-anchor {
     position: absolute;
