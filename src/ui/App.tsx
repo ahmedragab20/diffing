@@ -28,7 +28,11 @@ import { useApplyFonts } from "./hooks/useApplyFonts";
 import { useViewed } from "./hooks/useViewed";
 import { useScrollToNextFile } from "./hooks/useScrollToNextFile";
 import { HapticsProvider, playSound, fireFeedback } from "./hooks/useHaptics";
-import { parseExtensionFilter, matchesExtensionFilter } from "./lib/extensionFilter";
+import {
+    parseExtensionFilter,
+    matchesExtensionFilter,
+    normalizeExtensions,
+} from "./lib/extensionFilter";
 import { getUiStateItem, setUiStateItem } from "./utils/uiState";
 import { useDiffSearch } from "./hooks/useDiffSearch";
 import { Toolbar } from "./components/Toolbar";
@@ -113,16 +117,18 @@ export function App() {
             return 320;
         }
     });
-    const [extensionFilter, setExtensionFilter] = useState(() => {
+    /** Applied multi-select extensions (normalized). Empty = show all. */
+    const [appliedExtensions, setAppliedExtensions] = useState<string[]>(() => {
         try {
-            return getUiStateItem("diffing-extension-filter") ?? "";
+            return parseExtensionFilter(getUiStateItem("diffing-extension-filter") ?? "");
         } catch {
-            return "";
+            return [];
         }
     });
     useEffect(() => {
-        setUiStateItem("diffing-extension-filter", extensionFilter);
-    }, [extensionFilter]);
+        // Persist as "vue,js,ts" (no leading dots) for back-compat with parseExtensionFilter.
+        setUiStateItem("diffing-extension-filter", appliedExtensions.join(","));
+    }, [appliedExtensions]);
     const [chipFilter, setChipFilter] = useState<FileTreeChipFilter>(() => {
         try {
             const stored = getUiStateItem("diffing-chip-filter");
@@ -419,11 +425,14 @@ export function App() {
         return counts;
     }, [comments]);
 
+    // Full sorted list (no extension/chip filter) — FileTree needs every path so
+    // the multi-select can list all available extensions even when a filter is on.
+    const allSortedFiles = useMemo(() => [...files].sort(sortFilesByName), [files]);
+
     const filteredFiles = useMemo(() => {
         let list = files;
-        const extensions = parseExtensionFilter(extensionFilter);
-        if (extensions.length > 0) {
-            list = list.filter((f) => matchesExtensionFilter(f.name, extensions));
+        if (appliedExtensions.length > 0) {
+            list = list.filter((f) => matchesExtensionFilter(f.name, appliedExtensions));
         }
         if (chipFilter === "unviewed") {
             list = list.filter((f) => !viewedFiles.has(f.name));
@@ -433,7 +442,7 @@ export function App() {
             list = list.filter((f) => sinceLastFiles.has(f.name));
         }
         return list;
-    }, [files, extensionFilter, chipFilter, viewedFiles, commentCounts, sinceLastFiles]);
+    }, [files, appliedExtensions, chipFilter, viewedFiles, commentCounts, sinceLastFiles]);
 
     const sortedFiles = useMemo(() => [...filteredFiles].sort(sortFilesByName), [filteredFiles]);
 
@@ -546,8 +555,11 @@ export function App() {
         }
     }, []);
 
-    const handleExtensionFilterChange = useCallback((value: string) => {
-        setExtensionFilter(value);
+    const handleApplyExtensions = useCallback((extensions: string[]) => {
+        // Defer the expensive DiffViewer remount so the Apply click paints first.
+        startTransition(() => {
+            setAppliedExtensions(normalizeExtensions(extensions));
+        });
     }, []);
 
     const handleViewedChange = useCallback(
@@ -1294,7 +1306,7 @@ export function App() {
                 >
                     <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                         <FileTree
-                        files={sortedFiles}
+                            files={allSortedFiles}
                             activeFile={activeFile}
                             commentCounts={commentCounts}
                             viewedFiles={viewedFiles}
@@ -1302,8 +1314,8 @@ export function App() {
                             onFileClick={handleFileClick}
                             collapsed={sidebarCollapsed}
                             onToggleCollapse={handleToggleCollapse}
-                            extensionFilter={extensionFilter}
-                            onExtensionFilterChange={handleExtensionFilterChange}
+                            appliedExtensions={appliedExtensions}
+                            onApplyExtensions={handleApplyExtensions}
                             chipFilter={chipFilter}
                             onChipFilterChange={setChipFilter}
                             sinceLastFiles={sinceLastFiles}

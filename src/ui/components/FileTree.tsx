@@ -5,6 +5,7 @@ import {
   X,
   PanelLeftClose,
   PanelLeftOpen,
+  Check,
 } from 'lucide-react'
 import type { FileDiffMetadata } from '@pierre/diffs'
 import { FileTree as PierreFileTree, useFileTree } from '@pierre/trees/react'
@@ -14,7 +15,14 @@ import {
   sanitizePaths,
   buildExpandedPaths,
 } from '../lib/treePathSanitize'
-import { parseExtensionFilter, matchesExtensionFilter, formatExtensionFilter } from '../lib/extensionFilter'
+import {
+  matchesExtensionFilter,
+  formatExtensionFilter,
+  collectExtensions,
+  normalizeExtensions,
+  sameExtensionSet,
+  extensionFilterNeedsApply,
+} from '../lib/extensionFilter'
 import { FileTreeErrorBoundary } from './FileTreeErrorBoundary'
 
 export type FileTreeChipFilter = 'all' | 'unviewed' | 'has-comments' | 'since-last'
@@ -28,8 +36,10 @@ interface FileTreeProps {
   onFileClick: (filePath: string) => void
   collapsed?: boolean
   onToggleCollapse?: () => void
-  extensionFilter?: string
-  onExtensionFilterChange?: (value: string) => void
+  /** Applied extension multi-select (normalized, no dots). Empty = all. */
+  appliedExtensions?: string[]
+  /** Commit a new applied extension set (from multi-select Apply / live toggle). */
+  onApplyExtensions?: (extensions: string[]) => void
   /** Smart filter chips (AND-combined with extension + name search). */
   chipFilter?: FileTreeChipFilter
   onChipFilterChange?: (value: FileTreeChipFilter) => void
@@ -51,20 +61,70 @@ export const FileTree = memo(function FileTree({
   onFileClick,
   collapsed,
   onToggleCollapse,
-  extensionFilter = '',
-  onExtensionFilterChange,
+  appliedExtensions = [],
+  onApplyExtensions,
   chipFilter = 'all',
   onChipFilterChange,
   sinceLastFiles,
   sinceLastAvailable = false,
 }: FileTreeProps) {
   const [filter, setFilter] = useState('')
+  // Draft selection for multi-select; only committed via Apply (or live when small).
+  const [draftExtensions, setDraftExtensions] = useState<string[]>(() =>
+    normalizeExtensions(appliedExtensions),
+  )
 
-  const allowedExtensions = useMemo(() => parseExtensionFilter(extensionFilter), [extensionFilter])
+  useEffect(() => {
+    setDraftExtensions(normalizeExtensions(appliedExtensions))
+  }, [appliedExtensions])
+
+  const totalChangedLines = useMemo(() => {
+    let n = 0
+    for (const f of files) {
+      n += f.additionLines.length + f.deletionLines.length
+    }
+    return n
+  }, [files])
+
+  const needsApply = extensionFilterNeedsApply(files.length, totalChangedLines)
+  const availableExtensions = useMemo(
+    () => collectExtensions(files.map((f) => f.name)),
+    [files],
+  )
+
+  const commitExtensions = useCallback(
+    (next: string[]) => {
+      const normalized = normalizeExtensions(next)
+      setDraftExtensions(normalized)
+      onApplyExtensions?.(normalized)
+    },
+    [onApplyExtensions],
+  )
+
+  const toggleDraftExtension = useCallback(
+    (ext: string) => {
+      setDraftExtensions((prev) => {
+        const set = new Set(prev)
+        if (set.has(ext)) set.delete(ext)
+        else set.add(ext)
+        const next = normalizeExtensions([...set])
+        // Small diffs: apply live so multi-select still feels instant.
+        if (!needsApply) {
+          onApplyExtensions?.(next)
+        }
+        return next
+      })
+    },
+    [needsApply, onApplyExtensions],
+  )
+
+  const dirty = !sameExtensionSet(draftExtensions, appliedExtensions)
+
   const filteredFiles = useMemo(() => {
     let list = files
-    if (allowedExtensions.length > 0) {
-      list = list.filter((f) => matchesExtensionFilter(f.name, allowedExtensions))
+    // Tree always shows the *applied* set so it matches the main DiffViewer.
+    if (appliedExtensions.length > 0) {
+      list = list.filter((f) => matchesExtensionFilter(f.name, appliedExtensions))
     }
     if (chipFilter === 'unviewed') {
       list = list.filter((f) => !viewedFiles.has(f.name))
@@ -75,7 +135,7 @@ export const FileTree = memo(function FileTree({
       list = list.filter((f) => set.has(f.name))
     }
     return list
-  }, [files, allowedExtensions, chipFilter, viewedFiles, commentCounts, sinceLastFiles])
+  }, [files, appliedExtensions, chipFilter, viewedFiles, commentCounts, sinceLastFiles])
 
   // Map files to paths required by @pierre/trees, deduping and resolving
   // file↔directory collisions so the underlying tree model never sees a
@@ -218,10 +278,11 @@ export const FileTree = memo(function FileTree({
     )
   }
 
-  const filterLabel = formatExtensionFilter(allowedExtensions)
+  const filterLabel = formatExtensionFilter(appliedExtensions)
   const totalFiles = files.length
   const shownFiles = filteredFiles.length
   const hiddenFiles = totalFiles - shownFiles
+  const showExtensionPicker = availableExtensions.length > 0 && !!onApplyExtensions
 
   return (
     <div className="ft" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -249,29 +310,74 @@ export const FileTree = memo(function FileTree({
             />
           </div>
         </div>
-        <div className="ft-search-row">
-          <div className="ft-search-wrapper">
-            <Filter size={14} className="ft-search-icon" />
-            <input
-              type="text"
-              placeholder="Extensions: vue, js, ts..."
-              value={extensionFilter}
-              onChange={(e) => onExtensionFilterChange?.(e.target.value)}
-              className="ft-search-input"
-              aria-label="Filter by file extension"
-            />
-            {extensionFilter && (
-              <button
-                className="ft-search-clear"
-                onClick={() => onExtensionFilterChange?.('')}
-                aria-label="Clear extension filter"
-                title="Clear extension filter"
-              >
-                <X size={12} />
-              </button>
-            )}
+
+        {showExtensionPicker && (
+          <div className="ft-ext-panel" aria-label="Filter by file extension">
+            <div className="ft-ext-header">
+              <Filter size={12} aria-hidden="true" />
+              <span className="ft-ext-title">Extensions</span>
+              {appliedExtensions.length > 0 && (
+                <span className="ft-ext-applied" title={filterLabel}>
+                  {appliedExtensions.length} applied
+                </span>
+              )}
+              {dirty && needsApply && (
+                <span className="ft-ext-pending">unsaved</span>
+              )}
+            </div>
+            <div className="ft-ext-chips" role="group" aria-label="File extensions">
+              {availableExtensions.map((ext) => {
+                const selected = draftExtensions.includes(ext)
+                return (
+                  <button
+                    key={ext}
+                    type="button"
+                    className={`ft-ext-chip ${selected ? 'ft-ext-chip-active' : ''}`}
+                    aria-pressed={selected}
+                    title={selected ? `Remove .${ext}` : `Include .${ext}`}
+                    onClick={() => toggleDraftExtension(ext)}
+                  >
+                    .{ext}
+                  </button>
+                )
+              })}
+            </div>
+            <div className="ft-ext-actions">
+              {needsApply ? (
+                <button
+                  type="button"
+                  className="ft-ext-apply"
+                  disabled={!dirty}
+                  onClick={() => commitExtensions(draftExtensions)}
+                  title="Apply the selected extensions to the file tree and diff list"
+                >
+                  <Check size={12} />
+                  Apply
+                  {dirty && draftExtensions.length > 0
+                    ? ` (${draftExtensions.length})`
+                    : dirty
+                      ? ' (all)'
+                      : ''}
+                </button>
+              ) : (
+                <span className="ft-ext-hint">Live filter</span>
+              )}
+              {(draftExtensions.length > 0 || appliedExtensions.length > 0) && (
+                <button
+                  type="button"
+                  className="ft-ext-clear"
+                  onClick={() => commitExtensions([])}
+                  aria-label="Clear extension filter"
+                  title="Show all extensions"
+                >
+                  <X size={12} />
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
-        </div>
+        )}
+
         {onChipFilterChange && (
           <div className="ft-chips" role="group" aria-label="Smart file filters">
             {(

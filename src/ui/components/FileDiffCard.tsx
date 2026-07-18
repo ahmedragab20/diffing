@@ -116,6 +116,10 @@ export const FileDiffCard = memo(function FileDiffCard({
   const [revertError, setRevertError] = useState<string | null>(null)
   const [previewHunkIndex, setPreviewHunkIndex] = useState<number | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
+  // Defer mounting the expensive @pierre/diffs renderer until the card is near
+  // the viewport. Once mounted we keep it (sticky) so scroll-back doesn't re-run
+  // Shiki. Combined with content-visibility CSS this is the main large-diff win.
+  const [bodyMounted, setBodyMounted] = useState(false)
 
   const handleCopyPath = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -182,7 +186,34 @@ export const FileDiffCard = memo(function FileDiffCard({
     setCollapsed(viewed)
   }, [viewed])
 
-
+  useEffect(() => {
+    if (bodyMounted || collapsed) return
+    const el = cardRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setBodyMounted(true)
+      return
+    }
+    // Eager-mount when already in / near the viewport on expand.
+    const rect = el.getBoundingClientRect()
+    const near =
+      rect.bottom >= -800 &&
+      rect.top <= (typeof window !== 'undefined' ? window.innerHeight + 800 : 2000)
+    if (near) {
+      setBodyMounted(true)
+      return
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setBodyMounted(true)
+          io.disconnect()
+        }
+      },
+      { root: null, rootMargin: '800px 0px', threshold: 0 },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [collapsed, bodyMounted])
 
   const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP.nord
 
@@ -591,7 +622,12 @@ export const FileDiffCard = memo(function FileDiffCard({
       })()}
       {!collapsed && (
         <div className="file-diff-card-body">
-          {fileDiff.hunks.length > 0 && (
+          {!bodyMounted && (
+            <div className="file-diff-body-placeholder" aria-hidden="true">
+              Loading diff…
+            </div>
+          )}
+          {bodyMounted && fileDiff.hunks.length > 0 && (
             <DiffMinimap
               fileDiff={fileDiff}
               filePath={filePath}
@@ -601,7 +637,7 @@ export const FileDiffCard = memo(function FileDiffCard({
             />
           )}
           {/* File-level comments section */}
-          {(fileLevelAnnotations.length > 0 || showFileCommentForm) && (
+          {bodyMounted && (fileLevelAnnotations.length > 0 || showFileCommentForm) && (
             <div 
               className="file-level-comments-section"
               style={{
@@ -652,8 +688,8 @@ export const FileDiffCard = memo(function FileDiffCard({
               we use MultiFileDiff (computes the diff from full file
               contents, so unchanged hunks are expandable). Otherwise
               the cheaper FileDiff render is used against the parsed
-              partial patch. */}
-          {contentsReady ? (
+              partial patch. Lazy-mounted until near the viewport. */}
+          {bodyMounted && contentsReady ? (
             <MultiFileDiff<ReviewComment | { _pending: true }>
               oldFile={{ name: oldFilePath, contents: oldContent ?? '' }}
               newFile={{ name: filePath, contents: newContent ?? '' }}
@@ -726,7 +762,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               renderAnnotation={renderAnnotationFn}
               renderGutterUtility={renderGutter}
             />
-          ) : (
+          ) : bodyMounted ? (
           <FileDiff<ReviewComment | { _pending: true }>
             fileDiff={fileDiff}
             options={{
@@ -824,7 +860,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               </button>
             )}
           />
-          )}
+          ) : null}
         </div>
       )}
     </div>

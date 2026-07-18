@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react'
+import { memo } from 'react'
 import { GitCompare } from 'lucide-react'
 import type { FileDiffMetadata, DiffLineAnnotation, AnnotationSide } from '@pierre/diffs'
 import type { ReviewComment } from '../../lib/types'
@@ -110,11 +110,9 @@ export const DiffViewer = memo(function DiffViewer({
   onDeleteComment,
   onCardToggleCollapse,
 }: DiffViewerProps) {
-  const sortedFiles = useMemo(() => {
-    return [...files].sort(sortFilesByName)
-  }, [files])
-
-  if (sortedFiles.length === 0) {
+  // Callers (App) already sort with sortFilesByName — re-sorting here was pure
+  // CPU cost on every parent re-render of large diffs.
+  if (files.length === 0) {
     return (
       <div className="empty-state" role="status">
         <div className="empty-state-icon" aria-hidden="true">
@@ -130,13 +128,13 @@ export const DiffViewer = memo(function DiffViewer({
 
   return (
     <div className="diff-viewer">
-      {sortedFiles.map((file, index) => {
+      {files.map((file) => {
         const filePath = file.name
         const binaryInfo = binaryFiles.get(filePath)
         if (binaryInfo) {
           return (
             <BinaryFileDiff
-              key={`${filePath}-${index}`}
+              key={filePath}
               filePath={filePath}
               info={binaryInfo}
               viewed={viewedFiles.has(filePath)}
@@ -146,7 +144,7 @@ export const DiffViewer = memo(function DiffViewer({
         }
         return (
           <FileDiffCard
-            key={`${filePath}-${index}`}
+            key={filePath}
             id={`file-${filePath}`}
             fileDiff={file}
             filePath={filePath}
