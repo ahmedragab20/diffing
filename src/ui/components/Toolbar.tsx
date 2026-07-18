@@ -10,8 +10,6 @@ import {
   LayoutGrid,
   Sparkles,
   CheckCheck,
-  Columns2,
-  Rows3,
 } from 'lucide-react'
 import type { DiffOptions } from '../hooks/useDiff'
 import type {
@@ -304,29 +302,6 @@ export const Toolbar = memo(function Toolbar({
         </div>
       </div>
 
-      <div className="diff-view-toggle" role="group" aria-label="Diff layout">
-        <button
-          type="button"
-          className={`diff-view-toggle-btn ${diffStyle === 'unified' ? 'is-active' : ''}`}
-          aria-pressed={diffStyle === 'unified'}
-          title="Unified diff · m"
-          onClick={() => onDiffStyleChange('unified')}
-        >
-          <Rows3 size={13} aria-hidden="true" />
-          <span>Unified</span>
-        </button>
-        <button
-          type="button"
-          className={`diff-view-toggle-btn ${diffStyle === 'split' ? 'is-active' : ''}`}
-          aria-pressed={diffStyle === 'split'}
-          title="Split diff · m"
-          onClick={() => onDiffStyleChange('split')}
-        >
-          <Columns2 size={13} aria-hidden="true" />
-          <span>Split</span>
-        </button>
-      </div>
-
       <div className="toolbar-right">
         <button
           className="btn btn-sm toolbar-search-btn"
@@ -597,6 +572,18 @@ export const Toolbar = memo(function Toolbar({
               />
             </div>
             <div className="settings-section-label">Appearance</div>
+            <div className="settings-item settings-item-spaced">
+              <span>Diff style</span>
+              <Select
+                value={diffStyle}
+                onValueChange={(v) => onDiffStyleChange(v as 'split' | 'unified')}
+                options={[
+                  { value: 'split', label: 'Split' },
+                  { value: 'unified', label: 'Unified' },
+                ]}
+                ariaLabel="Diff style"
+              />
+            </div>
             <div className="settings-item settings-item-spaced">
               <span>Theme</span>
               <button

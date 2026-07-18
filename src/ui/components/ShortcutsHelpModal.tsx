@@ -69,7 +69,7 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       icon: <MessageSquare size={15} />,
       items: [
         { keys: ['m'], description: 'Toggle Diff Style (Unified ↔ Split)' },
-        { keys: ['UI'], description: 'Toolbar Unified / Split switches the same modes' },
+        { keys: ['UI'], description: 'Settings → Diff style (or press m)' },
         { keys: ['t'], description: 'Cycle Tab Indentation Size (2 → 4 → 8)' },
         { keys: ['w'], description: 'Toggle Soft-Wrap Long Lines' },
         { keys: ['n'], description: 'Toggle Line Numbers' },

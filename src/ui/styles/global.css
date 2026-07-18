@@ -2086,21 +2086,21 @@ body {
     box-shadow: var(--shadow-sm);
 }
 
-/* Diffs toolbar — 3-column like plan: brand · view toggle · actions */
+/* Diffs toolbar */
 .toolbar.diff-app-toolbar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: var(--space-3);
     padding: 0 var(--space-4);
-    justify-content: initial;
 }
 .toolbar.diff-app-toolbar .toolbar-left {
     min-width: 0;
     gap: var(--space-2);
+    flex: 1;
 }
 .toolbar.diff-app-toolbar .toolbar-right {
-    justify-self: end;
+    flex-shrink: 0;
     gap: var(--space-2);
 }
 
@@ -2204,44 +2204,6 @@ body {
     color: var(--feedback-warning-text);
     border-color: color-mix(in srgb, var(--feedback-warning-border) 45%, transparent);
     background: var(--feedback-warning-bg);
-}
-
-/* Centered Unified / Split control (mirrors plan view toggle) */
-.diff-view-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 3px;
-    border-radius: var(--radius-lg);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-weak);
-    box-shadow: var(--shadow-sm);
-}
-.diff-view-toggle-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 28px;
-    padding: 0 11px;
-    border: none;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--text-muted);
-    font-size: var(--text-sm);
-    font-weight: 600;
-    font-family: inherit;
-    cursor: pointer;
-    transition: background var(--transition-fast), color var(--transition-fast);
-}
-.diff-view-toggle-btn:hover {
-    color: var(--text-primary);
-    background: var(--bg-tertiary);
-}
-.diff-view-toggle-btn.is-active {
-    color: var(--text-primary);
-    background: var(--bg-primary);
-    box-shadow: var(--shadow-sm);
-    border: 1px solid var(--border-weak);
 }
 
 .stat-additions {
@@ -10498,29 +10460,8 @@ button.toolbar-last-send-btn:hover {
 /* Responsive plan + diff toolbars */
 @media (max-width: 900px) {
     .toolbar.diff-app-toolbar {
-        grid-template-columns: minmax(0, 1fr) auto;
-        grid-template-rows: auto auto;
         gap: 8px;
-        padding: 8px 12px;
-        height: auto;
-        min-height: var(--toolbar-height);
-    }
-    .toolbar.diff-app-toolbar .toolbar-left {
-        grid-column: 1;
-        grid-row: 1;
-    }
-    .toolbar.diff-app-toolbar .toolbar-right {
-        grid-column: 2;
-        grid-row: 1;
-    }
-    .diff-view-toggle {
-        grid-column: 1 / -1;
-        grid-row: 2;
-        justify-self: stretch;
-    }
-    .diff-view-toggle-btn {
-        flex: 1;
-        justify-content: center;
+        padding: 0 12px;
     }
     .toolbar-branch-inline {
         max-width: 120px;
