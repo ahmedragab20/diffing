@@ -1,7 +1,17 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { useSubmitPanelSize, SUBMIT_PANEL_SIZE_KEY, SUBMIT_PANEL_WIDTH_KEY, SUBMIT_PANEL_MIN, SUBMIT_PANEL_MAX, SUBMIT_PANEL_MIN_WIDTH, SUBMIT_PANEL_MAX_WIDTH, SUBMIT_PANEL_PRESETS } from '../../hooks/useSubmitPanelSize'
+import {
+  useSubmitPanelSize,
+  SUBMIT_PANEL_SIZE_KEY,
+  SUBMIT_PANEL_WIDTH_KEY,
+  SUBMIT_PANEL_MIN,
+  SUBMIT_PANEL_MAX,
+  SUBMIT_PANEL_MIN_WIDTH,
+  SUBMIT_PANEL_MAX_WIDTH,
+  SUBMIT_PANEL_PRESETS,
+  RESIZE_DISMISS_GUARD_MS,
+} from '../../hooks/useSubmitPanelSize'
 
 const mockGet = vi.fn()
 const mockSet = vi.fn()
@@ -115,29 +125,51 @@ describe('useSubmitPanelSize', () => {
     expect(mockSet).toHaveBeenCalledWith(SUBMIT_PANEL_SIZE_KEY, '760')
   })
 
+  function makePointerDown(partial: { clientX?: number; clientY?: number; pointerId?: number }) {
+    const handle = document.createElement('div')
+    handle.setPointerCapture = vi.fn()
+    handle.releasePointerCapture = vi.fn()
+    handle.hasPointerCapture = vi.fn(() => true)
+    return {
+      button: 0,
+      pointerId: partial.pointerId ?? 1,
+      clientX: partial.clientX ?? 0,
+      clientY: partial.clientY ?? 0,
+      currentTarget: handle,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    }
+  }
+
   it('startResize registers and cleans up drag listeners', () => {
     mockGet.mockReturnValue(null)
     const { result } = renderHook(() => useSubmitPanelSize())
     const styleStore: Record<string, string> = {}
-const div = { style: { setProperty: (prop: string, val: string) => { styleStore[prop] = val }, getPropertyValue: (prop: string) => styleStore[prop] ?? '' } } as unknown as HTMLDivElement
+    const div = {
+      style: {
+        setProperty: (prop: string, val: string) => {
+          styleStore[prop] = val
+        },
+        getPropertyValue: (prop: string) => styleStore[prop] ?? '',
+      },
+    } as unknown as HTMLDivElement
     // Attach ref
-    (result.current.panelRef as any).current = div
+    ;(result.current.panelRef as any).current = div
 
     const addSpy = vi.spyOn(document, 'addEventListener')
     const removeSpy = vi.spyOn(document, 'removeEventListener')
 
-    const mouseDownEvent = new MouseEvent('mousedown', { clientY: 400 })
     act(() => {
-      result.current.startResize(mouseDownEvent as any)
+      result.current.startResize(makePointerDown({ clientY: 400 }) as any)
     })
 
-    expect(addSpy).toHaveBeenCalledWith('mousemove', expect.any(Function))
-    expect(addSpy).toHaveBeenCalledWith('mouseup', expect.any(Function))
+    expect(addSpy).toHaveBeenCalledWith('pointermove', expect.any(Function))
+    expect(addSpy).toHaveBeenCalledWith('pointerup', expect.any(Function))
 
-    // Simulate mousemove (drag DOWN → increase height)
-    const moveHandler = addSpy.mock.calls.find(c => c[0] === 'mousemove')![1] as any
+    // Simulate pointermove (drag DOWN → increase height)
+    const moveHandler = addSpy.mock.calls.find((c) => c[0] === 'pointermove')![1] as any
     act(() => {
-      moveHandler(new MouseEvent('mousemove', { clientY: 500 }))
+      moveHandler(new PointerEvent('pointermove', { clientY: 500, pointerId: 1 }))
     })
 
     // rAF should have been scheduled
@@ -147,14 +179,14 @@ const div = { style: { setProperty: (prop: string, val: string) => { styleStore[
     // Height should increase: clientY(500) - startY(400) = 100, default 480 + 100 = 580
     expect(div.style.getPropertyValue('--submit-panel-height')).toBe('580px')
 
-    // Simulate mouseup
-    const upHandler = addSpy.mock.calls.find(c => c[0] === 'mouseup')![1] as any
+    // Simulate pointerup
+    const upHandler = addSpy.mock.calls.find((c) => c[0] === 'pointerup')![1] as any
     act(() => {
-      upHandler(new MouseEvent('mouseup'))
+      upHandler(new PointerEvent('pointerup', { pointerId: 1 }))
     })
 
-    expect(removeSpy).toHaveBeenCalledWith('mousemove', expect.any(Function))
-    expect(removeSpy).toHaveBeenCalledWith('mouseup', expect.any(Function))
+    expect(removeSpy).toHaveBeenCalledWith('pointermove', expect.any(Function))
+    expect(removeSpy).toHaveBeenCalledWith('pointerup', expect.any(Function))
     expect(document.body.style.cursor).toBe('')
     expect(document.body.style.userSelect).toBe('')
 
@@ -192,27 +224,33 @@ const div = { style: { setProperty: (prop: string, val: string) => { styleStore[
     mockGet.mockReturnValue(null)
     const { result } = renderHook(() => useSubmitPanelSize())
     const leftStyleStore: Record<string, string> = {}
-const div = { style: { setProperty: (prop: string, val: string) => { leftStyleStore[prop] = val }, getPropertyValue: (prop: string) => leftStyleStore[prop] ?? '' } } as unknown as HTMLDivElement
+    const div = {
+      style: {
+        setProperty: (prop: string, val: string) => {
+          leftStyleStore[prop] = val
+        },
+        getPropertyValue: (prop: string) => leftStyleStore[prop] ?? '',
+      },
+    } as unknown as HTMLDivElement
     // Attach ref
-    (result.current.panelRef as any).current = div
+    ;(result.current.panelRef as any).current = div
 
     const addSpy = vi.spyOn(document, 'addEventListener')
     const removeSpy = vi.spyOn(document, 'removeEventListener')
 
-    const mouseDownEvent = new MouseEvent('mousedown', { clientX: 400 })
     act(() => {
-      result.current.startLeftResize(mouseDownEvent as any)
+      result.current.startLeftResize(makePointerDown({ clientX: 400 }) as any)
     })
 
-    expect(addSpy).toHaveBeenCalledWith('mousemove', expect.any(Function))
-    expect(addSpy).toHaveBeenCalledWith('mouseup', expect.any(Function))
+    expect(addSpy).toHaveBeenCalledWith('pointermove', expect.any(Function))
+    expect(addSpy).toHaveBeenCalledWith('pointerup', expect.any(Function))
     expect(document.body.style.cursor).toBe('col-resize')
     expect(document.body.style.userSelect).toBe('none')
 
-    // Simulate mousemove (drag LEFT → increase width)
-    const moveHandler = addSpy.mock.calls.find(c => c[0] === 'mousemove')![1] as any
+    // Simulate pointermove (drag LEFT → increase width)
+    const moveHandler = addSpy.mock.calls.find((c) => c[0] === 'pointermove')![1] as any
     act(() => {
-      moveHandler(new MouseEvent('mousemove', { clientX: 300 }))
+      moveHandler(new PointerEvent('pointermove', { clientX: 300, pointerId: 1 }))
     })
 
     // rAF should have been scheduled
@@ -222,19 +260,188 @@ const div = { style: { setProperty: (prop: string, val: string) => { leftStyleSt
     // Width should increase: startX(400) - clientX(300) = 100, default 520 + 100 = 620
     expect(div.style.getPropertyValue('--submit-panel-width')).toBe('620px')
 
-    // Simulate mouseup
-    const upHandler = addSpy.mock.calls.find(c => c[0] === 'mouseup')![1] as any
+    // Simulate pointerup
+    const upHandler = addSpy.mock.calls.find((c) => c[0] === 'pointerup')![1] as any
     act(() => {
-      upHandler(new MouseEvent('mouseup'))
+      upHandler(new PointerEvent('pointerup', { pointerId: 1 }))
     })
 
-    expect(removeSpy).toHaveBeenCalledWith('mousemove', expect.any(Function))
-    expect(removeSpy).toHaveBeenCalledWith('mouseup', expect.any(Function))
+    expect(removeSpy).toHaveBeenCalledWith('pointermove', expect.any(Function))
+    expect(removeSpy).toHaveBeenCalledWith('pointerup', expect.any(Function))
     expect(document.body.style.cursor).toBe('')
     expect(document.body.style.userSelect).toBe('')
     expect(mockSet).toHaveBeenCalledWith(SUBMIT_PANEL_WIDTH_KEY, '620')
 
     addSpy.mockRestore()
     removeSpy.mockRestore()
+  })
+
+  it('startCornerResize updates width and height together', () => {
+    mockGet.mockReturnValue(null)
+    const { result } = renderHook(() => useSubmitPanelSize())
+    const styleStore: Record<string, string> = {}
+    const div = {
+      style: {
+        setProperty: (prop: string, val: string) => {
+          styleStore[prop] = val
+        },
+        getPropertyValue: (prop: string) => styleStore[prop] ?? '',
+      },
+    } as unknown as HTMLDivElement
+    ;(result.current.panelRef as any).current = div
+
+    const addSpy = vi.spyOn(document, 'addEventListener')
+    const removeSpy = vi.spyOn(document, 'removeEventListener')
+
+    act(() => {
+      result.current.startCornerResize(makePointerDown({ clientX: 400, clientY: 400 }) as any)
+    })
+
+    expect(addSpy).toHaveBeenCalledWith('pointermove', expect.any(Function))
+    expect(addSpy).toHaveBeenCalledWith('pointerup', expect.any(Function))
+    expect(document.body.style.cursor).toBe('nesw-resize')
+    expect(document.body.style.userSelect).toBe('none')
+
+    // SW corner: drag left 80px + down 50px → width +80, height +50
+    const moveHandler = addSpy.mock.calls.find((c) => c[0] === 'pointermove')![1] as any
+    act(() => {
+      moveHandler(new PointerEvent('pointermove', { clientX: 320, clientY: 450, pointerId: 1 }))
+    })
+
+    expect(globalThis.requestAnimationFrame).toHaveBeenCalled()
+    if (rafCb) act(() => rafCb())
+    // default 520×480 → 600×530
+    expect(div.style.getPropertyValue('--submit-panel-width')).toBe('600px')
+    expect(div.style.getPropertyValue('--submit-panel-height')).toBe('530px')
+
+    const upHandler = addSpy.mock.calls.find((c) => c[0] === 'pointerup')![1] as any
+    act(() => {
+      upHandler(new PointerEvent('pointerup', { pointerId: 1 }))
+    })
+
+    expect(removeSpy).toHaveBeenCalledWith('pointermove', expect.any(Function))
+    expect(removeSpy).toHaveBeenCalledWith('pointerup', expect.any(Function))
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+    expect(mockSet).toHaveBeenCalledWith(SUBMIT_PANEL_WIDTH_KEY, '600')
+    expect(mockSet).toHaveBeenCalledWith(SUBMIT_PANEL_SIZE_KEY, '530')
+    expect(result.current.width).toBe(600)
+    expect(result.current.height).toBe(530)
+
+    addSpy.mockRestore()
+    removeSpy.mockRestore()
+  })
+
+  it('startCornerResize clamps both axes at min/max', () => {
+    mockGet.mockReturnValue(null)
+    const { result } = renderHook(() => useSubmitPanelSize())
+    const styleStore: Record<string, string> = {}
+    const div = {
+      style: {
+        setProperty: (prop: string, val: string) => {
+          styleStore[prop] = val
+        },
+        getPropertyValue: (prop: string) => styleStore[prop] ?? '',
+      },
+    } as unknown as HTMLDivElement
+    ;(result.current.panelRef as any).current = div
+
+    const addSpy = vi.spyOn(document, 'addEventListener')
+
+    act(() => {
+      result.current.startCornerResize(makePointerDown({ clientX: 500, clientY: 300 }) as any)
+    })
+
+    const moveHandler = addSpy.mock.calls.find((c) => c[0] === 'pointermove')![1] as any
+    // Drag far right (shrink width past min) and far up (shrink height past min)
+    act(() => {
+      moveHandler(new PointerEvent('pointermove', { clientX: 5000, clientY: -5000, pointerId: 1 }))
+    })
+    if (rafCb) act(() => rafCb())
+    expect(div.style.getPropertyValue('--submit-panel-width')).toBe(`${SUBMIT_PANEL_MIN_WIDTH}px`)
+    expect(div.style.getPropertyValue('--submit-panel-height')).toBe(`${SUBMIT_PANEL_MIN}px`)
+
+    // Drag far left + far down past max
+    act(() => {
+      moveHandler(new PointerEvent('pointermove', { clientX: -5000, clientY: 5000, pointerId: 1 }))
+    })
+    if (rafCb) act(() => rafCb())
+    expect(div.style.getPropertyValue('--submit-panel-width')).toBe(`${SUBMIT_PANEL_MAX_WIDTH}px`)
+    expect(div.style.getPropertyValue('--submit-panel-height')).toBe(`${SUBMIT_PANEL_MAX}px`)
+
+    addSpy.mockRestore()
+  })
+
+  it('handleOpenChange cancels dismiss during and right after resize', () => {
+    mockGet.mockReturnValue(null)
+    const { result } = renderHook(() => useSubmitPanelSize())
+    const styleStore: Record<string, string> = {}
+    const div = {
+      style: {
+        setProperty: (prop: string, val: string) => {
+          styleStore[prop] = val
+        },
+        getPropertyValue: (prop: string) => styleStore[prop] ?? '',
+      },
+    } as unknown as HTMLDivElement
+    ;(result.current.panelRef as any).current = div
+
+    const setOpen = vi.fn()
+    const cancel = vi.fn()
+
+    // Idle: close is allowed
+    act(() => {
+      result.current.handleOpenChange(false, { cancel, reason: 'outside-press' }, setOpen)
+    })
+    expect(setOpen).toHaveBeenCalledWith(false)
+    expect(cancel).not.toHaveBeenCalled()
+    setOpen.mockClear()
+
+    // Start left resize (hits max width when overshooting is normal)
+    const addSpy = vi.spyOn(document, 'addEventListener')
+    act(() => {
+      result.current.startLeftResize(makePointerDown({ clientX: 400 }) as any)
+    })
+
+    // Mid-drag: outside press must not close
+    act(() => {
+      result.current.handleOpenChange(false, { cancel, reason: 'outside-press' }, setOpen)
+    })
+    expect(cancel).toHaveBeenCalled()
+    expect(setOpen).not.toHaveBeenCalled()
+    cancel.mockClear()
+
+    // Release past the panel edge
+    const upHandler = addSpy.mock.calls.find((c) => c[0] === 'pointerup')![1] as any
+    act(() => {
+      upHandler(new PointerEvent('pointerup', { pointerId: 1 }))
+    })
+
+    // Immediately after release: still blocked (synthetic click window)
+    act(() => {
+      result.current.handleOpenChange(false, { cancel, reason: 'outside-press' }, setOpen)
+    })
+    expect(cancel).toHaveBeenCalled()
+    expect(setOpen).not.toHaveBeenCalled()
+    cancel.mockClear()
+
+    // After the guard window: dismiss is allowed again
+    act(() => {
+      vi.advanceTimersByTime(RESIZE_DISMISS_GUARD_MS + 1)
+    })
+    act(() => {
+      result.current.handleOpenChange(false, { cancel, reason: 'outside-press' }, setOpen)
+    })
+    expect(setOpen).toHaveBeenCalledWith(false)
+    expect(cancel).not.toHaveBeenCalled()
+
+    // Opening is always allowed, even during a theoretical guard
+    setOpen.mockClear()
+    act(() => {
+      result.current.handleOpenChange(true, { cancel }, setOpen)
+    })
+    expect(setOpen).toHaveBeenCalledWith(true)
+
+    addSpy.mockRestore()
   })
 })

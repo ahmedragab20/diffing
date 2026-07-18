@@ -16,18 +16,23 @@ vi.mock('@pierre/diffs/react', () => ({
   File: () => <div data-testid="diffs-file-stub" />,
 }))
 
-// Stub all the icons referenced by PlanReview + its sub-components.
+// Stub all lucide icons (PlanReview + PlanCommentBubble + float composers).
 vi.mock('lucide-react', () => {
   const Stub = () => null
-  const proxy: Record<string, unknown> = {}
-  const keys = [
+  const names = [
     'Bot', 'FileText', 'Code2', 'MessageSquarePlus', 'Check', 'X',
     'MessageSquareWarning', 'Clock', 'History', 'ArrowLeft', 'ChevronsUpDown',
     'MessageSquare', 'Copy', 'Link2', 'FolderOpen', 'ListTree',
     'ExternalLink', 'Loader2', 'MessagesSquare', 'Maximize2', 'Minimize2',
+    'Pencil', 'Trash2', 'CornerDownRight', 'CheckCircle2', 'Circle',
+    'ChevronDown', 'ChevronRight', 'User', 'AlertTriangle', 'Reply',
+    'MoreHorizontal', 'Send', 'Edit2', 'Edit3', 'GripVertical', 'Minus',
+    // CommentForm severity select
+    'AlertOctagon', 'CircleDot', 'HelpCircle', 'Sparkles',
   ]
-  for (const k of keys) proxy[k] = Stub
-  return proxy
+  const mod: Record<string, unknown> = { __esModule: true }
+  for (const n of names) mod[n] = Stub
+  return mod
 })
 
 // Stub usePlans so we don't need a real network/cache plumbing.
@@ -141,7 +146,7 @@ describe('PlanReview version switcher', () => {
     })
   })
 
-  it('filters comments to those anchored to the version being viewed', () => {
+  it('shows plan comments inline in Read mode and filters by historical version', async () => {
     const plan: Plan = {
       ...basePlan,
       comments: [
@@ -150,10 +155,18 @@ describe('PlanReview version switcher', () => {
       ],
     }
     render(<PlanReview plan={plan} {...baseProps} viewMode="rendered" />, { wrapper: createWrapper() })
-    // In rendered view we don't surface comments. The only thing we can assert
-    // here is the version chip + dropdown; the actual filtering is verified by
-    // the formatPlanReview tests, which exercise the same predicate.
-    expect(screen.getByLabelText('Plan version')).toBeInTheDocument()
+    // Current version: both threads appear (inline + rail).
+    await waitFor(() => {
+      expect(screen.getAllByText('new feedback').length).toBeGreaterThan(0)
+      expect(screen.getAllByText('old feedback').length).toBeGreaterThan(0)
+    })
+    // Historical version: only comments anchored to that version.
+    const select = screen.getByLabelText('Plan version') as HTMLSelectElement
+    fireEvent.change(select, { target: { value: '1' } })
+    await waitFor(() => {
+      expect(screen.getAllByText('old feedback').length).toBeGreaterThan(0)
+      expect(screen.queryByText('new feedback')).not.toBeInTheDocument()
+    })
   })
 
   it('exposes Copy path controls that write the absolute sourcePath', async () => {

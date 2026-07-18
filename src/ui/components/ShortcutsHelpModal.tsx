@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { X, Keyboard, Navigation, Eye, MessageSquare } from 'lucide-react'
+import { X, Keyboard, Navigation, Eye, MessageSquare, GitCommit } from 'lucide-react'
 import { Modal } from '../primitives/Modal'
 import { BrandMark } from './BrandMark'
 
@@ -49,18 +49,29 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       ],
     },
     {
+      title: 'Commit Walk',
+      icon: <GitCommit size={15} />,
+      items: [
+        { keys: [']'], description: 'Next commit (diffing show multi-commit)' },
+        { keys: ['['], description: 'Previous commit (diffing show multi-commit)' },
+        { keys: ['UI'], description: 'Walk bar: Show all returns to the full range patch' },
+      ],
+    },
+    {
       title: 'Search & Dialogs',
       icon: <Eye size={15} />,
       items: [
-        { keys: ['⌘', 'K'], description: 'Open Search Palette (files · text · symbols)' },
+        { keys: ['⌘', 'K'], description: 'Open Search Palette (all scopes)' },
         { keys: ['/'], description: 'Search file contents (Text scope)' },
-        { keys: ['g', 'f'], description: 'Search files (Files scope)' },
-        { keys: ['s'], description: 'Search symbols (or "g s")' },
-        { keys: ['g', 'v'], description: 'Browse any file in the repo' },
+        { keys: ['s'], description: 'Search symbols (Symbols scope)' },
+        { keys: ['g', 's'], description: 'Search symbols (same as s)' },
+        { keys: ['g', 'f'], description: 'Open Search Palette (all scopes)' },
+        { keys: ['g', 'v'], description: 'Browse any file in the repo (Files scope)' },
         { keys: ['g', 't'], description: 'Open Theme Selection Modal' },
-        { keys: ['Tab'], description: 'Cycle search scope while open' },
+        { keys: ['Tab'], description: 'Cycle search scope while palette is open' },
         { keys: ['⌘', '↵'], description: 'Peek a result in the preview pane' },
-        { keys: ['?'], description: 'Toggle Keyboard Shortcuts Guide' },
+        { keys: ['?'], description: 'Open Keyboard Shortcuts Guide' },
+        { keys: ['⌘', '?'], description: 'Open Keyboard Shortcuts Guide' },
         { keys: ['Esc'], description: 'Close preview / dialog' },
       ],
     },
@@ -69,12 +80,11 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       icon: <MessageSquare size={15} />,
       items: [
         { keys: ['m'], description: 'Toggle Diff Style (Unified ↔ Split)' },
-        { keys: ['UI'], description: 'Settings → Diff style (or press m)' },
         { keys: ['t'], description: 'Cycle Tab Indentation Size (2 → 4 → 8)' },
         { keys: ['w'], description: 'Toggle Soft-Wrap Long Lines' },
         { keys: ['n'], description: 'Toggle Line Numbers' },
         { keys: ['i'], description: 'Cycle Diff Indicator Style (+/− → bars → none)' },
-        { keys: ['Shift', 'I'], description: 'Cycle Inline Diff Style (word → char → none)' },
+        { keys: ['I'], description: 'Cycle Inline Diff Style (word → word-alt → char → none)' },
         { keys: ['⌘', 'Shift', 'P'], description: 'Toggle Preview Mode in Comments' },
       ],
     },
@@ -98,8 +108,10 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       icon: <Keyboard size={15} />,
       items: [
         { keys: ['?'], description: 'Open Keyboard Shortcuts Guide' },
+        { keys: ['⌘', '?'], description: 'Open Keyboard Shortcuts Guide' },
         { keys: ['⌘', ','], description: 'Open Settings' },
         { keys: ['⌘', 'K'], description: 'Open Search Palette' },
+        { keys: ['⌘', 'B'], description: 'Collapse / expand the vim status bar' },
         { keys: ['g', 't'], description: 'Open Theme Selection Modal' },
         { keys: ['Esc'], description: 'Close preview / dialog / this guide' },
       ],
@@ -134,8 +146,11 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       items: [
         { keys: ['m'], description: 'Cycle view mode (Source → Read → Split)' },
         { keys: ['UI'], description: 'Toolbar Source / Read / Split switches the same modes' },
-        { keys: ['UI'], description: 'Read mode: expand icon enters Zen (full-width focus)' },
+        { keys: ['z'], description: 'Toggle Zen reading (enters Read if needed; full-width focus)' },
+        { keys: ['UI'], description: 'Read mode: expand icon also toggles Zen' },
         { keys: ['Esc'], description: 'Exit Zen reading mode' },
+        { keys: ['o'], description: 'Toggle Outline sidebar (left TOC)' },
+        { keys: ['c'], description: 'Toggle Comments map sidebar (right rail)' },
         { keys: ['drag'], description: 'Split mode: drag the center divider to resize panes' },
         { keys: ['dbl-click'], description: 'Split mode: double-click divider to reset 50/50' },
         { keys: ['←', '→'], description: 'Split mode: focus divider, nudge width ±2%' },
@@ -148,11 +163,13 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       title: 'Comments & Review',
       icon: <MessageSquare size={15} />,
       items: [
+        { keys: ['c'], description: 'Toggle Comments map sidebar (right rail)' },
+        { keys: ['o'], description: 'Toggle Outline sidebar (left TOC)' },
         { keys: ['UI'], description: 'Source: select lines or click gutter + to comment' },
         { keys: ['UI'], description: 'Read: highlight text → Add comment (multiple drafts OK)' },
         { keys: ['Esc'], description: 'Dismiss Add-comment chip / close draft (asks if dirty)' },
         { keys: ['UI'], description: 'Header icons: copy link · copy markdown · open in editor' },
-        { keys: ['UI'], description: 'Header: toggle Outline and Comments map' },
+        { keys: ['UI'], description: 'Header: Outline (o) · Comments map (c)' },
         { keys: ['⌘', 'Shift', 'P'], description: 'Toggle Preview Mode in Comments' },
       ],
     },
@@ -163,6 +180,7 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
         { keys: ['?'], description: 'Open Keyboard Shortcuts Guide' },
         { keys: ['⌘', '?'], description: 'Open Keyboard Shortcuts Guide' },
         { keys: ['⌘', ','], description: 'Open Settings' },
+        { keys: ['⌘', 'B'], description: 'Collapse / expand the vim status bar' },
         { keys: ['g', 't'], description: 'Open Theme Selection Modal' },
         { keys: ['Esc'], description: 'Close preview / dialog / this guide' },
       ],
@@ -173,7 +191,7 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
   const intro =
     mode === 'plan'
       ? 'Vim-style keybindings for plan review. Cycle Source / Read / Split with m, jump plans with J/K, and comment from line selection or text highlight.'
-      : 'Vim-style keybindings are enabled! Navigate and review diffs entirely from your home keys.'
+      : 'Vim-style keybindings for reviewing diffs. Jump files with J/K, walk commits with [ / ], and open search with ⌘K.'
 
   return (
     <Modal open={isOpen} onClose={onClose} className="shortcuts-modal" ariaLabel="Keyboard shortcuts">

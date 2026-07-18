@@ -52,7 +52,7 @@ import { AlertTriangle } from "lucide-react";
 import { markOutdatedComments } from "../lib/comment-outdated";
 import { parsePermalink } from "./lib/permalink";
 import { scrollToLine } from "./utils";
-import { CommitWalkBar } from "./components/CommitWalkBar";
+import { CommitWalkBar, stepCommitWalk } from "./components/CommitWalkBar";
 import { AgentProgressToast } from "./components/AgentProgressToast";
 import { useSinceLastRound } from "./hooks/useSinceLastRound";
 
@@ -821,6 +821,12 @@ export function App() {
         }
     }, [files, activeFile, setActiveFile]);
 
+    /** Prev/next commit in `diffing show` multi-commit mode (`[` / `]`). */
+    const navigateCommit = useCallback((direction: 'next' | 'prev') => {
+        if (!showMode || commits.length < 2) return;
+        setCommitWalkIndex((cur) => stepCommitWalk(cur, commits.length, direction));
+    }, [showMode, commits.length]);
+
     const toggleActiveFileViewed = useCallback(() => {
         if (!activeFile) return;
         const isCurrentlyViewed = viewedFiles.has(activeFile);
@@ -938,6 +944,16 @@ export function App() {
                 navigateFile('prev');
                 fireFeedback('selection', 'navigate');
                 keyBuffer = '';
+            } else if (keyBuffer === ']') {
+                e.preventDefault();
+                navigateCommit('next');
+                fireFeedback('selection', 'navigate');
+                keyBuffer = '';
+            } else if (keyBuffer === '[') {
+                e.preventDefault();
+                navigateCommit('prev');
+                fireFeedback('selection', 'navigate');
+                keyBuffer = '';
             } else if (keyBuffer === 'v') {
                 e.preventDefault();
                 toggleActiveFileViewed();
@@ -1020,6 +1036,7 @@ export function App() {
         settings.diffStyle,
         settings.defaultTabSize,
         navigateFile,
+        navigateCommit,
         toggleActiveFileViewed,
         toggleDiffStyle,
         cycleTabSize,
@@ -1463,6 +1480,11 @@ export function App() {
                 activeFile={activeFile}
                 onShowHelp={() => setShortcutsHelpOpen(true)}
                 visible={settings.showStatusBar ?? true}
+                placeholder={
+                    showMode && commits.length > 1
+                        ? 'No active file (J/K files · [ / ] commits)'
+                        : undefined
+                }
             />
             <ShortcutsHelpModal
                 isOpen={shortcutsHelpOpen}

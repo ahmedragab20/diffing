@@ -30,7 +30,9 @@ import type { LineHoverHighlight } from '../hooks/useSettings'
 import { usePlans } from '../hooks/usePlans'
 import { CommentForm } from './CommentForm'
 import { PlanCommentBubble } from './PlanCommentBubble'
+import { PlanReadInlineComments } from './PlanReadInlineComments'
 import { FilePreviewModal } from './FilePreviewModal'
+import { planCommentLineLabel } from '../lib/planCommentAnchors'
 import { Select } from '../primitives/Select'
 import { Tooltip } from '../primitives/Tooltip'
 import { buildPlanOutline } from '../lib/planOutline'
@@ -39,6 +41,18 @@ import {
   selectionIntersectsRoot,
   selectionRangeInRoot,
 } from '../lib/planSelection'
+import {
+  pendingFromSelection,
+  pendingOrderedRange,
+  pendingLineLabel,
+  selectedRangeFromPending,
+  adjustPendingStart,
+  adjustPendingEnd,
+  canAdjustPendingStart,
+  canAdjustPendingEnd,
+  normalizePendingRange,
+  type PendingLineComment,
+} from '../lib/commentSelection'
 import { setUiStateItem } from '../utils/uiState'
 import { PLAN_UI, readBoolUi, readSplitRatioUi, clampSplitRatio } from '../lib/planUiState'
 import {
@@ -69,12 +83,34 @@ interface PlanReviewProps {
   onTocOpenChange?: (open: boolean) => void
   commentsRailOpen?: boolean
   onCommentsRailOpenChange?: (open: boolean) => void
+  /**
+   * Controlled zen (full-width Read). When omitted, PlanReview owns local
+   * persisted state. Parent should pass these when handling the `z` shortcut.
+   */
+  zenMode?: boolean
+  onZenModeChange?: (open: boolean) => void
 }
 
 /** Source-mode gutter / line-selection pending only (not floating). */
 interface PendingComment {
   lineNumber: number
   startLineNumber?: number
+}
+
+/** Adapt plan pending ↔ shared pending helpers (plan source has no diff side). */
+function planToLinePending(p: PendingComment): PendingLineComment {
+  return normalizePendingRange({
+    side: 'additions',
+    lineNumber: p.lineNumber,
+    startLineNumber: p.startLineNumber,
+  })
+}
+
+function linePendingToPlan(p: PendingLineComment): PendingComment {
+  const n = normalizePendingRange(p)
+  return n.startLineNumber != null && n.startLineNumber !== n.lineNumber
+    ? { lineNumber: n.lineNumber, startLineNumber: n.startLineNumber }
+    : { lineNumber: n.lineNumber }
 }
 
 type PlanAnnotationMeta = PlanComment | { _pending: true }
@@ -102,6 +138,8 @@ export function PlanReview({
   onTocOpenChange,
   commentsRailOpen: commentsRailOpenProp,
   onCommentsRailOpenChange,
+  zenMode: zenModeProp,
+  onZenModeChange,
 }: PlanReviewProps) {
   const {
     addPlanComment,
@@ -116,8 +154,11 @@ export function PlanReview({
 
   /** Source-mode only pending annotation form. */
   const [pending, setPending] = useState<PendingComment | null>(null)
+  /** Stable draft key for the open source-mode composer (survives range adjusts). */
+  const planDraftSessionRef = useRef<string | null>(null)
   /** Multiple floating selection composers (rendered mode). */
   const [floatComposers, setFloatComposers] = useState<FloatComposerDraft[]>([])
+  /** Controlled only while a source-mode draft is open (do not fight live drag). */
   const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
   const [liveSelectionCount, setLiveSelectionCount] = useState(0)
   const [previewFilePath, setPreviewFilePath] = useState<string | null>(null)
@@ -170,7 +211,8 @@ export function PlanReview({
   const [splitRatio, setSplitRatio] = useState(() => readSplitRatioUi(50))
   const [splitDragging, setSplitDragging] = useState(false)
   /** Immersive full-width Read mode (only when rendered-only). */
-  const [zenMode, setZenMode] = useState(() => readBoolUi(PLAN_UI.zenMode, false))
+  const [zenModeLocal, setZenModeLocal] = useState(() => readBoolUi(PLAN_UI.zenMode, false))
+  const zenMode = zenModeProp ?? zenModeLocal
   splitRatioRef.current = splitRatio
   const showSource = viewMode === 'source' || viewMode === 'split'
   const showRendered = viewMode === 'rendered' || viewMode === 'split'
@@ -180,9 +222,13 @@ export function PlanReview({
 
   const setZen = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
     const value = typeof next === 'function' ? next(zenMode) : next
-    setZenMode(value)
-    setUiStateItem(PLAN_UI.zenMode, String(value))
-  }, [zenMode])
+    if (onZenModeChange) {
+      onZenModeChange(value)
+    } else {
+      setZenModeLocal(value)
+      setUiStateItem(PLAN_UI.zenMode, String(value))
+    }
+  }, [zenMode, onZenModeChange])
 
 
   // Version switcher: `viewingVersion` is the body the user is reading right
@@ -283,6 +329,28 @@ export function PlanReview({
 
   const lineRange = (start: number | undefined, end: number) => extractPlanLines(viewingBody, start ?? end, end)
 
+  const openSourcePending = useCallback((next: PendingComment) => {
+    const normalized = linePendingToPlan(planToLinePending(next))
+    if (!planDraftSessionRef.current) {
+      planDraftSessionRef.current = crypto.randomUUID()
+    }
+    setPending(normalized)
+    setSelectedRange(selectedRangeFromPending(planToLinePending(normalized)))
+    setLiveSelectionCount(0)
+  }, [])
+
+  const clearSourcePending = useCallback(() => {
+    setPending(null)
+    setSelectedRange(null)
+    setLiveSelectionCount(0)
+    planDraftSessionRef.current = null
+  }, [])
+
+  const planLineBounds = useMemo(() => {
+    const total = viewingBody.replace(/\r\n/g, '\n').split('\n').length
+    return { min: 1, max: Math.max(1, total) }
+  }, [viewingBody])
+
   const commitSourceComment = (
     p: PendingComment,
     body: string,
@@ -300,9 +368,7 @@ export function PlanReview({
       severity: severity && severity !== 'none' ? severity : undefined,
       createdAtPlanVersion: viewingVersion,
     })
-    setPending(null)
-    setSelectedRange(null)
-    setLiveSelectionCount(0)
+    clearSourcePending()
   }
 
   /**
@@ -364,17 +430,34 @@ export function PlanReview({
     if (!meta) return null
     if ('_pending' in meta) {
       const p = pending!
+      const linePending = planToLinePending(p)
+      const ordered = pendingOrderedRange(linePending)
+      const session = planDraftSessionRef.current ?? 'open'
       return (
         <CommentForm
-          draftKey={`plan-new:${plan.id}:${p.startLineNumber ?? p.lineNumber}:${p.lineNumber}`}
+          draftKey={`plan-new:${plan.id}:${session}`}
           lineContent={lineRange(p.startLineNumber, p.lineNumber)}
+          lineLabel={pendingLineLabel(linePending)}
           showSeverity
-          onSubmit={(body, severity) => commitSourceComment(p, body, severity)}
-          onCancel={() => {
-            setPending(null)
-            setSelectedRange(null)
-            setLiveSelectionCount(0)
+          range={{
+            start: ordered.start,
+            end: ordered.end,
+            sideLabel: 'source',
+            canAdjustStart: (d) => canAdjustPendingStart(linePending, d, planLineBounds),
+            canAdjustEnd: (d) => canAdjustPendingEnd(linePending, d, planLineBounds),
           }}
+          onAdjustStart={(delta) => {
+            const next = linePendingToPlan(adjustPendingStart(linePending, delta, planLineBounds))
+            setPending(next)
+            setSelectedRange(selectedRangeFromPending(planToLinePending(next)))
+          }}
+          onAdjustEnd={(delta) => {
+            const next = linePendingToPlan(adjustPendingEnd(linePending, delta, planLineBounds))
+            setPending(next)
+            setSelectedRange(selectedRangeFromPending(planToLinePending(next)))
+          }}
+          onSubmit={(body, severity) => commitSourceComment(p, body, severity)}
+          onCancel={clearSourcePending}
         />
       )
     }
@@ -748,8 +831,11 @@ export function PlanReview({
           disableLineNumbers: !showLineNumbers,
           lineHoverHighlight,
           onLineSelectionStart: () => {
-            setSelectedRange(null)
+            // Drop open draft; stop controlling selectedLines so pierre owns the drag.
             setLiveSelectionCount(0)
+            setPending(null)
+            setSelectedRange(null)
+            planDraftSessionRef.current = null
           },
           onLineSelectionChange: (range) => {
             setLiveSelectionCount(range ? Math.abs(range.end - range.start) + 1 : 0)
@@ -757,9 +843,21 @@ export function PlanReview({
           onLineSelectionEnd: (range) => {
             setLiveSelectionCount(0)
             if (range) {
-              setSelectedRange(range)
-              setPending({ lineNumber: range.end, startLineNumber: range.start })
+              // Normalize reverse drags (start > end) via shared helper.
+              const p = pendingFromSelection(range)
+              openSourcePending({
+                lineNumber: p.lineNumber,
+                startLineNumber: p.startLineNumber,
+              })
             }
+          },
+          // Pierre built-in gutter + only — cannot combine with renderGutterUtility.
+          onGutterUtilityClick: (range) => {
+            const p = pendingFromSelection(range)
+            openSourcePending({
+              lineNumber: p.lineNumber,
+              startLineNumber: p.startLineNumber,
+            })
           },
           theme: {
             dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
@@ -768,20 +866,9 @@ export function PlanReview({
           themeType: shikiConfig.type,
           unsafeCSS,
         }}
-        selectedLines={selectedRange}
+        selectedLines={pending ? selectedRange : undefined}
         lineAnnotations={annotations}
         renderAnnotation={renderAnnotation}
-        renderGutterUtility={(getHoveredLine) => (
-          <button
-            className="gutter-add-btn"
-            onClick={() => {
-              const line = getHoveredLine()
-              if (line) setPending({ lineNumber: line.lineNumber })
-            }}
-          >
-            +
-          </button>
-        )}
       />
     </div>
   )
@@ -832,9 +919,29 @@ export function PlanReview({
         className="markdown-body plan-rendered"
         onClick={handleMarkdownClick}
       >
-        <Markdown content={viewingBody} />
+        {/* React-owned sections + comments (no DOM injection — survives mode switches). */}
+        <PlanReadInlineComments
+          body={viewingBody}
+          outline={outline}
+          comments={lineComments}
+          onResolve={(id) => resolvePlanComment(plan.id, id)}
+          onUnresolve={(id) => unresolvePlanComment(plan.id, id)}
+          onDelete={(id) => removePlanComment(plan.id, id)}
+          onEdit={(id, body) => editPlanComment(plan.id, id, body)}
+          onReply={(id, body) => addPlanReply(plan.id, id, body)}
+          onEditReply={(commentId, replyId, body) => editPlanReply(plan.id, commentId, replyId, body)}
+          onDeleteReply={(commentId, replyId) => removePlanReply(plan.id, commentId, replyId)}
+        />
       </div>
     </div>
+  )
+
+  // When inline comments appear/disappear, Read layout reflows — float
+  // highlight rects must remeasure (see PlanFloatComposers layoutEpoch).
+  const floatLayoutEpoch = useMemo(
+    () =>
+      `${viewMode}:${viewingVersion}:${lineComments.map((c) => c.id).join(',')}:${floatComposers.map((c) => c.id).join(',')}`,
+    [viewMode, viewingVersion, lineComments, floatComposers],
   )
 
   const floatingSelectionComposers =
@@ -844,6 +951,10 @@ export function PlanReview({
         composers={floatComposers}
         onChange={setFloatComposers}
         onSubmit={commitFloatComment}
+        planBody={viewingBody}
+        buildSourceContext={buildAgentLineContent}
+        renderedRootRef={renderedRef}
+        layoutEpoch={floatLayoutEpoch}
       />
     ) : null
 
@@ -994,8 +1105,8 @@ export function PlanReview({
             <Tooltip
               content={
                 zenActive
-                  ? 'Exit zen reading (Esc)'
-                  : 'Zen mode — full-width focus reading'
+                  ? 'Exit zen reading (z / Esc)'
+                  : 'Zen mode — full-width focus reading (z)'
               }
               side="bottom"
             >
@@ -1012,7 +1123,7 @@ export function PlanReview({
           )}
           {showRendered && outline.length > 0 && !zenActive && (
             <Tooltip
-              content={tocOpen ? 'Hide outline' : 'Show outline'}
+              content={tocOpen ? 'Hide outline (o)' : 'Show outline (o)'}
               side="bottom"
             >
               <button
@@ -1030,10 +1141,10 @@ export function PlanReview({
             <Tooltip
               content={
                 commentsRailOpen
-                  ? 'Hide comments map'
+                  ? 'Hide comments map (c)'
                   : openCount > 0
-                    ? `Show comments map (${openCount} open)`
-                    : 'Show comments map'
+                    ? `Show comments map (${openCount} open) · c`
+                    : 'Show comments map (c)'
               }
               side="bottom"
             >
@@ -1205,7 +1316,7 @@ export function PlanReview({
                       title={c.body.slice(0, 200)}
                     >
                       <span className="plan-comments-rail-line">
-                        {c.lineNumber > 0 ? `L${c.lineNumber}` : 'General'}
+                        {planCommentLineLabel(c)}
                       </span>
                       <span className="plan-comments-rail-preview">
                         {c.sectionTitle ? `${c.sectionTitle} · ` : ''}

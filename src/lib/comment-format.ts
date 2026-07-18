@@ -61,6 +61,7 @@ export function formatComments(
     lines.push(`    - The "mode" attribute on the root element controls your behavior: "standard" (apply edits) or "comment-only" (reply only, no edits).`)
   }
   lines.push('    - Target lines are specified by the "line" attribute (e.g. line="10" or line="10-15").')
+  lines.push('    - When line="A-B", the range is INCLUSIVE on that side (both A and B and every line between). Address the whole span, not only the last line.')
   lines.push('    - "side" indicates whether the comment is on "additions" (added/modified lines) or "deletions" (deleted/old lines).')
   lines.push('    - "status" indicates whether the comment is "open" or "resolved". Only address comments with status="open".')
   lines.push('    - Optional severity="blocking|nit|question|praise":')

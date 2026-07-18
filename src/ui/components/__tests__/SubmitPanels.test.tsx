@@ -137,9 +137,16 @@ describe('SendReviewPopover', () => {
 
   it('renders left width resize handle', () => {
     renderSend()
-    const handle = screen.getByRole('separator', { name: /resize submit panel width/i })
+    const handle = screen.getByRole('separator', { name: 'Resize submit panel width' })
     expect(handle).toBeInTheDocument()
     expect(handle).toHaveAttribute('aria-orientation', 'vertical')
+  })
+
+  it('renders corner bidirectional resize handle', () => {
+    renderSend()
+    expect(
+      screen.getByRole('separator', { name: 'Resize submit panel width and height' }),
+    ).toBeInTheDocument()
   })
 
   it('renders size presets', () => {
@@ -163,9 +170,16 @@ describe('SubmitPlanReviewPopover', () => {
 
   it('renders left width resize handle', () => {
     renderPlan()
-    const handle = screen.getByRole('separator', { name: /resize submit panel width/i })
+    const handle = screen.getByRole('separator', { name: 'Resize submit panel width' })
     expect(handle).toBeInTheDocument()
     expect(handle).toHaveAttribute('aria-orientation', 'vertical')
+  })
+
+  it('renders corner bidirectional resize handle', () => {
+    renderPlan()
+    expect(
+      screen.getByRole('separator', { name: 'Resize submit panel width and height' }),
+    ).toBeInTheDocument()
   })
 
   it('renders size presets', () => {
@@ -212,9 +226,16 @@ describe('SubmitToGitHubPopover', () => {
 
   it('renders left width resize handle', () => {
     renderGitHub()
-    const handle = screen.getByRole('separator', { name: /resize submit panel width/i })
+    const handle = screen.getByRole('separator', { name: 'Resize submit panel width' })
     expect(handle).toBeInTheDocument()
     expect(handle).toHaveAttribute('aria-orientation', 'vertical')
+  })
+
+  it('renders corner bidirectional resize handle', () => {
+    renderGitHub()
+    expect(
+      screen.getByRole('separator', { name: 'Resize submit panel width and height' }),
+    ).toBeInTheDocument()
   })
 
   it('renders size presets', () => {

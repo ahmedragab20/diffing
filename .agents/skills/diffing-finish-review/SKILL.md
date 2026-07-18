@@ -37,8 +37,12 @@ Read the root **`decision`** and **`mode`** before touching files:
 ## Process each open comment
 
 - **Clear change request**: inspect the anchored code, make the scoped change, verify, reply with what changed, then **resolve**.
-- **Question**: reply with the answer; **leave open**.
+- **Question** (body is a question, or `severity="question"`): reply with the answer; **leave open**.
 - **Ambiguous**: ask a precise clarification; **leave open**.
+- **Nit** (`severity="nit"`): optional polish — apply when cheap; otherwise reply why not.
+- **Blocking** (`severity="blocking"`): treat as must-fix before considering the review done.
+- **Praise** (`severity="praise"`): no code change required; optional brief acknowledge.
+- **Multi-line** (`line="A-B"`): the range is **inclusive** on that `side` — fix the whole span, not only the last line.
 - **Resolved**: do nothing unless the human reopens it (`unresolve_comment` / `diffing unresolve`).
 - **```suggestion` fence**: apply via `apply_suggestion` MCP or `POST /api/comments/<id>/apply-suggestion` when appropriate.
 

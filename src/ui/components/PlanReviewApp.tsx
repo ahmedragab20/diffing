@@ -19,7 +19,7 @@ import { SHIKI_THEME_MAP } from '../utils'
 import { HapticsProvider, playSound, fireFeedback } from '../hooks/useHaptics'
 import { getUiStateItem, setUiStateItem } from "../utils/uiState"
 import { PlanReview, type PlanViewMode } from './PlanReview'
-import { PLAN_UI } from '../lib/planUiState'
+import { PLAN_UI, readBoolUi } from '../lib/planUiState'
 import { PlanList } from './PlanList'
 import { ThemeModal } from './ThemeModal'
 import { AgentActivityToast } from './AgentActivityToast'
@@ -91,6 +91,24 @@ export function PlanReviewApp() {
     } catch {}
   }, [])
 
+  // Immersive full-width Read (zen) — owned here so `z` can switch to Read + zen.
+  const [zenMode, setZenModeState] = useState(() => readBoolUi(PLAN_UI.zenMode, false))
+  const handleZenModeChange = useCallback((open: boolean) => {
+    setZenModeState(open)
+    try {
+      setUiStateItem(PLAN_UI.zenMode, String(open))
+    } catch {}
+  }, [])
+
+  const toggleZenMode = useCallback(() => {
+    if (viewMode !== 'rendered') {
+      handleViewModeChange('rendered')
+      handleZenModeChange(true)
+    } else {
+      handleZenModeChange(!zenMode)
+    }
+  }, [viewMode, zenMode, handleViewModeChange, handleZenModeChange])
+
   // Outline + comments rail — same ui-state store as every other chrome pref.
   const [tocOpen, setTocOpen] = useState(() => {
     try {
@@ -116,6 +134,14 @@ export function PlanReviewApp() {
     setCommentsRailOpen(open)
     setUiStateItem(PLAN_UI.commentsRail, String(open))
   }, [])
+
+  const toggleOutline = useCallback(() => {
+    handleTocOpenChange(!tocOpen)
+  }, [tocOpen, handleTocOpenChange])
+
+  const toggleCommentsRail = useCallback(() => {
+    handleCommentsRailOpenChange(!commentsRailOpen)
+  }, [commentsRailOpen, handleCommentsRailOpenChange])
 
   const routeId = useMemo(() => {
     const m = /^\/plan\/([^/]+)/.exec(path)
@@ -373,6 +399,21 @@ export function PlanReviewApp() {
         toggleViewMode()
         fireFeedback('selection', 'toggle')
         keyBuffer = ''
+      } else if (keyBuffer === 'z') {
+        e.preventDefault()
+        toggleZenMode()
+        fireFeedback('selection', 'toggle')
+        keyBuffer = ''
+      } else if (keyBuffer === 'c') {
+        e.preventDefault()
+        toggleCommentsRail()
+        fireFeedback('selection', 'toggle')
+        keyBuffer = ''
+      } else if (keyBuffer === 'o') {
+        e.preventDefault()
+        toggleOutline()
+        fireFeedback('selection', 'toggle')
+        keyBuffer = ''
       } else if (keyBuffer === 't') {
         e.preventDefault()
         cycleTabSize()
@@ -412,7 +453,17 @@ export function PlanReviewApp() {
     return () => {
       window.removeEventListener('keydown', handleGlobalKeyDown)
     }
-  }, [toggleSidebar, toggleLineWrap, toggleLineNumbers, toggleViewMode, cycleTabSize, navigatePlan])
+  }, [
+    toggleSidebar,
+    toggleLineWrap,
+    toggleLineNumbers,
+    toggleViewMode,
+    toggleZenMode,
+    toggleCommentsRail,
+    toggleOutline,
+    cycleTabSize,
+    navigatePlan,
+  ])
 
   const openCommentCount = useMemo(() => {
     if (!activePlan) return 0
@@ -749,6 +800,8 @@ export function PlanReviewApp() {
                 onTocOpenChange={handleTocOpenChange}
                 commentsRailOpen={commentsRailOpen}
                 onCommentsRailOpenChange={handleCommentsRailOpenChange}
+                zenMode={zenMode}
+                onZenModeChange={handleZenModeChange}
               />
             ) : (
               <PlanEmptyState hasPlans={plans.length > 0} notFound={!!routeId} />

@@ -57,6 +57,28 @@ diffing plan submit <revised-plan.md> --id <plan-id> --model "<model-name>"
 
 Only address comments with `status="open"`. Questions stay open after reply; resolve a change request only when the revised plan incorporates it.
 
+## Plan comments, ranges, and severity
+
+Human comments on the plan appear in `<plan-review>` XML with:
+
+- `line="N"` or inclusive `line="A-B"` (multi-line selection)
+- optional `severity="blocking|nit|question|praise"` (same triage as code review)
+- optional section title and source/quote context
+
+Treat **blocking** as must-fix before resubmit; **nit** as optional; **question** as needing a reply (usually leave open); **praise** as no change required. Missing severity = untriaged normal request.
+
 ## Human UI notes (so agents set expectations)
 
-The human reviews at `/plan` or `/plan/<id>`: Source / Read / Split views, optional zen full-width Read, outline, comments rail, and **Submit review** for the verdict that unblocks `plan await`.
+The human reviews at `/plan` or `/plan/<id>`:
+
+| Feature | Behavior |
+|---------|----------|
+| Source / Read / Split | `m` cycles modes; toolbar switches the same modes |
+| Zen Read | `z` toggles full-width focus (switches to Read if needed); Esc exits |
+| Comments map (right rail) | `c` toggles; lists open threads with `L` / `Lstart–Lend` labels |
+| Inline comments | Source: gutter + / line selection; Read: text highlight → Add comment; multi-line ranges with optional severity |
+| Read mode threads | Comments render inline under the matching section (React-owned; survives mode switches) |
+| Comment cards | Collapsible thread; collapsible source preview inside the card |
+| Submit review | Verdict that unblocks `plan await` |
+
+Plans may be versioned; comments are version-anchored when the human browses history.

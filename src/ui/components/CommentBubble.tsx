@@ -1,5 +1,15 @@
 import { useState, useEffect, useRef } from 'react'
-import { CheckCircle2, Bot, User, Reply, Pencil, Trash2, AlertTriangle } from 'lucide-react'
+import {
+  CheckCircle2,
+  Bot,
+  User,
+  Reply,
+  Pencil,
+  Trash2,
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+} from 'lucide-react'
 import type { ReviewComment } from '../../lib/types'
 import { timeAgo } from '../utils'
 import { Markdown } from './Markdown'
@@ -30,6 +40,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
   const [, setTick] = useState(0)
   const { resolveComment, unresolveComment, addReply, removeReply, editReply, applySuggestion, editComment } = useComments()
   const isResolved = comment.status === 'resolved'
+  /** Open threads start expanded; resolved start collapsed. User can toggle either. */
   const [collapsed, setCollapsed] = useState(isResolved)
   const [isReplying, setIsReplying] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
@@ -40,9 +51,11 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
 
   const remainingBody = comment.body.replace(/```suggestion\n([\s\S]*?)```/g, '').trim()
   const hasBodyContent = remainingBody.length > 0
+  const bodyPreview = comment.body.replace(/\s+/g, ' ').trim().slice(0, 72)
+  const replyCount = comment.replies?.length ?? 0
 
   useEffect(() => {
-    setCollapsed(comment.status === 'resolved')
+    if (comment.status === 'resolved') setCollapsed(true)
   }, [comment.status])
 
   useEffect(() => {
@@ -61,86 +74,81 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
     removeReply(comment.id, replyId)
   }
 
-  if (isResolved && collapsed) {
+  const locationBits = (
+    <>
+      {comment.lineNumber === 0 && (
+        <span className="comment-file-chip">File</span>
+      )}
+      {comment.outdated && (
+        <span className="comment-outdated-badge" title="Anchored code no longer matches the live diff">
+          <AlertTriangle size={10} /> outdated
+        </span>
+      )}
+      {comment.severity && comment.severity !== 'none' && (
+        <span className="comment-severity-badge" data-severity={comment.severity}>
+          {comment.severity}
+        </span>
+      )}
+      {comment.startLineNumber && comment.startLineNumber !== comment.lineNumber && (
+        <span className="comment-range-chip">
+          L{comment.startLineNumber}–{comment.lineNumber}
+        </span>
+      )}
+      {comment.lineNumber > 0 &&
+        !(comment.startLineNumber && comment.startLineNumber !== comment.lineNumber) && (
+          <span className="comment-range-chip">L{comment.lineNumber}</span>
+        )}
+    </>
+  )
+
+  if (collapsed && !isEditing) {
     return (
       <div
-        className="comment-resolved-collapsed"
-        style={{
-          padding: '12px 18px',
-          margin: '14px 20px',
-          background: 'var(--bg-secondary)',
-          border: '1px solid var(--border-color)',
-          borderRadius: 'var(--radius-md)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          opacity: 0.85,
-          boxShadow: 'var(--shadow-sm)'
-        }}
+        className={`comment-collapsed-bar ${isResolved ? 'comment-collapsed-bar-resolved' : ''}`}
+        id={`comment-${comment.id}`}
+        role="article"
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-muted)' }}>
-          <CheckCircle2 size={16} style={{ color: 'var(--success)' }} />
-          <span style={{ fontWeight: 600 }}>Conversation resolved</span>
-          {comment.lineNumber === 0 && (
-            <span
-              style={{
-                padding: '2px 6px',
-                background: 'var(--accent-subtle)',
-                border: '1px solid var(--primary)',
-                borderRadius: 'var(--radius-sm)',
-                fontSize: '10px',
-                fontWeight: 700,
-                color: 'var(--primary)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px'
-              }}
-            >
-              File Comment
-            </span>
+        <button
+          type="button"
+          className="comment-collapsed-toggle"
+          onClick={() => setCollapsed(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              setCollapsed(false)
+            }
+          }}
+          aria-expanded={false}
+          aria-label={isResolved ? 'Show resolved conversation' : 'Expand comment thread'}
+          title="Expand"
+        >
+          <ChevronRight size={14} aria-hidden="true" />
+        </button>
+        <div className="comment-collapsed-main">
+          {isResolved ? (
+            <CheckCircle2 size={14} className="comment-collapsed-resolved-icon" aria-hidden="true" />
+          ) : (
+            <AvatarIcon role="user" size={11} />
           )}
-          {comment.outdated && (
-            <span className="comment-outdated-badge" title="Anchored code no longer matches the live diff">
-              <AlertTriangle size={10} /> outdated
-            </span>
-          )}
-          {comment.severity && comment.severity !== 'none' && (
-            <span className="comment-severity-badge" data-severity={comment.severity}>
-              {comment.severity}
-            </span>
-          )}
-          {comment.startLineNumber && comment.startLineNumber !== comment.lineNumber && (
-            <span
-              style={{
-                padding: '2px 6px',
-                background: 'var(--bg-primary)',
-                border: '1px solid var(--border-color)',
-                borderRadius: 'var(--radius-sm)',
-                fontSize: '10px',
-                fontWeight: 600,
-                fontFamily: 'var(--font-mono)',
-                color: 'var(--text-secondary)'
-              }}
-            >
-              L{comment.startLineNumber}-{comment.lineNumber}
-            </span>
-          )}
-          <span>•</span>
-          <span>{comment.replies?.length > 0 ? `${comment.replies.length + 1} comments` : '1 comment'}</span>
+          <span className="comment-collapsed-label">
+            {isResolved ? 'Resolved' : 'User'}
+          </span>
+          {locationBits}
+          <span className="comment-collapsed-preview" title={comment.body}>
+            {bodyPreview}
+            {comment.body.length > 72 ? '…' : ''}
+          </span>
+          <span className="comment-collapsed-meta">
+            {replyCount > 0 ? `${replyCount + 1} comments` : '1 comment'}
+          </span>
         </div>
         <button
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--primary)',
-            fontSize: '12px',
-            fontWeight: 600,
-            cursor: 'pointer'
-          }}
+          type="button"
+          className="comment-collapsed-expand-btn"
           onClick={() => setCollapsed(false)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(false) } }}
-          aria-label="Show resolved conversation"
+          aria-label={isResolved ? 'Show resolved conversation' : 'Expand comment thread'}
         >
-          Show resolved
+          Expand
         </button>
       </div>
     )
@@ -199,7 +207,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                       color: 'var(--text-secondary)'
                     }}
                   >
-                    L{comment.startLineNumber}-{comment.lineNumber}
+                    L{comment.startLineNumber}–{comment.lineNumber}
                   </span>
                 )}
               </span>
@@ -236,6 +244,16 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
         </div>
         <div className="comment-content-col">
           <div className="comment-node-header">
+            <button
+              type="button"
+              className="comment-collapse-btn"
+              onClick={() => setCollapsed(true)}
+              aria-expanded={true}
+              aria-label="Collapse comment thread"
+              title="Collapse"
+            >
+              <ChevronDown size={14} aria-hidden="true" />
+            </button>
             <span className="comment-node-author">User</span>
             <span className="comment-node-badge comment-node-badge-user">User</span>
             <span className="comment-node-time" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -270,7 +288,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                     color: 'var(--text-secondary)'
                   }}
                 >
-                  L{comment.startLineNumber}-{comment.lineNumber}
+                  L{comment.startLineNumber}–{comment.lineNumber}
                 </span>
               )}
             </span>

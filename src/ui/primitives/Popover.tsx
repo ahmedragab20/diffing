@@ -1,11 +1,17 @@
 import { Popover as BasePopover } from '@base-ui-components/react/popover'
+import type { PopoverRoot } from '@base-ui-components/react/popover'
 import type { ReactElement, ReactNode } from 'react'
 
 interface PopoverProps {
   trigger: ReactElement<Record<string, unknown>>
   children: ReactNode
   open?: boolean
-  onOpenChange?: (open: boolean) => void
+  /**
+   * Called when open state should change. Second arg is Base UI event details
+   * (`reason`, `cancel()`, …) so callers can suppress dismiss (e.g. during a
+   * resize drag that ends outside the panel).
+   */
+  onOpenChange?: (open: boolean, eventDetails: PopoverRoot.ChangeEventDetails) => void
   side?: 'top' | 'bottom' | 'left' | 'right'
   align?: 'start' | 'center' | 'end'
   className?: string

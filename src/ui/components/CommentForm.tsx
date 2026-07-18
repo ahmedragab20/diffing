@@ -1,4 +1,14 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, type ReactNode } from 'react'
+import { Select as BaseSelect } from '@base-ui-components/react/select'
+import {
+  AlertOctagon,
+  Check,
+  ChevronsUpDown,
+  CircleDot,
+  HelpCircle,
+  Minus,
+  Sparkles,
+} from 'lucide-react'
 import { Markdown } from './Markdown'
 import { getDraft, setDraft, clearDraft } from '../drafts'
 import { useFeedback } from '../hooks/useHaptics'
@@ -14,19 +24,133 @@ function preprocessMentions(content: string): string {
   })
 }
 
-const SEVERITY_OPTIONS: { value: CommentSeverity; label: string }[] = [
-  { value: 'none', label: 'None' },
-  { value: 'blocking', label: 'Blocking' },
-  { value: 'nit', label: 'Nit' },
-  { value: 'question', label: 'Question' },
-  { value: 'praise', label: 'Praise' },
+const SEVERITY_OPTIONS: {
+  value: CommentSeverity
+  label: string
+  hint: string
+  icon: ReactNode
+}[] = [
+  { value: 'none', label: 'None', hint: 'Untriaged', icon: <Minus size={13} /> },
+  {
+    value: 'blocking',
+    label: 'Blocking',
+    hint: 'Must fix before merge',
+    icon: <AlertOctagon size={13} />,
+  },
+  { value: 'nit', label: 'Nit', hint: 'Optional polish', icon: <CircleDot size={13} /> },
+  {
+    value: 'question',
+    label: 'Question',
+    hint: 'Needs an answer',
+    icon: <HelpCircle size={13} />,
+  },
+  {
+    value: 'praise',
+    label: 'Praise',
+    hint: 'No change required',
+    icon: <Sparkles size={13} />,
+  },
 ]
+
+function SeveritySelect({
+  value,
+  onChange,
+}: {
+  value: CommentSeverity
+  onChange: (v: CommentSeverity) => void
+}) {
+  const current = SEVERITY_OPTIONS.find((o) => o.value === value) ?? SEVERITY_OPTIONS[0]!
+  return (
+    <BaseSelect.Root
+      value={value}
+      onValueChange={(v) => onChange(v as CommentSeverity)}
+      modal={false}
+    >
+      <BaseSelect.Trigger
+        className={`ui-select-trigger comment-severity-trigger comment-severity-trigger-${value}`}
+        aria-label="Comment severity"
+        data-severity={value}
+      >
+        <span className="comment-severity-trigger-inner">
+          <span className="comment-severity-icon" data-severity={value} aria-hidden="true">
+            {current.icon}
+          </span>
+          <BaseSelect.Value>
+            {(val: string) =>
+              SEVERITY_OPTIONS.find((o) => o.value === val)?.label ?? val
+            }
+          </BaseSelect.Value>
+        </span>
+        <BaseSelect.Icon className="ui-select-icon">
+          <ChevronsUpDown size={12} />
+        </BaseSelect.Icon>
+      </BaseSelect.Trigger>
+      <BaseSelect.Portal>
+        <BaseSelect.Positioner
+          className="ui-select-positioner comment-severity-positioner"
+          sideOffset={4}
+          align="start"
+          side="top"
+          alignItemWithTrigger={false}
+        >
+          <BaseSelect.Popup className="ui-select-popup comment-severity-popup" aria-label="Severity">
+            {SEVERITY_OPTIONS.map((o) => (
+              <BaseSelect.Item
+                key={o.value}
+                value={o.value}
+                className={`ui-select-item comment-severity-item comment-severity-item-${o.value}`}
+              >
+                <span className="comment-severity-item-main">
+                  <span className="comment-severity-icon" data-severity={o.value} aria-hidden="true">
+                    {o.icon}
+                  </span>
+                  <span className="comment-severity-item-text">
+                    <BaseSelect.ItemText className="comment-severity-item-label">
+                      {o.label}
+                    </BaseSelect.ItemText>
+                    <span className="comment-severity-item-hint">{o.hint}</span>
+                  </span>
+                </span>
+                <BaseSelect.ItemIndicator className="ui-select-indicator">
+                  <Check size={13} />
+                </BaseSelect.ItemIndicator>
+              </BaseSelect.Item>
+            ))}
+          </BaseSelect.Popup>
+        </BaseSelect.Positioner>
+      </BaseSelect.Portal>
+    </BaseSelect.Root>
+  )
+}
+
+/** Editable inclusive line range for a new inline comment draft. */
+export interface CommentFormRange {
+  /** Top of range (inclusive). */
+  start: number
+  /** Bottom of range (inclusive) — annotation slot. */
+  end: number
+  /** "new" | "old" or similar side label. */
+  sideLabel: string
+  /** Whether the start edge can move up (−1) or down (+1). */
+  canAdjustStart?: (delta: -1 | 1) => boolean
+  /** Whether the end edge can move up (−1) or down (+1). */
+  canAdjustEnd?: (delta: -1 | 1) => boolean
+}
 
 interface CommentFormProps {
   initialBody?: string
   lineContent?: string
-  /** Optional range label shown above the form, e.g. "L12–L15 · new". */
+  /** Optional static range label shown above the form, e.g. "L12–L15 · new". */
   lineLabel?: string
+  /**
+   * Interactive range chrome (bidirectional start/end steppers). When provided
+   * with `onAdjustStart` / `onAdjustEnd`, replaces the static `lineLabel` chip.
+   */
+  range?: CommentFormRange
+  /** Move the top of the range (−1 expand up, +1 shrink toward end). */
+  onAdjustStart?: (delta: -1 | 1) => void
+  /** Move the bottom of the range (−1 shrink toward start, +1 expand down). */
+  onAdjustEnd?: (delta: -1 | 1) => void
   draftKey?: string
   /** Called with body + optional severity (omit / none = no severity). */
   onSubmit: (body: string, severity?: CommentSeverity) => void
@@ -39,6 +163,9 @@ export function CommentForm({
   initialBody,
   lineContent,
   lineLabel,
+  range,
+  onAdjustStart,
+  onAdjustEnd,
   draftKey,
   onSubmit,
   onCancel,
@@ -182,13 +309,94 @@ export function CommentForm({
     }
   }
 
+  const rangeEditable = !!(range && onAdjustStart && onAdjustEnd)
+  const lineCount = range ? Math.abs(range.end - range.start) + 1 : 0
+  const canStartUp = rangeEditable && (range!.canAdjustStart?.(-1) ?? true)
+  const canStartDown = rangeEditable && (range!.canAdjustStart?.(1) ?? true)
+  const canEndUp = rangeEditable && (range!.canAdjustEnd?.(-1) ?? true)
+  const canEndDown = rangeEditable && (range!.canAdjustEnd?.(1) ?? true)
+
+  /** Keep focus in the textarea when using range steppers. */
+  const preventFocusSteal = (e: React.MouseEvent) => {
+    e.preventDefault()
+  }
+
   return (
     <div className="comment-form" style={{ padding: '16px' }} role="form" aria-label="Comment form">
-      {lineLabel && (
+      {rangeEditable && range ? (
+        <div className="comment-form-range" aria-live="polite">
+          <span className="comment-form-range-prefix">Commenting on</span>
+          <div className="comment-form-range-controls" role="group" aria-label="Comment line range">
+            <div className="comment-form-range-edge" aria-label="Range start">
+              <button
+                type="button"
+                className="comment-form-range-btn"
+                aria-label="Expand range upward"
+                title="Expand range upward"
+                disabled={!canStartUp}
+                onMouseDown={preventFocusSteal}
+                onClick={() => onAdjustStart!(-1)}
+              >
+                −
+              </button>
+              <span className="comment-form-range-num" aria-label={`Start line ${range.start}`}>
+                L{range.start}
+              </span>
+              <button
+                type="button"
+                className="comment-form-range-btn"
+                aria-label="Shrink range from top"
+                title="Shrink range from top"
+                disabled={!canStartDown}
+                onMouseDown={preventFocusSteal}
+                onClick={() => onAdjustStart!(1)}
+              >
+                +
+              </button>
+            </div>
+            <span className="comment-form-range-sep" aria-hidden="true">
+              –
+            </span>
+            <div className="comment-form-range-edge" aria-label="Range end">
+              <button
+                type="button"
+                className="comment-form-range-btn"
+                aria-label="Shrink range from bottom"
+                title="Shrink range from bottom"
+                disabled={!canEndUp}
+                onMouseDown={preventFocusSteal}
+                onClick={() => onAdjustEnd!(-1)}
+              >
+                −
+              </button>
+              <span className="comment-form-range-num" aria-label={`End line ${range.end}`}>
+                L{range.end}
+              </span>
+              <button
+                type="button"
+                className="comment-form-range-btn"
+                aria-label="Expand range downward"
+                title="Expand range downward"
+                disabled={!canEndDown}
+                onMouseDown={preventFocusSteal}
+                onClick={() => onAdjustEnd!(1)}
+              >
+                +
+              </button>
+            </div>
+          </div>
+          <span className="comment-form-range-meta">
+            <span className="comment-form-range-side">{range.sideLabel}</span>
+            <span className="comment-form-range-count">
+              {lineCount} line{lineCount === 1 ? '' : 's'}
+            </span>
+          </span>
+        </div>
+      ) : lineLabel ? (
         <div className="comment-form-line-label" aria-live="polite">
           Commenting on <strong>{lineLabel}</strong>
         </div>
-      )}
+      ) : null}
       <div
         className="comment-form-tabs"
         role="tablist"
@@ -422,21 +630,10 @@ export function CommentForm({
 
       <div className="comment-form-actions">
         {showSeverity && (
-          <label className="comment-form-severity">
+          <div className="comment-form-severity" data-severity={severity}>
             <span className="comment-form-severity-label">Severity</span>
-            <select
-              value={severity}
-              onChange={(e) => setSeverity(e.target.value as CommentSeverity)}
-              aria-label="Comment severity"
-              data-severity={severity}
-            >
-              {SEVERITY_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </label>
+            <SeveritySelect value={severity} onChange={setSeverity} />
+          </div>
         )}
         <div className="comment-form-actions-right">
           <button type="button" className="btn btn-secondary btn-sm" onClick={onCancel}>

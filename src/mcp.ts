@@ -70,6 +70,8 @@ const commentSchema = z.object({
   body: z.string(),
   status: z.enum(['open', 'resolved']),
   createdAt: z.number(),
+  /** Optional triage label; omitted / none = untriaged. Emitted on agent handoff XML. */
+  severity: z.enum(['blocking', 'nit', 'question', 'praise', 'none']).optional(),
   replies: z.array(z.object({
     id: z.string(),
     body: z.string(),
@@ -852,22 +854,36 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 
   server.registerTool('create_comment', {
     title: 'Create an inline review comment',
-    description: 'Create a local inline comment on an exact line from get_diff. side is additions for +/context in the new file and deletions for a removed line.',
+    description:
+      'Create a local inline comment on an exact line (or inclusive range) from get_diff. ' +
+      'side is additions for +/context in the new file and deletions for a removed line. ' +
+      'Optional severity triages the finding for the human and is included in the agent handoff XML.',
     inputSchema: {
       filePath: z.string().min(1).describe('Repository-relative file path exactly as shown in the patch.'),
       side: z.enum(['deletions', 'additions']).describe('Which side of the patch contains the target line.'),
-      lineNumber: z.number().int().positive().describe('Target line number on the selected side.'),
-      startLineNumber: z.number().int().positive().optional().describe('Optional first line for a multiline comment.'),
-      lineContent: z.string().describe('Target line text, used to preserve context in the review UI.'),
+      lineNumber: z.number().int().positive().describe('Target line number on the selected side (bottom of range if multi-line).'),
+      startLineNumber: z.number().int().positive().optional().describe('Optional first line for an inclusive multi-line comment.'),
+      lineContent: z.string().describe('Target line text (or joined multi-line span), used to preserve context in the review UI.'),
       body: z.string().min(1).describe('Actionable review comment in Markdown.'),
+      severity: z
+        .enum(['blocking', 'nit', 'question', 'praise', 'none'])
+        .optional()
+        .describe(
+          'Optional triage: blocking = must fix; nit = optional polish; question = needs answer; praise = no change. Omit or none = untriaged.',
+        ),
     },
     outputSchema: { status: z.literal('created'), comment: commentSchema },
     annotations: MUTATING,
   }, async (input) => {
+    const payload = {
+      ...input,
+      // Match HTTP/UI: do not persist bare "none".
+      severity: input.severity && input.severity !== 'none' ? input.severity : undefined,
+    }
     const comment = await requestBaseJson<ReviewComment>('/api/comments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
+      body: JSON.stringify(payload),
     })
     return textResult(`Created inline comment ${comment.id} on ${comment.filePath}:${comment.lineNumber}.`, {
       status: 'created', comment,

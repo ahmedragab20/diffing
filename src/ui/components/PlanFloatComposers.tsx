@@ -1,10 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { GripVertical, Minus, Maximize2, X, MessageSquarePlus } from 'lucide-react'
 import { CommentForm } from './CommentForm'
 import { ConfirmDialog } from '../primitives/ConfirmDialog'
 import { getDraft, clearDraft } from '../drafts'
 import type { CommentSeverity } from '../../lib/types'
+import { extractPlanLines } from '../../lib/plan-format'
+import {
+  adjustPendingStart,
+  adjustPendingEnd,
+  canAdjustPendingStart,
+  canAdjustPendingEnd,
+  normalizePendingRange,
+  pendingOrderedRange,
+  type PendingLineComment,
+} from '../lib/commentSelection'
+import { measureQuoteInRoot } from '../lib/planSelection'
 
 export interface PageRect {
   top: number
@@ -101,6 +112,20 @@ interface PlanFloatComposersProps {
     body: string,
     severity?: CommentSeverity,
   ) => void
+  /** Plan source body — enables bidirectional line-range adjust in the form. */
+  planBody?: string
+  /** Agent context builder for the adjusted span (exact ± neighbors). */
+  buildSourceContext?: (startLine: number, endLine: number) => string
+  /**
+   * Root of the rendered plan (`.plan-rendered`). Used to remeasure highlight
+   * overlays after layout shifts (comment delete, mode switch, etc.).
+   */
+  renderedRootRef?: React.RefObject<HTMLElement | null>
+  /**
+   * Bump when inline comments / body layout change so highlights re-glue to
+   * the text after reflow.
+   */
+  layoutEpoch?: string | number
 }
 
 /**
@@ -110,12 +135,17 @@ interface PlanFloatComposersProps {
  * - minimize / restore
  * - confirm before discard when draft has text
  * - Esc closes topmost (with confirm)
+ * - bidirectional line-range steppers (when planBody is provided)
  */
 export function PlanFloatComposers({
   planId,
   composers,
   onChange,
   onSubmit,
+  planBody,
+  buildSourceContext,
+  renderedRootRef,
+  layoutEpoch,
 }: PlanFloatComposersProps) {
   const dragRef = useRef<{
     id: string
@@ -146,6 +176,39 @@ export function PlanFloatComposers({
       onChange((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)))
     },
     [onChange],
+  )
+
+  const planLineBounds = useMemo(() => {
+    if (!planBody) return undefined
+    const total = planBody.replace(/\r\n/g, '\n').split('\n').length
+    return { min: 1, max: Math.max(1, total) }
+  }, [planBody])
+
+  const applyRangeAdjust = useCallback(
+    (draft: FloatComposerDraft, edge: 'start' | 'end', delta: -1 | 1) => {
+      if (!planBody || !planLineBounds) return
+      const pending: PendingLineComment = normalizePendingRange({
+        side: 'additions',
+        lineNumber: draft.lineNumber,
+        startLineNumber: draft.startLineNumber,
+      })
+      const next =
+        edge === 'start'
+          ? adjustPendingStart(pending, delta, planLineBounds)
+          : adjustPendingEnd(pending, delta, planLineBounds)
+      const start = next.startLineNumber ?? next.lineNumber
+      const end = next.lineNumber
+      const exact = extractPlanLines(planBody, start, end)
+      updateOne(draft.id, {
+        lineNumber: end,
+        startLineNumber: next.startLineNumber,
+        exactLines: exact,
+        sourceContext: buildSourceContext
+          ? buildSourceContext(start, end)
+          : exact,
+      })
+    },
+    [planBody, planLineBounds, buildSourceContext, updateOne],
   )
 
   const removeOne = useCallback(
@@ -324,6 +387,53 @@ export function PlanFloatComposers({
     return () => window.removeEventListener('resize', onResize)
   }, [composers.length, onChange])
 
+  /**
+   * After layout shifts (deleting an inline comment, mode change, etc.),
+   * remeasure page-space highlight rects from the current rendered DOM so
+   * overlays stay on the selected quote instead of floating at stale coords.
+   */
+  useEffect(() => {
+    if (composers.length === 0) return
+    const root = renderedRootRef?.current
+    if (!root) return
+
+    let raf = 0
+    const remeasure = () => {
+      onChange((prev) => {
+        let changed = false
+        const next = prev.map((c) => {
+          const quote = (c.selectedQuote || c.exactLines || '').trim()
+          if (!quote) return c
+          const rects = measureQuoteInRoot(root, quote)
+          if (rects.length === 0) return c
+          // Cheap equality: length + first/last top.
+          const same =
+            rects.length === c.highlightRects.length &&
+            rects.every((r, i) => {
+              const o = c.highlightRects[i]
+              return (
+                o &&
+                Math.abs(o.top - r.top) < 0.5 &&
+                Math.abs(o.left - r.left) < 0.5 &&
+                Math.abs(o.width - r.width) < 0.5 &&
+                Math.abs(o.height - r.height) < 0.5
+              )
+            })
+          if (same) return c
+          changed = true
+          return { ...c, highlightRects: rects }
+        })
+        return changed ? next : prev
+      })
+    }
+
+    // Double rAF: wait for React to commit segment/comment DOM after delete.
+    raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(remeasure)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [layoutEpoch, composers.length, renderedRootRef, onChange])
+
   if (composers.length === 0 || typeof document === 'undefined') return null
 
   const minimized = composers.filter((c) => c.minimized)
@@ -383,8 +493,8 @@ export function PlanFloatComposers({
               <span className="plan-selection-comment-meta">
                 Commenting on{' '}
                 {c.startLineNumber && c.startLineNumber !== c.lineNumber
-                  ? `lines ${c.startLineNumber}–${c.lineNumber}`
-                  : `line ${c.lineNumber}`}
+                  ? `L${c.startLineNumber}–L${c.lineNumber}`
+                  : `L${c.lineNumber}`}
                 {section ? ` · § ${section}` : ''}
               </span>
               <button
@@ -421,7 +531,43 @@ export function PlanFloatComposers({
                 <CommentForm
                   draftKey={draftKey(planId, c.id)}
                   lineContent={c.exactLines}
+                  lineLabel={
+                    c.startLineNumber && c.startLineNumber !== c.lineNumber
+                      ? `L${c.startLineNumber}–L${c.lineNumber} · source`
+                      : `L${c.lineNumber} · source`
+                  }
                   showSeverity
+                  range={
+                    planBody && planLineBounds
+                      ? (() => {
+                          const pending = normalizePendingRange({
+                            side: 'additions',
+                            lineNumber: c.lineNumber,
+                            startLineNumber: c.startLineNumber,
+                          })
+                          const ordered = pendingOrderedRange(pending)
+                          return {
+                            start: ordered.start,
+                            end: ordered.end,
+                            sideLabel: 'source',
+                            canAdjustStart: (d) =>
+                              canAdjustPendingStart(pending, d, planLineBounds),
+                            canAdjustEnd: (d) =>
+                              canAdjustPendingEnd(pending, d, planLineBounds),
+                          }
+                        })()
+                      : undefined
+                  }
+                  onAdjustStart={
+                    planBody
+                      ? (delta) => applyRangeAdjust(c, 'start', delta)
+                      : undefined
+                  }
+                  onAdjustEnd={
+                    planBody
+                      ? (delta) => applyRangeAdjust(c, 'end', delta)
+                      : undefined
+                  }
                   onSubmit={(body, severity) => {
                     onSubmit(c, body, severity)
                     clearDraft(draftKey(planId, c.id))

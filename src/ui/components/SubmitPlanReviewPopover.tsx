@@ -64,7 +64,16 @@ export function SubmitPlanReviewPopover({
   const [open, setOpen] = useState(false)
   const [verdict, setVerdict] = useState<Verdict | null>(null)
   const [comment, setComment] = useState('')
-  const { popoverStyle, activePreset, applyPreset, startResize, startLeftResize, panelRef } = useSubmitPanelSize()
+  const {
+    popoverStyle,
+    activePreset,
+    applyPreset,
+    startResize,
+    startLeftResize,
+    startCornerResize,
+    handleOpenChange,
+    panelRef,
+  } = useSubmitPanelSize()
 
   const handleSubmit = async () => {
     if (!verdict) return
@@ -82,7 +91,7 @@ export function SubmitPlanReviewPopover({
   return (
     <Popover
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(next, details) => handleOpenChange(next, details, setOpen)}
       ariaLabel="Submit plan review"
       className="submit-plan-review-popover"
       trigger={
@@ -103,7 +112,7 @@ export function SubmitPlanReviewPopover({
       }
     >
       <div className="srp" ref={panelRef} style={popoverStyle}>
-        <div className="srp-resize-handle-left" onMouseDown={startLeftResize} role="separator" aria-orientation="vertical" aria-label="Resize submit panel width" tabIndex={0} />
+        <div className="srp-resize-handle-left" onPointerDown={startLeftResize} role="separator" aria-orientation="vertical" aria-label="Resize submit panel width" tabIndex={0} />
         <div className="srp-head">
           {alreadyDecided ? (
             <RefreshCw size={15} aria-hidden="true" />
@@ -185,7 +194,14 @@ export function SubmitPlanReviewPopover({
             {submitting ? 'Submitting…' : 'Submit review'}
           </button>
         </div>
-        <div className="srp-resize-handle" onMouseDown={startResize} role="separator" aria-orientation="horizontal" aria-label="Resize submit panel" tabIndex={0} />
+        <div className="srp-resize-handle" onPointerDown={startResize} role="separator" aria-orientation="horizontal" aria-label="Resize submit panel" tabIndex={0} />
+        <div
+          className="srp-resize-handle-corner"
+          onPointerDown={startCornerResize}
+          role="separator"
+          aria-label="Resize submit panel width and height"
+          tabIndex={0}
+        />
       </div>
     </Popover>
   )

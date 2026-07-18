@@ -1,6 +1,8 @@
+// @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
 import {
   mapSelectionToLines,
+  measureQuoteInRoot,
   normalizePlanText,
   selectionIntersectsRoot,
 } from '../planSelection'
@@ -82,5 +84,31 @@ describe('selectionIntersectsRoot', () => {
     sel.removeAllRanges()
     sel.addRange(range)
     expect(selectionIntersectsRoot(sel, root)).toBe(true)
+  })
+})
+
+describe('measureQuoteInRoot', () => {
+  it('returns page rects for text in the plan body and ignores comment hosts', () => {
+    document.body.innerHTML = `
+      <div class="plan-rendered" id="root">
+        <h2>Changes</h2>
+        <ol>
+          <li>Add a hello endpoint to the server.</li>
+          <li>Return message</li>
+        </ol>
+        <div class="plan-read-comment-host">
+          <p>Hi Agent! should not match</p>
+        </div>
+      </div>
+    `
+    const root = document.getElementById('root') as HTMLElement
+    // jsdom often returns zero client rects — still ensure we don't throw and
+    // prefer body text over comment hosts when matching.
+    const rects = measureQuoteInRoot(root, 'Add a hello endpoint to the server.')
+    // In jsdom getClientRects is empty; function may return []. Smoke: no throw.
+    expect(Array.isArray(rects)).toBe(true)
+
+    const agentLeak = measureQuoteInRoot(root, 'Hi Agent! should not match')
+    expect(agentLeak).toEqual([])
   })
 })

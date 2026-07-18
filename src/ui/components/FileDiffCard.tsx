@@ -18,13 +18,48 @@ import { DiffMinimap } from './DiffMinimap'
 import { SHIKI_THEME_MAP, scrollToLine } from '../utils'
 import {
   pendingFromSelection,
-  pendingFromLine,
   pendingLineLabel,
+  pendingOrderedRange,
+  pendingSideLabel,
   selectedRangeFromPending,
+  adjustPendingStart,
+  adjustPendingEnd,
+  canAdjustPendingStart,
+  canAdjustPendingEnd,
+  normalizePendingRange,
   type PendingLineComment,
+  type PendingLineBounds,
 } from '../lib/commentSelection'
 
 type PendingComment = PendingLineComment
+
+/** Min/max file line numbers present on one side of a pierre FileDiffMetadata. */
+function boundsForSide(
+  fileDiff: FileDiffMetadata,
+  side: AnnotationSide,
+  expandedLineCount?: number,
+): PendingLineBounds {
+  const startKey = side === 'additions' ? 'additionStart' : 'deletionStart'
+  const countKey = side === 'additions' ? 'additionCount' : 'deletionCount'
+  let min = Number.POSITIVE_INFINITY
+  let max = 0
+  for (const hunk of fileDiff.hunks) {
+    const start = hunk[startKey] as number
+    const count = hunk[countKey] as number
+    if (count <= 0) continue
+    min = Math.min(min, start)
+    max = Math.max(max, start + count - 1)
+  }
+  // When full-file context is expanded, allow navigating the whole file.
+  if (expandedLineCount && expandedLineCount > 0) {
+    min = Math.min(min === Number.POSITIVE_INFINITY ? 1 : min, 1)
+    max = Math.max(max, expandedLineCount)
+  }
+  if (!Number.isFinite(min) || max < 1) {
+    return { min: 1, max: Math.max(1, expandedLineCount ?? 1) }
+  }
+  return { min, max }
+}
 
 interface FileDiffCardProps {
   id?: string
@@ -102,10 +137,15 @@ export const FileDiffCard = memo(function FileDiffCard({
   onCardToggleCollapse,
 }: FileDiffCardProps) {
   const [pending, setPending] = useState<PendingComment | null>(null)
+  /**
+   * Controlled pierre selection — only set while a pending composer is open so
+   * we do not fight live drag selection (re-applying null mid-drag collapses
+   * multi-line ranges to a single line).
+   */
   const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
   const [liveSelectionCount, setLiveSelectionCount] = useState(0)
-  /** Capture gutter hover on pointerdown — click-time getHoveredLine() is racey. */
-  const gutterLineRef = useRef<{ lineNumber: number; side: AnnotationSide } | null>(null)
+  /** Stable draft key for the open composer session (survives range adjusts). */
+  const draftSessionRef = useRef<string | null>(null)
   const [permalinkFlash, setPermalinkFlash] = useState<string | null>(null)
   const [pathCopyFlash, setPathCopyFlash] = useState(false)
   const lineTotal = fileDiff.additionLines.length + fileDiff.deletionLines.length
@@ -233,6 +273,11 @@ export const FileDiffCard = memo(function FileDiffCard({
     const startNum = Math.min(a, b)
     const endNum = Math.max(a, b)
     const resultLines: string[] = []
+    // Full-file contents when "Expand context" is on — fills lines outside patch hunks.
+    const expanded =
+      contentsReady
+        ? (side === 'additions' ? newContent : oldContent)?.replace(/\r\n/g, '\n').split('\n')
+        : undefined
 
     for (let line = startNum; line <= endNum; line++) {
       const lines = side === 'additions' ? fileDiff.additionLines : fileDiff.deletionLines
@@ -252,15 +297,19 @@ export const FileDiffCard = memo(function FileDiffCard({
       }
       if (!found) {
         // Context / expanded lines aren't in the patch arrays.
-        resultLines.push('')
+        resultLines.push(expanded?.[line - 1] ?? '')
       }
     }
     return resultLines.join('\n')
   }
 
   const openPending = useCallback((next: PendingComment) => {
-    setPending(next)
-    setSelectedRange(selectedRangeFromPending(next))
+    const normalized = normalizePendingRange(next)
+    if (!draftSessionRef.current) {
+      draftSessionRef.current = crypto.randomUUID()
+    }
+    setPending(normalized)
+    setSelectedRange(selectedRangeFromPending(normalized))
     setLiveSelectionCount(0)
   }, [])
 
@@ -268,11 +317,29 @@ export const FileDiffCard = memo(function FileDiffCard({
     setPending(null)
     setSelectedRange(null)
     setLiveSelectionCount(0)
-    gutterLineRef.current = null
+    draftSessionRef.current = null
+  }, [])
+
+  const pendingBounds = useMemo((): PendingLineBounds | undefined => {
+    if (!pending) return undefined
+    const expandedCount =
+      contentsReady && pending.side === 'additions'
+        ? (newContent ?? '').split('\n').length
+        : contentsReady && pending.side === 'deletions'
+          ? (oldContent ?? '').split('\n').length
+          : undefined
+    return boundsForSide(fileDiff, pending.side, expandedCount)
+  }, [pending, fileDiff, contentsReady, newContent, oldContent])
+
+  const updatePendingRange = useCallback((next: PendingComment) => {
+    const normalized = normalizePendingRange(next)
+    setPending(normalized)
+    setSelectedRange(selectedRangeFromPending(normalized))
   }, [])
 
   // After a new draft opens, scroll its annotation into view (it can land
-  // off-screen when opened near the bottom of a tall file).
+  // off-screen when opened near the bottom of a tall file). Re-run when the
+  // bottom edge moves so the form stays near the anchor slot.
   useEffect(() => {
     if (!pending) return
     const id = window.requestAnimationFrame(() => {
@@ -282,7 +349,7 @@ export const FileDiffCard = memo(function FileDiffCard({
       }
     })
     return () => cancelAnimationFrame(id)
-  }, [pending?.side, pending?.lineNumber, pending?.startLineNumber])
+  }, [pending?.side, pending?.lineNumber])
 
   const handleOpenEditor = async (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -323,23 +390,45 @@ export const FileDiffCard = memo(function FileDiffCard({
   ) => {
     if ('_pending' in annotation.metadata) {
       if (!pending) return null
-      const draftKey = `new:${filePath}:${pending.side}:${pending.startLineNumber || pending.lineNumber}:${pending.lineNumber}`
+      const session = draftSessionRef.current ?? 'open'
+      const draftKey = `new:${filePath}:${pending.side}:${session}`
       const lineContent = getLineContent(
         pending.side,
         pending.lineNumber,
         pending.startLineNumber,
       )
+      const ordered = pendingOrderedRange(pending)
+      const bounds = pendingBounds
       return (
         <CommentForm
           draftKey={draftKey}
           lineContent={lineContent}
           lineLabel={pendingLineLabel(pending)}
+          range={{
+            start: ordered.start,
+            end: ordered.end,
+            sideLabel: pendingSideLabel(pending),
+            canAdjustStart: (d) => canAdjustPendingStart(pending, d, bounds),
+            canAdjustEnd: (d) => canAdjustPendingEnd(pending, d, bounds),
+          }}
+          onAdjustStart={(delta) => {
+            updatePendingRange(adjustPendingStart(pending, delta, bounds))
+          }}
+          onAdjustEnd={(delta) => {
+            updatePendingRange(adjustPendingEnd(pending, delta, bounds))
+          }}
           onSubmit={(body, severity) => {
+            // Recompute content at submit so adjusted ranges are accurate.
+            const content = getLineContent(
+              pending.side,
+              pending.lineNumber,
+              pending.startLineNumber,
+            )
             onAddComment(
               filePath,
               pending.side,
               pending.lineNumber,
-              lineContent,
+              content,
               body,
               pending.startLineNumber,
               severity,
@@ -358,35 +447,14 @@ export const FileDiffCard = memo(function FileDiffCard({
     )
   }
 
-  const renderGutter = (
-    getHoveredLine: () => { lineNumber: number; side: AnnotationSide } | undefined,
-  ) => (
-    <button
-      type="button"
-      className="gutter-add-btn"
-      title="Add comment on this line"
-      aria-label="Add comment on this line"
-      onPointerDown={(e) => {
-        // Capture while hover is still valid — click-time getHoveredLine() often returns undefined.
-        e.stopPropagation()
-        const line = getHoveredLine()
-        gutterLineRef.current = line ?? null
-      }}
-      onClick={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        const line = gutterLineRef.current ?? getHoveredLine()
-        gutterLineRef.current = null
-        if (line) openPending(pendingFromLine(line.side, line.lineNumber))
-      }}
-    >
-      +
-    </button>
-  )
-
+  // Drop any open draft when a new selection starts. Do NOT keep controlling
+  // selectedLines during the drag (pending → null → selectedLines=undefined)
+  // so pierre owns the live range.
   const handleSelectionStart = useCallback(() => {
-    setSelectedRange(null)
     setLiveSelectionCount(0)
+    setPending(null)
+    setSelectedRange(null)
+    draftSessionRef.current = null
   }, [])
 
   const handleSelectionChange = useCallback((range: SelectedLineRange | null) => {
@@ -402,6 +470,17 @@ export const FileDiffCard = memo(function FileDiffCard({
       setLiveSelectionCount(0)
       if (!range) return
       // Open the composer under the selection (works for single-click select + drag).
+      openPending(pendingFromSelection(range))
+    },
+    [openPending],
+  )
+
+  /**
+   * Pierre built-in gutter + (single click or drag). Must NOT be combined with
+   * `renderGutterUtility` — pierre throws if both APIs are used.
+   */
+  const handleGutterUtilityClick = useCallback(
+    (range: SelectedLineRange) => {
       openPending(pendingFromSelection(range))
     },
     [openPending],
@@ -769,6 +848,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 onLineSelectionStart: handleSelectionStart,
                 onLineSelectionChange: handleSelectionChange,
                 onLineSelectionEnd: handleSelectionEnd,
+                onGutterUtilityClick: handleGutterUtilityClick,
                 onLineNumberClick: (props) => {
                   const side = props.annotationSide === 'deletions' ? 'deletions' : 'additions'
                   const short = `${filePath}:${side === 'deletions' ? '-' : '+'}${props.lineNumber}`
@@ -796,11 +876,11 @@ export const FileDiffCard = memo(function FileDiffCard({
                 themeType: shikiConfig.type,
                 unsafeCSS,
               }}
-              selectedLines={selectedRange}
+              // Only control selection while a draft is open — never push null mid-drag.
+              selectedLines={pending ? selectedRange : undefined}
               lineAnnotations={allAnnotations}
               renderHeaderMetadata={() => null}
               renderAnnotation={renderAnnotationFn}
-              renderGutterUtility={renderGutter}
             />
           ) : bodyMounted ? (
           <FileDiff<ReviewComment | { _pending: true }>
@@ -819,6 +899,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               onLineSelectionStart: handleSelectionStart,
               onLineSelectionChange: handleSelectionChange,
               onLineSelectionEnd: handleSelectionEnd,
+              onGutterUtilityClick: handleGutterUtilityClick,
               onLineNumberClick: (props) => {
                 const side = props.annotationSide === 'deletions' ? 'deletions' : 'additions'
                 const short = `${filePath}:${side === 'deletions' ? '-' : '+'}${props.lineNumber}`
@@ -846,11 +927,10 @@ export const FileDiffCard = memo(function FileDiffCard({
               themeType: shikiConfig.type,
               unsafeCSS,
             }}
-            selectedLines={selectedRange}
+            selectedLines={pending ? selectedRange : undefined}
             lineAnnotations={allAnnotations}
             renderHeaderMetadata={() => null} // Header is disabled
             renderAnnotation={renderAnnotationFn}
-            renderGutterUtility={renderGutter}
           />
           ) : null}
         </div>

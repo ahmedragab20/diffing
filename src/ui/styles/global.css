@@ -2515,7 +2515,9 @@ body {
 .main {
     flex: 1;
     min-width: 0;
-    padding: 12px 16px 24px;
+    /* Extra bottom padding so the last file card isn't flush against the
+       viewport edge when scrolling through long diffs / commit walks. */
+    padding: 12px 16px 64px;
     background: var(--bg-primary);
 }
 
@@ -2614,7 +2616,33 @@ body {
     background: rgba(163, 190, 140, 0.1);
 }
 
-/* Gutter add button — larger hit target, always-visible when host shows it */
+/* Pierre built-in gutter + (onGutterUtilityClick) — theme to match app chrome.
+   Note: cannot use renderGutterUtility together with onGutterUtilityClick. */
+.file-diff-card [data-utility-button],
+.plan-file [data-utility-button] {
+    background: var(--primary) !important;
+    color: var(--bg-primary) !important;
+    fill: currentColor !important;
+    border-radius: 50% !important;
+    width: 22px !important;
+    height: 22px !important;
+    box-shadow: var(--shadow-md);
+    opacity: 0.95;
+    transition:
+        opacity var(--transition-fast),
+        background var(--transition-fast),
+        transform var(--transition-fast);
+}
+.file-diff-card [data-utility-button]:hover,
+.file-diff-card [data-utility-button]:focus-visible,
+.plan-file [data-utility-button]:hover,
+.plan-file [data-utility-button]:focus-visible {
+    background: var(--primary-hover) !important;
+    transform: scale(1.08);
+    outline: none;
+}
+
+/* Legacy custom gutter button (kept for any remaining hosts) */
 .gutter-add-btn {
     position: absolute;
     top: 50%;
@@ -2674,6 +2702,97 @@ body {
     color: var(--primary);
     font-family: var(--font-mono);
     font-weight: 700;
+}
+
+/* Interactive multi-line range chrome (start/end steppers) */
+.comment-form-range {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    margin: 0 0 12px;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-weak);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    width: fit-content;
+    max-width: 100%;
+}
+.comment-form-range-prefix {
+    flex-shrink: 0;
+}
+.comment-form-range-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+.comment-form-range-edge {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 1px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-weak);
+}
+.comment-form-range-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: calc(var(--radius-sm) - 1px);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+}
+.comment-form-range-btn:hover:not(:disabled) {
+    background: var(--bg-secondary);
+    color: var(--primary);
+}
+.comment-form-range-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+.comment-form-range-num {
+    min-width: 2.4em;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--primary);
+    padding: 0 2px;
+}
+.comment-form-range-sep {
+    color: var(--text-muted);
+    font-weight: 600;
+    padding: 0 2px;
+}
+.comment-form-range-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+}
+.comment-form-range-side {
+    text-transform: lowercase;
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+.comment-form-range-count {
+    font-weight: 600;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
 }
 
 /* ==========================================================================
@@ -7036,9 +7155,13 @@ file-tree,
     transform: translate(-50%, -10px) scale(0.98);
 }
 
-/* Tooltip (Base UI Tooltip) */
+/* Tooltip (Base UI Tooltip) — must clear sticky plan/diff chrome (z≈5–100)
+   and sit above popovers so hover help isn't clipped under the header. */
+.ui-tooltip-positioner {
+    z-index: 1500;
+}
 .ui-tooltip {
-    z-index: 600;
+    z-index: 1500;
     padding: var(--space-1) var(--space-2);
     font-family: var(--font-sans);
     font-size: var(--text-xs);
@@ -7049,6 +7172,7 @@ file-tree,
     border: 1px solid var(--border-normal);
     border-radius: var(--radius-sm);
     box-shadow: var(--shadow-md);
+    pointer-events: none;
     transition:
         opacity var(--transition-fast),
         transform var(--transition-fast);
@@ -7518,6 +7642,35 @@ file-tree,
 .srp-resize-handle-left:hover,
 .srp-resize-handle-left:active {
     background: var(--border-focus);
+}
+/* Bottom-left corner grip: bidirectional (width + height) resize. */
+.srp-resize-handle-corner {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 14px;
+    height: 14px;
+    cursor: nesw-resize;
+    z-index: 3;
+    background: transparent;
+}
+.srp-resize-handle-corner::after {
+    content: '';
+    position: absolute;
+    right: 3px;
+    top: 3px;
+    width: 8px;
+    height: 8px;
+    border-left: 2px solid var(--border-color);
+    border-bottom: 2px solid var(--border-color);
+    border-bottom-left-radius: 2px;
+    opacity: 0.55;
+    transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+.srp-resize-handle-corner:hover::after,
+.srp-resize-handle-corner:active::after {
+    opacity: 1;
+    border-color: var(--border-focus);
 }
 .settings-panel {
     gap: var(--space-0-5);
@@ -8539,37 +8692,119 @@ button.toolbar-last-send-btn:hover {
 .comment-form-severity {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-secondary);
+    min-width: 0;
 }
 .comment-form-severity-label {
     font-weight: 600;
+    flex-shrink: 0;
 }
-.comment-form-severity select {
+
+/* Severity dropdown (Base UI Select — design system) */
+.comment-severity-trigger {
+    min-width: 132px;
     height: 28px;
-    padding: 0 8px;
-    border-radius: var(--radius-round);
-    border: 1px solid var(--border-color);
-    background: var(--bg-primary);
-    color: var(--text-primary);
+    gap: 6px;
+    padding: 0 8px 0 6px;
     font-size: 12px;
     font-weight: 600;
-    font-family: inherit;
-    cursor: pointer;
+    background: var(--bg-primary);
 }
-.comment-form-severity select[data-severity="blocking"] {
-    border-color: color-mix(in srgb, var(--danger) 50%, var(--border-color));
+.comment-severity-trigger-inner {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+.comment-severity-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--bg-tertiary) 80%, transparent);
+}
+.comment-severity-icon[data-severity="blocking"] {
     color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
-.comment-form-severity select[data-severity="nit"] {
+.comment-severity-icon[data-severity="nit"] {
     color: var(--text-muted);
 }
-.comment-form-severity select[data-severity="question"] {
+.comment-severity-icon[data-severity="question"] {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.comment-severity-icon[data-severity="praise"] {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+.comment-severity-trigger-blocking {
+    border-color: color-mix(in srgb, var(--danger) 45%, var(--border-color));
+    color: var(--danger);
+}
+.comment-severity-trigger-question {
+    border-color: color-mix(in srgb, var(--primary) 40%, var(--border-color));
     color: var(--primary);
 }
-.comment-form-severity select[data-severity="praise"] {
+.comment-severity-trigger-praise {
+    border-color: color-mix(in srgb, var(--success) 40%, var(--border-color));
     color: var(--success);
+}
+.comment-severity-trigger-nit {
+    color: var(--text-secondary);
+}
+.comment-severity-positioner {
+    z-index: 1600;
+}
+.comment-severity-popup {
+    min-width: 220px;
+    padding: 4px;
+}
+.comment-severity-item {
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 10px;
+}
+.comment-severity-item-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+}
+.comment-severity-item-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+.comment-severity-item-label {
+    font-weight: 600;
+    font-size: 12.5px;
+    color: var(--text-primary);
+}
+.comment-severity-item-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.3;
+}
+.comment-severity-item-blocking .comment-severity-item-label {
+    color: var(--danger);
+}
+.comment-severity-item-question .comment-severity-item-label {
+    color: var(--primary);
+}
+.comment-severity-item-praise .comment-severity-item-label {
+    color: var(--success);
+}
+.comment-severity-item[data-highlighted] {
+    background: color-mix(in srgb, var(--bg-tertiary) 90%, var(--bg-primary) 10%);
 }
 
 .comment-form-suggest-row {
@@ -8677,9 +8912,24 @@ button.toolbar-last-send-btn:hover {
 .commit-walk-btn {
     flex-shrink: 0;
 }
+/* Trailing cluster: Show all (reserved width) + next. Next stays rightmost
+   so its hit target never shifts when entering single-commit focus. */
+.commit-walk-trailing {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    margin-left: auto;
+}
 .commit-walk-all {
     flex-shrink: 0;
     font-size: 11px;
+    /* Fixed footprint so visibility toggles don't reflow the next chevron. */
+    min-width: 4.75rem;
+}
+.commit-walk-all:disabled {
+    visibility: hidden;
+    pointer-events: none;
 }
 
 /* Agent progress toast */
@@ -9846,6 +10096,176 @@ button.toolbar-last-send-btn:hover {
 .plan-toc-level-3 a { padding-left: 20px; font-size: 11.5px; }
 .plan-toc-level-4 a { padding-left: 28px; font-size: 11px; }
 
+/* Plan Read: React-owned section + comment stack */
+.plan-read-segment {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    min-width: 0;
+}
+.plan-read-segment + .plan-read-segment {
+    margin-top: 0.25em;
+}
+.plan-read-segment > .markdown-body,
+.plan-read-segment > div:not(.plan-read-comment-host) {
+    min-width: 0;
+}
+
+/* Submitted plan comments after each section in Read/Split */
+.plan-read-comment-host {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 14px 0 18px;
+    padding: 12px 14px;
+    max-width: 100%;
+    /* Theme-aware recessed surface: darker than the document card so threads
+       read as distinct inset panels in both light and dark themes. */
+    background: color-mix(in srgb, var(--bg-tertiary) 88%, var(--bg-primary) 12%);
+    border: 1px solid var(--border-normal);
+    border-radius: var(--radius-md);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--bg-primary) 35%, transparent);
+}
+.plan-read-comment-slot {
+    width: 100%;
+    max-width: min(720px, 100%);
+}
+.plan-read-comment-slot .comment-bubble-canvas,
+.plan-read-comment-slot .comment-collapsed-bar {
+    max-width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+    width: 100%;
+}
+.plan-read-comment-slot .comment-bubble-canvas {
+    /* Nested bubble sits on the host surface without double-card glare */
+    background: color-mix(in srgb, var(--bg-secondary) 70%, var(--bg-primary) 30%);
+    border-color: var(--border-weak);
+}
+
+/* Collapsible comment threads (diff + plan) */
+.comment-collapsed-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    margin: 14px 20px;
+    background: color-mix(in srgb, var(--bg-tertiary) 75%, var(--bg-secondary) 25%);
+    border: 1px solid var(--border-normal);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    min-width: 0;
+}
+.comment-collapsed-bar-resolved {
+    opacity: 0.9;
+}
+.comment-collapsed-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.comment-collapsed-toggle:hover {
+    background: var(--bg-secondary);
+    color: var(--primary);
+}
+.comment-collapsed-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+}
+.comment-collapsed-label {
+    font-weight: 700;
+    color: var(--text-primary);
+    flex-shrink: 0;
+}
+.comment-collapsed-resolved-icon {
+    color: var(--success);
+    flex-shrink: 0;
+}
+.comment-collapsed-preview {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+}
+.comment-collapsed-meta {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-size: 11.5px;
+}
+.comment-collapsed-expand-btn {
+    flex-shrink: 0;
+    border: none;
+    background: none;
+    color: var(--primary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 4px 6px;
+}
+.comment-collapsed-expand-btn:hover {
+    text-decoration: underline;
+}
+.comment-collapsed-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+.comment-collapse-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    margin-right: 2px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+.comment-collapse-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--primary);
+}
+.comment-file-chip,
+.comment-range-chip {
+    padding: 1px 6px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+.comment-file-chip {
+    font-family: inherit;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--primary);
+    border-color: var(--primary);
+    background: var(--accent-subtle);
+}
+
 /* Rendered markdown — calm document surface */
 .plan-rendered {
     margin: 0;
@@ -10145,8 +10565,52 @@ button.toolbar-last-send-btn:hover {
     font-size: 11px;
     opacity: 0.9;
 }
-.plan-comment-context {
+/* In-card source preview (collapsible) */
+.comment-context-block {
     margin: 8px 0 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+.comment-context-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    max-width: 100%;
+    padding: 4px 8px;
+    border: 1px solid var(--border-weak);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--bg-tertiary) 70%, var(--bg-primary) 30%);
+    color: var(--text-secondary);
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+        background var(--transition-fast),
+        border-color var(--transition-fast),
+        color var(--transition-fast);
+}
+.comment-context-toggle:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--border-normal);
+    color: var(--text-primary);
+}
+.comment-context-toggle-label {
+    flex-shrink: 0;
+}
+.comment-context-toggle-meta {
+    font-weight: 500;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.plan-comment-context {
+    margin: 0;
     padding: 8px 10px;
     border-radius: var(--radius-sm);
     border-left: 3px solid var(--primary);
@@ -10657,7 +11121,7 @@ button.toolbar-last-send-btn:hover {
 /* Tablet and smaller adjustments */
 @media (max-width: 1024px) {
     .main {
-        padding: 12px 16px;
+        padding: 12px 16px 56px;
     }
     .sidebar {
         width: min(var(--sidebar-width, 280px), 35vw);
@@ -10760,7 +11224,7 @@ button.toolbar-last-send-btn:hover {
 
     /* Main content */
     .main {
-        padding: 8px 12px;
+        padding: 8px 12px 48px;
     }
     .diff-viewer {
         gap: 12px;

@@ -37,17 +37,32 @@ If the harness does not expose named skills, apply those workflows from this rou
 |------|-------|
 | Session | `review_session_status`, `start_review_session` |
 | Diff | `get_diff`, `diff_summary`, `diff_files`, `diff_hunks`, `diff_slice`, `diff_search` |
-| Comments | `create_comment`, `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment`, `edit_comment`, `delete_comment`, `edit_reply`, `delete_reply`, `apply_suggestion`, `resolve_all_comments` |
+| Comments | `create_comment` (path, side, line/range, body, optional **severity**), `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment`, `edit_comment`, `delete_comment`, `edit_reply`, `delete_reply`, `apply_suggestion`, `resolve_all_comments` |
 | Loop | `await_review`, `report_progress`, `get_review_history` |
 | Plan | `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment` |
 
 CLI mirrors: `await-review`, `comments`, `reply`, `resolve`, `unresolve`, `comment edit|delete`, `progress`, `plan …`, `inspect …` (TUI), `doctor`, `mcp`, `url`.
+
+## Comment model (diff + plan handoffs)
+
+Shared by code review and plan review agent XML:
+
+| Field | Notes |
+|-------|--------|
+| Line / range | `line="N"` or inclusive `line="A-B"` (`startLineNumber`–`lineNumber`) |
+| Side (diff only) | `additions` \| `deletions` |
+| Severity (optional) | `blocking` \| `nit` \| `question` \| `praise`; omit = untriaged |
+| Body / code context | Markdown body + optional `<code>` / quote / source snapshot |
+
+UI supports multi-line selection, range adjust, collapsible threads, and severity dropdown. Plan Read mode shows inline comments under sections; `c` toggles comments map; `z` toggles zen Read; `m` cycles Source/Read/Split.
 
 ## Behavioral contract
 
 - Timeouts from await tools are **expected**; retry while waiting is still requested.
 - Only act on **open** comments.
 - Apply and resolve clear change requests; reply without resolving questions or ambiguous requests.
+- Honor **severity** when present: prioritize **blocking**, leave **question** open after answer, treat **nit** as optional, skip code changes for **praise**.
+- Multi-line ranges are **inclusive** — address the full span.
 - **`comment-only`** forbids file edits.
 - A plan may be implemented only after **`approved`**; revise the same plan ID on **`changes-requested`**; stop on **`rejected`**.
 - Send replies/resolutions as work completes so the human UI stays live; await another round only when the user wants the loop to continue.

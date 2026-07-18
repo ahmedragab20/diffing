@@ -6,21 +6,35 @@
 
 ### Minor Changes
 
-- Plan + diff review UI redesign, reliable line comments, zen reading, and TUI mouse-first work.
+- Plan + diff review UX: multiline comments, zen/outline/comments shortcuts, severity handoff, and TUI mouse-first work.
 
   **Plan review**
   - Quieter reading-first chrome; centered Source / Read / Split control; icon actions with tooltips.
-  - Resizable split panes (persisted); full-width Read mode; immersive zen reading (Esc to exit).
-  - Plan shortcuts guide updated (`?` / `⌘?`); collapsed sidebar expand control centered.
+  - Resizable split panes (persisted); full-width Read mode; immersive zen reading.
+  - **Read mode always shows inline comments** under the matching section (React-owned segments — survives mode switches).
+  - Multiline plan comments with range steppers in source composers and floating Read drafts.
+  - Collapsible comment threads; collapsible in-card source preview; delete resolved comments and replies.
+  - Float-composer highlights remeasure after layout shifts (e.g. deleting a comment).
+  - Keyboard: `m` cycle views, **`z` zen**, **`o` outline**, **`c` comments map**, Esc exits zen; shortcuts modal and tooltips updated.
+  - Tooltips stack above sticky plan/diff chrome.
 
   **Diff review**
   - Compact toolbar summary chips; icon-forward file headers; cleaner file-tree chrome.
   - Improved send-review CTA; quieter comment canvases; expanded keyboard shortcuts help.
   - Diff style (Unified / Split) lives in Settings (and `m`).
+  - Submit-review popovers: shared resize (width + height + corner), size presets; no dismiss when releasing a drag past max size.
+  - Commit walk bar polish.
 
-  **Inline comments**
+  **Inline comments (diff + plan)**
   - Fix form anchoring to the correct side and line (same-side selections no longer default to additions and land at EOF).
-  - Multiline ranges normalize correctly; gutter `+` captures the line on pointerdown; composer shows a line-range label.
+  - Multiline ranges: normalize reverse drags; inclusive `startLineNumber`–`lineNumber`; pierre gutter via `onGutterUtilityClick` only (no dual-API crash).
+  - Bidirectional range steppers in the composer; stable draft keys while adjusting.
+  - Severity dropdown (design-system Select) with icons/hints: `blocking` | `nit` | `question` | `praise`.
+  - Severity persisted and emitted on agent handoff XML for **diff** and **plan**; MCP `create_comment` accepts optional severity.
+  - Collapsible open/resolved threads on diff and plan cards.
+
+  **Agent skills**
+  - `skills/` and `.agents/skills/` updated for severity, multi-line ranges, plan UI shortcuts, and finish-review priority rules (byte-identical contract).
 
   **Roadmap (rolled up)**
   - GitHub PR repair, multi-round review history, suggestions + severity + saved replies.

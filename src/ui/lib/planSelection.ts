@@ -9,6 +9,14 @@ export interface PlanTextSelection {
   endLine: number
 }
 
+/** Document-absolute rect for float-composer highlight overlays. */
+export interface PlanPageRect {
+  top: number
+  left: number
+  width: number
+  height: number
+}
+
 /** Normalize selection / body text for resilient matching. */
 export function normalizePlanText(value: string): string {
   return value
@@ -184,4 +192,119 @@ function mapSoftIndexToOriginal(original: string, softIndex: number): number {
   // Skip remaining spaces so we land on content.
   while (i < original.length && /\s/.test(original[i])) i += 1
   return i < original.length ? i : -1
+}
+
+/**
+ * Elements that must not contribute text when rematching float-composer
+ * highlights (comment cards, chrome, etc.).
+ */
+function isHighlightExcluded(el: Element | null): boolean {
+  if (!el) return true
+  return !!el.closest(
+    [
+      '.plan-read-comment-host',
+      '.plan-float-highlights',
+      '.plan-float-highlight',
+      '.plan-selection-comment',
+      '.plan-selection-popup',
+      '.comment-bubble-canvas',
+      '.comment-collapsed-bar',
+      '.plan-toc',
+      'button',
+      'textarea',
+      'input',
+    ].join(','),
+  )
+}
+
+function clientRectsToPageRects(range: Range): PlanPageRect[] {
+  const sx = window.scrollX
+  const sy = window.scrollY
+  return Array.from(range.getClientRects())
+    .filter((r) => r.width > 0 && r.height > 0)
+    .map((r) => ({
+      top: r.top + sy,
+      left: r.left + sx,
+      width: r.width,
+      height: r.height,
+    }))
+}
+
+/**
+ * Re-find `quote` inside the rendered plan root and return document-space
+ * highlight rects. Used after layout shifts (e.g. deleting an inline comment)
+ * so float-composer overlays stay glued to the text.
+ */
+export function measureQuoteInRoot(root: HTMLElement, quote: string): PlanPageRect[] {
+  const needle = quote.trim()
+  if (!needle || needle.length < 2) return []
+
+  const textNodes: Text[] = []
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement
+      if (isHighlightExcluded(parent)) return NodeFilter.FILTER_REJECT
+      return node.textContent ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+    },
+  })
+  let n: Node | null
+  while ((n = walker.nextNode())) textNodes.push(n as Text)
+  if (textNodes.length === 0) return []
+
+  // Concatenate with absolute offsets for multi-node ranges.
+  let haystack = ''
+  const spans: { node: Text; start: number; end: number }[] = []
+  for (const node of textNodes) {
+    const t = node.textContent || ''
+    spans.push({ node, start: haystack.length, end: haystack.length + t.length })
+    haystack += t
+  }
+
+  const candidates = [
+    needle,
+    ...needle
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length >= 3),
+  ]
+
+  let matchStart = -1
+  let matchEnd = -1
+  for (const c of candidates) {
+    const idx = haystack.indexOf(c)
+    if (idx >= 0) {
+      matchStart = idx
+      matchEnd = idx + c.length
+      break
+    }
+  }
+
+  if (matchStart < 0) {
+    // Whitespace-collapsed fallback for soft HTML wrapping differences.
+    const softHay = haystack.replace(/\s+/g, ' ')
+    const softNeedle = needle.replace(/\s+/g, ' ')
+    const si = softHay.indexOf(softNeedle)
+    if (si < 0) return []
+    // Approximate: expand first matching raw line of the needle.
+    const first = needle.split('\n').map((l) => l.trim()).find((l) => l.length >= 3)
+    if (!first) return []
+    const fi = haystack.indexOf(first)
+    if (fi < 0) return []
+    matchStart = fi
+    matchEnd = fi + first.length
+  }
+
+  const startSpan = spans.find((s) => matchStart >= s.start && matchStart < s.end)
+  const endSpan = spans.find((s) => matchEnd > s.start && matchEnd <= s.end) ??
+    spans.find((s) => matchEnd > s.start && matchEnd - 1 < s.end)
+  if (!startSpan || !endSpan) return []
+
+  try {
+    const range = document.createRange()
+    range.setStart(startSpan.node, matchStart - startSpan.start)
+    range.setEnd(endSpan.node, Math.min(endSpan.node.textContent!.length, matchEnd - endSpan.start))
+    return clientRectsToPageRects(range)
+  } catch {
+    return []
+  }
 }

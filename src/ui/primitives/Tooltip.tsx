@@ -19,7 +19,9 @@ export function Tooltip({ children, content, side = 'bottom' }: TooltipProps) {
     <BaseTooltip.Root>
       <BaseTooltip.Trigger render={children} />
       <BaseTooltip.Portal>
-        <BaseTooltip.Positioner side={side} sideOffset={6}>
+        {/* Positioner needs the z-index — sticky headers (toolbar, plan head)
+            paint above a bare popup when only the popup carries z-index. */}
+        <BaseTooltip.Positioner className="ui-tooltip-positioner" side={side} sideOffset={6}>
           <BaseTooltip.Popup className="ui-tooltip">{content}</BaseTooltip.Popup>
         </BaseTooltip.Positioner>
       </BaseTooltip.Portal>
