@@ -23,22 +23,50 @@ export interface FloatComposerDraft {
   exactLines: string
   sectionTitle?: string
   panelPos: { left: number; top: number }
+  /** Explicit size so the panel can be resized from any edge. */
+  panelSize: { width: number; height: number }
   minimized: boolean
   /** Document-space rects for persistent highlight overlays. */
   highlightRects: PageRect[]
 }
 
-const PANEL_W = 400
-const PANEL_H_EST = 420
+export const PANEL_DEFAULT_W = 400
+export const PANEL_DEFAULT_H = 420
+const PANEL_MIN_W = 300
+const PANEL_MIN_H = 240
+const WINDOW_PAD = 12
 
-export function clampToWindow(left: number, top: number, w = PANEL_W, h = PANEL_H_EST) {
-  const pad = 12
-  const maxL = Math.max(pad, window.innerWidth - w - pad)
-  const maxT = Math.max(pad, window.innerHeight - Math.min(h, window.innerHeight - pad * 2) - pad)
-  return {
-    left: Math.min(Math.max(pad, left), maxL),
-    top: Math.min(Math.max(pad, top), maxT),
-  }
+export type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+
+export function clampPanelRect(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+): { left: number; top: number; width: number; height: number } {
+  const maxW = Math.max(PANEL_MIN_W, window.innerWidth - WINDOW_PAD * 2)
+  const maxH = Math.max(PANEL_MIN_H, window.innerHeight - WINDOW_PAD * 2)
+  let w = Math.min(Math.max(PANEL_MIN_W, width), maxW)
+  let h = Math.min(Math.max(PANEL_MIN_H, height), maxH)
+  let l = left
+  let t = top
+  // Keep fully inside the viewport.
+  if (l + w > window.innerWidth - WINDOW_PAD) l = window.innerWidth - WINDOW_PAD - w
+  if (t + h > window.innerHeight - WINDOW_PAD) t = window.innerHeight - WINDOW_PAD - h
+  if (l < WINDOW_PAD) l = WINDOW_PAD
+  if (t < WINDOW_PAD) t = WINDOW_PAD
+  // If still overflowing (tiny window), shrink to fit from top-left.
+  w = Math.min(w, window.innerWidth - WINDOW_PAD - l)
+  h = Math.min(h, window.innerHeight - WINDOW_PAD - t)
+  w = Math.max(PANEL_MIN_W, w)
+  h = Math.max(PANEL_MIN_H, h)
+  return { left: l, top: t, width: w, height: h }
+}
+
+/** Back-compat helper used by PlanReview when placing a new panel. */
+export function clampToWindow(left: number, top: number, w = PANEL_DEFAULT_W, h = PANEL_DEFAULT_H) {
+  const r = clampPanelRect(left, top, w, h)
+  return { left: r.left, top: r.top }
 }
 
 export function clientRectsToPage(range: Range): PageRect[] {
@@ -83,7 +111,7 @@ interface PlanFloatComposersProps {
 /**
  * Multi-instance floating plan comment composers with:
  * - persistent selection highlights
- * - drag + window clamp
+ * - drag + resize from all sides
  * - minimize / restore
  * - confirm before discard when draft has text
  * - Esc closes topmost (with confirm)
@@ -100,6 +128,17 @@ export function PlanFloatComposers({
     startY: number
     origLeft: number
     origTop: number
+  } | null>(null)
+
+  const resizeRef = useRef<{
+    id: string
+    edge: ResizeEdge
+    startX: number
+    startY: number
+    origLeft: number
+    origTop: number
+    origW: number
+    origH: number
   } | null>(null)
 
   const updateOne = useCallback(
@@ -130,7 +169,9 @@ export function PlanFloatComposers({
 
   const onDragStart = useCallback(
     (id: string, e: React.MouseEvent) => {
-      if ((e.target as HTMLElement).closest('button, input, textarea, select, a')) return
+      if ((e.target as HTMLElement).closest('button, input, textarea, select, a, .plan-float-resize')) {
+        return
+      }
       const c = composers.find((x) => x.id === id)
       if (!c || c.minimized) return
       e.preventDefault()
@@ -145,8 +186,18 @@ export function PlanFloatComposers({
         if (!dragRef.current || dragRef.current.id !== id) return
         const left = dragRef.current.origLeft + (ev.clientX - dragRef.current.startX)
         const top = dragRef.current.origTop + (ev.clientY - dragRef.current.startY)
-        const next = clampToWindow(left, top)
-        onChange((prev) => prev.map((x) => (x.id === id ? { ...x, panelPos: next } : x)))
+        onChange((prev) =>
+          prev.map((x) => {
+            if (x.id !== id) return x
+            const size = x.panelSize ?? { width: PANEL_DEFAULT_W, height: PANEL_DEFAULT_H }
+            const r = clampPanelRect(left, top, size.width, size.height)
+            return {
+              ...x,
+              panelPos: { left: r.left, top: r.top },
+              panelSize: { width: r.width, height: r.height },
+            }
+          }),
+        )
       }
       const onUp = () => {
         dragRef.current = null
@@ -159,12 +210,82 @@ export function PlanFloatComposers({
     [composers, onChange],
   )
 
-  // Esc: close selection is handled by parent; here close topmost non-minimized
-  // composer with confirm if dirty.
+  const onResizeStart = useCallback(
+    (id: string, edge: ResizeEdge, e: React.MouseEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const c = composers.find((x) => x.id === id)
+      if (!c || c.minimized) return
+      const size = c.panelSize ?? { width: PANEL_DEFAULT_W, height: PANEL_DEFAULT_H }
+      resizeRef.current = {
+        id,
+        edge,
+        startX: e.clientX,
+        startY: e.clientY,
+        origLeft: c.panelPos.left,
+        origTop: c.panelPos.top,
+        origW: size.width,
+        origH: size.height,
+      }
+      const onMove = (ev: MouseEvent) => {
+        const st = resizeRef.current
+        if (!st || st.id !== id) return
+        const dx = ev.clientX - st.startX
+        const dy = ev.clientY - st.startY
+        let left = st.origLeft
+        let top = st.origTop
+        let width = st.origW
+        let height = st.origH
+
+        if (st.edge.includes('e')) width = st.origW + dx
+        if (st.edge.includes('s')) height = st.origH + dy
+        if (st.edge.includes('w')) {
+          width = st.origW - dx
+          left = st.origLeft + dx
+        }
+        if (st.edge.includes('n')) {
+          height = st.origH - dy
+          top = st.origTop + dy
+        }
+
+        // Enforce min size while preserving the opposite edge.
+        if (width < PANEL_MIN_W) {
+          if (st.edge.includes('w')) left = st.origLeft + st.origW - PANEL_MIN_W
+          width = PANEL_MIN_W
+        }
+        if (height < PANEL_MIN_H) {
+          if (st.edge.includes('n')) top = st.origTop + st.origH - PANEL_MIN_H
+          height = PANEL_MIN_H
+        }
+
+        const r = clampPanelRect(left, top, width, height)
+        onChange((prev) =>
+          prev.map((x) =>
+            x.id === id
+              ? {
+                  ...x,
+                  panelPos: { left: r.left, top: r.top },
+                  panelSize: { width: r.width, height: r.height },
+                }
+              : x,
+          ),
+        )
+      }
+      const onUp = () => {
+        resizeRef.current = null
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [composers, onChange],
+  )
+
+  // Esc: close topmost non-minimized composer with confirm if dirty.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      // Prefer the last (most recently added) expanded composer.
       const open = [...composers].reverse().find((c) => !c.minimized)
       if (!open) return
       e.preventDefault()
@@ -175,29 +296,34 @@ export function PlanFloatComposers({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [composers, requestClose])
 
-  // Re-clamp all panels on resize.
+  // Re-clamp all panels on window resize.
   useEffect(() => {
     if (composers.length === 0) return
     const onResize = () => {
       onChange((prev) =>
-        prev.map((c) => ({
-          ...c,
-          panelPos: clampToWindow(c.panelPos.left, c.panelPos.top),
-        })),
+        prev.map((c) => {
+          const size = c.panelSize ?? { width: PANEL_DEFAULT_W, height: PANEL_DEFAULT_H }
+          const r = clampPanelRect(c.panelPos.left, c.panelPos.top, size.width, size.height)
+          return {
+            ...c,
+            panelPos: { left: r.left, top: r.top },
+            panelSize: { width: r.width, height: r.height },
+          }
+        }),
       )
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
-  }, [composers, onChange])
+  }, [composers.length, onChange])
 
   if (composers.length === 0 || typeof document === 'undefined') return null
 
   const minimized = composers.filter((c) => c.minimized)
   const expanded = composers.filter((c) => !c.minimized)
+  const edges: ResizeEdge[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']
 
   const layer = (
     <>
-      {/* Document-space highlights (scroll with the page). */}
       <div className="plan-float-highlights" aria-hidden="true">
         {composers.map((c) =>
           c.highlightRects.map((r, i) => (
@@ -217,6 +343,7 @@ export function PlanFloatComposers({
 
       {expanded.map((c, index) => {
         const section = c.sectionTitle
+        const size = c.panelSize ?? { width: PANEL_DEFAULT_W, height: PANEL_DEFAULT_H }
         return (
           <div
             key={c.id}
@@ -226,10 +353,19 @@ export function PlanFloatComposers({
             style={{
               left: c.panelPos.left,
               top: c.panelPos.top,
-              width: Math.min(PANEL_W, window.innerWidth - 24),
+              width: size.width,
+              height: size.height,
               zIndex: 110 + index,
             }}
           >
+            {edges.map((edge) => (
+              <div
+                key={edge}
+                className={`plan-float-resize plan-float-resize-${edge}`}
+                onMouseDown={(e) => onResizeStart(c.id, edge, e)}
+                aria-hidden="true"
+              />
+            ))}
             <div
               className="plan-selection-comment-drag"
               onMouseDown={(e) => onDragStart(c.id, e)}
@@ -262,27 +398,31 @@ export function PlanFloatComposers({
                 <X size={14} />
               </button>
             </div>
-            <div className="plan-selection-comment-context">
-              {c.selectedQuote.trim() ? (
-                <blockquote className="plan-comment-quote" cite={`L${c.lineNumber}`}>
-                  “{c.selectedQuote.trim()}”
-                </blockquote>
-              ) : null}
-              <pre className="plan-comment-source" aria-label="Source context for agent">
-                {c.sourceContext || c.exactLines || '(no source lines)'}
-              </pre>
+            <div className="plan-selection-comment-body">
+              <div className="plan-selection-comment-context">
+                {c.selectedQuote.trim() ? (
+                  <blockquote className="plan-comment-quote" cite={`L${c.lineNumber}`}>
+                    “{c.selectedQuote.trim()}”
+                  </blockquote>
+                ) : null}
+                <pre className="plan-comment-source" aria-label="Source context for agent">
+                  {c.sourceContext || c.exactLines || '(no source lines)'}
+                </pre>
+              </div>
+              <div className="plan-selection-comment-form">
+                <CommentForm
+                  draftKey={draftKey(planId, c.id)}
+                  lineContent={c.exactLines}
+                  showSeverity
+                  onSubmit={(body, severity) => {
+                    onSubmit(c, body, severity)
+                    clearDraft(draftKey(planId, c.id))
+                    onChange((prev) => prev.filter((x) => x.id !== c.id))
+                  }}
+                  onCancel={() => requestClose(c.id)}
+                />
+              </div>
             </div>
-            <CommentForm
-              draftKey={draftKey(planId, c.id)}
-              lineContent={c.exactLines}
-              showSeverity
-              onSubmit={(body, severity) => {
-                onSubmit(c, body, severity)
-                clearDraft(draftKey(planId, c.id))
-                onChange((prev) => prev.filter((x) => x.id !== c.id))
-              }}
-              onCancel={() => requestClose(c.id)}
-            />
           </div>
         )
       })}

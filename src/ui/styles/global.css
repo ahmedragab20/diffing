@@ -9160,18 +9160,103 @@ button.toolbar-last-send-btn:hover {
     background: var(--bg-elevated, var(--bg-secondary));
     box-shadow: var(--shadow-md);
 }
-/* Quote-selection composer: fixed, window-clamped, draggable by header. */
+/* Quote-selection composer: fixed, window-clamped, draggable + resizable. */
 .plan-selection-comment-floating {
     position: fixed;
     z-index: 110;
     margin: 0;
-    max-width: min(400px, calc(100vw - 24px));
-    max-height: min(70vh, 520px);
-    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    min-width: 300px;
+    min-height: 240px;
+    overflow: hidden;
     border: 1px solid var(--primary);
     box-shadow: var(--shadow-lg);
     opacity: 1;
     box-sizing: border-box;
+}
+.plan-selection-comment-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+.plan-selection-comment-form {
+    flex: 1;
+    min-height: 0;
+}
+/* Resize handles — all edges + corners */
+.plan-float-resize {
+    position: absolute;
+    z-index: 3;
+}
+.plan-float-resize-n {
+    top: 0;
+    left: 8px;
+    right: 8px;
+    height: 6px;
+    cursor: ns-resize;
+}
+.plan-float-resize-s {
+    bottom: 0;
+    left: 8px;
+    right: 8px;
+    height: 6px;
+    cursor: ns-resize;
+}
+.plan-float-resize-e {
+    top: 8px;
+    right: 0;
+    bottom: 8px;
+    width: 6px;
+    cursor: ew-resize;
+}
+.plan-float-resize-w {
+    top: 8px;
+    left: 0;
+    bottom: 8px;
+    width: 6px;
+    cursor: ew-resize;
+}
+.plan-float-resize-ne {
+    top: 0;
+    right: 0;
+    width: 12px;
+    height: 12px;
+    cursor: nesw-resize;
+}
+.plan-float-resize-nw {
+    top: 0;
+    left: 0;
+    width: 12px;
+    height: 12px;
+    cursor: nwse-resize;
+}
+.plan-float-resize-se {
+    bottom: 0;
+    right: 0;
+    width: 12px;
+    height: 12px;
+    cursor: nwse-resize;
+}
+.plan-float-resize-sw {
+    bottom: 0;
+    left: 0;
+    width: 12px;
+    height: 12px;
+    cursor: nesw-resize;
+}
+.plan-selection-comment-floating .plan-selection-comment-drag {
+    margin: 0;
+    flex-shrink: 0;
+}
+.plan-selection-comment-floating.plan-selection-comment {
+    padding: 0;
+}
+.plan-selection-comment-floating .plan-selection-comment-body {
+    padding: 10px 12px 12px;
 }
 .plan-selection-comment-drag {
     display: flex;

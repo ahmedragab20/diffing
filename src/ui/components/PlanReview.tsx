@@ -39,6 +39,8 @@ import {
   PlanFloatComposers,
   clampToWindow,
   clientRectsToPage,
+  PANEL_DEFAULT_W,
+  PANEL_DEFAULT_H,
   type FloatComposerDraft,
 } from './PlanFloatComposers'
 
@@ -515,14 +517,19 @@ export function PlanReview({
       sel && sel.rangeCount > 0 && !sel.isCollapsed ? sel.getRangeAt(0).cloneRange() : null
     const highlightRects = range ? clientRectsToPage(range) : []
 
-    const preferredLeft = selectionPopup.x - 200
+    const preferredLeft = selectionPopup.x - PANEL_DEFAULT_W / 2
     const preferredTop =
       selectionPopup.placement === 'below'
         ? selectionPopup.y + 8
-        : selectionPopup.y - 420 - 8
+        : selectionPopup.y - PANEL_DEFAULT_H - 8
     // Cascade new panels so multiple don't stack exactly.
     const cascade = floatComposers.length * 28
-    const pos = clampToWindow(preferredLeft + cascade, preferredTop + cascade)
+    const pos = clampToWindow(
+      preferredLeft + cascade,
+      preferredTop + cascade,
+      PANEL_DEFAULT_W,
+      PANEL_DEFAULT_H,
+    )
 
     const start = selectionPopup.startLine
     const end = selectionPopup.endLine
@@ -536,6 +543,7 @@ export function PlanReview({
       sourceContext: buildAgentLineContent(start, end),
       sectionTitle: sectionTitleForLine(viewingBody, start),
       panelPos: pos,
+      panelSize: { width: PANEL_DEFAULT_W, height: PANEL_DEFAULT_H },
       minimized: false,
       highlightRects,
     }
