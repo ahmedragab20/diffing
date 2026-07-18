@@ -2,36 +2,37 @@
 
 ## Unreleased
 
+## 0.7.0
+
 ### Minor Changes
 
-- Non-TUI feature roadmap: GitHub PR repair, multi-round review, suggestions, MCP/CLI lifecycle, navigation UX, agent visibility, DX tools, and PR deep parity.
+- Plan + diff review UI redesign, reliable line comments, zen reading, and TUI mouse-first work.
 
-  **GitHub PR mode (P0/P1)**
-  - Open browser at `/gh/pr` in PR mode; soft `GET /api/gh/session` returns `{ prMode: false }` outside PR so SPA boot does not 404-spam.
-  - Wire `--gh-pr` / `gh pr N` through `parseDiffOptions`; fail hard when PR session build fails (no silent local fallback).
-  - Fix `PrReviewApp` FileTree/CommentTracker contracts; local resolve for draft PR comments; fork-safe base owner/repo; dry-run never hits network; refresh preserves drafts and invalidates patch; correct `isOutdated`, multi-line sides, file-level comments, draft pending reviews, CI checks strip, and reply-to-existing GH threads with line-anchored bubbles.
+  **Plan review**
+  - Quieter reading-first chrome; centered Source / Read / Split control; icon actions with tooltips.
+  - Resizable split panes (persisted); full-width Read mode; immersive zen reading (Esc to exit).
+  - Plan shortcuts guide updated (`?` / `⌘?`); collapsed sidebar expand control centered.
 
-  **Multi-round review**
-  - Review history popover (Round N badge), “changed since last review” file chips, and outdated comment detection (badge + tracker filter; best-effort re-anchor).
+  **Diff review**
+  - Compact toolbar summary chips; icon-forward file headers; cleaner file-tree chrome.
+  - Improved send-review CTA; quieter comment canvases; expanded keyboard shortcuts help.
+  - Diff style (Unified / Split) lives in Settings (and `m`).
 
-  **Suggestions + comment model**
-  - Multi-line `apply-suggestion` via `lib/apply-suggestion.ts`; CommentForm “Suggest change”; severity labels (blocking/nit/question/praise); saved replies in global settings.
+  **Inline comments**
+  - Fix form anchoring to the correct side and line (same-side selections no longer default to additions and land at EOF).
+  - Multiline ranges normalize correctly; gutter `+` captures the line on pointerdown; composer shows a line-range label.
 
-  **MCP + CLI lifecycle**
-  - New MCP tools: `edit_comment`, `unresolve_comment`, `delete_comment`, `apply_suggestion`, `resolve_all_comments`, `get_review_history`, `report_progress`, `edit_reply`, `delete_reply`.
-  - CLI: `comment edit|delete|unresolve`, `comments --format md|xml|json`, `progress`, `doctor`, `completion <bash|zsh|fish>`.
+  **Roadmap (rolled up)**
+  - GitHub PR repair, multi-round review history, suggestions + severity + saved replies.
+  - MCP/CLI lifecycle tools (`edit`/`unresolve`/`delete`/`apply_suggestion`/`progress`/`doctor`/completions).
+  - Navigation: whitespace toggles, filter chips, deep permalinks, commit-walk bar, hybrid minimap.
+  - Agent progress toast, multi-agent waiters, markdown export.
 
-  **Diff navigation**
-  - Live whitespace toggles; file-tree filter chips; deep permalinks (`?file&line&side&comment`); commit-walk bar in show mode; hybrid minimap (header change-map + vertical density strip).
+  **Docs / branding**
+  - Remove remaining fork attribution from README and landing.
 
-  **Agent visibility + export**
-  - Markdown export from toolbar / CLI; agent progress SSE + toast; multi-agent waiter identity in the toolbar.
-
-  **DX**
-  - `diffing doctor` and shell completions. Project config intentionally deferred.
-
-  **UI polish**
-  - Compact dense file headers, severity filters in tracker, shortcuts help for review affordances, reduced-motion-friendly animations.
+  **Native TUI**
+  - Scalable mouse-first review interface (opt-in `--tui`).
 
 ## 0.6.2
 

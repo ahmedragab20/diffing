@@ -713,7 +713,6 @@ kbd {
 }
 .footer-main { color: var(--text-secondary); font-family: var(--font-mono); font-size: 13px; margin: 0 0 6px; }
 .footer-main strong { color: var(--primary); }
-.footer-fork { color: var(--text-muted); font-size: 12px; margin: 0 0 6px; }
 .footer-fine { color: var(--text-muted); font-size: 11px; margin: 0; opacity: 0.8; }
 
 /* ── Vim status bar ────────────────────────────────────────────────────── */
