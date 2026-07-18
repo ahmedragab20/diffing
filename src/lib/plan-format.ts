@@ -86,7 +86,8 @@ export function formatPlanReview(plan: Plan, options: FormatPlanReviewOptions = 
     lines.push('    - <plan-body> is the exact markdown of the plan being reviewed. Inline comments target lines within it.')
     lines.push('    - Each <comment> targets a line ("line=42"), a range ("line=12-15"), or the whole plan ("line=plan").')
     lines.push('      "section" names the nearest markdown heading for context. Only address comments with status="open".')
-    lines.push('    - <context> contains the exact plan text the comment is anchored to.')
+    lines.push('    - <context> is structured: <quote> is the exact text the human highlighted (when present);')
+    lines.push('      <source line="N" end-line="M"> is the full plan source line(s). Prefer <quote> when deciding what they meant.')
     lines.push('')
     lines.push('    HOW TO RESPOND:')
     lines.push('    - If approved: proceed with the work.')
@@ -130,8 +131,22 @@ export function formatPlanReview(plan: Plan, options: FormatPlanReviewOptions = 
       lines.push(
         `      <comment id="${escapeAttr(comment.id)}" line="${lineLabel(comment)}"${sectionAttr} status="${comment.status}" created-at="${isoDate}"${versionAttr}>`,
       )
-      if (comment.lineNumber !== 0 && comment.lineContent) {
-        lines.push(`        <context><![CDATA[${comment.lineContent}]]></context>`)
+      if (comment.lineNumber !== 0 && (comment.lineContent || comment.selectedQuote)) {
+        const start = comment.startLineNumber && comment.startLineNumber !== comment.lineNumber
+          ? comment.startLineNumber
+          : comment.lineNumber
+        const end = comment.lineNumber
+        const endAttr = end !== start ? ` end-line="${end}"` : ''
+        lines.push(`        <context line="${start}"${endAttr}>`)
+        if (comment.selectedQuote?.trim()) {
+          lines.push(`          <quote><![CDATA[${comment.selectedQuote.trim()}]]></quote>`)
+        }
+        if (comment.lineContent) {
+          lines.push(
+            `          <source line="${start}"${endAttr}><![CDATA[${comment.lineContent}]]></source>`,
+          )
+        }
+        lines.push('        </context>')
       }
       lines.push(`        <body><![CDATA[${comment.body}]]></body>`)
 

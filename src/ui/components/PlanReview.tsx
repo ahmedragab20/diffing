@@ -60,6 +60,8 @@ interface PlanReviewProps {
 interface PendingComment {
   lineNumber: number
   startLineNumber?: number
+  /** Exact text the user highlighted in the rendered pane (agent quote). */
+  selectedQuote?: string
 }
 
 type PlanAnnotationMeta = PlanComment | { _pending: true }
@@ -248,12 +250,18 @@ export function PlanReview({
   const lineRange = (start: number | undefined, end: number) => extractPlanLines(viewingBody, start ?? end, end)
 
   const commitComment = (p: PendingComment, body: string) => {
+    const start = p.startLineNumber ?? p.lineNumber
+    const sourceLines = lineRange(p.startLineNumber, p.lineNumber)
+    const quote = p.selectedQuote?.trim()
     addPlanComment({
       planId: plan.id,
       lineNumber: p.lineNumber,
       startLineNumber: p.startLineNumber,
-      lineContent: lineRange(p.startLineNumber, p.lineNumber),
-      sectionTitle: sectionTitleForLine(viewingBody, p.startLineNumber ?? p.lineNumber),
+      // Full source line(s) for re-anchoring + agent <source>.
+      lineContent: sourceLines,
+      // Exact highlight so the agent sees what the human pointed at.
+      selectedQuote: quote && quote !== sourceLines.trim() ? quote : quote || undefined,
+      sectionTitle: sectionTitleForLine(viewingBody, start),
       body,
       createdAtPlanVersion: viewingVersion,
     })
@@ -280,7 +288,7 @@ export function PlanReview({
       return (
         <CommentForm
           draftKey={`plan-new:${plan.id}:${p.startLineNumber ?? p.lineNumber}:${p.lineNumber}`}
-          lineContent={lineRange(p.startLineNumber, p.lineNumber)}
+          lineContent={formatPendingContext(p, viewingBody)}
           onSubmit={(body) => commitComment(p, body)}
           onCancel={() => {
             setPending(null)
@@ -453,6 +461,7 @@ export function PlanReview({
         selectionPopup.startLine !== selectionPopup.endLine
           ? selectionPopup.startLine
           : undefined,
+      selectedQuote: selectionPopup.text,
     })
     setLiveSelectionCount(
       Math.abs(selectionPopup.endLine - selectionPopup.startLine) + 1,
@@ -581,10 +590,11 @@ export function PlanReview({
               {pending.startLineNumber && pending.startLineNumber !== pending.lineNumber
                 ? `s ${pending.startLineNumber}–${pending.lineNumber}`
                 : ` ${pending.lineNumber}`}
+              {pending.selectedQuote ? ' · selected quote' : ''}
             </div>
             <CommentForm
               draftKey={`plan-new:${plan.id}:${pending.startLineNumber ?? pending.lineNumber}:${pending.lineNumber}`}
-              lineContent={lineRange(pending.startLineNumber, pending.lineNumber)}
+              lineContent={formatPendingContext(pending, viewingBody)}
               onSubmit={(body) => commitComment(pending, body)}
               onCancel={() => {
                 setPending(null)
@@ -920,6 +930,28 @@ export function PlanReview({
       />
     </div>
   )
+}
+
+/** Preview string for the comment form: quote + source lines for the human. */
+function formatPendingContext(
+  p: { lineNumber: number; startLineNumber?: number; selectedQuote?: string },
+  body: string,
+): string {
+  const start = p.startLineNumber ?? p.lineNumber
+  const source = extractPlanLines(body, start, p.lineNumber)
+  const section = sectionTitleForLine(body, start)
+  const parts: string[] = []
+  if (section) parts.push(`§ ${section}`)
+  parts.push(
+    p.startLineNumber && p.startLineNumber !== p.lineNumber
+      ? `L${p.startLineNumber}–${p.lineNumber}`
+      : `L${p.lineNumber}`,
+  )
+  const header = parts.join(' · ')
+  if (p.selectedQuote?.trim()) {
+    return `${header}\nSelected: “${p.selectedQuote.trim()}”\nSource:\n${source}`
+  }
+  return source ? `${header}\n${source}` : header
 }
 
 function buildPlanCSS(tabSize: number, fontSize: number, fontFamily: string): string {

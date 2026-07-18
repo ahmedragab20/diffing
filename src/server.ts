@@ -1364,11 +1364,16 @@ export function createApp(
     // viewer), but the server's value is authoritative.
     const createdAtPlanVersion =
       Number.isFinite(body.createdAtPlanVersion) ? Number(body.createdAtPlanVersion) : plan.version
+    const selectedQuote =
+      typeof body.selectedQuote === 'string' && body.selectedQuote.trim()
+        ? body.selectedQuote.trim()
+        : undefined
     const comment = {
       id: crypto.randomUUID(),
       lineNumber,
       startLineNumber,
       lineContent,
+      selectedQuote,
       sectionTitle,
       body: body.body,
       status: 'open' as const,

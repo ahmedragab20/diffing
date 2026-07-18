@@ -64,8 +64,31 @@ describe('formatPlanReview', () => {
       ],
     })
     expect(out).toContain('<comment id="c1" line="4" section="Phase 1" status="open" created-at="1970-01-01T00:00:03.000Z" plan-version="1">')
-    expect(out).toContain('<context><![CDATA[Do the first thing]]></context>')
+    expect(out).toContain('<context line="4">')
+    expect(out).toContain('<source line="4"><![CDATA[Do the first thing]]></source>')
     expect(out).toContain('<body><![CDATA[Clarify this]]></body>')
+  })
+
+  it('emits structured quote + source when selectedQuote is set', () => {
+    const out = formatPlanReview({
+      ...base,
+      comments: [
+        {
+          id: 'c1',
+          lineNumber: 4,
+          lineContent: 'Do the first thing',
+          selectedQuote: 'first thing',
+          sectionTitle: 'Phase 1',
+          body: 'Be more specific',
+          status: 'open',
+          createdAt: 3000,
+          createdAtPlanVersion: 1,
+          replies: [],
+        },
+      ],
+    })
+    expect(out).toContain('<quote><![CDATA[first thing]]></quote>')
+    expect(out).toContain('<source line="4"><![CDATA[Do the first thing]]></source>')
   })
 
   it('renders a range comment and a whole-plan comment label', () => {

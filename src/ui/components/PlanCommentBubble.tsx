@@ -168,12 +168,30 @@ export function PlanCommentBubble({
             )}
           </div>
 
+          {(comment.selectedQuote || comment.lineContent) && !isEditing && (
+            <div className="plan-comment-context" title="Anchored plan context for the agent">
+              {comment.selectedQuote && (
+                <blockquote className="plan-comment-quote">
+                  “{comment.selectedQuote}”
+                </blockquote>
+              )}
+              {comment.lineContent &&
+                comment.lineContent.trim() !== comment.selectedQuote?.trim() && (
+                  <pre className="plan-comment-source">{comment.lineContent}</pre>
+                )}
+            </div>
+          )}
+
           {isEditing ? (
             <div style={{ marginTop: '8px' }}>
               <CommentForm
                 draftKey={`plan-edit:${comment.id}`}
                 initialBody={comment.body}
-                lineContent={comment.lineContent}
+                lineContent={
+                  comment.selectedQuote
+                    ? `Selected: “${comment.selectedQuote}”\nSource:\n${comment.lineContent}`
+                    : comment.lineContent
+                }
                 onSubmit={(newBody) => {
                   onEdit(newBody)
                   setIsEditing(false)

@@ -28,8 +28,17 @@ export interface PlanComment {
   lineNumber: number
   /** Start of a multi-line selection (inclusive). Omitted for single lines. */
   startLineNumber?: number
-  /** Snapshot of the anchored plan text, for context in the handoff XML. */
+  /**
+   * Snapshot of the full source line(s) the comment is anchored to (1-based
+   * range). Always the raw plan markdown lines — not the rendered HTML.
+   */
   lineContent: string
+  /**
+   * Exact user highlight from the rendered pane, when the comment was created
+   * via text selection. Agents should treat this as the primary quote the
+   * human pointed at; `lineContent` is the surrounding source line(s).
+   */
+  selectedQuote?: string
   /** Nearest preceding markdown heading, captured so the agent knows the section. */
   sectionTitle?: string
   body: string

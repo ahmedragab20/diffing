@@ -29,6 +29,8 @@ interface AddCommentParams {
   lineNumber: number
   startLineNumber?: number
   lineContent: string
+  /** Exact rendered-pane highlight the human selected (optional). */
+  selectedQuote?: string
   sectionTitle?: string
   body: string
   /**

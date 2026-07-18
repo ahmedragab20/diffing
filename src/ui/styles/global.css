@@ -9117,16 +9117,17 @@ button.toolbar-last-send-btn:hover {
     padding: 0 12px;
     border-radius: var(--radius-round, 999px);
     border: 1px solid var(--primary);
-    background: var(--bg-primary);
+    /* Fully opaque solid surface — never fade into the plan text behind */
+    background: var(--bg-elevated, var(--bg-secondary));
     color: var(--primary);
     font-size: 12px;
     font-weight: 700;
     font-family: inherit;
     box-shadow: var(--shadow-lg);
     cursor: pointer;
-    /* Isolate from text so the chip never paints under the highlight */
     pointer-events: auto;
     white-space: nowrap;
+    opacity: 1 !important;
 }
 /* Below selection (default): anchor is top of chip at last-rect bottom + gap */
 .plan-selection-popup-below {
@@ -9136,13 +9137,20 @@ button.toolbar-last-send-btn:hover {
 .plan-selection-popup-above {
     transform: translate(-50%, -100%);
 }
-.plan-selection-popup:hover {
-    background: var(--accent-subtle);
+/* Keep opacity and fill stable on hover — only strengthen the border */
+.plan-selection-popup:hover,
+.plan-selection-popup:focus-visible {
+    opacity: 1 !important;
+    background: var(--bg-elevated, var(--bg-secondary));
+    border-color: var(--primary);
+    color: var(--primary);
+    filter: none;
 }
 .plan-selection-popup-lines {
     font-weight: 600;
     color: var(--text-muted);
     font-size: 11px;
+    opacity: 1;
 }
 .plan-selection-comment {
     margin-top: 16px;
@@ -9156,6 +9164,35 @@ button.toolbar-last-send-btn:hover {
     font-weight: 600;
     color: var(--text-secondary);
     margin-bottom: 8px;
+}
+.plan-comment-context {
+    margin: 8px 0 10px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    border-left: 3px solid var(--primary);
+    background: var(--bg-tertiary);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.plan-comment-quote {
+    margin: 0;
+    padding: 0;
+    border: none;
+    font-size: 12.5px;
+    font-style: italic;
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+.plan-comment-source {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.4;
 }
 
 /* Comments map rail */
