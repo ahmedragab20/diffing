@@ -177,21 +177,27 @@ export function SendReviewPopover({
             waitingAgents.length > 0
               ? `Waiting: ${waitingAgents.map((a) => a.label || a.model || a.id.slice(0, 8)).join(', ')}`
               : agentWaiting
-                ? 'An agent is connected and waiting'
-                : 'Submit your review to a waiting agent'
+                ? 'Agent waiting for your review'
+                : 'Submit review to agent'
           }
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          aria-label={
+            sending
+              ? 'Sending review'
+              : count > 0
+                ? `Send review with ${count} comment${count === 1 ? '' : 's'}`
+                : 'Send review to agent'
+          }
         >
           {agentWaiting && <span className="agent-waiting-dot" aria-hidden="true" />}
-          <Bot size={14} />
+          <Bot size={14} aria-hidden="true" />
           <span className="btn-label">
             {sending
               ? 'Sending…'
               : waitingAgents.length > 1
-                ? `Send to ${waitingAgents.length} agents${count > 0 ? ` (${count})` : ''}`
+                ? `Send (${waitingAgents.length})`
                 : count > 0
-                  ? `Send to agent (${count})`
-                  : 'Send to agent'}
+                  ? `Send (${count})`
+                  : 'Send review'}
           </span>
         </button>
       }
@@ -200,7 +206,7 @@ export function SendReviewPopover({
         <div className="srp-resize-handle-left" onMouseDown={startLeftResize} role="separator" aria-orientation="vertical" aria-label="Resize submit panel width" tabIndex={0} />
         <div className="srp-head">
           <Bot size={15} aria-hidden="true" />
-          <span className="srp-title">Send review to agent</span>
+          <span className="srp-title">Submit review</span>
           <div className="srp-size-presets" role="group" aria-label="Panel size">
             {SUBMIT_PANEL_PRESETS.map((p, i) => (
               <button
@@ -216,7 +222,9 @@ export function SendReviewPopover({
               </button>
             ))}
           </div>
-          <span className="srp-count">{count} comment{count === 1 ? '' : 's'}</span>
+          {count > 0 && (
+            <span className="srp-count">{count} comment{count === 1 ? '' : 's'}</span>
+          )}
         </div>
 
         {waitingAgents.length > 0 && (

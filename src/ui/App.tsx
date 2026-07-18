@@ -869,6 +869,18 @@ export function App() {
             clearTimeout(bufferTimeout);
             const key = e.key;
 
+            // ⌘? / Ctrl+? — open shortcuts guide
+            if (
+                (e.metaKey || e.ctrlKey) &&
+                (key === '?' || (key === '/' && e.shiftKey) || (e.code === 'Slash' && e.shiftKey))
+            ) {
+                e.preventDefault();
+                setShortcutsHelpOpen(true);
+                fireFeedback('medium', 'open');
+                keyBuffer = '';
+                return;
+            }
+
             if (e.ctrlKey) {
                 if (key === 'd') {
                     e.preventDefault();

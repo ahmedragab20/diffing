@@ -68,7 +68,8 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       title: 'Views & Formatting',
       icon: <MessageSquare size={15} />,
       items: [
-        { keys: ['m'], description: 'Toggle Diff Style (Split / Unified)' },
+        { keys: ['m'], description: 'Toggle Diff Style (Unified ↔ Split)' },
+        { keys: ['UI'], description: 'Toolbar Unified / Split switches the same modes' },
         { keys: ['t'], description: 'Cycle Tab Indentation Size (2 → 4 → 8)' },
         { keys: ['w'], description: 'Toggle Soft-Wrap Long Lines' },
         { keys: ['n'], description: 'Toggle Line Numbers' },
@@ -81,11 +82,26 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       title: 'Review & Comments',
       icon: <MessageSquare size={15} />,
       items: [
+        { keys: ['UI'], description: 'Select lines or gutter + to start an inline comment' },
+        { keys: ['v'], description: 'Toggle Viewed on the active file (collapses card)' },
+        { keys: ['UI'], description: 'File header icons: expand context · edit · file comment' },
         { keys: ['UI'], description: 'Round badge → open review history timeline' },
-        { keys: ['UI'], description: 'File-tree chips: Unviewed · Comments · Since last · status' },
+        { keys: ['UI'], description: 'File-tree chips: Unviewed · Comments · Since last' },
         { keys: ['UI'], description: 'Comment form “Suggest change” inserts ```suggestion fence' },
         { keys: ['click #'], description: 'Line number copies a deep permalink (?file&line&side)' },
-        { keys: ['UI'], description: 'Minimap: header change-map + density strip scroll targets' },
+        { keys: ['UI'], description: 'Minimap: change-map + density strip scroll targets' },
+        { keys: ['UI'], description: 'Send review: pick verdict, optional note, hand off to agent' },
+      ],
+    },
+    {
+      title: 'Dialogs & Settings',
+      icon: <Keyboard size={15} />,
+      items: [
+        { keys: ['?'], description: 'Open Keyboard Shortcuts Guide' },
+        { keys: ['⌘', ','], description: 'Open Settings' },
+        { keys: ['⌘', 'K'], description: 'Open Search Palette' },
+        { keys: ['g', 't'], description: 'Open Theme Selection Modal' },
+        { keys: ['Esc'], description: 'Close preview / dialog / this guide' },
       ],
     },
   ]

@@ -420,60 +420,57 @@ export const FileDiffCard = memo(function FileDiffCard({
 
         <div className="file-diff-header-right" onClick={(e) => e.stopPropagation()}>
           {canExpandContext && (
-            <button
-              className={`file-diff-edit-btn ${contextExpanded ? 'btn-active' : ''}`}
-              onClick={() => setContextExpanded((v) => !v)}
-              disabled={contentsLoading}
-              title={
+            <Tooltip
+              content={
                 contextExpanded
-                  ? 'Hide unchanged context (use original patch render)'
-                  : 'Load full file so unchanged context becomes expandable'
+                  ? 'Hide unchanged context'
+                  : 'Expand full-file context'
               }
-              aria-label={
-                contentsLoading
-                  ? 'Loading context'
-                  : contextExpanded
-                    ? 'Hide context'
-                    : 'Expand context'
-              }
+              side="bottom"
             >
-              {contentsLoading ? <Loader2 size={12} className="spin" /> : <Maximize2 size={12} />}
-              <span>
-                {contentsLoading
-                  ? 'Loading…'
-                  : contextExpanded
-                    ? 'Collapse'
-                    : 'Expand'}
-              </span>
-            </button>
+              <button
+                className={`file-diff-icon-btn ${contextExpanded ? 'is-active' : ''}`}
+                onClick={() => setContextExpanded((v) => !v)}
+                disabled={contentsLoading}
+                aria-label={
+                  contentsLoading
+                    ? 'Loading context'
+                    : contextExpanded
+                      ? 'Hide context'
+                      : 'Expand context'
+                }
+              >
+                {contentsLoading ? <Loader2 size={13} className="spin" /> : <Maximize2 size={13} />}
+              </button>
+            </Tooltip>
           )}
           {fileDiff.type !== 'deleted' && (
-            <button
-              className="file-diff-edit-btn"
-              onClick={handleOpenEditor}
-              disabled={opening}
-              title="Open and edit full file locally"
-              aria-label={opening ? 'Opening file' : 'Edit file'}
-            >
-              <Edit3 size={12} />
-              <span>{opening ? 'Opening…' : 'Edit'}</span>
-            </button>
+            <Tooltip content="Open in editor" side="bottom">
+              <button
+                className="file-diff-icon-btn"
+                onClick={handleOpenEditor}
+                disabled={opening}
+                aria-label={opening ? 'Opening file' : 'Edit file'}
+              >
+                {opening ? <Loader2 size={13} className="spin" /> : <Edit3 size={13} />}
+              </button>
+            </Tooltip>
           )}
-          <button
-            className="file-diff-edit-btn"
-            onClick={() => {
-              setCollapsed(false)
-              setShowFileCommentForm(true)
-            }}
-            title="Comment on this entire file"
-            aria-label="Add file comment"
-          >
-            <MessageSquare size={12} />
-            <span>Comment</span>
-          </button>
+          <Tooltip content="Comment on entire file" side="bottom">
+            <button
+              className="file-diff-icon-btn"
+              onClick={() => {
+                setCollapsed(false)
+                setShowFileCommentForm(true)
+              }}
+              aria-label="Add file comment"
+            >
+              <MessageSquare size={13} />
+            </button>
+          </Tooltip>
           <label
             className={`viewed-label ${viewed ? 'viewed-checked' : ''}`}
-            title={viewed ? 'Mark as unviewed' : 'Mark as viewed'}
+            title={viewed ? 'Mark unviewed · v' : 'Mark viewed · v'}
           >
             <input
               type="checkbox"
@@ -497,15 +494,16 @@ export const FileDiffCard = memo(function FileDiffCard({
 
       {!collapsed && fileDiff.hunks.length > 0 && (
         <div className="file-diff-hunk-actions" onClick={(e) => e.stopPropagation()}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span className="file-diff-hunk-actions-label" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-              Selective Revert
+          <div className="file-diff-hunk-actions-meta">
+            <span className="file-diff-hunk-actions-label">
+              Revert hunks
             </span>
-            <Tooltip content="Selective Revert lets you preview and undo specific blocks of changes (hunks) in this file using 'git apply --reverse'." side="top">
-              <HelpCircle size={12} style={{ color: 'var(--text-muted)', cursor: 'help' }} />
+            <Tooltip content="Preview and undo specific change blocks via git apply --reverse" side="top">
+              <HelpCircle size={12} className="file-diff-hunk-help" />
             </Tooltip>
-            <span style={{ color: 'var(--text-muted)', fontSize: '11px', margin: '0 4px' }}>·</span>
-            <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>{fileDiff.hunks.length} block{fileDiff.hunks.length !== 1 ? 's' : ''} available</span>
+            <span className="file-diff-hunk-count">
+              {fileDiff.hunks.length} block{fileDiff.hunks.length !== 1 ? 's' : ''}
+            </span>
           </div>
           <div className="file-diff-hunk-actions-buttons">
             {fileDiff.hunks.map((h, i) => (

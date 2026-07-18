@@ -1,5 +1,18 @@
 import { useState, useEffect, memo } from 'react'
-import { GitBranch, Settings, Palette, Search, ClipboardList, Type, Menu, LayoutGrid, Sparkles, CheckCheck } from 'lucide-react'
+import {
+  GitBranch,
+  Settings,
+  Palette,
+  Search,
+  ClipboardList,
+  Type,
+  Menu,
+  LayoutGrid,
+  Sparkles,
+  CheckCheck,
+  Columns2,
+  Rows3,
+} from 'lucide-react'
 import type { DiffOptions } from '../hooks/useDiff'
 import type {
   LineDiffType,
@@ -240,8 +253,14 @@ export const Toolbar = memo(function Toolbar({
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [])
 
+  const filesLabel = showMode
+    ? `${showCommitCount} commit${showCommitCount === 1 ? '' : 's'}`
+    : fileCount === totalFileCount
+      ? `${fileCount} file${fileCount !== 1 ? 's' : ''}`
+      : `${fileCount}/${totalFileCount} files`
+
   return (
-    <header className="toolbar" role="banner">
+    <header className="toolbar diff-app-toolbar" role="banner">
       <div className="toolbar-left">
         {onToggleSidebar && (
           <button
@@ -249,56 +268,74 @@ export const Toolbar = memo(function Toolbar({
             onClick={onToggleSidebar}
             aria-label={sidebarCollapsed ? 'Open file tree' : 'Close file tree'}
             aria-expanded={!sidebarCollapsed}
-            title={sidebarCollapsed ? 'Open sidebar' : 'Close sidebar'}
+            title={sidebarCollapsed ? 'Open sidebar · b' : 'Close sidebar · b'}
           >
             <Menu size={18} />
           </button>
         )}
         <div className="toolbar-brand">
-          <BrandMark size={22} className="toolbar-brand-mark" />
-          <h1 className="toolbar-title">{repoName || 'diffing'}</h1>
+          <BrandMark size={20} className="toolbar-brand-mark" />
+          <div className="toolbar-brand-text">
+            <h1 className="toolbar-title">{repoName || 'diffing'}</h1>
+            {branch && (
+              <span className="toolbar-branch-inline" title={branch}>
+                <GitBranch size={11} aria-hidden="true" />
+                {branch}
+              </span>
+            )}
+          </div>
         </div>
-        {branch && (
-          <span className="toolbar-branch">
-            <GitBranch size={12} />
-            {branch}
-          </span>
-        )}
-        <span className="toolbar-stat">
-          {showMode ? (
-            <>
-              showing{' '}
-              <strong className="toolbar-stat-count">
-                {showCommitCount}
-              </strong>{' '}
-              commit{showCommitCount === 1 ? '' : 's'}
-              {additions > 0 && <span className="stat-additions"> +{additions}</span>}
-              {deletions > 0 && <span className="stat-deletions"> -{deletions}</span>}
-            </>
-          ) : (
-            <>
-              {fileCount === totalFileCount ? (
-                <>
-                  {fileCount} file{fileCount !== 1 ? 's' : ''} changed
-                </>
-              ) : (
-                <>
-                  {fileCount} of {totalFileCount} files changed
-                </>
-              )}
-              {additions > 0 && <span className="stat-additions"> +{additions}</span>}
-              {deletions > 0 && <span className="stat-deletions"> -{deletions}</span>}
-            </>
+        <div className="toolbar-meta" aria-label="Diff summary">
+          <span className="toolbar-chip">{filesLabel}</span>
+          {(additions > 0 || deletions > 0) && (
+            <span className="toolbar-chip toolbar-chip-diff">
+              {additions > 0 && <span className="stat-additions">+{additions}</span>}
+              {deletions > 0 && <span className="stat-deletions">−{deletions}</span>}
+            </span>
           )}
-        </span>
-        {lastSend && lastSend.round > 0 && (
-          <ReviewHistoryPopover lastRound={lastSend.round} />
-        )}
+          {commentCount > 0 && (
+            <span className="toolbar-chip toolbar-chip-comments">
+              {commentCount} open
+            </span>
+          )}
+          {lastSend && lastSend.round > 0 && (
+            <ReviewHistoryPopover lastRound={lastSend.round} />
+          )}
+        </div>
       </div>
+
+      <div className="diff-view-toggle" role="group" aria-label="Diff layout">
+        <button
+          type="button"
+          className={`diff-view-toggle-btn ${diffStyle === 'unified' ? 'is-active' : ''}`}
+          aria-pressed={diffStyle === 'unified'}
+          title="Unified diff · m"
+          onClick={() => onDiffStyleChange('unified')}
+        >
+          <Rows3 size={13} aria-hidden="true" />
+          <span>Unified</span>
+        </button>
+        <button
+          type="button"
+          className={`diff-view-toggle-btn ${diffStyle === 'split' ? 'is-active' : ''}`}
+          aria-pressed={diffStyle === 'split'}
+          title="Split diff · m"
+          onClick={() => onDiffStyleChange('split')}
+        >
+          <Columns2 size={13} aria-hidden="true" />
+          <span>Split</span>
+        </button>
+      </div>
+
       <div className="toolbar-right">
-        <button className="btn btn-sm toolbar-search-btn" onClick={onOpenSearch} title="Search (⌘K)">
-          <Search size={14} style={{ marginRight: '6px' }} />
-          <span>Search</span>
+        <button
+          className="btn btn-sm toolbar-search-btn"
+          onClick={onOpenSearch}
+          title="Search files, text, symbols (⌘K)"
+          aria-label="Search"
+        >
+          <Search size={14} />
+          <span className="btn-label">Search</span>
           <kbd className="toolbar-search-kbd">⌘K</kbd>
         </button>
         {planCount > 0 && (
@@ -307,14 +344,16 @@ export const Toolbar = memo(function Toolbar({
             onClick={onOpenPlans}
             title={
               pendingPlanCount > 0
-                ? `${pendingPlanCount} plan${pendingPlanCount === 1 ? '' : 's'} awaiting your review`
-                : 'Review agent plans'
+                ? `${pendingPlanCount} plan${pendingPlanCount === 1 ? '' : 's'} awaiting review`
+                : 'Open plan review'
             }
           >
             {pendingPlanCount > 0 && <span className="agent-waiting-dot" aria-hidden="true" />}
-            <ClipboardList size={14} style={{ marginRight: '6px' }} />
-            <span>Plans</span>
-            {pendingPlanCount > 0 && <span className="toolbar-plans-badge">{pendingPlanCount}</span>}
+            <ClipboardList size={14} />
+            <span className="btn-label">Plans</span>
+            {pendingPlanCount > 0 && (
+              <span className="toolbar-plans-badge">{pendingPlanCount}</span>
+            )}
           </button>
         )}
 
@@ -332,24 +371,27 @@ export const Toolbar = memo(function Toolbar({
                 onResolveAllOpen()
               }
             }}
-            title="Mark every open comment as resolved"
+            title="Resolve all open comments"
           >
-            <CheckCheck size={14} style={{ marginRight: '6px' }} />
-            <span>Resolve all</span>
+            <CheckCheck size={14} />
+            <span className="btn-label">Resolve all</span>
           </button>
         )}
 
-
-        {/* Settings */}
         <Popover
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
           ariaLabel="Settings"
           className="settings-popover"
           trigger={
-          <button className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`} title="Settings">
-            <Settings size={14} /> <span className="btn-label">Settings</span>
-          </button>
+            <button
+              className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`}
+              title="Settings (⌘,)"
+              aria-label="Settings"
+            >
+              <Settings size={14} />
+              <span className="btn-label">Settings</span>
+            </button>
           }
         >
           <div className="popover-scroll settings-panel">
@@ -554,19 +596,7 @@ export const Toolbar = memo(function Toolbar({
                 ariaLabel="Preferred IDE"
               />
             </div>
-            <div className="settings-section-label">Review Options</div>
-            <div className="settings-item settings-item-spaced">
-              <span>Diff style</span>
-              <Select
-                value={diffStyle}
-                onValueChange={(v) => onDiffStyleChange(v as 'split' | 'unified')}
-                options={[
-                  { value: 'split', label: 'Split' },
-                  { value: 'unified', label: 'Unified' },
-                ]}
-                ariaLabel="Diff style"
-              />
-            </div>
+            <div className="settings-section-label">Appearance</div>
             <div className="settings-item settings-item-spaced">
               <span>Theme</span>
               <button

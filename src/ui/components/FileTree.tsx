@@ -260,20 +260,18 @@ export const FileTree = memo(function FileTree({
 
   if (collapsed) {
     return (
-      <div className="ft">
-        <div className="ft-search">
-          {onToggleCollapse && (
-            <Tooltip content="Expand sidebar" side="right">
-              <button
-                className="sidebar-toggle"
-                onClick={onToggleCollapse}
-                aria-label="Expand sidebar"
-              >
-                <PanelLeftOpen size={16} />
-              </button>
-            </Tooltip>
-          )}
-        </div>
+      <div className="ft ft-collapsed">
+        {onToggleCollapse && (
+          <Tooltip content="Expand sidebar · b" side="right">
+            <button
+              className="sidebar-toggle"
+              onClick={onToggleCollapse}
+              aria-label="Expand sidebar"
+            >
+              <PanelLeftOpen size={16} />
+            </button>
+          </Tooltip>
+        )}
       </div>
     )
   }
@@ -286,10 +284,10 @@ export const FileTree = memo(function FileTree({
 
   return (
     <div className="ft" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div className="ft-search" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '10px' }}>
+      <div className="ft-chrome">
         <div className="ft-search-row">
           {onToggleCollapse && (
-            <Tooltip content="Collapse sidebar" side="right">
+            <Tooltip content="Collapse sidebar · b" side="right">
               <button
                 className="sidebar-toggle"
                 onClick={onToggleCollapse}
@@ -300,13 +298,14 @@ export const FileTree = memo(function FileTree({
             </Tooltip>
           )}
           <div className="ft-search-wrapper">
-            <Search size={14} className="ft-search-icon" />
+            <Search size={14} className="ft-search-icon" aria-hidden="true" />
             <input
               type="text"
-              placeholder="Filter files..."
+              placeholder="Filter files…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               className="ft-search-input"
+              aria-label="Filter files"
             />
           </div>
         </div>
@@ -410,7 +409,7 @@ export const FileTree = memo(function FileTree({
         {hiddenFiles > 0 && (
           <div className="ft-filter-status">
             <span className="ft-filter-status-text" title={filterLabel}>
-              Showing {shownFiles} of {totalFiles} files
+              {shownFiles} of {totalFiles}
             </span>
           </div>
         )}
