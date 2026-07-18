@@ -465,6 +465,7 @@ tree, and push your review back to GitHub when you're done. The "Send to
 agent" handoff is **structurally absent** in PR mode — there's no way to
 accidentally route a PR review to a coding agent.
 
+<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/c581f93d-92bc-44dc-ba7c-3d673395f39f" />
 <img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/efb894d8-2815-445e-b587-8397074e6ef2" />
 <img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/6906b216-a1c2-44e0-85c4-6fadad6245de" />
 
