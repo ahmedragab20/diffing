@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+## 0.9.0
+
+### Minor Changes
+
+- fcada85: Rebuild GitHub pull-request review as a first-class review surface.
+
+  **Local-review parity**
+
+  - Use the full file tree, extension/comment/viewed filters, search palette,
+    shared themes and fonts, density and diff settings, status bar, and local
+    review navigation/comment keymaps in `/gh/pr`.
+  - Move PR identity, diff stats, draft count, and live check status into a
+    compact summary so the action toolbar stays focused and responsive.
+  - Keep remote PR safety boundaries: local editor/revert actions and the
+    "Send to agent" handoff remain unavailable.
+
+  **GitHub conversations and review activity**
+
+  - Anchor published GitHub threads beneath their current diff lines; route
+    outdated or unavailable anchors to file-level context.
+  - Synchronize replies, edits, deletes, resolve, and reopen in both directions
+    through GitHub REST/GraphQL, with refresh-on-focus and a 30-second visible
+    page interval.
+  - Render GitHub suggestion fences as before/after previews, including
+    multi-line source ranges.
+  - Add review activity navigation for approval, request-changes, comment-only,
+    pending, and dismissed review events with author, verdict, time, Markdown
+    body, and GitHub link.
+
+  **Reliable submission flow**
+
+  - Submit native multi-line anchors and support Approve, Comment, Request
+    changes, and Save as draft from the redesigned review panel.
+  - Fix hanging `gh api --input -` submission/reply transports with explicit
+    stdin closure, timeouts, and output limits.
+  - Promote submitted local drafts into published GitHub context and show the
+    overall review note immediately while GitHub history catches up.
+  - Make success feedback opaque and page-local so dismiss/reload never revives
+    a historical toast.
+
+  **Docs and coverage**
+
+  - Update README and CLI/API documentation for synchronization, review
+    activity, payload mapping, storage, endpoints, and corrected headless CLI
+    examples.
+  - Add transport, server, component, keymap, anchoring, checks, activity, and
+    submission regression coverage.
+  - Clean stale server chunks before rebuilding the web client so release
+    packages contain only the current production artifacts.
+
 ## 0.8.0
 
 ### Minor Changes
@@ -9,6 +59,7 @@
 - Live plan editing on the plan review page (`/plan`).
 
   **Edit the plan in the browser**
+
   - Enter Edit (`e` or pencil) on the current version: Source becomes a line-numbered markdown editor with live Read preview (prefers Split).
   - Debounced **autosave** via existing `PUT /api/plans/:id` — mutates the current version only (no version bump, decision preserved); rewrites `plan-sources/<id>.md`.
   - **⌘/Ctrl+S** flushes autosave immediately; status chip shows Unsaved / Saving / Saved / error.
@@ -17,20 +68,24 @@
   - New comments are disabled in edit mode; existing threads remain resolvable.
 
   **Split pane + face-sync**
+
   - Edit + Split locks Source and Read to independent viewport-height scrollers so the caret does not jump.
   - Active Source line faces the matching Read segment by scrolling **only** the Read pane (never `window.scrollTo`).
 
   **Discard edits**
+
   - **Original** snapshot is pinned on first enter for a plan version (survives exit/re-enter).
-  - **Recent** = this session’s start. Discard is dual-choice only when re-entering after prior autosaves *and* making further edits; otherwise a single action (discard session or roll back to original).
+  - **Recent** = this session’s start. Discard is dual-choice only when re-entering after prior autosaves _and_ making further edits; otherwise a single action (discard session or roll back to original).
   - Leaving edit after session changes shows an **Edits saved** notice explaining the re-entry baseline.
   - **Esc** opens Discard while editing (works in the textarea); Esc with nothing to discard exits edit mode.
 
   **API / hooks / tests**
+
   - UI wires `updatePlan` (PUT) and `submitPlanVersion` (POST) in `usePlans`.
   - Endpoint and component tests cover in-place PUT, version bump, edit/discard flows, and line-sync helpers.
 
   **Docs**
+
   - README, `docs/cli.md`, `AGENTS.md`, and plan-review skills document live edit, shortcuts, and PUT vs POST semantics.
 
 ## 0.7.0
@@ -40,6 +95,7 @@
 - Plan + diff review UX: multiline comments, zen/outline/comments shortcuts, severity handoff, and TUI mouse-first work.
 
   **Plan review**
+
   - Quieter reading-first chrome; centered Source / Read / Split control; icon actions with tooltips.
   - Resizable split panes (persisted); full-width Read mode; immersive zen reading.
   - **Read mode always shows inline comments** under the matching section (React-owned segments — survives mode switches).
@@ -50,6 +106,7 @@
   - Tooltips stack above sticky plan/diff chrome.
 
   **Diff review**
+
   - Compact toolbar summary chips; icon-forward file headers; cleaner file-tree chrome.
   - Improved send-review CTA; quieter comment canvases; expanded keyboard shortcuts help.
   - Diff style (Unified / Split) lives in Settings (and `m`).
@@ -57,6 +114,7 @@
   - Commit walk bar polish.
 
   **Inline comments (diff + plan)**
+
   - Fix form anchoring to the correct side and line (same-side selections no longer default to additions and land at EOF).
   - Multiline ranges: normalize reverse drags; inclusive `startLineNumber`–`lineNumber`; pierre gutter via `onGutterUtilityClick` only (no dual-API crash).
   - Bidirectional range steppers in the composer; stable draft keys while adjusting.
@@ -65,18 +123,22 @@
   - Collapsible open/resolved threads on diff and plan cards.
 
   **Agent skills**
+
   - `skills/` and `.agents/skills/` updated for severity, multi-line ranges, plan UI shortcuts, and finish-review priority rules (byte-identical contract).
 
   **Roadmap (rolled up)**
+
   - GitHub PR repair, multi-round review history, suggestions + severity + saved replies.
   - MCP/CLI lifecycle tools (`edit`/`unresolve`/`delete`/`apply_suggestion`/`progress`/`doctor`/completions).
   - Navigation: whitespace toggles, filter chips, deep permalinks, commit-walk bar, hybrid minimap.
   - Agent progress toast, multi-agent waiters, markdown export.
 
   **Docs / branding**
+
   - Remove remaining fork attribution from README and landing.
 
   **Native TUI**
+
   - Scalable mouse-first review interface (opt-in `--tui`).
 
 ## 0.6.2

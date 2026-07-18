@@ -7,7 +7,9 @@ export default defineConfig({
   entry: ['src/cli.ts'],
   format: 'esm',
   outDir: 'dist',
-  clean: false,
+  // Run tsdown before Vite so this can clear stale server chunks without
+  // deleting the freshly generated client bundle.
+  clean: true,
   deps: {
     neverBundle: ['open', 'get-port', '@modelcontextprotocol/sdk', 'zod'],
   },

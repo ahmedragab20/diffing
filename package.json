@@ -1,6 +1,6 @@
 {
   "name": "diffing",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "local-first CLI for reviewing, navigating, and discussing git diffs with AI",
   "type": "module",
   "license": "MIT",
@@ -26,8 +26,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "vite build && tsdown && pnpm run build:tui",
-    "build:ts": "vite build && tsdown",
+    "build": "tsdown && vite build && pnpm run build:tui",
+    "build:ts": "tsdown && vite build",
     "build:tui": "cargo build --release --manifest-path crates/diffing-tui/Cargo.toml",
     "build:tui:debug": "cargo build --manifest-path crates/diffing-tui/Cargo.toml",
     "changeset": "changeset",
