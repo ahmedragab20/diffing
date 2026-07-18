@@ -82,12 +82,16 @@ export function usePlans() {
     }
   }, [])
 
-  // Flash a toast when an agent replies to a plan comment. Seed the seen-set on
-  // first load so pre-existing replies don't flash.
+  // Flash a toast when an agent replies to an *open* plan comment.
+  // Important: wait until the first non-empty fetch settles before seeding —
+  // otherwise the empty `[]` first paint marks firstLoad done and every
+  // historical agent reply on the real load spams the toast.
   const seenReplyIds = useRef<Set<string> | null>(null)
   const [agentActivity, setAgentActivity] = useState<PlanAgentActivity | null>(null)
   useEffect(() => {
-    const firstLoad = seenReplyIds.current === null
+    if (isLoading) return
+
+    const seeding = seenReplyIds.current === null
     if (seenReplyIds.current === null) seenReplyIds.current = new Set()
     const seen = seenReplyIds.current
 
@@ -97,23 +101,26 @@ export function usePlans() {
         for (const reply of comment.replies ?? []) {
           if (seen.has(reply.id)) continue
           seen.add(reply.id)
+          if (seeding) continue
+          // Only surface replies on open threads — resolved / closed threads
+          // shouldn't toast, and decided plans still allow open follow-ups.
+          if (comment.status === 'resolved') continue
           const isAgent = reply.role === 'agent' || (reply.role == null && !!reply.model)
-          if (!firstLoad && isAgent) {
-            if (!latest || reply.createdAt > latest.at) {
-              latest = {
-                at: reply.createdAt,
-                planId: plan.id,
-                commentId: comment.id,
-                model: reply.model,
-                body: reply.body,
-              }
+          if (!isAgent) continue
+          if (!latest || reply.createdAt > latest.at) {
+            latest = {
+              at: reply.createdAt,
+              planId: plan.id,
+              commentId: comment.id,
+              model: reply.model,
+              body: reply.body,
             }
           }
         }
       }
     }
     if (latest) setAgentActivity(latest)
-  }, [plans])
+  }, [plans, isLoading])
 
   const writePlan = useCallback(
     (plan: Plan) => {

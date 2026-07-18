@@ -31,7 +31,7 @@ interface AgentStatus {
 
 export function useComments() {
   const queryClient = useQueryClient()
-  const { data: comments = [] } = useQuery({ queryKey: COMMENTS_KEY, queryFn: fetchComments })
+  const { data: comments = [], isLoading } = useQuery({ queryKey: COMMENTS_KEY, queryFn: fetchComments })
 
   // Realtime: the server pushes a `comments` event whenever the store changes
   // (a user or agent added / replied / resolved / deleted). Refetch on push
@@ -65,13 +65,16 @@ export function useComments() {
   }, [])
 
   // Surface fresh agent replies so the UI can flash a "the agent responded"
-  // indicator. We track which reply ids we've already seen; on the first load
-  // we just seed the set (no flash for pre-existing history).
+  // indicator. Seed after the first successful fetch — an empty initial
+  // `comments=[]` must not count as "seeded", or every historical reply
+  // toasts when the real data arrives. Skip resolved threads.
   const seenReplyIds = useRef<Set<string> | null>(null)
   const [agentActivity, setAgentActivity] = useState<AgentActivity | null>(null)
 
   useEffect(() => {
-    const firstLoad = seenReplyIds.current === null
+    if (isLoading) return
+
+    const seeding = seenReplyIds.current === null
     if (seenReplyIds.current === null) seenReplyIds.current = new Set()
     const seen = seenReplyIds.current
 
@@ -80,22 +83,23 @@ export function useComments() {
       for (const reply of comment.replies ?? []) {
         if (seen.has(reply.id)) continue
         seen.add(reply.id)
+        if (seeding) continue
+        if (comment.status === 'resolved') continue
         const isAgent = reply.role === 'agent' || (reply.role == null && !!reply.model)
-        if (!firstLoad && isAgent) {
-          if (!latest || reply.createdAt > latest.at) {
-            latest = {
-              at: reply.createdAt,
-              commentId: comment.id,
-              filePath: comment.filePath,
-              model: reply.model,
-              body: reply.body,
-            }
+        if (!isAgent) continue
+        if (!latest || reply.createdAt > latest.at) {
+          latest = {
+            at: reply.createdAt,
+            commentId: comment.id,
+            filePath: comment.filePath,
+            model: reply.model,
+            body: reply.body,
           }
         }
       }
     }
     if (latest) setAgentActivity(latest)
-  }, [comments])
+  }, [comments, isLoading])
 
   const addMutation = useMutation({
     mutationFn: async (params: {

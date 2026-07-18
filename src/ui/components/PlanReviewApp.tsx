@@ -9,7 +9,7 @@ import { useRoutePath, navigate } from '../router'
 import { SHIKI_THEME_MAP } from '../utils'
 import { HapticsProvider, playSound, fireFeedback } from '../hooks/useHaptics'
 import { getUiStateItem, setUiStateItem } from "../utils/uiState"
-import { PlanReview } from './PlanReview'
+import { PlanReview, type PlanViewMode } from './PlanReview'
 import { PlanList } from './PlanList'
 import { ThemeModal } from './ThemeModal'
 import { AgentActivityToast } from './AgentActivityToast'
@@ -56,20 +56,19 @@ export function PlanReviewApp() {
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [])
 
-  // Persisted viewMode state: source or rendered
-  const [viewMode, setViewMode] = useState<'source' | 'rendered'>(() => {
+  // Persisted viewMode: source | rendered | split
+  const [viewMode, setViewMode] = useState<PlanViewMode>(() => {
     try {
-      const stored = getUiStateItem("diffing-plan-view-mode")
-      return stored === 'rendered' ? 'rendered' : 'source'
-    } catch {
-      return 'source'
-    }
+      const stored = getUiStateItem('diffing-plan-view-mode')
+      if (stored === 'rendered' || stored === 'split' || stored === 'source') return stored
+    } catch {}
+    return 'source'
   })
 
-  const handleViewModeChange = useCallback((mode: 'source' | 'rendered') => {
+  const handleViewModeChange = useCallback((mode: PlanViewMode) => {
     setViewMode(mode)
     try {
-      setUiStateItem("diffing-plan-view-mode", mode)
+      setUiStateItem('diffing-plan-view-mode', mode)
     } catch {}
   }, [])
 
@@ -215,7 +214,10 @@ export function PlanReviewApp() {
   }, [settings.showLineNumbers, updateSettings])
 
   const toggleViewMode = useCallback(() => {
-    handleViewModeChange(viewMode === 'source' ? 'rendered' : 'source')
+    // Cycle source → rendered → split → source
+    const order: PlanViewMode[] = ['source', 'rendered', 'split']
+    const next = order[(order.indexOf(viewMode) + 1) % order.length]
+    handleViewModeChange(next)
   }, [viewMode, handleViewModeChange])
 
   const cycleTabSize = useCallback(() => {
@@ -493,10 +495,11 @@ export function PlanReviewApp() {
                   <span>View mode</span>
                   <Select
                     value={viewMode}
-                    onValueChange={(v) => handleViewModeChange(v as 'source' | 'rendered')}
+                    onValueChange={(v) => handleViewModeChange(v as PlanViewMode)}
                     options={[
                       { value: 'source', label: 'Source (commentable)' },
                       { value: 'rendered', label: 'Rendered (markdown)' },
+                      { value: 'split', label: 'Split (source + rendered)' },
                     ]}
                     ariaLabel="Plan view mode"
                   />
@@ -634,6 +637,7 @@ export function PlanReviewApp() {
                 showLineNumbers={settings.showLineNumbers}
                 lineHoverHighlight={settings.lineHoverHighlight}
                 viewMode={viewMode}
+                editorIDE={settings.editorIDE}
               />
             ) : (
               <PlanEmptyState hasPlans={plans.length > 0} notFound={!!routeId} />
@@ -650,12 +654,25 @@ export function PlanReviewApp() {
         <AgentActivityToast
           activity={
             agentActivity
-              ? { at: agentActivity.at, commentId: agentActivity.commentId, filePath: 'plan comment', model: agentActivity.model, body: agentActivity.body }
+              ? {
+                  at: agentActivity.at,
+                  commentId: agentActivity.commentId,
+                  filePath: `plan · ${agentActivity.planId.slice(0, 8)}`,
+                  model: agentActivity.model,
+                  body: agentActivity.body,
+                }
               : null
           }
           onDismiss={clearAgentActivity}
           onJump={() => {
-            if (agentActivity) navigate(`/plan/${agentActivity.planId}`)
+            if (!agentActivity) return
+            navigate(`/plan/${agentActivity.planId}`)
+            // After navigation, scroll to the thread on next frame.
+            requestAnimationFrame(() => {
+              document
+                .getElementById(`plan-comment-${agentActivity.commentId}`)
+                ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            })
           }}
         />
         <VimStatusBar

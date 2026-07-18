@@ -16,6 +16,9 @@ import {
   FileText,
   FolderOpen,
   ListTree,
+  ExternalLink,
+  Loader2,
+  MessagesSquare,
 } from 'lucide-react'
 import type { Plan, PlanComment, PlanDecision, PlanVersion } from '../../lib/plan-types'
 import { sectionTitleForLine, extractPlanLines } from '../../lib/plan-format'
@@ -29,6 +32,9 @@ import { FilePreviewModal } from './FilePreviewModal'
 import { Select } from '../primitives/Select'
 import { Tooltip } from '../primitives/Tooltip'
 import { buildPlanOutline } from '../lib/planOutline'
+import { mapSelectionToLines } from '../lib/planSelection'
+
+export type PlanViewMode = 'source' | 'rendered' | 'split'
 
 interface PlanReviewProps {
   plan: Plan
@@ -39,7 +45,8 @@ interface PlanReviewProps {
   lineWrap: boolean
   showLineNumbers: boolean
   lineHoverHighlight: LineHoverHighlight
-  viewMode: 'source' | 'rendered'
+  viewMode: PlanViewMode
+  editorIDE?: string
 }
 
 interface PendingComment {
@@ -67,6 +74,7 @@ export function PlanReview({
   showLineNumbers,
   lineHoverHighlight,
   viewMode,
+  editorIDE,
 }: PlanReviewProps) {
   const {
     addPlanComment,
@@ -77,9 +85,6 @@ export function PlanReview({
     addPlanReply,
     editPlanReply,
     removePlanReply,
-    submitDecision,
-    submitting,
-    agentWaiting,
   } = usePlans()
 
   const [pending, setPending] = useState<PendingComment | null>(null)
@@ -88,6 +93,19 @@ export function PlanReview({
   const [previewFilePath, setPreviewFilePath] = useState<string | null>(null)
   const [copyFlash, setCopyFlash] = useState<string | null>(null)
   const [tocOpen, setTocOpen] = useState(true)
+  const [commentsRailOpen, setCommentsRailOpen] = useState(true)
+  const [openingEditor, setOpeningEditor] = useState(false)
+  /** Floating "Add comment" after selecting text in the rendered pane. */
+  const [selectionPopup, setSelectionPopup] = useState<{
+    x: number
+    y: number
+    startLine: number
+    endLine: number
+    text: string
+  } | null>(null)
+  const renderedRef = useRef<HTMLDivElement>(null)
+  const showSource = viewMode === 'source' || viewMode === 'split'
+  const showRendered = viewMode === 'rendered' || viewMode === 'split'
 
   // Version switcher: `viewingVersion` is the body the user is reading right
   // now. Defaults to the plan's current version. The user can pick any prior
@@ -231,16 +249,18 @@ export function PlanReview({
     }
     const comment = meta
     return (
-      <PlanCommentBubble
-        comment={comment}
-        onResolve={() => resolvePlanComment(plan.id, comment.id)}
-        onUnresolve={() => unresolvePlanComment(plan.id, comment.id)}
-        onDelete={() => removePlanComment(plan.id, comment.id)}
-        onEdit={(body) => editPlanComment(plan.id, comment.id, body)}
-        onReply={(body) => addPlanReply(plan.id, comment.id, body)}
-        onEditReply={(replyId, body) => editPlanReply(plan.id, comment.id, replyId, body)}
-        onDeleteReply={(replyId) => removePlanReply(plan.id, comment.id, replyId)}
-      />
+      <div id={`plan-comment-${comment.id}`}>
+        <PlanCommentBubble
+          comment={comment}
+          onResolve={() => resolvePlanComment(plan.id, comment.id)}
+          onUnresolve={() => unresolvePlanComment(plan.id, comment.id)}
+          onDelete={() => removePlanComment(plan.id, comment.id)}
+          onEdit={(body) => editPlanComment(plan.id, comment.id, body)}
+          onReply={(body) => addPlanReply(plan.id, comment.id, body)}
+          onEditReply={(replyId, body) => editPlanReply(plan.id, comment.id, replyId, body)}
+          onDeleteReply={(replyId) => removePlanReply(plan.id, comment.id, replyId)}
+        />
+      </div>
     )
   }
 
@@ -292,10 +312,209 @@ export function PlanReview({
     [flashCopy],
   )
 
+  const openInEditor = useCallback(async () => {
+    if (!copyablePath) return
+    setOpeningEditor(true)
+    try {
+      await fetch('/api/open-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath: copyablePath, editor: editorIDE }),
+      })
+    } catch {
+      // ignore
+    } finally {
+      setOpeningEditor(false)
+    }
+  }, [copyablePath, editorIDE])
+
+  const jumpToComment = useCallback((commentId: string, lineNumber: number) => {
+    const el = document.getElementById(`plan-comment-${commentId}`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.classList.add('plan-comment-flash')
+      window.setTimeout(() => el.classList.remove('plan-comment-flash'), 1400)
+      return
+    }
+    // Fallback: scroll source line if visible
+    const lineEl = document.querySelector(`[data-plan-line="${lineNumber}"]`)
+    lineEl?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [])
+
+  const handleRenderedMouseUp = useCallback(() => {
+    if (isHistorical) return
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      setSelectionPopup(null)
+      return
+    }
+    const text = sel.toString()
+    const mapped = mapSelectionToLines(viewingBody, text)
+    if (!mapped) {
+      setSelectionPopup(null)
+      return
+    }
+    // Only react to selections inside the rendered plan body.
+    const anchorNode = sel.anchorNode
+    if (!renderedRef.current || !anchorNode || !renderedRef.current.contains(anchorNode)) {
+      setSelectionPopup(null)
+      return
+    }
+    const range = sel.getRangeAt(0)
+    const rect = range.getBoundingClientRect()
+    setSelectionPopup({
+      x: Math.min(rect.left + rect.width / 2, window.innerWidth - 80),
+      y: Math.max(8, rect.top - 8),
+      startLine: mapped.startLine,
+      endLine: mapped.endLine,
+      text: mapped.text,
+    })
+  }, [viewingBody, isHistorical])
+
+  const startCommentFromSelection = useCallback(() => {
+    if (!selectionPopup) return
+    setPending({
+      lineNumber: selectionPopup.endLine,
+      startLineNumber:
+        selectionPopup.startLine !== selectionPopup.endLine
+          ? selectionPopup.startLine
+          : undefined,
+    })
+    setLiveSelectionCount(
+      Math.abs(selectionPopup.endLine - selectionPopup.startLine) + 1,
+    )
+    setSelectionPopup(null)
+    window.getSelection()?.removeAllRanges()
+  }, [selectionPopup])
+
   const reviewUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}${window.location.pathname.startsWith('/plan') ? window.location.pathname : `/plan/${plan.id}`}`
       : `/plan/${plan.id}`
+
+  const sourcePanel = (
+    <div className="plan-file">
+      <div className="plan-file-hint">
+        Source — select lines (or use the gutter +) to comment.
+        {showRendered && ' Split with rendered on the right for reading.'}
+      </div>
+      <DiffsFile<PlanAnnotationMeta>
+        file={{ name: plan.sourcePath?.split(/[/\\]/).pop() || 'PLAN.md', contents: viewingBody, lang: 'markdown' }}
+        options={{
+          disableFileHeader: true,
+          enableGutterUtility: true,
+          enableLineSelection: true,
+          overflow: lineWrap ? 'wrap' : 'scroll',
+          disableLineNumbers: !showLineNumbers,
+          lineHoverHighlight,
+          onLineSelectionStart: () => {
+            setSelectedRange(null)
+            setLiveSelectionCount(0)
+          },
+          onLineSelectionChange: (range) => {
+            setLiveSelectionCount(range ? Math.abs(range.end - range.start) + 1 : 0)
+          },
+          onLineSelectionEnd: (range) => {
+            setLiveSelectionCount(0)
+            if (range) {
+              setSelectedRange(range)
+              setPending({ lineNumber: range.end, startLineNumber: range.start })
+            }
+          },
+          theme: {
+            dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
+            light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
+          },
+          themeType: shikiConfig.type,
+          unsafeCSS,
+        }}
+        selectedLines={selectedRange}
+        lineAnnotations={annotations}
+        renderAnnotation={renderAnnotation}
+        renderGutterUtility={(getHoveredLine) => (
+          <button
+            className="gutter-add-btn"
+            onClick={() => {
+              const line = getHoveredLine()
+              if (line) setPending({ lineNumber: line.lineNumber })
+            }}
+          >
+            +
+          </button>
+        )}
+      />
+    </div>
+  )
+
+  const renderedPanel = (
+    <div className="plan-rendered-layout">
+      {tocOpen && outline.length > 0 && (
+        <nav className="plan-toc" aria-label="Plan outline">
+          <div className="plan-toc-head">
+            <ListTree size={12} aria-hidden="true" />
+            <span>On this page</span>
+          </div>
+          <ul className="plan-toc-list">
+            {outline.map((item) => (
+              <li
+                key={item.id}
+                className={`plan-toc-item plan-toc-level-${Math.min(item.level, 4)}`}
+              >
+                <a
+                  href={`#${item.id}`}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    document.getElementById(item.id)?.scrollIntoView({
+                      behavior: 'smooth',
+                      block: 'start',
+                    })
+                    if (typeof history !== 'undefined') {
+                      history.replaceState(null, '', `#${item.id}`)
+                    }
+                  }}
+                >
+                  {item.text}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )}
+      <div
+        ref={renderedRef}
+        className="markdown-body plan-rendered"
+        onClick={handleMarkdownClick}
+        onMouseUp={handleRenderedMouseUp}
+      >
+        {!isHistorical && (
+          <div className="plan-rendered-select-hint">
+            Highlight any text to add a comment
+          </div>
+        )}
+        <Markdown content={viewingBody} />
+        {/* Floating pending comment form when started from rendered selection */}
+        {pending && showRendered && !showSource && (
+          <div className="plan-selection-comment" id="plan-selection-comment">
+            <div className="plan-selection-comment-meta">
+              Comment on line
+              {pending.startLineNumber && pending.startLineNumber !== pending.lineNumber
+                ? `s ${pending.startLineNumber}–${pending.lineNumber}`
+                : ` ${pending.lineNumber}`}
+            </div>
+            <CommentForm
+              draftKey={`plan-new:${plan.id}:${pending.startLineNumber ?? pending.lineNumber}:${pending.lineNumber}`}
+              lineContent={lineRange(pending.startLineNumber, pending.lineNumber)}
+              onSubmit={(body) => commitComment(pending, body)}
+              onCancel={() => {
+                setPending(null)
+                setSelectedRange(null)
+              }}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  )
 
   return (
     <div className="plan-review">
@@ -445,7 +664,21 @@ export function PlanReview({
               </button>
             </Tooltip>
           )}
-          {viewMode === 'rendered' && outline.length > 0 && (
+          {copyablePath && (
+            <Tooltip content="Open the plan source file in your editor">
+              <button
+                type="button"
+                className="btn btn-sm plan-action-btn"
+                onClick={openInEditor}
+                disabled={openingEditor}
+                aria-label="Open plan source in editor"
+              >
+                {openingEditor ? <Loader2 size={13} className="spin" /> : <ExternalLink size={13} />}
+                <span className="btn-label">Open</span>
+              </button>
+            </Tooltip>
+          )}
+          {showRendered && outline.length > 0 && (
             <button
               type="button"
               className={`btn btn-sm plan-action-btn ${tocOpen ? 'btn-active' : ''}`}
@@ -455,6 +688,20 @@ export function PlanReview({
             >
               <ListTree size={13} />
               <span className="btn-label">Outline</span>
+            </button>
+          )}
+          {comments.length > 0 && (
+            <button
+              type="button"
+              className={`btn btn-sm plan-action-btn ${commentsRailOpen ? 'btn-active' : ''}`}
+              onClick={() => setCommentsRailOpen((v) => !v)}
+              aria-pressed={commentsRailOpen}
+              title="Toggle comments map"
+            >
+              <MessagesSquare size={13} />
+              <span className="btn-label">
+                Comments{openCount > 0 ? ` (${openCount})` : ''}
+              </span>
             </button>
           )}
         </div>
@@ -496,114 +743,95 @@ export function PlanReview({
             <span>General comments ({generalComments.length})</span>
           </div>
           {generalComments.map((c) => (
-            <PlanCommentBubble
-              key={c.id}
-              comment={c}
-              onResolve={() => resolvePlanComment(plan.id, c.id)}
-              onUnresolve={() => unresolvePlanComment(plan.id, c.id)}
-              onDelete={() => removePlanComment(plan.id, c.id)}
-              onEdit={(body) => editPlanComment(plan.id, c.id, body)}
-              onReply={(body) => addPlanReply(plan.id, c.id, body)}
-              onEditReply={(replyId, body) => editPlanReply(plan.id, c.id, replyId, body)}
-              onDeleteReply={(replyId) => removePlanReply(plan.id, c.id, replyId)}
-            />
+            <div key={c.id} id={`plan-comment-${c.id}`}>
+              <PlanCommentBubble
+                comment={c}
+                onResolve={() => resolvePlanComment(plan.id, c.id)}
+                onUnresolve={() => unresolvePlanComment(plan.id, c.id)}
+                onDelete={() => removePlanComment(plan.id, c.id)}
+                onEdit={(body) => editPlanComment(plan.id, c.id, body)}
+                onReply={(body) => addPlanReply(plan.id, c.id, body)}
+                onEditReply={(replyId, body) => editPlanReply(plan.id, c.id, replyId, body)}
+                onDeleteReply={(replyId) => removePlanReply(plan.id, c.id, replyId)}
+              />
+            </div>
           ))}
         </div>
       )}
 
-      {viewMode === 'rendered' ? (
-        <div className="plan-rendered-layout">
-          {tocOpen && outline.length > 0 && (
-            <nav className="plan-toc" aria-label="Plan outline">
-              <div className="plan-toc-head">
-                <ListTree size={12} aria-hidden="true" />
-                <span>On this page</span>
-              </div>
-              <ul className="plan-toc-list">
-                {outline.map((item) => (
-                  <li
-                    key={item.id}
-                    className={`plan-toc-item plan-toc-level-${Math.min(item.level, 4)}`}
-                  >
-                    <a
-                      href={`#${item.id}`}
-                      onClick={(e) => {
-                        e.preventDefault()
-                        const el = document.getElementById(item.id)
-                        el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                        // Keep hash in URL for shareability without jump-fighting.
-                        if (typeof history !== 'undefined') {
-                          history.replaceState(null, '', `#${item.id}`)
-                        }
-                      }}
+      <div
+        className={`plan-review-body ${commentsRailOpen && comments.length > 0 ? 'plan-review-body-with-rail' : ''}`}
+      >
+        <div
+          className={`plan-content ${
+            showSource && showRendered ? 'plan-content-split' : 'plan-content-single'
+          }`}
+        >
+          {showSource && sourcePanel}
+          {showRendered && renderedPanel}
+        </div>
+
+        {commentsRailOpen && comments.length > 0 && (
+          <aside className="plan-comments-rail" aria-label="Comments map">
+            <div className="plan-comments-rail-head">
+              <MessagesSquare size={12} aria-hidden="true" />
+              <span>Comments</span>
+              <span className="plan-comments-rail-count">
+                {openCount} open · {comments.length} total
+              </span>
+            </div>
+            <ul className="plan-comments-rail-list">
+              {[...comments]
+                .sort((a, b) => {
+                  if (a.status !== b.status) return a.status === 'open' ? -1 : 1
+                  return a.lineNumber - b.lineNumber
+                })
+                .map((c) => (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      className={`plan-comments-rail-item ${c.status === 'resolved' ? 'is-resolved' : ''}`}
+                      onClick={() => jumpToComment(c.id, c.lineNumber)}
+                      title={c.body.slice(0, 200)}
                     >
-                      {item.text}
-                    </a>
+                      <span className="plan-comments-rail-line">
+                        {c.lineNumber > 0 ? `L${c.lineNumber}` : 'General'}
+                      </span>
+                      <span className="plan-comments-rail-preview">
+                        {c.sectionTitle ? `${c.sectionTitle} · ` : ''}
+                        {c.body.replace(/\s+/g, ' ').slice(0, 80)}
+                        {c.body.length > 80 ? '…' : ''}
+                      </span>
+                      <span className={`plan-comments-rail-status plan-comments-rail-status-${c.status}`}>
+                        {c.status}
+                      </span>
+                    </button>
                   </li>
                 ))}
-              </ul>
-            </nav>
-          )}
-          <div
-            className="markdown-body plan-rendered"
-            onClick={handleMarkdownClick}
-          >
-            <Markdown content={viewingBody} />
-          </div>
-        </div>
-      ) : (
-        <div className="plan-file">
-          <div className="plan-file-hint">
-            Source mode — select lines in the gutter to comment. Switch to{' '}
-            <strong>Rendered</strong> in Settings for reading with outline + code copy.
-          </div>
-          <DiffsFile<PlanAnnotationMeta>
-            file={{ name: plan.sourcePath?.split('/').pop() || 'PLAN.md', contents: viewingBody, lang: 'markdown' }}
-            options={{
-              disableFileHeader: true,
-              enableGutterUtility: true,
-              enableLineSelection: true,
-              overflow: lineWrap ? 'wrap' : 'scroll',
-              disableLineNumbers: !showLineNumbers,
-              lineHoverHighlight,
-              onLineSelectionStart: () => {
-                setSelectedRange(null)
-                setLiveSelectionCount(0)
-              },
-              onLineSelectionChange: (range) => {
-                setLiveSelectionCount(range ? Math.abs(range.end - range.start) + 1 : 0)
-              },
-              onLineSelectionEnd: (range) => {
-                setLiveSelectionCount(0)
-                if (range) {
-                  setSelectedRange(range)
-                  setPending({ lineNumber: range.end, startLineNumber: range.start })
-                }
-              },
-              theme: {
-                dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
-                light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
-              },
-              themeType: shikiConfig.type,
-              unsafeCSS,
-            }}
-            selectedLines={selectedRange}
-            lineAnnotations={annotations}
-            renderAnnotation={renderAnnotation}
-            renderGutterUtility={(getHoveredLine) => (
-              <button
-                className="gutter-add-btn"
-                onClick={() => {
-                  const line = getHoveredLine()
-                  if (line) setPending({ lineNumber: line.lineNumber })
-                }}
-              >
-                +
-              </button>
-            )}
-          />
-        </div>
+            </ul>
+          </aside>
+        )}
+      </div>
+
+      {selectionPopup && (
+        <button
+          type="button"
+          className="plan-selection-popup"
+          style={{ left: selectionPopup.x, top: selectionPopup.y }}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={startCommentFromSelection}
+        >
+          <MessageSquarePlus size={13} />
+          Add comment
+          <span className="plan-selection-popup-lines">
+            L{selectionPopup.startLine}
+            {selectionPopup.endLine !== selectionPopup.startLine
+              ? `–${selectionPopup.endLine}`
+              : ''}
+          </span>
+        </button>
       )}
+
       <FilePreviewModal
         isOpen={!!previewFilePath}
         filePath={previewFilePath}

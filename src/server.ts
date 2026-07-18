@@ -346,11 +346,26 @@ export function createApp(
 
     try {
       const root = getRepoRoot()
+      let absolutePath: string | null = null
+
+      // Repo-relative paths (diff review).
       const relPath = toSafeRelativePath(filePath, root)
-      if (!relPath) {
+      if (relPath) {
+        absolutePath = resolve(root, relPath)
+      } else {
+        // Absolute paths under ~/.diffing/ only (plan source mirrors live there).
+        const resolved = resolve(filePath)
+        const diffingHome = resolve(homedir(), '.diffing')
+        const underDiffing =
+          resolved === diffingHome || resolved.startsWith(diffingHome + '/') ||
+          resolved.startsWith(diffingHome + '\\')
+        if (underDiffing && existsSync(resolved)) {
+          absolutePath = resolved
+        }
+      }
+      if (!absolutePath) {
         return c.json({ error: 'Forbidden file path' }, 403)
       }
-      const absolutePath = resolve(root, relPath)
 
       if (editor && editor !== 'default') {
         const command = resolveEditorCommand(editor as EditorChoice, absolutePath)
