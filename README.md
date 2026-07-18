@@ -671,8 +671,10 @@ When review comments are exported or streamed to a waiting agent, they are seria
     You are an AI coding assistant receiving a structured list of code review comments to address.
     For each file, review the inline comments and apply the changes requested.
     - Target lines are specified by the "line" attribute (e.g. line="42" for single lines, line="42-45" for multi-line blocks, or line="file" for file-level notes).
+    - When line="A-B", the range is INCLUSIVE on that side.
     - "side" indicates whether the comment is on "additions" (new code) or "deletions" (old code).
     - "status" indicates whether the comment is "open" or "resolved". Only address "open" comments.
+    - Optional severity="blocking|nit|question|praise": blocking = must fix; nit = optional polish; question = needs an answer; praise = positive (no change required). Omit (or none) = untriaged.
     - The <code> block contains the code context at the reviewed lines.
     - The <body> tag contains the review feedback or request.
     
@@ -689,7 +691,7 @@ When review comments are exported or streamed to a waiting agent, they are seria
 
   <file path="src/utils/parser.ts">
     <!-- [Example A] Multi-Line Selection Addition Comment -->
-    <comment id="c1" line="42-45" side="additions" status="open" created-at="2026-05-24T22:00:00.000Z">
+    <comment id="c1" line="42-45" side="additions" status="open" severity="blocking" created-at="2026-05-24T22:00:00.000Z">
       <code><![CDATA[
 + const parsedToken = tokenize(input);
 + if (parsedToken.type === 'EOF') {
@@ -705,7 +707,7 @@ When review comments are exported or streamed to a waiting agent, they are seria
     </comment>
 
     <!-- [Example B] Whole-File General Comment -->
-    <comment id="c2" line="file" side="additions" status="open" created-at="2026-05-24T22:08:00.000Z">
+    <comment id="c2" line="file" side="additions" status="open" severity="nit" created-at="2026-05-24T22:08:00.000Z">
       <body><![CDATA[This parser module needs additional unit tests to cover negative bounds.]]></body>
     </comment>
   </file>

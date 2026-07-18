@@ -150,7 +150,7 @@ diffing plan resolve <comment-id>
 
 ### Plan UI (human)
 
-Source / Read / Split modes, zen full-width Read, resizable split, outline + comments rail, Submit review for verdict. See `docs/cli.md` §4b Plan review UI.
+Source / Read / Split (`m`), zen Read (`z`), outline (`o`), comments map (`c`), resizable split, inline comments on Source and Read (with severity + multi-line ranges), Submit review for verdict. See `docs/cli.md` §4b Plan review UI.
 
 ---
 
@@ -176,7 +176,7 @@ diffing url
 
 Session: `review_session_status`, `start_review_session`  
 Diff: `get_diff`, `diff_summary`, `diff_files`, `diff_hunks`, `diff_slice`, `diff_search`  
-Comments: `create_comment`, `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment`, `edit_comment`, `delete_comment`, `apply_suggestion`, `resolve_all_comments`, `edit_reply`, `delete_reply`  
+Comments: `create_comment` (path, side, line/range, body, optional **severity**), `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment`, `edit_comment`, `delete_comment`, `apply_suggestion`, `resolve_all_comments`, `edit_reply`, `delete_reply`  
 Loop: `await_review`, `report_progress`, `get_review_history`  
 Plan: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment`
 

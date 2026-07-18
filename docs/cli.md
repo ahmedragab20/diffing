@@ -975,14 +975,15 @@ When review comments are exported (either via copying from the UI clipboard or r
    - **Serialization**: Wrapped inside a `<![CDATA[ ... ]]>` block to safely support rich markdown layout, paragraphs, and list elements.
    - **Position**: Placed immediately after `<instructions>` and before the first `<file>` tag.
 4. **`<file path="...">`**: Groups all comments associated with a specific file path (relative to the repository root).
-5. **`<comment id="..." line="..." side="..." status="..." created-at="...">`**: An individual inline comment thread.
+5. **`<comment id="..." line="..." side="..." status="..." [severity="..."] created-at="...">`**: An individual inline comment thread.
    - **`id`**: Unique UUID of the comment.
    - **`line`**: The line target attribute. Supports three distinct formats:
      - **Single-Line Select** (e.g. `line="15"`): Comment is anchored on line 15.
-     - **Multi-Line Select** (e.g. `line="10-15"`): Comment spans a range from line 10 to 15.
+     - **Multi-Line Select** (e.g. `line="10-15"`): Inclusive range from line 10 to 15 on that side.
      - **Whole-File Target** (e.g. `line="file"`): Comment is a general file-level note (where line number is 0).
    - **`side`**: Indicates the target branch of the diff. Either `"additions"` (added/modified code) or `"deletions"` (deleted/old code).
    - **`status`**: Current resolution state. Either `"open"` or `"resolved"`.
+   - **`severity`** (optional): Triage label `blocking` | `nit` | `question` | `praise`. Omitted when unset or `none`. Agents should prioritize blocking, leave questions open after answering, treat nits as optional, and skip code changes for praise.
    - **`created-at`**: ISO-8601 timestamp of when the comment thread was opened.
 6. **`<code>` (Optional)**:
    - **Purpose**: Captures the exact code context target.
@@ -1010,7 +1011,7 @@ When review comments are exported (either via copying from the UI clipboard or r
   </general-comment>
   <file path="src/utils/parser.ts">
     <!-- Multi-Line Addition Comment -->
-    <comment id="c1" line="42-45" side="additions" status="open" created-at="2026-05-24T22:00:00.000Z">
+    <comment id="c1" line="42-45" side="additions" status="open" severity="blocking" created-at="2026-05-24T22:00:00.000Z">
       <code><![CDATA[
 + const parsedToken = tokenize(input);
 + if (parsedToken.type === 'EOF') {
@@ -1026,7 +1027,7 @@ When review comments are exported (either via copying from the UI clipboard or r
     </comment>
 
     <!-- Whole-File General Comment -->
-    <comment id="c2" line="file" side="additions" status="open" created-at="2026-05-24T22:08:00.000Z">
+    <comment id="c2" line="file" side="additions" status="open" severity="nit" created-at="2026-05-24T22:08:00.000Z">
       <body><![CDATA[This parser module needs additional unit tests to cover negative bounds.]]></body>
     </comment>
   </file>
@@ -1309,7 +1310,7 @@ Updates a plan's `title`/`body`/`source`/`model`, or deletes a plan.
 
 #### `POST /api/plans/:id/comments`
 Adds an inline comment. `lineNumber: 0` marks a whole-plan comment; `startLineNumber`
-makes it a range. When `lineContent`/`sectionTitle` are omitted, the server derives
+makes it a range (inclusive with `lineNumber`). When `lineContent`/`sectionTitle` are omitted, the server derives
 them from the plan body (the anchored text and nearest preceding heading). Returns
 the updated plan (201).
 - **Payload Schema**:
@@ -1319,7 +1320,8 @@ the updated plan (201).
     "startLineNumber": 3,            // optional (multi-line range)
     "body": "Clarify this step.",
     "lineContent": "…",             // optional (auto-derived)
-    "sectionTitle": "Phase 1"        // optional (auto-derived)
+    "sectionTitle": "Phase 1",       // optional (auto-derived)
+    "severity": "blocking | nit | question | praise | none"  // optional triage label
   }
   ```
 
@@ -1335,8 +1337,9 @@ blocked on `/api/plan-review/await`.
 - **Payload Schema**:
   ```json
   {
-    "decision": "approved | rejected | changes-requested",   // required
-    "decisionComment": "Optional overall note"
+    "decision": "approved | rejected | changes-requested | comment-only",   // required
+    "decisionComment": "Optional overall note",
+    "mode": "standard | comment-only"   // optional agent behavior override
   }
   ```
 - **Response**: `{ ok, round, decision, openCommentCount, waiters }`.
