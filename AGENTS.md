@@ -14,10 +14,18 @@ diffing url                # Get server base URL (port-agnostic discovery)
 diffing plan submit PLAN.md --model "<model>"  # Submit plan for review
 diffing plan await         # Block until human reviews plan
 diffing await-review       # Block until human sends code review comments
-diffing comments --open    # Dump open review comments as XML
+diffing comments --open              # Dump open review comments as XML
+diffing comments --format md         # Markdown export
 diffing reply <id> --body "..." --model "<model>"  # Reply to comment
-diffing resolve <id>       # Mark comment resolved
+diffing resolve <id>                 # Mark comment resolved
+diffing unresolve <id>               # Re-open a resolved thread
+diffing comment edit <id> --body "..."
+diffing progress --message "Working…" [--pct 40]
+diffing doctor                       # Environment self-check
+diffing mcp --repo /abs/path         # Stdio MCP server
 ```
+
+Full CLI/MCP contracts: `docs/cli.md`.
 
 ## Skill Registry
 
@@ -122,7 +130,7 @@ See `diffing-plan-review` skill for full API, flags, examples, MCP tools.
 ### Key Commands
 
 ```bash
-diffing plan submit PLAN.md [--title] [--source] [--model] [--id <id>] [--wait]
+diffing plan submit PLAN.md [--title] [--source] [--model] [--id <id>] [--wait] [--save-source]
 diffing plan await [--timeout <sec>]
 diffing plan list [--json]
 diffing plan show <id> [--version <n>] [--json]
@@ -138,6 +146,11 @@ diffing plan resolve <comment-id>
 | `approved` | Implement as planned |
 | `changes-requested` | Revise plan, `submit --id`, `await` again |
 | `rejected` | Stop; do not implement |
+| `comment-only` | Do not edit files; reply only |
+
+### Plan UI (human)
+
+Source / Read / Split modes, zen full-width Read, resizable split, outline + comments rail, Submit review for verdict. See `docs/cli.md` §4b Plan review UI.
 
 ---
 
@@ -148,22 +161,36 @@ See `diffing-review` skill for full API, suggestion blocks, MCP tools.
 ### Key Commands
 
 ```bash
-diffing comments [--open] [--json]
+diffing comments [--open] [--format xml|json|md]
 diffing reply <id> --body <text> [--model]
 diffing resolve <id>
+diffing unresolve <id>
+diffing comment edit <id> --body <text>
+diffing comment delete <id>
+diffing progress --message "…" [--model] [--pct]
 diffing await-review [--timeout <sec>]
 diffing url
 ```
 
+### MCP (preferred when available)
+
+Session: `review_session_status`, `start_review_session`  
+Diff: `get_diff`, `diff_summary`, `diff_files`, `diff_hunks`, `diff_slice`, `diff_search`  
+Comments: `create_comment`, `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment`, `edit_comment`, `delete_comment`, `apply_suggestion`, `resolve_all_comments`, `edit_reply`, `delete_reply`  
+Loop: `await_review`, `report_progress`, `get_review_history`  
+Plan: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment`
+
 ### HTTP API (for posting comments, applying suggestions)
 
 ```
-POST   /api/comments              # Create inline comment
-PUT    /api/comments/<id>         # Edit comment
+POST   /api/comments              # Create inline comment (+ optional severity, multi-line)
+PUT    /api/comments/<id>         # Edit body or {status: "resolved"|"open"}
 DELETE /api/comments/<id>         # Delete comment
+POST   /api/comments/resolve-all  # Resolve every open thread
 POST   /api/comments/<id>/replies # Agent reply
-PUT    /api/comments/<id>         # Resolve: {status: "resolved"}
 POST   /api/comments/<id>/apply-suggestion  # Apply ```suggestion block
+POST   /api/agent/progress        # Live progress toast
+GET    /api/review/history        # Multi-round handoff history
 ```
 
 ---

@@ -354,6 +354,8 @@ Diffing Server Options:
   --host <host>        Host address to bind to (default: 127.0.0.1). Pass
                        0.0.0.0 to expose the server to the local network.
   --no-open            Don't open the browser automatically
+  --gh-pr <ref>        Open a GitHub PR review session (number, owner/repo#N, or URL)
+                       Same as: diffing "gh pr <ref>"
 
 Output Modes:
   By default diffing auto-selects the best output mode:
@@ -368,10 +370,22 @@ Output Modes:
 
 Subcommands:
   show <revspec>...    Drop-in for 'git show'. Renders commit metadata
-                       (subject, author, date, message body) above the
-                       diff in the web UI. Accepts single commits,
-                       ranges (a..b, a...b), tags, and multiple SHAs.
-                       Use '--' to separate revspecs from pathspecs.
+                       above the diff. Accepts commits, ranges, tags.
+  await-review         Block until human clicks Send to agent; print XML
+  comments [--open] [--format xml|json|md]
+  reply <id> --body …  Reply on a comment thread
+  resolve|unresolve <id>
+  comment edit|delete <id>
+  progress --message … Live agent progress toast
+  url                  Print the active review base URL
+  plan <submit|await|list|show|versions|reply|resolve>
+  gh <status|pr-fetch|pr-list-comments|pr-review>
+  mcp [--repo PATH]    Stdio MCP server for agents
+  inspect <summary|files|hunks|slice|search>
+                       Bounded reads from a running TUI session
+  doctor               Environment self-check
+  completion <bash|zsh|fish>
+  update               Check for a newer npm release
 
 Custom ranges (e.g. main..feature) and 'gh pr' sessions also display a
 "what is this diff" banner in the web UI summarising the diff source.
@@ -384,16 +398,22 @@ Examples:
   diffing show HEAD              Review a single commit's metadata + diff
   diffing show HEAD~3..HEAD      Review the last 3 commits as a series
   diffing show HEAD -- src/      Limit a commit review to a directory
+  diffing "gh pr 1234"           Review a GitHub pull request
   diffing --diff-algorithm=patience src/  Diff with patience algorithm
   diffing -U10                   Diff with 10 context lines
   diffing --word-diff=color      Word-level diff in color
   diffing -b -w                  Ignore whitespace changes
   diffing --host 0.0.0.0         Allow other machines on the LAN to review
   diffing --tui                  Open the experimental TUI (native Rust)
+  diffing await-review           Agent: wait for human handoff
+  diffing plan submit PLAN.md    Agent: submit a plan for approval
+  diffing mcp --repo /abs/path   MCP server bound to one repository
 
 Note: 'diffing <sha>' runs 'git diff <sha>' (working tree vs <sha>); it
 is not the same as 'diffing show <sha>'. Use 'show' when you want to
-review a commit's changes.`)
+review a commit's changes.
+
+Full reference: docs/cli.md (bundled in the repository).`)
 }
 
 function printGitDiffHelp(): void {

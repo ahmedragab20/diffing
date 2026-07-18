@@ -55,9 +55,14 @@ if (ghPrConsumed > 0) {
   args.splice(0, ghPrConsumed)
 }
 
-// ── Agent subcommands ───────────────────────────────────
-// A small reserved set of verbs drives the user→agent handoff. They're checked
-// before diff parsing so they never collide with `git diff` revisions.
+// ── Agent / DX subcommands ──────────────────────────────
+// Reserved verbs for handoff, plan review, GH PR automation, MCP, and
+// diagnostics. Checked before git-diff parsing so they never collide with
+// revisions. Full contracts: docs/cli.md §4–§5 and Agents.md.
+//
+//   await-review | comments | reply | resolve | unresolve | comment
+//   progress | url | plan | gh | mcp | inspect | doctor | completion | update
+//   show is handled separately (falls through to web/terminal/tui).
 const SUBCOMMANDS = new Set([
   'await-review',
   'reply',
@@ -83,10 +88,16 @@ if (SUBCOMMANDS.has(args[0])) {
 
 Run diffing as a local stdio MCP server bound to one Git repository.
 
+The server advertises session, diff inspection, comment lifecycle, plan
+review, progress, and history tools. Prefer MCP when the harness exposes
+it; otherwise use the CLI mirrors (await-review, comments, plan, …).
+
 Options:
   --repo <path>  Bind to this absolute Git repository path.
                  If omitted, the Git repository containing the current directory is used.
-  -h, --help     Show this help.`)
+  -h, --help     Show this help.
+
+See docs/cli.md §5 (MCP) for the full tool table.`)
       process.exit(0)
     }
 

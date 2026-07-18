@@ -10,11 +10,11 @@ Use diffing as a real implementation gate: submit clean markdown, wait for the h
 
 ## Start and submit
 
-Prefer diffing MCP tools when available:
+Prefer MCP when available:
 
-1. Call `review_session_status`, then `start_review_session` if needed.
-2. Call `submit_plan` with the complete markdown body, a useful title, and model/source attribution when known.
-3. Call `await_plan_review`. A timeout is normal; retry while the user still wants you to wait.
+1. `review_session_status`, then `start_review_session` if needed.
+2. `submit_plan` with complete markdown body, title, and model/source when known.
+3. `await_plan_review`. Timeout is normal; retry while the user still wants you to wait.
 
 CLI fallback:
 
@@ -22,19 +22,32 @@ CLI fallback:
 diffing --web --no-open
 diffing plan submit <plan.md> [--save-source] --title "..." --model "<model-name>"
 diffing plan await
+# or: cat PLAN.md | diffing plan submit --model "..."
 ```
 
-Keep temporary plan files in `~/.diffing/<repo>/plan-sources/` rather than anywhere in the consumer project's working tree. Use `--save-source` / `-S` on `diffing plan submit` to automatically save a copy there. Piping the body on stdin is also supported (this is the preferred path — zero filesystem footprint). Always resubmit revisions with the original plan ID so history remains one conversation.
+Keep temporary plan files in **`~/.diffing/<repo>/plan-sources/`** — never in the consumer project tree. Use `--save-source` / `-S` to copy the submitted body there. Prefer stdin for zero working-tree footprint. Always resubmit revisions with the original plan **`--id`** so history stays one conversation.
+
+Useful reads:
+
+```bash
+diffing plan list [--json]
+diffing plan show <id> [--json] [--version n]
+diffing plan versions <id> [--json]
+```
 
 ## Obey the verdict
 
-- `approved`: implement the reviewed version, taking open inline comments into account.
-- `changes-requested`: do not implement. Reply to each open thread, revise the plan, resolve addressed threads, resubmit the same `planId`, and await another verdict.
-- `rejected`: stop. Do not implement or keep extending the rejected approach.
-- `comment-only`: do not edit files or implement. Only answer questions and discuss the decision comment.
-- `pending`: keep waiting or report that no decision has been made.
+| Decision | Action |
+|----------|--------|
+| `approved` | Implement the reviewed version; account for open inline comments. |
+| `changes-requested` | Do **not** implement. Reply to open threads, revise plan, resolve addressed threads, `submit` same `planId`, `await` again. |
+| `rejected` | Stop. Do not implement or extend the rejected approach. |
+| `comment-only` | Do **not** edit files or implement. Only answer questions / discuss. |
+| `pending` | Keep waiting or report no decision yet. |
 
-Use `reply_to_plan_comment` and `resolve_plan_comment` over MCP. CLI equivalents are:
+MCP: `reply_to_plan_comment`, `resolve_plan_comment`, `get_plan`, `get_plan_versions`, `get_plan_version`.
+
+CLI:
 
 ```bash
 diffing plan reply <comment-id> --body "..." --model "<model-name>"
@@ -42,4 +55,8 @@ diffing plan resolve <comment-id>
 diffing plan submit <revised-plan.md> --id <plan-id> --model "<model-name>"
 ```
 
-Only address comments with `status="open"`. Questions and ambiguous requests should receive a reply and remain open; resolve a change request only when the revised plan actually incorporates it.
+Only address comments with `status="open"`. Questions stay open after reply; resolve a change request only when the revised plan incorporates it.
+
+## Human UI notes (so agents set expectations)
+
+The human reviews at `/plan` or `/plan/<id>`: Source / Read / Split views, optional zen full-width Read, outline, comments rail, and **Submit review** for the verdict that unblocks `plan await`.

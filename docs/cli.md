@@ -101,6 +101,20 @@ diffing [options] [<revision>...] [-- <path>...]
 
 A specialized suite of subcommands is integrated into the `diffing` binary to coordinate handoffs and synchronize review cycles. These commands automatically discover the active server via the lockfile.
 
+| Subcommand | Role |
+|------------|------|
+| `await-review` | Block until human **Send to agent** |
+| `comments` | Snapshot comments (XML / JSON / Markdown) |
+| `reply` / `resolve` / `unresolve` | Thread lifecycle |
+| `comment edit` / `comment delete` | Mutate a thread body or delete it |
+| `progress` | Live agent progress toast |
+| `url` | Active server base URL |
+| `plan …` | Plan-review loop (see §4b) |
+| `gh …` | GitHub PR automation (see §4c) |
+| `mcp` | Stdio MCP server (see §5) |
+| `inspect …` | Bounded TUI data reads (see below) |
+| `doctor` / `completion` / `update` | DX |
+
 ### `await-review`
 Blocks the calling process until the user clicks **"Send to agent"** in the browser toolbar, then streams the review comments as XML to `stdout`.
 
@@ -131,8 +145,10 @@ diffing comments [options]
 - **Options**:
   - `--open`: Filter results to only output comments whose status is `"open"`.
   - `--json`: Format output as standard, structured JSON instead of the self-documenting agent XML.
+  - `--format <xml|json|md|markdown>`: Explicit output format. `--json` is an alias for `--format json`. Default is agent XML.
 - **Behavior**:
   - Returns a snapshot of comments at the moment of execution.
+  - Markdown export is useful for pasting into PR descriptions or chat without XML plumbing.
 
 ---
 
@@ -170,6 +186,51 @@ diffing resolve <commentId>
 
 ---
 
+### `unresolve`
+Re-opens a previously resolved comment thread (`status: "open"`).
+
+```bash
+diffing unresolve <commentId>
+```
+
+- **Arguments**:
+  - `<commentId>`: The UUID of the comment thread.
+- **Exit Codes**:
+  - `0`: Successfully re-opened.
+  - `4`: Comment not found.
+
+---
+
+### `comment edit` / `comment delete`
+Edit or permanently delete a comment thread (body or whole thread).
+
+```bash
+diffing comment edit <commentId> --body "..."   # body via --body or stdin
+diffing comment delete <commentId>
+```
+
+- **Exit Codes**:
+  - `0`: Success.
+  - `4`: Comment not found.
+  - `5`: Usage (missing body for edit).
+
+Prefer `reply` for conversation turns. Use `comment edit` only when correcting a mis-posted finding; use `comment delete` sparingly (it is destructive and cannot be undone from the CLI).
+
+---
+
+### `progress`
+Report live agent status so the human UI can show a progress toast while work is underway.
+
+```bash
+diffing progress --message "Addressing L42…" [--model <name>] [--pct <0-100>] [--comment-id <id>] [--agent-id <id>]
+```
+
+- Posts to `POST /api/agent/progress` on the active review server.
+- Safe to call frequently; the UI coalesces updates.
+- Does not replace `reply` / `resolve` — it only communicates status.
+
+---
+
 ### `url`
 Outputs the base URL of the active review server. Highly useful for external scripts making direct curl or HTTP requests.
 
@@ -179,6 +240,57 @@ diffing url
 
 - **Behavior**:
   - Resolves the lockfile and outputs `http://127.0.0.1:<port>` to stdout.
+
+---
+
+### `doctor`
+Environment and installation self-check for the current machine/repository.
+
+```bash
+diffing doctor
+```
+
+- Prints a human-readable report covering git availability, repository detection, lockfile/server state, TUI binary discovery, and related health checks.
+- Exit `0` when all checks pass; non-zero when one or more checks fail.
+
+---
+
+### `completion`
+Emit shell completion scripts for interactive CLIs.
+
+```bash
+diffing completion <bash|zsh|fish>
+# Install examples:
+#   diffing completion bash >> ~/.bashrc
+#   diffing completion zsh  > ~/.zfunc/_diffing
+#   diffing completion fish > ~/.config/fish/completions/diffing.fish
+```
+
+---
+
+### `inspect`
+Read **bounded** diff data from a running **native TUI** session without transferring the full patch (TUI-only agent inspection API).
+
+```bash
+diffing inspect summary
+diffing inspect files [--cursor N] [--limit N]
+diffing inspect hunks --file N [--cursor N] [--limit N] [--generation N]
+diffing inspect slice --file N [--start N] [--max-lines N] [--max-bytes N] [--generation N]
+diffing inspect search <text>|--query <text> [--file N] [--row N] [--limit N] [--max-bytes N]
+# Add --pretty for indented JSON.
+```
+
+- Requires an active TUI lock (`mode: "tui"`) with agent HTTP endpoints.
+- Prefer MCP `diff_summary` / `diff_files` / `diff_hunks` / `diff_slice` / `diff_search` when available — they target the same bounded data model.
+
+---
+
+### `update`
+Check npm for a newer `diffing` package and print install guidance when one exists.
+
+```bash
+diffing update
+```
 
 ---
 
@@ -235,10 +347,18 @@ diffing plan list [--json]
 Print a single plan.
 
 ```bash
-diffing plan show [<id>] [--json]      # latest plan if <id> omitted
+diffing plan show [<id>] [--json] [--version <n>]      # latest plan if <id> omitted
 ```
 
 - Default: the `<plan-review>` XML. `--json`: the raw plan object.
+- `--version <n>`: when supported by the server, print a historical body instead of the current version.
+
+### `plan versions`
+List version history for a plan (id, version numbers, timestamps).
+
+```bash
+diffing plan versions <id> [--json]
+```
 
 ### `plan reply`
 Reply to an inline plan comment (the owning plan is resolved automatically).
@@ -253,6 +373,18 @@ Mark a plan comment resolved.
 ```bash
 diffing plan resolve <commentId>
 ```
+
+### Plan review UI (web)
+
+The browser plan surface (`/plan`, `/plan/:id`) is the human half of this loop:
+
+- **Source / Read / Split** — view mode is always visible in the plan toolbar; `m` cycles modes.
+- **Zen Read** — in Read-only mode, the expand control enters full-width focus reading (Esc exits). Preference is persisted.
+- **Resizable split** — drag the divider between Source and Read; double-click resets 50/50.
+- **Inline comments** — Source: select lines or gutter `+`. Read: highlight text → Add comment (multiple floating drafts supported).
+- **Verdict** — Approve / Request changes / Reject / Comment only via **Submit review** (releases `plan await`).
+
+Keep agent plan sources under `~/.diffing/<repo>/plan-sources/` — never in the consumer project tree.
 
 ---
 
@@ -662,8 +794,11 @@ declared explicitly.
 | Area | Tools | Purpose |
 |------|-------|---------|
 | Session | `review_session_status`, `start_review_session` | Inspect the bound repository and live server; idempotently start or reuse a loopback session |
-| Diff review | `get_diff`, `create_comment` | Read the complete unified diff and post typed inline findings without raw HTTP |
-| Human handoff | `await_review`, `list_comments`, `reply_to_comment`, `resolve_comment` | Receive verdict/comments and synchronize the discussion in real time |
+| Diff inspection | `get_diff`, `diff_summary`, `diff_files`, `diff_hunks`, `diff_slice`, `diff_search` | Full patch **or** bounded file/hunk/slice/search reads for large diffs |
+| Diff review | `create_comment` | Post typed inline findings (path, side, line/range, body, optional severity) |
+| Human handoff | `await_review`, `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment` | Receive verdict/comments and synchronize discussion in real time |
+| Comment lifecycle | `edit_comment`, `delete_comment`, `edit_reply`, `delete_reply`, `apply_suggestion`, `resolve_all_comments` | Edit/delete threads and replies; apply ```suggestion fences; bulk-resolve |
+| Progress / history | `report_progress`, `get_review_history` | Live agent progress toast; multi-round handoff history |
 | Plan review | `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment` | Gate implementation on a versioned human-reviewed plan |
 
 `start_review_session` accepts an optional array of safe git-diff scope,
@@ -677,6 +812,18 @@ baseline working-tree mode accepts only staged/cached selection.
 The await tools return `status: "released" | "timeout"` in structured content.
 Timeout is an expected retry state. Released results include `mode`; when the
 mode is `comment-only`, the agent must reply without editing files.
+
+CLI mirrors for the expanded tool surface:
+
+| MCP | CLI |
+|-----|-----|
+| `await_review` | `diffing await-review` |
+| `list_comments` | `diffing comments [--open] [--format xml\|json\|md]` |
+| `reply_to_comment` / `resolve_comment` / `unresolve_comment` | `diffing reply` / `resolve` / `unresolve` |
+| `edit_comment` / `delete_comment` | `diffing comment edit` / `comment delete` |
+| `report_progress` | `diffing progress --message "..."` |
+| `diff_*` (bounded) | `diffing inspect <summary\|files\|hunks\|slice\|search>` (TUI session) |
+| Plan tools | `diffing plan …` |
 
 ### MCP Prompts and Resource
 
@@ -978,18 +1125,20 @@ Fetches a list of all current code review comment threads.
 - **Response Schema**: Array of `ReviewComment` objects.
 
 #### `POST /api/comments`
-Opens a new inline comment thread on a line of code.
+Opens a new inline comment thread on a line of code (or multi-line range).
 - **Payload Schema**:
   ```json
   {
     "filePath": "src/lib/git.ts",
     "side": "additions | deletions",
     "lineNumber": 142,
-    "startLineNumber": 140,            // Supports range select
+    "startLineNumber": 140,            // Optional; multi-line range (inclusive with lineNumber)
     "lineContent": "The exact source line context",
-    "body": "Markdown comment message"
+    "body": "Markdown comment message",
+    "severity": "blocking | nit | question | praise | none"  // optional triage label
   }
   ```
+- **Side / line anchoring (web UI)**: comments attach to the selected **side** (`additions` / `deletions`) and line number(s). Same-side selections use `side` only (not a default of `additions`). The composer anchors under the bottom line of a multi-line selection.
 
 #### `PUT /api/comments/:id`
 Updates an existing comment thread body or toggles its status.
@@ -1003,6 +1152,9 @@ Updates an existing comment thread body or toggles its status.
 
 #### `DELETE /api/comments/:id`
 Permanently deletes a comment thread.
+
+#### `POST /api/comments/resolve-all`
+Marks every open comment as `resolved` in one request. Used by the web **Resolve all** toolbar control.
 
 #### `POST /api/comments/:id/replies`
 Appends a conversation reply to an existing comment thread.
@@ -1022,7 +1174,26 @@ Updates the body text of a comment reply.
 Deletes a comment reply.
 
 #### `POST /api/comments/:id/apply-suggestion`
-Parses a Markdown ```suggestion code block inside the comment body, applies the proposed lines of code to the physical working tree file, and marks the comment thread as `resolved`.
+Parses a Markdown ```suggestion code block inside the comment body, applies the proposed lines of code to the physical working tree file (including multi-line suggestions), and marks the comment thread as `resolved`.
+
+#### `POST /api/agent/progress`
+Agent → human live status for the progress toast.
+
+```json
+{
+  "message": "Working on comment…",
+  "model": "claude-opus-4",
+  "agentId": "optional-session-id",
+  "commentId": "optional-comment-uuid",
+  "pct": 40
+}
+```
+
+#### `GET /api/agent/progress`
+Latest progress snapshot (if any).
+
+#### `GET /api/review/history`
+Multi-round handoff history (rounds, timestamps, verdicts) for the review history popover / `get_review_history` MCP tool.
 
 ---
 
