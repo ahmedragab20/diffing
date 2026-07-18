@@ -32,10 +32,11 @@ Prefer the terminal? Add `--tui` for a native-Rust terminal UI — same review f
 diffing --tui
 ```
 > [!WARNING]
-> The TUI is **experimental** in v0.3.0. The interface, keymap, and
-> `server.json` (`mode: "tui"`) on-disk format may change in a minor
-> release. The web UI is the supported path for production workflows.
-> See [Native Terminal UI (TUI)](#native-terminal-ui-tui) for the full feature set, keymap, and stability notes.
+> The TUI is **experimental**. The interface, keymap, and `server.json`
+> (`mode: "tui"`) on-disk format may change in a minor release. The web UI is
+> the supported path for production workflows. See
+> [Native Terminal UI (TUI)](#native-terminal-ui-tui) for the full feature set,
+> keymap, and stability notes.
 
 ### 3. Update
 Check if a new version is available on npm and upgrade instantly via the CLI:
@@ -49,16 +50,18 @@ diffing update
 
 A local Hono-powered review server delivers a full-featured GitHub-like code review interface directly in your browser.
 
-- **Split / Unified View** — Toggle between side-by-side (`split`) and inline (`unified`) diff layouts via toolbar or keyboard shortcut `m`.
+- **Split / Unified View** — Side-by-side (`split`) or inline (`unified`) layouts. Set under **Settings → Diff style**, or press `m` to cycle. Diff style is not a toolbar toggle.
+- **Compact toolbar** — Repo + branch, quiet summary chips (files, `+X/−Y`, open comments), Search (`⌘K`), Plans badge, Resolve all, Settings, and **Send review**.
 - **Syntax Highlighting** — Powered by Shiki via `@pierre/diffs`, with high-fidelity highlighting for 200+ languages.
-- **Interactive File Tree** — Hierarchical file navigation sidebar with collapsible folders, viewed/unviewed tracking, and change-type indicators (added, modified, deleted).
-- **Status Dashboard (Comment Tracker)** — Bottom panel tracking open, replied, and resolved comments with filter tabs and click-to-navigate references to the relevant file and line.
-- **Git Diff Stats** — Toolbar displays repo name, branch, file count, and additions/deletions (`+X/-Y`) computed from the patch.
-- **Server-Side State & Drafts Persistence** — No browser storage is used. All settings, UI panels sizing, session states, and comment drafts are securely stored and persisted server-side in the project's global `.diffing` directory (and global settings inside `~/.config/diffing/settings.json`).
-- **Dynamic Font Customization** — Pick any [Google Fonts](https://fonts.google.com/) family or locally-installed system font for both UI typography and monospace code rendering, configurable via the settings font picker. Google-hosted families are fetched automatically as web fonts and render everywhere; local fonts are applied by name (see the [note on custom fonts](#a-note-on-custom-fonts)).
-- **Resizable Panels** — Drag-to-resize sidebar (240px–640px) and comment tracker panel (100px–600px). Panel states are instantly saved server-side for absolute consistency across browser sessions.
-- **Skeleton Loading Screen** — Full shimmer placeholder UI for toolbar, sidebar, search, tree nodes, and file diffs during initial load.
-- **Image Diff Previews** — Visual side-by-side comparison for added, changed, and deleted image files (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, AVIF).
+- **Interactive File Tree** — Hierarchical navigation with collapsible folders, viewed/unviewed tracking, change-type indicators, smart filter chips (**All / Unviewed / Comments / Since last**), multi-select extension filters, and path search.
+- **Icon file-header actions** — Expand context, open in editor, file-level comment, and Viewed — with tooltips; less chrome noise per card.
+- **Status Dashboard (Comment Tracker)** — Bottom panel tracking open, replied, and resolved comments with severity filters and click-to-navigate.
+- **Multi-round review** — Round history popover, “changed since last send” chips, and outdated-comment detection.
+- **Server-Side State & Drafts Persistence** — No browser storage is used. Settings, panel sizes, session state, and comment drafts live under `~/.diffing/` (global settings in `~/.config/diffing/settings.json`).
+- **Dynamic Font Customization** — Google Fonts or local system fonts for UI + mono (see [custom fonts](#a-note-on-custom-fonts)).
+- **Resizable Panels** — Drag-to-resize sidebar (240px–640px) and comment tracker (100px–600px); sizes persisted server-side.
+- **Skeleton Loading Screen** — Full shimmer placeholder UI during initial load.
+- **Image Diff Previews** — Side-by-side comparison for common image formats.
 
 ---
 
@@ -120,7 +123,7 @@ Full keyboard-driven navigation with vim-like motions and a modal status bar:
 | `Ctrl+d` / `Ctrl+u` | Scroll half-page down/up |
 | `g` `g` | Jump to top of diff |
 | `G` | Jump to bottom of diff |
-| `m` | Toggle split/unified view |
+| `m` | Toggle split/unified view (also Settings → Diff style) |
 | `t` | Cycle tab size (2 → 4 → 8) |
 | `w` | Toggle line wrap |
 | `n` | Toggle line numbers |
@@ -140,7 +143,14 @@ Full keyboard-driven navigation with vim-like motions and a modal status bar:
 | `g` `t` | Open theme picker |
 | `Cmd/Ctrl+K` | Open global command palette |
 | `Cmd/Ctrl+,` | Toggle settings panel |
-| `?` | Show shortcuts help modal |
+| `?` / `⌘?` | Show shortcuts help modal |
+
+### Plan page extras (when reviewing a plan at `/plan`)
+| Key | Action |
+|-----|--------|
+| `m` | Cycle Source → Read → Split |
+| `J` / `K` | Next / previous plan |
+| Esc | Exit zen reading / dismiss Add-comment chip |
 
 A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), file path, and a help button. Multi-key sequences use an 800ms key buffer.
 
@@ -152,11 +162,11 @@ A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), 
 ## Native Terminal UI (TUI) — *Experimental*
 
 > [!WARNING]
-> The TUI is **experimental** in v0.3.0. The interface, keymap, and on-disk
-> format of `server.json` (`mode: "tui"`) may change in a minor release
-> before stabilisation. The web UI is the supported path for production
-> workflows; please open an issue before depending on the TUI for CI / agent
-> automation. The web review flow, plan review, and PR review are unaffected.
+> The TUI is **experimental**. The interface, keymap, and on-disk format of
+> `server.json` (`mode: "tui"`) may change in a minor release before
+> stabilisation. The web UI is the supported path for production workflows;
+> please open an issue before depending on the TUI for CI / agent automation.
+> The web review flow, plan review, and PR review are unaffected.
 
 `diffing --tui` opens an **opt-in native-Rust terminal interface** that mirrors the local code-review workflow — no browser or Electron. The renderer and headless tools share one sparse diff index. A random-port loopback API is published through `server.json` with `mode: "tui"` and a per-session capability, so local agents can inspect a large diff without receiving the whole patch.
 
@@ -275,21 +285,33 @@ Bidirectional, event-driven sync between the browser UI and connected AI agents 
 The `diffing` binary acts as a port-agnostic CLI client. It automatically discovers the running server by reading a local repository lockfile:
 
 ```bash
-diffing await-review                 # Block process until you click "Send to agent"; outputs comments as XML
-diffing comments [--open] [--json]   # One-shot query of the comments database
-diffing reply <id> --body "..."     # Post an agent response or explanation
-diffing resolve <id>                 # Mark a comment resolved, updating the UI live
-diffing url                          # Retrieve the active server base URL
+# Code-review handoff
+diffing await-review                 # Block until "Send to agent"; print comments as XML
+diffing comments [--open] [--format xml|json|md]
+diffing reply <id> --body "..."      # Post an agent response
+diffing resolve <id>                 # Mark resolved (UI updates live)
+diffing unresolve <id>               # Re-open a resolved thread
+diffing comment edit <id> --body "..."
+diffing comment delete <id>
+diffing progress --message "…" [--pct 40] [--model M]   # Live progress toast
+diffing url                          # Active server base URL
 
-# Plan review (review a markdown plan before any code is written)
-diffing plan submit <file> [--title T] [--model M] [--id <id>] [--wait]   # Submit/resubmit a plan; prints its id
-diffing plan await [--timeout N]     # Block until the human approves/rejects/requests-changes; outputs the verdict XML
-diffing plan list [--json]           # List submitted plans with their verdicts
-diffing plan show [<id>] [--json] [--version N]   # Show one plan as <plan-review> XML (latest if omitted; use --version to read a historical body)
-diffing plan versions <id> [--json]  # List every submitted version of a plan, oldest-first (current marked with `*`)
-diffing plan reply <commentId> --body "..."   # Reply to an inline plan comment
-diffing plan resolve <commentId>     # Mark a plan comment resolved
+# Plan review (before any code is written)
+diffing plan submit <file> [--title T] [--model M] [--id <id>] [--wait] [--save-source]
+diffing plan await [--timeout N]
+diffing plan list [--json]
+diffing plan show [<id>] [--json] [--version N]
+diffing plan versions <id> [--json]
+diffing plan reply <commentId> --body "..."
+diffing plan resolve <commentId>
+
+# DX
+diffing doctor                       # Environment / install self-check
+diffing completion <bash|zsh|fish>
+diffing inspect summary|files|hunks|slice|search   # Bounded reads from a TUI session
 ```
+
+Full contracts (flags, exit codes, XML, HTTP): **[docs/cli.md](docs/cli.md)**.
 
 ### B. Model Context Protocol (MCP) Server
 If your agent supports MCP, configure `diffing` as a stdio server. The MCP is
@@ -325,9 +347,13 @@ Run `diffing mcp --help` for setup details. The server initialization
 instructions tell an unfamiliar model what to do next, and every tool returns
 both readable text and structured content.
 
-- Session: `review_session_status`, `start_review_session`
-- Local review: `get_diff`, `create_comment`, `await_review`, `list_comments`, `reply_to_comment`, `resolve_comment`
-- Plan review: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment`
+| Area | Tools |
+|------|-------|
+| Session | `review_session_status`, `start_review_session` |
+| Diff inspection | `get_diff`, `diff_summary`, `diff_files`, `diff_hunks`, `diff_slice`, `diff_search` |
+| Comments | `create_comment`, `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment`, `edit_comment`, `delete_comment`, `edit_reply`, `delete_reply`, `apply_suggestion`, `resolve_all_comments` |
+| Loop | `await_review`, `report_progress`, `get_review_history` |
+| Plan | `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment` |
 
 Clients that expose MCP prompts can use `review_local_changes` and
 `submit_plan_for_review`; clients that expose resources can read
@@ -352,7 +378,11 @@ still interpret pasted self-describing XML. The installable `skills/` copies and
 repo-local `.agents/skills/` copies are contract-tested to remain identical.
 
 ### Send Review Popover
-A GitHub-style "finish your review" popover with inline editing of each comment, an optional general/overall comment, and a visual indicator when an agent is waiting. The **"Copy comments"** toolbar button serializes all comments to the XML spec and copies them to the clipboard.
+A GitHub-style **Submit review** / **Send to agent** popover: pick a verdict
+(Approve / Request edits / Reject / **Comment only**), optionally add an overall
+note, preview every inline comment (editable/removable), and release every
+waiting agent. Agent waiting state shows as a green dot on the button.
+**Copy comments** serializes the thread set to the agent XML spec.
 
 ### Port-Agnostic Discovery
 A per-repo lockfile (`server.json`) in `~/.diffing/<repo-hash>/` enables all subcommands and MCP tools to discover the server's port with zero configuration. Stale or crashed server locks are automatically detected and treated as dead via `process.kill(pid, 0)`.
@@ -367,39 +397,27 @@ A `ReviewSession` class with a monotonic `round` counter and race-guard logic en
 Review **any agent plan** — not just code. When an AI agent produces a plan
 (an implementation outline, a design proposal, a migration strategy), `diffing`
 renders the markdown line-by-line so you can comment on specific lines or
-sections and **approve**, **request changes**, or **reject** it — then hands the
-structured verdict back to the waiting agent. It's the "agent waits, human
-releases" handoff, applied *before* any code is written.
+sections and **approve**, **request changes**, **reject**, or **comment only**
+— then hands the structured verdict back to the waiting agent. It's the
+"agent waits, human releases" handoff, applied *before* any code is written.
 
 ```text
 1. The agent submits a markdown plan and blocks (diffing plan submit … --wait).
-2. You open the "Plans" tab, read the plan, and comment on lines/sections.
-3. You click Approve / Request changes / Reject (with an optional overall note).
-4. The agent wakes instantly, receives the verdict + comments as <plan-review> XML,
-   and proceeds, revises-and-resubmits, or stops accordingly.
+2. You open Plans (/plan), read Source / Read / Split, and comment on lines/sections.
+3. You Submit review: Approve / Request changes / Reject / Comment only.
+4. The agent wakes, receives <plan-review> XML, and proceeds, revises, or stops.
 ```
 
-- **Renders any markdown plan** — the plan body is shown via `@pierre/diffs` with
-  full syntax highlighting and line numbers, so it's addressable like a diff.
-- **Line, range & section comments** — hover the gutter `+` or select a line range
-  to comment; each comment auto-captures its enclosing markdown heading (section)
-  and the exact anchored text for the agent.
-- **General comments** — attach notes scoped to the whole plan.
-- **Three-way verdict** — Approve / Request changes / Reject, GitHub-style, with
-  an optional overall comment. Resubmitting a revised plan (same id) bumps the
-  version and re-opens it for review.
-- **Browse plan versions** — every submitted body is kept on disk, oldest-first.
-  A version dropdown next to the `v{n}` chip switches the viewer to any past
-  version; comments are filtered to those anchored to the version you're
-  reading; a "viewing v{N} of v{M}" banner makes the historical context obvious.
-  Available from the CLI (`diffing plan versions <id>`, `diffing plan show <id> --version N`),
-  MCP (`get_plan_versions`, `get_plan_version`), and the HTTP API
-  (`GET /api/plans/:id/versions`, `GET /api/plans/:id/versions/:n`).
-- **Live "Plans" badge** — the diff toolbar shows a badge counting plans awaiting
-  your review, with a green dot when an agent is connected and waiting.
-- **Same channels everywhere** — drive it from the CLI (`diffing plan …`), the
-  MCP tools (`submit_plan`, `await_plan_review`, …), or the HTTP API
-  (`POST /api/plans`, `POST /api/plans/:id/decision`, `GET /api/plan-review/await`).
+- **Source / Read / Split** — always-visible view modes in the plan toolbar (`m` cycles). Read uses full main-column width; **Zen** expands to immersive full-width focus reading (Esc exits).
+- **Resizable split** — drag the Source|Read divider; double-click resets 50/50.
+- **Renders any markdown plan** — Source via `@pierre/diffs` (commentable lines); Read as polished markdown with outline.
+- **Line, range & section comments** — gutter `+` or select lines (Source); highlight text → Add comment in Read (multiple floating drafts, minimize tray, Esc).
+- **General comments** — notes scoped to the whole plan.
+- **Four-way verdict** — Approve / Request changes / Reject / Comment only (no file edits). Resubmit with the same id bumps version and re-opens review.
+- **Browse plan versions** — version dropdown, historical banner, comments filtered to the viewed version. CLI / MCP / HTTP as below.
+- **Live "Plans" badge** — toolbar badge for plans awaiting review; green dot when an agent is waiting.
+- **Same channels everywhere** — CLI (`diffing plan …`), MCP (`submit_plan`, `await_plan_review`, …), HTTP (`POST /api/plans`, `POST /api/plans/:id/decision`, `GET /api/plan-review/await`).
+- **Scratch outside the tree** — plan sources under `~/.diffing/<repo>/plan-sources/` (`--save-source`); never commit agent plans into the consumer project.
 
 ### Plan Review XML Specification
 
@@ -511,13 +529,16 @@ coexist without colliding.
 
 Rich, real-time comment threads directly on diff lines:
 
-- **Inline Threads** — Hover and click the `+` button on any addition or deletion line to start a thread. Supports markdown (GFM + line breaks) with syntax-highlighted fenced code blocks.
-- **Multi-Line Comments** — Select a line range to comment on an entire block of code.
-- **File-Level Comments** — Add general comments scoped to the entire file without targeting a specific line.
-- **Comment Drafts** — Draft system (`diffing-draft-*` keys) with 7-day TTL, stored in the global `.diffing` folder so drafts survive page refreshes without any browser storage footprint.
-- **Agent Attribution** — Replies carry `role` (`user`/`agent`) and the agent's `model` name for clear attribution.
-- **Suggestion Application** — Parse `` ```suggestion `` code blocks from comment bodies and apply them to the file in one click via `POST /api/comments/:id/apply-suggestion`.
-- **Full CRUD API** — REST endpoints for creating, reading, updating, and deleting comments and replies.
+- **Inline Threads** — Hover the gutter `+` or select lines to open a composer **on that line/side** (additions and deletions). Markdown (GFM + breaks) with syntax-highlighted fences.
+- **Multi-Line Comments** — Drag a line range; the form anchors under the bottom line, with a clear `L12–L15 · new|old` label. Reverse selection is normalized.
+- **Severity** — Optional triage labels: blocking / nit / question / praise.
+- **File-Level Comments** — Notes scoped to the entire file.
+- **Comment Drafts** — Server-side drafts with TTL under `~/.diffing/` (no browser storage).
+- **Agent Attribution** — Replies carry `role` (`user`/`agent`) and `model`.
+- **Suggestion Application** — `` ```suggestion `` blocks (including multi-line) via **Apply suggestion** / `POST /api/comments/:id/apply-suggestion`.
+- **Bulk resolve** — Toolbar **Resolve all** → `POST /api/comments/resolve-all`.
+- **Agent progress** — Agents can `diffing progress` / `report_progress` for a live toast while working.
+- **Full CRUD** — Create, edit, delete, reply, unresolve — CLI, MCP, and HTTP.
 
 ---
 
