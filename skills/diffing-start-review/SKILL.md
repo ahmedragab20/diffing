@@ -29,7 +29,7 @@ Optional health check: `diffing doctor`.
 | Path filter | paths after `--` |
 | GitHub PR | `diffing "gh pr 1234"` or `--gh-pr 1234` |
 | Commit series (show mode) | `diffing show <revspec>...` |
-| Native TUI | `diffing --tui` (experimental) |
+| Native TUI | `diffing --tui` (experimental; requires a separately built or installed `diffing-tui` binary) |
 
 Use structured argument arrays with `start_review_session`; do not compose a shell string from untrusted user input.
 

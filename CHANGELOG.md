@@ -40,6 +40,13 @@
   - Document TUI launch behavior, persistence, keymaps, headless inspection,
     cross-platform liveness, and the shared browser/TUI review contract.
 
+  **Distribution status**
+
+  - The cross-platform npm package does not yet bundle platform-specific TUI
+    executables or compile Rust at install time. `diffing --tui` requires a
+    source build or a separately installed compatible `diffing-tui` on
+    `PATH`; otherwise the CLI falls back safely to the normal terminal diff.
+
 ## 0.9.0
 
 ### Minor Changes

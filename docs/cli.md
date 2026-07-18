@@ -82,7 +82,7 @@ diffing [options] [<revision>...] [-- <path>...]
 - `--host <host>`: Host address to bind the server to (default: `127.0.0.1`). Pass `0.0.0.0` to expose the review dashboard to your local network.
 - `--no-open`: Prevents the CLI from automatically launching your browser when the server starts.
 - `--gh-pr <ref>`: Open a GitHub PR review session instead of a working-tree diff. The `<ref>` accepts the same forms as `gh pr <ref>` (bare number, `owner/repo#N`, or full GitHub URL). Equivalent to the quoted form `diffing "gh pr <ref>"`. See [§4c. GitHub PR Review Subcommands](#4c-github-pr-review-subcommands) for the full flow.
-- `--tui`: Open the opt-in native-Rust terminal UI instead of the web server. The same review flow (diff render, file tree, comments, agent handoff) in your terminal — no browser, no port. Strictly opt-in; without `--tui`, `diffing` behaves byte-identically to the previous releases. See [§4d. TUI Subcommands (Native Terminal UI)](#4d-tui-subcommands-native-terminal-ui) for the full flow.
+- `--tui`: Open the opt-in native-Rust terminal UI instead of the web server when a compatible `diffing-tui` executable has been built or installed. The same review flow (diff render, file tree, comments, agent handoff) runs in your terminal — no browser. Strictly opt-in; without `--tui`, `diffing` behaves byte-identically to previous releases. The v0.10.0 npm package does not bundle the native executable. See [§4d. TUI Subcommands (Native Terminal UI)](#4d-tui-subcommands-native-terminal-ui) for installation, fallback, and the full flow.
 
 #### Git-Compatible Flags Supported
 - **Revisions / Range**: `--staged`, `--cached`, `--merge`
@@ -643,12 +643,19 @@ ephemeral and appears only for a submission completed in that page lifetime.
 ## 4d. TUI Subcommands (Native Terminal UI) — *Experimental*
 
 > [!WARNING]
-> The TUI is **experimental** in v0.3.0. The interface, keymap, and the
+> The TUI is **experimental** in v0.10.0. The interface, keymap, and the
 > on-disk shape of `server.json` (`mode: "tui"`) may change in a minor
 > release before stabilisation. The web UI is the supported path for
 > production workflows; please open an issue before depending on the TUI
 > for CI / agent automation. The web review flow, plan review, and PR
 > review are unaffected by the experimental status of the TUI.
+
+> [!IMPORTANT]
+> The v0.10.0 npm package ships the Node CLI and web client but does not bundle
+> a platform-specific `diffing-tui` executable or compile Rust at install
+> time. Use a source build or place a separately installed compatible binary
+> on `PATH`. Without one, `diffing --tui` falls back safely to the normal
+> terminal diff.
 
 `diffing --tui` opens the opt-in **native-Rust terminal UI** — a leaf renderer
 in `crates/diffing-tui/` that reads the same `~/.diffing/<repo>/*` state on
@@ -707,9 +714,9 @@ diffing --tui -- -- src/           # Limit to a directory
   to git diff`) and runs the normal `git diff` output.
 - If the `diffing-tui` binary is missing or fails to start, the CLI prints
   one line to stderr (`diffing-tui binary not found; build it with
-  pnpm build:tui; falling back to git diff`) and runs the normal `git
-  diff` output. The web mode is unaffected by the TUI build — the same
-  `diffing` install serves either.
+  pnpm build:tui; falling back to git diff`) and runs the normal `git diff`
+  output. That build command applies to a source checkout. The web mode is
+  unaffected by the TUI build — the same `diffing` install serves either.
 
 ### Binary discovery
 
@@ -722,6 +729,12 @@ the bundled `dist/cli.mjs` directory:
 4. `target/debug/diffing-tui[.exe]` (debug build — a plain `cargo build`
    is enough to use the TUI; no `--release` required)
 5. `$PATH` lookup via `where` (Windows) / `which` (POSIX)
+
+The sibling and `bin/` locations make packaged native binaries discoverable,
+but the v0.10.0 npm tarball does not populate them. Shipping native binaries
+through npm requires platform-specific artifacts; the current release avoids
+install-time compilation and never places a binary for the wrong operating
+system or CPU in the cross-platform package.
 
 ### Lockfile integration
 
@@ -837,13 +850,16 @@ first `Ctrl+S` arms the review guard; a second `Ctrl+S` confirms the handoff.
 ### Building the TUI from source
 
 ```bash
-pnpm build:tui               # debug → target/debug/diffing-tui
-pnpm build:tui --release     # release → target/release/diffing-tui
+pnpm build:tui:debug         # debug → target/debug/diffing-tui
+pnpm build:tui               # release → target/release/diffing-tui
 ```
 
 The `crates/diffing-tui/` crate is a member of the workspace at
 `Cargo.toml`. `cargo fmt` + `cargo clippy --all-targets -- -D warnings` +
-84 cargo tests all pass before release.
+106 cargo tests pass before the v0.10.0 release. A CLI run from the source
+checkout discovers either build under `target/` automatically. To use an npm-global
+`diffing` command from arbitrary repositories, copy or symlink the resulting
+executable into a directory on `PATH`; on Windows, use `diffing-tui.exe`.
 
 ---
 

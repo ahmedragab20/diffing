@@ -29,14 +29,19 @@ diffing
 ```
 This instantly spins up a local server, establishes an active repository watcher, and opens your default browser to an interactive code review dashboard.
 
-Prefer the terminal? Add `--tui` for a native-Rust terminal UI — same review flow, no browser:
+Prefer the terminal? After building or separately installing the native binary
+as described below, add `--tui` for the same review flow without a browser:
+
 ```bash
 diffing --tui
 ```
+
 > [!WARNING]
 > The TUI is **experimental**. The interface, keymap, and `server.json`
 > (`mode: "tui"`) on-disk format may change in a minor release. The web UI is
-> the supported path for production workflows. See
+> the supported path for production workflows. The v0.10.0 npm package does
+> **not** bundle a platform-specific `diffing-tui` executable; `--tui`
+> requires a source build or a separately installed binary on `PATH`. See
 > [Native Terminal UI (TUI)](#native-terminal-ui-tui) for the full feature set,
 > keymap, and stability notes.
 
@@ -175,6 +180,14 @@ A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), 
 > please open an issue before depending on the TUI for CI / agent automation.
 > The web review flow, plan review, and PR review are unaffected.
 
+> [!IMPORTANT]
+> **Distribution status in v0.10.0:** the npm package contains the Node CLI and
+> web UI, but not a platform-specific `diffing-tui` executable. Build the
+> binary from a source checkout or install it separately on `PATH`. diffing
+> does not compile Rust during npm installation. If no compatible binary is
+> found, `diffing --tui` prints a fallback notice and runs the normal terminal
+> diff instead.
+
 `diffing --tui` opens an **opt-in native-Rust terminal interface** that mirrors the local code-review workflow — no browser or Electron. The renderer and headless tools share one sparse diff index. A random-port loopback API is published through `server.json` with `mode: "tui"` and a per-session capability, so local agents can inspect a large diff without receiving the whole patch.
 
 Its diff-first **Gridline** design system uses a one-row command header, border-light file navigation, a dedicated review gutter, high-contrast semantic tokens, and keyboard-visible focus rails. Empty review drawers collapse automatically. Wide terminals can show files, diff, and review together; medium layouts place an active review below the diff; compact layouts show one focused workspace at a time. Press `,` for persisted Settings, including **Single file** versus virtualized **Continuous files**, split/unified layout, wrap, tab size, line numbers, review drawer, optional language intelligence, and theme.
@@ -218,11 +231,19 @@ diffing inspect search "unsafe" --limit 25
 **Building the binary locally**
 
 ```bash
-pnpm build:tui               # debug build → target/debug/diffing-tui
-pnpm build:tui --release     # release build → target/release/diffing-tui
+pnpm build:tui:debug         # debug build → target/debug/diffing-tui
+pnpm build:tui               # release build → target/release/diffing-tui
 ```
 
-The CLI auto-discovers the binary in the following search order: sibling of `dist/cli.mjs`, `bin/`, `target/release/`, `target/debug/`, then `$PATH`. A `cargo build` (debug) workflow is supported out of the box; you don't need `--release` just to use the TUI.
+The CLI auto-discovers the binary in the following search order: sibling of
+`dist/cli.mjs`, `bin/`, `target/release/`, `target/debug/`, then `$PATH`. A
+`cargo build -p diffing-tui` debug workflow is supported out of the box; you
+do not need a release build just to use the TUI locally. The sibling and
+`bin/` locations are reserved for future packaged-binary distribution; they
+are not populated by the v0.10.0 npm package. A CLI run from this source
+checkout discovers the binary under `target/`; to use the globally installed
+npm CLI from arbitrary repositories, copy or symlink the resulting executable
+into a directory on `PATH`.
 
 ---
 
