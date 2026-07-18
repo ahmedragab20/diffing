@@ -62,6 +62,12 @@ interface PendingComment {
   startLineNumber?: number
   /** Exact text the user highlighted in the rendered pane (agent quote). */
   selectedQuote?: string
+  /**
+   * Viewport position for a floating composer (from the selection popup).
+   * When set, the form opens next to the selection instead of at the
+   * bottom of the document.
+   */
+  anchor?: { x: number; y: number; placement: 'above' | 'below' }
 }
 
 type PlanAnnotationMeta = PlanComment | { _pending: true }
@@ -285,14 +291,17 @@ export function PlanReview({
     if (!meta) return null
     if ('_pending' in meta) {
       const p = pending!
+      // Selection-driven pending comments use the floating composer instead.
+      if (p.selectedQuote || p.anchor) return null
       return (
         <CommentForm
           draftKey={`plan-new:${plan.id}:${p.startLineNumber ?? p.lineNumber}:${p.lineNumber}`}
-          lineContent={formatPendingContext(p, viewingBody)}
+          lineContent={lineRange(p.startLineNumber, p.lineNumber)}
           onSubmit={(body) => commitComment(p, body)}
           onCancel={() => {
             setPending(null)
             setSelectedRange(null)
+            setLiveSelectionCount(0)
           }}
         />
       )
@@ -462,6 +471,12 @@ export function PlanReview({
           ? selectionPopup.startLine
           : undefined,
       selectedQuote: selectionPopup.text,
+      // Keep the composer pinned to where the user was reading.
+      anchor: {
+        x: selectionPopup.x,
+        y: selectionPopup.y,
+        placement: selectionPopup.placement,
+      },
     })
     setLiveSelectionCount(
       Math.abs(selectionPopup.endLine - selectionPopup.startLine) + 1,
@@ -582,30 +597,67 @@ export function PlanReview({
           </div>
         )}
         <Markdown content={viewingBody} />
-        {/* Floating pending comment form when started from rendered selection */}
-        {pending && showRendered && !showSource && (
-          <div className="plan-selection-comment" id="plan-selection-comment">
-            <div className="plan-selection-comment-meta">
-              Comment on line
-              {pending.startLineNumber && pending.startLineNumber !== pending.lineNumber
-                ? `s ${pending.startLineNumber}–${pending.lineNumber}`
-                : ` ${pending.lineNumber}`}
-              {pending.selectedQuote ? ' · selected quote' : ''}
-            </div>
-            <CommentForm
-              draftKey={`plan-new:${plan.id}:${pending.startLineNumber ?? pending.lineNumber}:${pending.lineNumber}`}
-              lineContent={formatPendingContext(pending, viewingBody)}
-              onSubmit={(body) => commitComment(pending, body)}
-              onCancel={() => {
-                setPending(null)
-                setSelectedRange(null)
-              }}
-            />
-          </div>
-        )}
       </div>
     </div>
   )
+
+  /** Composer opened from rendered-pane selection — float next to the quote. */
+  const floatingSelectionComposer =
+    pending && showRendered && (pending.selectedQuote || pending.anchor) ? (
+      <div
+        className={`plan-selection-comment ${
+          pending.anchor ? 'plan-selection-comment-floating' : ''
+        }`}
+        id="plan-selection-comment"
+        style={
+          pending.anchor
+            ? {
+                left: Math.min(
+                  Math.max(16, pending.anchor.x - 200),
+                  typeof window !== 'undefined' ? window.innerWidth - 420 : 16,
+                ),
+                top:
+                  pending.anchor.placement === 'below'
+                    ? pending.anchor.y + 8
+                    : Math.max(8, pending.anchor.y - 12),
+                transform:
+                  pending.anchor.placement === 'above' ? 'translateY(-100%)' : undefined,
+              }
+            : undefined
+        }
+      >
+        <div className="plan-selection-comment-meta">
+          Commenting on{' '}
+          {pending.startLineNumber && pending.startLineNumber !== pending.lineNumber
+            ? `lines ${pending.startLineNumber}–${pending.lineNumber}`
+            : `line ${pending.lineNumber}`}
+          {sectionTitleForLine(viewingBody, pending.startLineNumber ?? pending.lineNumber)
+            ? ` · § ${sectionTitleForLine(viewingBody, pending.startLineNumber ?? pending.lineNumber)}`
+            : ''}
+        </div>
+        <div className="plan-selection-comment-context">
+          {pending.selectedQuote?.trim() ? (
+            <blockquote className="plan-comment-quote" cite={`L${pending.lineNumber}`}>
+              “{pending.selectedQuote.trim()}”
+            </blockquote>
+          ) : null}
+          <pre className="plan-comment-source" aria-label="Source lines">
+            {lineRange(pending.startLineNumber, pending.lineNumber) || '(no source lines)'}
+          </pre>
+        </div>
+        <CommentForm
+          draftKey={`plan-new:${plan.id}:${pending.startLineNumber ?? pending.lineNumber}:${pending.lineNumber}`}
+          lineContent={lineRange(pending.startLineNumber, pending.lineNumber)}
+          showSeverity={false}
+          onSubmit={(body) => commitComment(pending, body)}
+          onCancel={() => {
+            setPending(null)
+            setSelectedRange(null)
+            setLiveSelectionCount(0)
+          }}
+        />
+      </div>
+    ) : null
 
   return (
     <div className="plan-review">
@@ -923,6 +975,8 @@ export function PlanReview({
         </button>
       )}
 
+      {floatingSelectionComposer}
+
       <FilePreviewModal
         isOpen={!!previewFilePath}
         filePath={previewFilePath}
@@ -930,28 +984,6 @@ export function PlanReview({
       />
     </div>
   )
-}
-
-/** Preview string for the comment form: quote + source lines for the human. */
-function formatPendingContext(
-  p: { lineNumber: number; startLineNumber?: number; selectedQuote?: string },
-  body: string,
-): string {
-  const start = p.startLineNumber ?? p.lineNumber
-  const source = extractPlanLines(body, start, p.lineNumber)
-  const section = sectionTitleForLine(body, start)
-  const parts: string[] = []
-  if (section) parts.push(`§ ${section}`)
-  parts.push(
-    p.startLineNumber && p.startLineNumber !== p.lineNumber
-      ? `L${p.startLineNumber}–${p.lineNumber}`
-      : `L${p.lineNumber}`,
-  )
-  const header = parts.join(' · ')
-  if (p.selectedQuote?.trim()) {
-    return `${header}\nSelected: “${p.selectedQuote.trim()}”\nSource:\n${source}`
-  }
-  return source ? `${header}\n${source}` : header
 }
 
 function buildPlanCSS(tabSize: number, fontSize: number, fontFamily: string): string {

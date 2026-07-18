@@ -9157,13 +9157,44 @@ button.toolbar-last-send-btn:hover {
     padding: 12px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    background: var(--bg-primary);
+    background: var(--bg-elevated, var(--bg-secondary));
+    box-shadow: var(--shadow-md);
+}
+/* Pinned next to the highlight (viewport coords from selection popup). */
+.plan-selection-comment-floating {
+    position: fixed;
+    z-index: 110;
+    margin: 0;
+    width: min(400px, calc(100vw - 32px));
+    max-height: min(70vh, 520px);
+    overflow: auto;
+    border: 1px solid var(--primary);
+    box-shadow: var(--shadow-lg);
+    opacity: 1;
 }
 .plan-selection-comment-meta {
     font-size: 12px;
     font-weight: 600;
     color: var(--text-secondary);
     margin-bottom: 8px;
+}
+.plan-selection-comment-context {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    border-left: 3px solid var(--primary);
+    background: var(--bg-tertiary);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.plan-selection-comment-context .plan-comment-quote {
+    font-size: 13px;
+    color: var(--text-primary);
+}
+.plan-selection-comment-context .plan-comment-source {
+    font-size: 11px;
+    opacity: 0.9;
 }
 .plan-comment-context {
     margin: 8px 0 10px;
