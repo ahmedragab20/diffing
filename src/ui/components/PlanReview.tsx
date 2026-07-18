@@ -33,8 +33,11 @@ import { Select } from '../primitives/Select'
 import { Tooltip } from '../primitives/Tooltip'
 import { buildPlanOutline } from '../lib/planOutline'
 import { mapSelectionToLines } from '../lib/planSelection'
+import { setUiStateItem } from '../utils/uiState'
+import { PLAN_UI, readBoolUi } from '../lib/planUiState'
 
 export type PlanViewMode = 'source' | 'rendered' | 'split'
+export { PLAN_UI } from '../lib/planUiState'
 
 interface PlanReviewProps {
   plan: Plan
@@ -47,6 +50,11 @@ interface PlanReviewProps {
   lineHoverHighlight: LineHoverHighlight
   viewMode: PlanViewMode
   editorIDE?: string
+  /** When provided, Settings owns the value (still persisted by the parent). */
+  tocOpen?: boolean
+  onTocOpenChange?: (open: boolean) => void
+  commentsRailOpen?: boolean
+  onCommentsRailOpenChange?: (open: boolean) => void
 }
 
 interface PendingComment {
@@ -75,6 +83,10 @@ export function PlanReview({
   lineHoverHighlight,
   viewMode,
   editorIDE,
+  tocOpen: tocOpenProp,
+  onTocOpenChange,
+  commentsRailOpen: commentsRailOpenProp,
+  onCommentsRailOpenChange,
 }: PlanReviewProps) {
   const {
     addPlanComment,
@@ -92,8 +104,35 @@ export function PlanReview({
   const [liveSelectionCount, setLiveSelectionCount] = useState(0)
   const [previewFilePath, setPreviewFilePath] = useState<string | null>(null)
   const [copyFlash, setCopyFlash] = useState<string | null>(null)
-  const [tocOpen, setTocOpen] = useState(true)
-  const [commentsRailOpen, setCommentsRailOpen] = useState(true)
+  // Local fallbacks when parent doesn't control these (still persisted).
+  const [tocOpenLocal, setTocOpenLocal] = useState(() => readBoolUi(PLAN_UI.tocOpen, true))
+  const [commentsRailLocal, setCommentsRailLocal] = useState(() =>
+    readBoolUi(PLAN_UI.commentsRail, true),
+  )
+  const tocOpen = tocOpenProp ?? tocOpenLocal
+  const commentsRailOpen = commentsRailOpenProp ?? commentsRailLocal
+  const setTocOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      const value = typeof next === 'function' ? next(tocOpen) : next
+      if (onTocOpenChange) onTocOpenChange(value)
+      else {
+        setTocOpenLocal(value)
+        setUiStateItem(PLAN_UI.tocOpen, String(value))
+      }
+    },
+    [tocOpen, onTocOpenChange],
+  )
+  const setCommentsRailOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      const value = typeof next === 'function' ? next(commentsRailOpen) : next
+      if (onCommentsRailOpenChange) onCommentsRailOpenChange(value)
+      else {
+        setCommentsRailLocal(value)
+        setUiStateItem(PLAN_UI.commentsRail, String(value))
+      }
+    },
+    [commentsRailOpen, onCommentsRailOpenChange],
+  )
   const [openingEditor, setOpeningEditor] = useState(false)
   /** Floating "Add comment" after selecting text in the rendered pane. */
   const [selectionPopup, setSelectionPopup] = useState<{

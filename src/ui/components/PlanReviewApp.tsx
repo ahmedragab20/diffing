@@ -10,6 +10,7 @@ import { SHIKI_THEME_MAP } from '../utils'
 import { HapticsProvider, playSound, fireFeedback } from '../hooks/useHaptics'
 import { getUiStateItem, setUiStateItem } from "../utils/uiState"
 import { PlanReview, type PlanViewMode } from './PlanReview'
+import { PLAN_UI } from '../lib/planUiState'
 import { PlanList } from './PlanList'
 import { ThemeModal } from './ThemeModal'
 import { AgentActivityToast } from './AgentActivityToast'
@@ -59,7 +60,7 @@ export function PlanReviewApp() {
   // Persisted viewMode: source | rendered | split
   const [viewMode, setViewMode] = useState<PlanViewMode>(() => {
     try {
-      const stored = getUiStateItem('diffing-plan-view-mode')
+      const stored = getUiStateItem(PLAN_UI.viewMode)
       if (stored === 'rendered' || stored === 'split' || stored === 'source') return stored
     } catch {}
     return 'source'
@@ -68,8 +69,34 @@ export function PlanReviewApp() {
   const handleViewModeChange = useCallback((mode: PlanViewMode) => {
     setViewMode(mode)
     try {
-      setUiStateItem('diffing-plan-view-mode', mode)
+      setUiStateItem(PLAN_UI.viewMode, mode)
     } catch {}
+  }, [])
+
+  // Outline + comments rail — same ui-state store as every other chrome pref.
+  const [tocOpen, setTocOpen] = useState(() => {
+    try {
+      const v = getUiStateItem(PLAN_UI.tocOpen)
+      if (v === 'false') return false
+      if (v === 'true') return true
+    } catch {}
+    return true
+  })
+  const [commentsRailOpen, setCommentsRailOpen] = useState(() => {
+    try {
+      const v = getUiStateItem(PLAN_UI.commentsRail)
+      if (v === 'false') return false
+      if (v === 'true') return true
+    } catch {}
+    return true
+  })
+  const handleTocOpenChange = useCallback((open: boolean) => {
+    setTocOpen(open)
+    setUiStateItem(PLAN_UI.tocOpen, String(open))
+  }, [])
+  const handleCommentsRailOpenChange = useCallback((open: boolean) => {
+    setCommentsRailOpen(open)
+    setUiStateItem(PLAN_UI.commentsRail, String(open))
   }, [])
 
   const routeId = useMemo(() => {
@@ -519,6 +546,24 @@ export function PlanReviewApp() {
                   </button>
                 </div>
 
+                <div className="settings-section-label">Plan chrome</div>
+                <label className="settings-item">
+                  <input
+                    type="checkbox"
+                    checked={tocOpen}
+                    onChange={(e) => handleTocOpenChange(e.target.checked)}
+                  />
+                  Show outline (On this page)
+                </label>
+                <label className="settings-item">
+                  <input
+                    type="checkbox"
+                    checked={commentsRailOpen}
+                    onChange={(e) => handleCommentsRailOpenChange(e.target.checked)}
+                  />
+                  Show comments panel
+                </label>
+
                 <div className="settings-section-label">Display</div>
                 <label className="settings-item">
                   <input
@@ -638,6 +683,10 @@ export function PlanReviewApp() {
                 lineHoverHighlight={settings.lineHoverHighlight}
                 viewMode={viewMode}
                 editorIDE={settings.editorIDE}
+                tocOpen={tocOpen}
+                onTocOpenChange={handleTocOpenChange}
+                commentsRailOpen={commentsRailOpen}
+                onCommentsRailOpenChange={handleCommentsRailOpenChange}
               />
             ) : (
               <PlanEmptyState hasPlans={plans.length > 0} notFound={!!routeId} />

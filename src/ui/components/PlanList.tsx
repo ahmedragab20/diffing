@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import {
   Check,
   X,
@@ -15,6 +15,8 @@ import {
 import type { Plan, PlanDecision } from '../../lib/plan-types'
 import { timeAgo } from '../utils'
 import { Tooltip } from '../primitives/Tooltip'
+import { getUiStateItem, setUiStateItem } from '../utils/uiState'
+import { PLAN_UI } from '../lib/planUiState'
 
 interface PlanListProps {
   plans: Plan[]
@@ -35,10 +37,32 @@ const DECISION_ICON: Record<PlanDecision, { icon: typeof Check; className: strin
 
 type DecisionFilter = 'all' | PlanDecision
 
+const DECISION_FILTERS: DecisionFilter[] = [
+  'all',
+  'pending',
+  'approved',
+  'changes-requested',
+  'rejected',
+  'comment-only',
+]
+
+function readDecisionFilter(): DecisionFilter {
+  try {
+    const v = getUiStateItem(PLAN_UI.decisionFilter)
+    if (v && (DECISION_FILTERS as string[]).includes(v)) return v as DecisionFilter
+  } catch {}
+  return 'all'
+}
+
 export function PlanList({ plans, activeId, onSelect, onDelete, collapsed, onToggleCollapse }: PlanListProps) {
   const [filter, setFilter] = useState('')
-  const [decisionFilter, setDecisionFilter] = useState<DecisionFilter>('all')
+  const [decisionFilter, setDecisionFilter] = useState<DecisionFilter>(readDecisionFilter)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+
+  const handleDecisionFilter = useCallback((next: DecisionFilter) => {
+    setDecisionFilter(next)
+    setUiStateItem(PLAN_UI.decisionFilter, next)
+  }, [])
 
   // Newest first, so a freshly submitted plan jumps to the top of the list.
   const sorted = useMemo(() => [...plans].sort((a, b) => b.createdAt - a.createdAt), [plans])
@@ -119,7 +143,7 @@ export function PlanList({ plans, activeId, onSelect, onDelete, collapsed, onTog
               type="button"
               className={`ft-chip ${decisionFilter === chip.id ? 'ft-chip-active' : ''}`}
               aria-pressed={decisionFilter === chip.id}
-              onClick={() => setDecisionFilter(chip.id)}
+              onClick={() => handleDecisionFilter(chip.id)}
             >
               {chip.label}
             </button>
