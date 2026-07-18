@@ -417,6 +417,17 @@ async function planSubmit(args: string[]): Promise<number> {
 
   const title = values.title || deriveTitle(body)
   const base = baseUrl()
+  // Prefer an explicit --source; otherwise stamp the absolute path of the
+  // input file so reviewers can copy it from the UI for agent handoff.
+  let source = values.source
+  if (!source && file && file !== '-') {
+    try {
+      const { resolve } = await import('node:path')
+      source = resolve(file)
+    } catch {
+      source = file
+    }
+  }
 
   // Capture the current round so --wait only reacts to decisions after submit.
   let sinceRound = 0
@@ -432,7 +443,7 @@ async function planSubmit(args: string[]): Promise<number> {
   const res = await apiFetch(`${base}/api/plans`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: values.id, title, body, source: values.source, model: values.model }),
+    body: JSON.stringify({ id: values.id, title, body, source, model: values.model }),
   })
   if (!res.ok) {
     console.error(`Failed to submit plan: HTTP ${res.status}`)
@@ -440,7 +451,12 @@ async function planSubmit(args: string[]): Promise<number> {
   }
   const plan = (await res.json()) as Plan
   console.error(`Submitted plan ${plan.id} (v${plan.version}) — review at ${base}/plan/${plan.id}`)
+  if (plan.sourcePath) {
+    console.error(`Source path: ${plan.sourcePath}`)
+  }
 
+  // Optional extra mirror next to the input file (--saveSource). Server always
+  // writes ~/.diffing/.../plan-sources/<id>.md as sourcePath.
   if (values.saveSource) {
     try {
       const sourcesDir = join(getProjectStorageDir(), 'plan-sources')

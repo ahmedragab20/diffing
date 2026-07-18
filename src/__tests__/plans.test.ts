@@ -90,3 +90,20 @@ describe('InMemoryPlanStore', () => {
     expect(await store.getAll()).toHaveLength(0)
   })
 })
+
+describe('FilePlanStore source mirror', () => {
+  it('writes plan-sources/<id>.md and stamps sourcePath on upsert', async () => {
+    const { mkdtempSync, readFileSync, existsSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const { FilePlanStore } = await import('../lib/plans.js')
+    const dir = mkdtempSync(join(tmpdir(), 'diffing-plans-'))
+    const store = new FilePlanStore(dir)
+    const plan = await store.upsert({ title: 'P', body: '# Hello plan\n' })
+    expect(plan.sourcePath).toBe(join(dir, 'plan-sources', `${plan.id}.md`))
+    expect(existsSync(plan.sourcePath!)).toBe(true)
+    expect(readFileSync(plan.sourcePath!, 'utf-8')).toBe('# Hello plan\n')
+    const reloaded = await store.get(plan.id)
+    expect(reloaded?.sourcePath).toBe(plan.sourcePath)
+  })
+})

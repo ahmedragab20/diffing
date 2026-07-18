@@ -23,7 +23,7 @@ vi.mock('lucide-react', () => {
   const keys = [
     'Bot', 'FileText', 'Code2', 'MessageSquarePlus', 'Check', 'X',
     'MessageSquareWarning', 'Clock', 'History', 'ArrowLeft', 'ChevronsUpDown',
-    'MessageSquare',
+    'MessageSquare', 'Copy', 'Link2', 'FolderOpen', 'ListTree',
   ]
   for (const k of keys) proxy[k] = Stub
   return proxy
@@ -49,6 +49,10 @@ vi.mock('../primitives/Select', () => ({
   ),
 }))
 
+vi.mock('../primitives/Tooltip', () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+}))
+
 function createWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -62,6 +66,8 @@ const basePlan: Plan = {
   id: 'p1',
   title: 'My Plan',
   body: '# v3 body',
+  sourcePath: '/Users/me/.diffing/demo/plan-sources/p1.md',
+  source: '/Users/me/proj/PLAN.md',
   createdAt: 1000,
   updatedAt: 3000,
   version: 3,
@@ -88,6 +94,9 @@ const baseProps = {
 describe('PlanReview version switcher', () => {
   beforeEach(() => {
     mockUsePlans.mockReset()
+    Object.assign(navigator, {
+      clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+    })
     mockUsePlans.mockReturnValue({
       addPlanComment: vi.fn(),
       editPlanComment: vi.fn(),
@@ -144,5 +153,17 @@ describe('PlanReview version switcher', () => {
     // here is the version chip + dropdown; the actual filtering is verified by
     // the formatPlanReview tests, which exercise the same predicate.
     expect(screen.getByLabelText('Plan version')).toBeInTheDocument()
+  })
+
+  it('exposes Copy path controls that write the absolute sourcePath', async () => {
+    render(<PlanReview plan={basePlan} {...baseProps} />, { wrapper: createWrapper() })
+    const buttons = screen.getAllByRole('button', { name: /copy plan source path/i })
+    expect(buttons.length).toBeGreaterThan(0)
+    fireEvent.click(buttons[0])
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+        '/Users/me/.diffing/demo/plan-sources/p1.md',
+      )
+    })
   })
 })

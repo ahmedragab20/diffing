@@ -77,6 +77,12 @@ export interface Plan {
   body: string
   /** Free-form origin label, e.g. an agent/tool name or a file path. */
   source?: string
+  /**
+   * Absolute path to the on-disk markdown source for this plan (written under
+   * `~/.diffing/<repo>/plan-sources/<id>.md` on every upsert). Prefer this for
+   * "copy path" / agent handoff; `source` may be a short label instead.
+   */
+  sourcePath?: string
   /** The model that authored the plan, when known. */
   model?: string
   createdAt: number

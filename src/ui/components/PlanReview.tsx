@@ -1,7 +1,22 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { File as DiffsFile } from '@pierre/diffs/react'
 import type { LineAnnotation, SelectedLineRange } from '@pierre/diffs'
-import { Bot, FileText, Code2, MessageSquarePlus, Check, X, MessageSquareWarning, Clock, History, ArrowLeft, MessageSquare } from 'lucide-react'
+import {
+  Bot,
+  MessageSquarePlus,
+  Check,
+  X,
+  MessageSquareWarning,
+  Clock,
+  History,
+  ArrowLeft,
+  MessageSquare,
+  Copy,
+  Link2,
+  FileText,
+  FolderOpen,
+  ListTree,
+} from 'lucide-react'
 import type { Plan, PlanComment, PlanDecision, PlanVersion } from '../../lib/plan-types'
 import { sectionTitleForLine, extractPlanLines } from '../../lib/plan-format'
 import { SHIKI_THEME_MAP, timeAgo } from '../utils'
@@ -10,9 +25,10 @@ import type { LineHoverHighlight } from '../hooks/useSettings'
 import { usePlans } from '../hooks/usePlans'
 import { CommentForm } from './CommentForm'
 import { PlanCommentBubble } from './PlanCommentBubble'
-import { SubmitPlanReviewPopover } from './SubmitPlanReviewPopover'
 import { FilePreviewModal } from './FilePreviewModal'
 import { Select } from '../primitives/Select'
+import { Tooltip } from '../primitives/Tooltip'
+import { buildPlanOutline } from '../lib/planOutline'
 
 interface PlanReviewProps {
   plan: Plan
@@ -70,6 +86,8 @@ export function PlanReview({
   const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
   const [liveSelectionCount, setLiveSelectionCount] = useState(0)
   const [previewFilePath, setPreviewFilePath] = useState<string | null>(null)
+  const [copyFlash, setCopyFlash] = useState<string | null>(null)
+  const [tocOpen, setTocOpen] = useState(true)
 
   // Version switcher: `viewingVersion` is the body the user is reading right
   // now. Defaults to the plan's current version. The user can pick any prior
@@ -229,6 +247,56 @@ export function PlanReview({
   const decision = DECISION_META[plan.decision]
   const DecisionIcon = decision.icon
 
+  // Prefer durable on-disk mirror; fall back to free-form source when it looks
+  // like an absolute path (agent handoff / original submit file).
+  const copyablePath = useMemo(() => {
+    if (plan.sourcePath) return plan.sourcePath
+    if (plan.source && (plan.source.startsWith('/') || /^[A-Za-z]:[\\/]/.test(plan.source))) {
+      return plan.source
+    }
+    return null
+  }, [plan.sourcePath, plan.source])
+
+  const shortPath = useMemo(() => {
+    if (!copyablePath) return null
+    const parts = copyablePath.replace(/\\/g, '/').split('/')
+    if (parts.length <= 3) return copyablePath
+    return `…/${parts.slice(-3).join('/')}`
+  }, [copyablePath])
+
+  const outline = useMemo(() => buildPlanOutline(viewingBody), [viewingBody])
+  const wordCount = useMemo(() => {
+    const t = viewingBody.trim()
+    if (!t) return 0
+    return t.split(/\s+/).length
+  }, [viewingBody])
+  const lineCount = useMemo(
+    () => (viewingBody ? viewingBody.replace(/\r\n/g, '\n').split('\n').length : 0),
+    [viewingBody],
+  )
+
+  const flashCopy = useCallback((label: string) => {
+    setCopyFlash(label)
+    window.setTimeout(() => setCopyFlash(null), 1600)
+  }, [])
+
+  const copyText = useCallback(
+    async (text: string, label: string) => {
+      try {
+        await navigator.clipboard.writeText(text)
+        flashCopy(label)
+      } catch {
+        // Clipboard may be blocked outside secure contexts.
+      }
+    },
+    [flashCopy],
+  )
+
+  const reviewUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}${window.location.pathname.startsWith('/plan') ? window.location.pathname : `/plan/${plan.id}`}`
+      : `/plan/${plan.id}`
+
   return (
     <div className="plan-review">
       <div className="plan-review-head">
@@ -277,18 +345,23 @@ export function PlanReview({
                 )}
               </div>
             )}
-            {plan.source && <span className="plan-review-chip">{plan.source}</span>}
             {plan.model && (
               <span className="plan-review-chip plan-review-chip-model">
                 <Bot size={11} aria-hidden="true" />
                 {plan.model}
               </span>
             )}
+            <span className="plan-review-chip" title={`${lineCount} lines · ${wordCount} words`}>
+              {lineCount} lines · {wordCount} words
+            </span>
             {lineComments.length + generalComments.length > 0 && (
               <span className="plan-review-chip">
                 {comments.length} comment{comments.length === 1 ? '' : 's'}
                 {isHistorical && totalCommentCount !== comments.length && (
                   <span className="plan-review-chip-sub"> of {totalCommentCount}</span>
+                )}
+                {openCount > 0 && (
+                  <span className="plan-review-chip-sub"> · {openCount} open</span>
                 )}
               </span>
             )}
@@ -297,9 +370,94 @@ export function PlanReview({
                 {liveSelectionCount} line{liveSelectionCount === 1 ? '' : 's'} selected
               </span>
             )}
+            <span className="plan-review-chip plan-review-chip-muted" title={timeAgo(plan.updatedAt)}>
+              updated {timeAgo(plan.updatedAt)}
+            </span>
           </div>
+
+          {/* Source path row — primary DX for agent handoff */}
+          {(copyablePath || plan.source) && (
+            <div className="plan-source-row">
+              <FolderOpen size={13} className="plan-source-icon" aria-hidden="true" />
+              <code className="plan-source-path" title={copyablePath ?? plan.source}>
+                {shortPath ?? plan.source}
+              </code>
+              {copyablePath && (
+                <Tooltip content="Copy absolute source path (for agents / other tools)">
+                  <button
+                    type="button"
+                    className="plan-source-btn"
+                    onClick={() => copyText(copyablePath, 'Path copied')}
+                    aria-label="Copy plan source path"
+                  >
+                    <Copy size={12} />
+                    <span>Copy path</span>
+                  </button>
+                </Tooltip>
+              )}
+              {plan.source && plan.source !== copyablePath && (
+                <span className="plan-source-label" title={plan.source}>
+                  label: {plan.source}
+                </span>
+              )}
+              {copyFlash && (
+                <span className="plan-source-flash" role="status">
+                  {copyFlash}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
+        <div className="plan-review-head-actions">
+          <Tooltip content="Copy deep link to this plan review">
+            <button
+              type="button"
+              className="btn btn-sm plan-action-btn"
+              onClick={() => copyText(reviewUrl, 'Link copied')}
+              aria-label="Copy review URL"
+            >
+              <Link2 size={13} />
+              <span className="btn-label">Copy link</span>
+            </button>
+          </Tooltip>
+          <Tooltip content="Copy the full markdown body (current version view)">
+            <button
+              type="button"
+              className="btn btn-sm plan-action-btn"
+              onClick={() => copyText(viewingBody, 'Markdown copied')}
+              aria-label="Copy plan markdown"
+            >
+              <FileText size={13} />
+              <span className="btn-label">Copy MD</span>
+            </button>
+          </Tooltip>
+          {copyablePath && (
+            <Tooltip content="Copy absolute path to the on-disk plan source">
+              <button
+                type="button"
+                className="btn btn-sm plan-action-btn plan-action-btn-primary"
+                onClick={() => copyText(copyablePath, 'Path copied')}
+                aria-label="Copy plan source path"
+              >
+                <Copy size={13} />
+                <span className="btn-label">Copy path</span>
+              </button>
+            </Tooltip>
+          )}
+          {viewMode === 'rendered' && outline.length > 0 && (
+            <button
+              type="button"
+              className={`btn btn-sm plan-action-btn ${tocOpen ? 'btn-active' : ''}`}
+              onClick={() => setTocOpen((v) => !v)}
+              aria-pressed={tocOpen}
+              title="Toggle table of contents"
+            >
+              <ListTree size={13} />
+              <span className="btn-label">Outline</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {isHistorical && (
@@ -354,16 +512,53 @@ export function PlanReview({
       )}
 
       {viewMode === 'rendered' ? (
-        <div
-          className="markdown-body plan-rendered"
-          onClick={handleMarkdownClick}
-        >
-          <Markdown content={viewingBody} />
+        <div className="plan-rendered-layout">
+          {tocOpen && outline.length > 0 && (
+            <nav className="plan-toc" aria-label="Plan outline">
+              <div className="plan-toc-head">
+                <ListTree size={12} aria-hidden="true" />
+                <span>On this page</span>
+              </div>
+              <ul className="plan-toc-list">
+                {outline.map((item) => (
+                  <li
+                    key={item.id}
+                    className={`plan-toc-item plan-toc-level-${Math.min(item.level, 4)}`}
+                  >
+                    <a
+                      href={`#${item.id}`}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        const el = document.getElementById(item.id)
+                        el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                        // Keep hash in URL for shareability without jump-fighting.
+                        if (typeof history !== 'undefined') {
+                          history.replaceState(null, '', `#${item.id}`)
+                        }
+                      }}
+                    >
+                      {item.text}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          )}
+          <div
+            className="markdown-body plan-rendered"
+            onClick={handleMarkdownClick}
+          >
+            <Markdown content={viewingBody} />
+          </div>
         </div>
       ) : (
         <div className="plan-file">
+          <div className="plan-file-hint">
+            Source mode — select lines in the gutter to comment. Switch to{' '}
+            <strong>Rendered</strong> in Settings for reading with outline + code copy.
+          </div>
           <DiffsFile<PlanAnnotationMeta>
-            file={{ name: 'PLAN.md', contents: viewingBody, lang: 'markdown' }}
+            file={{ name: plan.sourcePath?.split('/').pop() || 'PLAN.md', contents: viewingBody, lang: 'markdown' }}
             options={{
               disableFileHeader: true,
               enableGutterUtility: true,

@@ -4,6 +4,11 @@ import { getRepoRoot, getProjectStorageDir } from './git.js'
 import type { Plan, PlanComment, PlanDecision, PlanVersion } from './plan-types.js'
 import type { CommentReply } from './types.js'
 
+/** Absolute path of the persisted markdown mirror for a plan id. */
+export function planSourceFilePath(storageDir: string, planId: string): string {
+  return join(storageDir, 'plan-sources', `${planId}.md`)
+}
+
 /**
  * Persistence for plan reviews. Mirrors {@link CommentStore}: an in-memory
  * implementation for tests and a file-backed one that writes `plans.json` into
@@ -363,6 +368,11 @@ export class FilePlanStore implements PlanStore {
         const before = Array.isArray(p.versions) ? p.versions.length : 0
         const beforeValid = Array.isArray(p.versions) && p.versions.length > 0
         backfillPlan(p)
+        // Heal missing sourcePath for plans submitted before the mirror field.
+        if (!p.sourcePath) {
+          p.sourcePath = planSourceFilePath(this.dirPath, p.id)
+          anyBackfilled = true
+        }
         const after = Array.isArray(p.versions) ? p.versions.length : 0
         // Save back if the backfill *changed* anything: either the plan had
         // no `versions[]` at all (legacy file) or it had a partial array
@@ -421,10 +431,28 @@ export class FilePlanStore implements PlanStore {
     }
   }
 
+  /**
+   * Mirror the plan body to `plan-sources/<id>.md` and stamp `sourcePath` so
+   * the UI / agents can always copy a stable absolute path (even when the
+   * submitter only piped stdin and never set `--source`).
+   */
+  private async writeSourceMirror(plan: Plan): Promise<void> {
+    try {
+      const sourcesDir = join(this.dirPath, 'plan-sources')
+      await mkdir(sourcesDir, { recursive: true })
+      const path = planSourceFilePath(this.dirPath, plan.id)
+      await writeFile(path, plan.body, 'utf-8')
+      plan.sourcePath = path
+    } catch (err) {
+      console.error('Failed to write plan source mirror:', err)
+    }
+  }
+
   async upsert(input: { id?: string; title: string; body: string; source?: string; model?: string }): Promise<Plan> {
     const plans = await this.getAll()
     const plan = applyUpsert(plans, input, Date.now())
     backfillPlan(plan)
+    await this.writeSourceMirror(plan)
     await this.save(plans)
     return plan
   }
@@ -440,6 +468,7 @@ export class FilePlanStore implements PlanStore {
     plan.updatedAt = Date.now()
     syncCurrentVersion(plan)
     backfillPlan(plan)
+    if (fields.body !== undefined) await this.writeSourceMirror(plan)
     await this.save(plans)
     return plan
   }
