@@ -379,9 +379,12 @@ diffing plan resolve <commentId>
 The browser plan surface (`/plan`, `/plan/:id`) is the human half of this loop:
 
 - **Source / Read / Split** — view mode is always visible in the plan toolbar; `m` cycles modes.
-- **Zen Read** — in Read-only mode, the expand control enters full-width focus reading (Esc exits). Preference is persisted.
+- **Zen Read** — `z` toggles immersive full-width focus (switches to Read if needed); toolbar expand control does the same; Esc exits. Preference is persisted.
+- **Outline / Comments map** — `o` toggles the left TOC; `c` toggles the right comments rail (also header icons).
 - **Resizable split** — drag the divider between Source and Read; double-click resets 50/50.
-- **Inline comments** — Source: select lines or gutter `+`. Read: highlight text → Add comment (multiple floating drafts supported).
+- **Inline comments** — Source: select lines or gutter `+` (range-aware). Read: highlight text → Add comment (multiple floating drafts, range steppers, minimize tray). **Submitted threads always render inline in Read** under the matching section.
+- **Severity** — optional `blocking` | `nit` | `question` | `praise` on plan comments (same as code review; included in handoff XML).
+- **Collapsible threads** — collapse cards and in-card source preview; delete resolved comments/replies.
 - **Verdict** — Approve / Request changes / Reject / Comment only via **Submit review** (releases `plan await`).
 
 Keep agent plan sources under `~/.diffing/<repo>/plan-sources/` — never in the consumer project tree.
@@ -1138,7 +1141,8 @@ Opens a new inline comment thread on a line of code (or multi-line range).
     "severity": "blocking | nit | question | praise | none"  // optional triage label
   }
   ```
-- **Side / line anchoring (web UI)**: comments attach to the selected **side** (`additions` / `deletions`) and line number(s). Same-side selections use `side` only (not a default of `additions`). The composer anchors under the bottom line of a multi-line selection.
+- **Side / line anchoring (web UI)**: comments attach to the selected **side** (`additions` / `deletions`) and line number(s). Same-side selections use `side` only (not a default of `additions`). The composer anchors under the bottom line of a multi-line selection; ranges are **inclusive** (`startLineNumber`–`lineNumber` → `line="A-B"` in handoff XML). Optional **severity** is stored and emitted on handoff / MCP.
+
 
 #### `PUT /api/comments/:id`
 Updates an existing comment thread body or toggles its status.

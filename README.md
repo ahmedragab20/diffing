@@ -149,8 +149,11 @@ Full keyboard-driven navigation with vim-like motions and a modal status bar:
 | Key | Action |
 |-----|--------|
 | `m` | Cycle Source → Read → Split |
+| `z` | Toggle zen reading (switches to Read if needed); Esc also exits zen |
+| `o` | Toggle Outline (left TOC) |
+| `c` | Toggle Comments map (right rail) |
 | `J` / `K` | Next / previous plan |
-| Esc | Exit zen reading / dismiss Add-comment chip |
+| Esc | Exit zen / dismiss Add-comment chip / close draft |
 
 A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), file path, and a help button. Multi-key sequences use an 800ms key buffer.
 
@@ -408,10 +411,12 @@ sections and **approve**, **request changes**, **reject**, or **comment only**
 4. The agent wakes, receives <plan-review> XML, and proceeds, revises, or stops.
 ```
 
-- **Source / Read / Split** — always-visible view modes in the plan toolbar (`m` cycles). Read uses full main-column width; **Zen** expands to immersive full-width focus reading (Esc exits).
+- **Source / Read / Split** — always-visible view modes in the plan toolbar (`m` cycles). Read uses full main-column width; **Zen** (`z`) immersive full-width focus (Esc exits).
 - **Resizable split** — drag the Source|Read divider; double-click resets 50/50.
-- **Renders any markdown plan** — Source via `@pierre/diffs` (commentable lines); Read as polished markdown with outline.
-- **Line, range & section comments** — gutter `+` or select lines (Source); highlight text → Add comment in Read (multiple floating drafts, minimize tray, Esc).
+- **Renders any markdown plan** — Source via `@pierre/diffs` (commentable lines); Read as polished markdown with outline (`o`) and comments map (`c`).
+- **Line, range & section comments** — gutter `+` or select lines (Source); highlight text → Add comment in Read (multiple floating drafts, range steppers, minimize tray, Esc). **Read mode always shows submitted threads inline** under the matching section.
+- **Severity** — optional blocking / nit / question / praise on plan comments (same labels as code review; included in `<plan-review>` handoff XML).
+- **Collapsible threads** — collapse open or resolved cards; collapse the in-card source preview; delete resolved comments and replies.
 - **General comments** — notes scoped to the whole plan.
 - **Four-way verdict** — Approve / Request changes / Reject / Comment only (no file edits). Resubmit with the same id bumps version and re-opens review.
 - **Browse plan versions** — version dropdown, historical banner, comments filtered to the viewed version. CLI / MCP / HTTP as below.
@@ -434,7 +439,7 @@ self-documenting `<plan-review>` envelope:
 ## Phase 1
 …full markdown of the plan being reviewed…]]></plan-body>
     <comments>
-      <comment id="c1" line="4" section="Phase 1" status="open" created-at="2026-05-29T18:52:29.557Z">
+      <comment id="c1" line="4" section="Phase 1" status="open" severity="blocking" created-at="2026-05-29T18:52:29.557Z">
         <context><![CDATA[Do the first thing]]></context>
         <body><![CDATA[Clarify what "the first thing" is.]]></body>
         <replies>
@@ -529,16 +534,16 @@ coexist without colliding.
 
 Rich, real-time comment threads directly on diff lines:
 
-- **Inline Threads** — Hover the gutter `+` or select lines to open a composer **on that line/side** (additions and deletions). Markdown (GFM + breaks) with syntax-highlighted fences.
-- **Multi-Line Comments** — Drag a line range; the form anchors under the bottom line, with a clear `L12–L15 · new|old` label. Reverse selection is normalized.
-- **Severity** — Optional triage labels: blocking / nit / question / praise.
+- **Inline Threads** — Hover the gutter `+` or select lines to open a composer **on that line/side** (additions and deletions). Markdown (GFM + breaks) with syntax-highlighted fences. Threads are collapsible.
+- **Multi-Line Comments** — Drag a line range; the form anchors under the bottom line, with a clear `L12–L15 · new|old` label and **range steppers**. Reverse selection is normalized; range is **inclusive** on the agent handoff (`line="12-15"`).
+- **Severity** — Optional triage labels (design-system dropdown): blocking / nit / question / praise. Stored and emitted on agent handoff XML; MCP `create_comment` accepts `severity`.
 - **File-Level Comments** — Notes scoped to the entire file.
 - **Comment Drafts** — Server-side drafts with TTL under `~/.diffing/` (no browser storage).
 - **Agent Attribution** — Replies carry `role` (`user`/`agent`) and `model`.
 - **Suggestion Application** — `` ```suggestion `` blocks (including multi-line) via **Apply suggestion** / `POST /api/comments/:id/apply-suggestion`.
 - **Bulk resolve** — Toolbar **Resolve all** → `POST /api/comments/resolve-all`.
 - **Agent progress** — Agents can `diffing progress` / `report_progress` for a live toast while working.
-- **Full CRUD** — Create, edit, delete, reply, unresolve — CLI, MCP, and HTTP.
+- **Full CRUD** — Create, edit, delete (including resolved plan threads), reply, unresolve — CLI, MCP, and HTTP.
 
 ---
 
