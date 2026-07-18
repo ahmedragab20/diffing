@@ -72,6 +72,8 @@ vi.mock('lucide-react', () => {
     'CheckCircle2', 'Loader2', 'Eye', 'EyeOff', 'Search', 'XCircle', 'Clock',
     'ChevronDown', 'ChevronUp', 'ChevronLeft', 'ChevronRight', 'CornerUpLeft',
     'FilePenLine',
+    // CommentForm severity select
+    'Minus', 'AlertOctagon', 'CircleDot', 'HelpCircle', 'Sparkles', 'ChevronsUpDown',
   ]
   for (const k of keys) proxy[k] = Stub
   return proxy
