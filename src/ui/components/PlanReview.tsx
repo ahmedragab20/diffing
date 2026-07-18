@@ -19,7 +19,6 @@ import {
   ExternalLink,
   Loader2,
   MessagesSquare,
-  GripVertical,
 } from 'lucide-react'
 import type { Plan, PlanComment, PlanDecision, PlanVersion } from '../../lib/plan-types'
 import { sectionTitleForLine, extractPlanLines } from '../../lib/plan-format'
@@ -36,6 +35,12 @@ import { buildPlanOutline } from '../lib/planOutline'
 import { mapSelectionToLines } from '../lib/planSelection'
 import { setUiStateItem } from '../utils/uiState'
 import { PLAN_UI, readBoolUi } from '../lib/planUiState'
+import {
+  PlanFloatComposers,
+  clampToWindow,
+  clientRectsToPage,
+  type FloatComposerDraft,
+} from './PlanFloatComposers'
 
 export type PlanViewMode = 'source' | 'rendered' | 'split'
 export { PLAN_UI } from '../lib/planUiState'
@@ -58,18 +63,10 @@ interface PlanReviewProps {
   onCommentsRailOpenChange?: (open: boolean) => void
 }
 
+/** Source-mode gutter / line-selection pending only (not floating). */
 interface PendingComment {
   lineNumber: number
   startLineNumber?: number
-  /** Exact text the user highlighted in the rendered pane (agent quote). */
-  selectedQuote?: string
-  /** Floating composer from rendered selection (draggable). */
-  presentation?: 'float'
-  /**
-   * Fixed panel top-left in viewport coords. Updated while dragging.
-   * Always kept inside the window via clampToWindow.
-   */
-  panelPos?: { left: number; top: number }
 }
 
 type PlanAnnotationMeta = PlanComment | { _pending: true }
@@ -109,7 +106,10 @@ export function PlanReview({
     removePlanReply,
   } = usePlans()
 
+  /** Source-mode only pending annotation form. */
   const [pending, setPending] = useState<PendingComment | null>(null)
+  /** Multiple floating selection composers (rendered mode). */
+  const [floatComposers, setFloatComposers] = useState<FloatComposerDraft[]>([])
   const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
   const [liveSelectionCount, setLiveSelectionCount] = useState(0)
   const [previewFilePath, setPreviewFilePath] = useState<string | null>(null)
@@ -209,12 +209,12 @@ export function PlanReview({
     }
   }, [viewingVersion, plan.version, plan.body, plan.title, plan.id, versions])
 
-  // Switching versions invalidates any in-flight selection/pending comment —
-  // those were anchored to a body that's no longer being rendered.
+  // Switching versions invalidates in-flight selection/pending/float drafts.
   useEffect(() => {
     setSelectedRange(null)
     setLiveSelectionCount(0)
     setPending(null)
+    setFloatComposers([])
   }, [viewingVersion])
 
   const isHistorical = viewingVersion !== plan.version
@@ -257,26 +257,18 @@ export function PlanReview({
 
   const lineRange = (start: number | undefined, end: number) => extractPlanLines(viewingBody, start ?? end, end)
 
-  const commitComment = (
+  const commitSourceComment = (
     p: PendingComment,
     body: string,
     severity?: import('../../lib/types').CommentSeverity,
   ) => {
     const start = p.startLineNumber ?? p.lineNumber
     const exactLines = lineRange(p.startLineNumber, p.lineNumber)
-    const agentContext =
-      p.presentation === 'float'
-        ? buildAgentLineContent(start, p.lineNumber)
-        : exactLines
-    const quote = p.selectedQuote?.trim()
     addPlanComment({
       planId: plan.id,
       lineNumber: p.lineNumber,
       startLineNumber: p.startLineNumber,
-      // Surrounding + exact lines for agent handoff (selection path).
-      lineContent: agentContext || exactLines,
-      // Exact highlight so the agent sees what the human pointed at.
-      selectedQuote: quote || undefined,
+      lineContent: exactLines,
       sectionTitle: sectionTitleForLine(viewingBody, start),
       body,
       severity: severity && severity !== 'none' ? severity : undefined,
@@ -286,20 +278,6 @@ export function PlanReview({
     setSelectedRange(null)
     setLiveSelectionCount(0)
   }
-
-  const PANEL_W = 400
-  const PANEL_H_EST = 420
-
-  /** Keep a panel fully inside the browser window (with padding). */
-  const clampToWindow = useCallback((left: number, top: number, w = PANEL_W, h = PANEL_H_EST) => {
-    const pad = 12
-    const maxL = Math.max(pad, window.innerWidth - w - pad)
-    const maxT = Math.max(pad, window.innerHeight - Math.min(h, window.innerHeight - pad * 2) - pad)
-    return {
-      left: Math.min(Math.max(pad, left), maxL),
-      top: Math.min(Math.max(pad, top), maxT),
-    }
-  }, [])
 
   /**
    * Agent context: exact selected range + ±1 surrounding source lines so
@@ -322,6 +300,28 @@ export function PlanReview({
     [viewingBody],
   )
 
+  const commitFloatComment = useCallback(
+    (
+      draft: FloatComposerDraft,
+      body: string,
+      severity?: import('../../lib/types').CommentSeverity,
+    ) => {
+      const start = draft.startLineNumber ?? draft.lineNumber
+      addPlanComment({
+        planId: plan.id,
+        lineNumber: draft.lineNumber,
+        startLineNumber: draft.startLineNumber,
+        lineContent: draft.sourceContext || draft.exactLines,
+        selectedQuote: draft.selectedQuote.trim() || undefined,
+        sectionTitle: draft.sectionTitle ?? sectionTitleForLine(viewingBody, start),
+        body,
+        severity: severity && severity !== 'none' ? severity : undefined,
+        createdAtPlanVersion: viewingVersion,
+      })
+    },
+    [addPlanComment, plan.id, viewingBody, viewingVersion],
+  )
+
   const annotations: LineAnnotation<PlanAnnotationMeta>[] = useMemo(() => {
     const list: LineAnnotation<PlanAnnotationMeta>[] = lineComments.map((c) => ({
       lineNumber: c.lineNumber,
@@ -338,14 +338,12 @@ export function PlanReview({
     if (!meta) return null
     if ('_pending' in meta) {
       const p = pending!
-      // Selection-driven pending comments use the floating composer instead.
-      if (p.presentation === 'float') return null
       return (
         <CommentForm
           draftKey={`plan-new:${plan.id}:${p.startLineNumber ?? p.lineNumber}:${p.lineNumber}`}
           lineContent={lineRange(p.startLineNumber, p.lineNumber)}
           showSeverity
-          onSubmit={(body, severity) => commitComment(p, body, severity)}
+          onSubmit={(body, severity) => commitSourceComment(p, body, severity)}
           onCancel={() => {
             setPending(null)
             setSelectedRange(null)
@@ -512,110 +510,60 @@ export function PlanReview({
 
   const startCommentFromSelection = useCallback(() => {
     if (!selectionPopup) return
-    // Place the panel just under (or above) the selection, then clamp to the window.
-    const preferredLeft = selectionPopup.x - PANEL_W / 2
+    const sel = window.getSelection()
+    const range =
+      sel && sel.rangeCount > 0 && !sel.isCollapsed ? sel.getRangeAt(0).cloneRange() : null
+    const highlightRects = range ? clientRectsToPage(range) : []
+
+    const preferredLeft = selectionPopup.x - 200
     const preferredTop =
       selectionPopup.placement === 'below'
         ? selectionPopup.y + 8
-        : selectionPopup.y - PANEL_H_EST - 8
-    const pos = clampToWindow(preferredLeft, preferredTop)
-    setPending({
-      lineNumber: selectionPopup.endLine,
-      startLineNumber:
-        selectionPopup.startLine !== selectionPopup.endLine
-          ? selectionPopup.startLine
-          : undefined,
+        : selectionPopup.y - 420 - 8
+    // Cascade new panels so multiple don't stack exactly.
+    const cascade = floatComposers.length * 28
+    const pos = clampToWindow(preferredLeft + cascade, preferredTop + cascade)
+
+    const start = selectionPopup.startLine
+    const end = selectionPopup.endLine
+    const exact = extractPlanLines(viewingBody, start, end)
+    const draft: FloatComposerDraft = {
+      id: crypto.randomUUID(),
+      lineNumber: end,
+      startLineNumber: start !== end ? start : undefined,
       selectedQuote: selectionPopup.text,
-      presentation: 'float',
+      exactLines: exact,
+      sourceContext: buildAgentLineContent(start, end),
+      sectionTitle: sectionTitleForLine(viewingBody, start),
       panelPos: pos,
-    })
-    setLiveSelectionCount(
-      Math.abs(selectionPopup.endLine - selectionPopup.startLine) + 1,
-    )
+      minimized: false,
+      highlightRects,
+    }
+    setFloatComposers((prev) => [...prev, draft])
+    setLiveSelectionCount(Math.abs(end - start) + 1)
     setSelectionPopup(null)
-    window.getSelection()?.removeAllRanges()
-  }, [selectionPopup, clampToWindow])
+    // Keep the native selection until the next user interaction would clear it;
+    // our page-space overlays also keep the highlight visible after selection drops.
+  }, [selectionPopup, floatComposers.length, viewingBody, buildAgentLineContent])
 
-  // Drag the floating composer by its header.
-  const dragRef = useRef<{
-    startX: number
-    startY: number
-    origLeft: number
-    origTop: number
-  } | null>(null)
-
-  const onComposerDragStart = useCallback(
-    (e: React.MouseEvent) => {
-      if (!pending?.panelPos) return
-      // Don't start drag from interactive form controls.
-      if ((e.target as HTMLElement).closest('button, input, textarea, select, a')) return
-      e.preventDefault()
-      dragRef.current = {
-        startX: e.clientX,
-        startY: e.clientY,
-        origLeft: pending.panelPos.left,
-        origTop: pending.panelPos.top,
-      }
-      const onMove = (ev: MouseEvent) => {
-        if (!dragRef.current) return
-        const left = dragRef.current.origLeft + (ev.clientX - dragRef.current.startX)
-        const top = dragRef.current.origTop + (ev.clientY - dragRef.current.startY)
-        const next = clampToWindow(left, top)
-        setPending((p) => (p ? { ...p, panelPos: next } : p))
-      }
-      const onUp = () => {
-        dragRef.current = null
-        window.removeEventListener('mousemove', onMove)
-        window.removeEventListener('mouseup', onUp)
-      }
-      window.addEventListener('mousemove', onMove)
-      window.addEventListener('mouseup', onUp)
-    },
-    [pending?.panelPos, clampToWindow],
-  )
-
-  // Esc closes selection chip and floating composer (not while typing in an input —
-  // CommentForm also handles Esc for empty drafts; we always clear pending float).
+  // Esc dismisses the lightweight "Add comment" chip first (float close is in PlanFloatComposers).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      if (selectionPopup) {
-        e.preventDefault()
-        setSelectionPopup(null)
-        window.getSelection()?.removeAllRanges()
-        return
-      }
-      if (pending?.presentation === 'float') {
-        e.preventDefault()
-        setPending(null)
-        setSelectedRange(null)
-        setLiveSelectionCount(0)
-      }
+      if (e.key !== 'Escape' || !selectionPopup) return
+      e.preventDefault()
+      setSelectionPopup(null)
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [selectionPopup, pending?.presentation])
+  }, [selectionPopup])
 
-  // Dismiss only the lightweight "Add comment" chip on scroll (not the open form).
+  // Dismiss only the lightweight chip on scroll (not open composers).
   useEffect(() => {
     if (!selectionPopup) return
     const dismiss = () => setSelectionPopup(null)
     window.addEventListener('scroll', dismiss, { passive: true, capture: true })
     return () => window.removeEventListener('scroll', dismiss, true)
   }, [selectionPopup])
-
-  // Keep floating panel inside the window on resize.
-  useEffect(() => {
-    if (!pending?.panelPos) return
-    const onResize = () => {
-      setPending((p) => {
-        if (!p?.panelPos) return p
-        return { ...p, panelPos: clampToWindow(p.panelPos.left, p.panelPos.top) }
-      })
-    }
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [pending?.panelPos, clampToWindow])
 
   const reviewUrl =
     typeof window !== 'undefined'
@@ -716,7 +664,7 @@ export function PlanReview({
       >
         {!isHistorical && (
           <div className="plan-rendered-select-hint">
-            Highlight text, then Add comment · drag the card · Esc to close
+            Highlight text → Add comment · open several · minimize · Esc closes (asks if draft)
           </div>
         )}
         <Markdown content={viewingBody} />
@@ -724,78 +672,15 @@ export function PlanReview({
     </div>
   )
 
-  const floatingSelectionComposer = (() => {
-    if (!pending || pending.presentation !== 'float' || !pending.panelPos || !showRendered) {
-      return null
-    }
-    const start = pending.startLineNumber ?? pending.lineNumber
-    const section = sectionTitleForLine(viewingBody, start)
-    const exact = lineRange(pending.startLineNumber, pending.lineNumber)
-    const agentCtx = buildAgentLineContent(start, pending.lineNumber)
-
-    return (
-      <div
-        className="plan-selection-comment plan-selection-comment-floating"
-        id="plan-selection-comment"
-        role="dialog"
-        aria-label="Add plan comment"
-        style={{
-          left: pending.panelPos.left,
-          top: pending.panelPos.top,
-          width: Math.min(PANEL_W, window.innerWidth - 24),
-        }}
-      >
-        <div
-          className="plan-selection-comment-drag"
-          onMouseDown={onComposerDragStart}
-          title="Drag to move"
-        >
-          <GripVertical size={14} aria-hidden="true" />
-          <span className="plan-selection-comment-meta">
-            Commenting on{' '}
-            {pending.startLineNumber && pending.startLineNumber !== pending.lineNumber
-              ? `lines ${pending.startLineNumber}–${pending.lineNumber}`
-              : `line ${pending.lineNumber}`}
-            {section ? ` · § ${section}` : ''}
-          </span>
-          <button
-            type="button"
-            className="plan-selection-comment-close"
-            aria-label="Close comment form"
-            title="Close (Esc)"
-            onClick={() => {
-              setPending(null)
-              setSelectedRange(null)
-              setLiveSelectionCount(0)
-            }}
-          >
-            <X size={14} />
-          </button>
-        </div>
-        <div className="plan-selection-comment-context">
-          {pending.selectedQuote?.trim() ? (
-            <blockquote className="plan-comment-quote" cite={`L${pending.lineNumber}`}>
-              “{pending.selectedQuote.trim()}”
-            </blockquote>
-          ) : null}
-          <pre className="plan-comment-source" aria-label="Source context for agent">
-            {agentCtx || exact || '(no source lines)'}
-          </pre>
-        </div>
-        <CommentForm
-          draftKey={`plan-new:${plan.id}:${start}:${pending.lineNumber}`}
-          lineContent={exact}
-          showSeverity
-          onSubmit={(body, severity) => commitComment(pending, body, severity)}
-          onCancel={() => {
-            setPending(null)
-            setSelectedRange(null)
-            setLiveSelectionCount(0)
-          }}
-        />
-      </div>
-    )
-  })()
+  const floatingSelectionComposers =
+    showRendered && floatComposers.length > 0 ? (
+      <PlanFloatComposers
+        planId={plan.id}
+        composers={floatComposers}
+        onChange={setFloatComposers}
+        onSubmit={commitFloatComment}
+      />
+    ) : null
 
   return (
     <div className="plan-review">
@@ -865,9 +750,11 @@ export function PlanReview({
                 )}
               </span>
             )}
-            {liveSelectionCount > 0 && (
+            {(liveSelectionCount > 0 || floatComposers.length > 0) && (
               <span className="plan-review-chip plan-review-chip-selection" aria-live="polite">
-                {liveSelectionCount} line{liveSelectionCount === 1 ? '' : 's'} selected
+                {floatComposers.length > 0
+                  ? `${floatComposers.length} draft comment${floatComposers.length === 1 ? '' : 's'}`
+                  : `${liveSelectionCount} line${liveSelectionCount === 1 ? '' : 's'} selected`}
               </span>
             )}
             <span className="plan-review-chip plan-review-chip-muted" title={timeAgo(plan.updatedAt)}>
@@ -1113,7 +1000,7 @@ export function PlanReview({
         </button>
       )}
 
-      {floatingSelectionComposer}
+      {floatingSelectionComposers}
 
       <FilePreviewModal
         isOpen={!!previewFilePath}

@@ -9210,6 +9210,98 @@ button.toolbar-last-send-btn:hover {
     background: var(--bg-secondary);
     color: var(--text-primary);
 }
+
+/* Persistent page-space highlights while float composers are open */
+.plan-float-highlights {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
+    overflow: visible;
+    pointer-events: none;
+    z-index: 50;
+}
+.plan-float-highlight {
+    position: absolute;
+    background: color-mix(in srgb, var(--primary) 32%, transparent);
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+    pointer-events: none;
+}
+
+/* Minimized composer tray */
+.plan-float-tray {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 120;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: min(380px, calc(100vw - 32px));
+}
+.plan-float-tray-chip-wrap {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.plan-float-tray-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: var(--radius-round, 999px);
+    border: 1px solid var(--primary);
+    background: var(--bg-elevated, var(--bg-secondary));
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    box-shadow: var(--shadow-lg);
+    cursor: pointer;
+    text-align: left;
+    opacity: 1;
+}
+.plan-float-tray-chip:hover {
+    background: var(--bg-tertiary);
+    opacity: 1;
+}
+.plan-float-tray-line {
+    color: var(--primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    flex-shrink: 0;
+}
+.plan-float-tray-quote {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+.plan-float-tray-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-round, 999px);
+    background: var(--bg-elevated, var(--bg-secondary));
+    color: var(--text-muted);
+    cursor: pointer;
+    box-shadow: var(--shadow-md);
+    flex-shrink: 0;
+}
+.plan-float-tray-close:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+}
 .plan-selection-comment-meta {
     font-size: 12px;
     font-weight: 600;
