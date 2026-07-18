@@ -726,11 +726,15 @@ For advanced features, internal API endpoints, sequence specifications, and conf
 
 > [!IMPORTANT]
 > Read the [CLI & Protocol Reference Manual](docs/cli.md) for detailed descriptions of:
-> - TTY Auto-Detection and Output Mode resolution.
-> - The port-agnostic discovery lockfile mechanics.
-> - Monotonic sequence `round` synchronization for race-free polling.
-> - Full Web API endpoints schema (`GET /api/review/await`, `POST /api/comments`, etc.).
-> - Custom git config shell aliases.
+> - TTY auto-detection and output modes (web / terminal / TUI).
+> - Port-agnostic discovery lockfile (`server.json`) and modes (`web` | `tui` | `gh-pr`).
+> - Full agent CLI surface: `await-review`, `comments`, `reply` / `resolve` / `unresolve`, `comment edit|delete`, `progress`, `plan …`, `gh …`, `inspect`, `doctor`, `completion`, `mcp`.
+> - Complete MCP tool table (session, bounded diff, comment lifecycle, progress, plan).
+> - Monotonic `round` handoff, plan-review XML, and comment XML schemas.
+> - Web API endpoints (`/api/review/await`, `/api/comments`, `/api/plans`, `/api/agent/progress`, …).
+> - Agent guidance: root [`Agents.md`](Agents.md) and installable skills under `skills/`.
+
+Changelog for the latest release: [`CHANGELOG.md`](CHANGELOG.md) (current package version **0.7.0**).
 
 ---
 
