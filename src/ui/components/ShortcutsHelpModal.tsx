@@ -109,39 +109,64 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       items: [
         { keys: ['J'], description: 'Jump to Next Plan in list' },
         { keys: ['K'], description: 'Jump to Previous Plan in list' },
-        { keys: ['b'], description: 'Toggle Plans Sidebar Panel collapse' },
+        { keys: ['b'], description: 'Toggle Plans Sidebar collapse' },
       ],
     },
     {
-      title: 'Search & Dialogs',
+      title: 'Views & Layout',
       icon: <Eye size={15} />,
       items: [
-        { keys: ['g', 't'], description: 'Open Theme Selection Modal' },
-        { keys: ['?'], description: 'Toggle Keyboard Shortcuts Guide' },
-        { keys: ['Esc'], description: 'Close preview / dialog' },
-      ],
-    },
-    {
-      title: 'Views & Formatting',
-      icon: <MessageSquare size={15} />,
-      items: [
-        { keys: ['m'], description: 'Toggle View Mode (Source / Rendered)' },
+        { keys: ['m'], description: 'Cycle view mode (Source → Read → Split)' },
+        { keys: ['UI'], description: 'Toolbar Source / Read / Split switches the same modes' },
+        { keys: ['UI'], description: 'Read mode: expand icon enters Zen (full-width focus)' },
+        { keys: ['Esc'], description: 'Exit Zen reading mode' },
+        { keys: ['drag'], description: 'Split mode: drag the center divider to resize panes' },
+        { keys: ['dbl-click'], description: 'Split mode: double-click divider to reset 50/50' },
+        { keys: ['←', '→'], description: 'Split mode: focus divider, nudge width ±2%' },
         { keys: ['t'], description: 'Cycle Tab Indentation Size (2 → 4 → 8)' },
         { keys: ['w'], description: 'Toggle Soft-Wrap Long Lines' },
         { keys: ['n'], description: 'Toggle Line Numbers' },
+      ],
+    },
+    {
+      title: 'Comments & Review',
+      icon: <MessageSquare size={15} />,
+      items: [
+        { keys: ['UI'], description: 'Source: select lines or click gutter + to comment' },
+        { keys: ['UI'], description: 'Read: highlight text → Add comment (multiple drafts OK)' },
+        { keys: ['Esc'], description: 'Dismiss Add-comment chip / close draft (asks if dirty)' },
+        { keys: ['UI'], description: 'Header icons: copy link · copy markdown · open in editor' },
+        { keys: ['UI'], description: 'Header: toggle Outline and Comments map' },
         { keys: ['⌘', 'Shift', 'P'], description: 'Toggle Preview Mode in Comments' },
+      ],
+    },
+    {
+      title: 'Dialogs & Settings',
+      icon: <Keyboard size={15} />,
+      items: [
+        { keys: ['?'], description: 'Open Keyboard Shortcuts Guide' },
+        { keys: ['⌘', '?'], description: 'Open Keyboard Shortcuts Guide' },
+        { keys: ['⌘', ','], description: 'Open Settings' },
+        { keys: ['g', 't'], description: 'Open Theme Selection Modal' },
+        { keys: ['Esc'], description: 'Close preview / dialog / this guide' },
       ],
     },
   ]
 
   const categories = mode === 'plan' ? planCategories : diffCategories
+  const intro =
+    mode === 'plan'
+      ? 'Vim-style keybindings for plan review. Cycle Source / Read / Split with m, jump plans with J/K, and comment from line selection or text highlight.'
+      : 'Vim-style keybindings are enabled! Navigate and review diffs entirely from your home keys.'
 
   return (
     <Modal open={isOpen} onClose={onClose} className="shortcuts-modal" ariaLabel="Keyboard shortcuts">
       <div className="shortcuts-header">
         <div className="shortcuts-header-title">
           <BrandMark size={22} className="shortcuts-mark" />
-          <h2>Developer Keyboard Shortcuts</h2>
+          <h2>
+            {mode === 'plan' ? 'Plan Review Shortcuts' : 'Developer Keyboard Shortcuts'}
+          </h2>
         </div>
         <button className="shortcuts-close-btn" onClick={onClose} aria-label="Close dialog">
           <X size={16} />
@@ -149,10 +174,8 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       </div>
 
       <div className="shortcuts-body">
-        <div className="shortcuts-intro">
-          Vim-style keybindings are enabled! Navigate and review plans entirely from your home keys.
-        </div>
-        
+        <div className="shortcuts-intro">{intro}</div>
+
         <div className="shortcuts-grid">
           {categories.map((cat, ci) => (
             <div key={ci} className="shortcuts-section">
@@ -181,7 +204,13 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       </div>
 
       <div className="shortcuts-footer">
-        Press <kbd className="vim-kbd-small">?</kbd> to dismiss this menu at any time.
+        Press <kbd className="vim-kbd-small">?</kbd>
+        {mode === 'plan' && (
+          <>
+            {' '}or <kbd className="vim-kbd-small">Esc</kbd>
+          </>
+        )}{' '}
+        to dismiss this menu at any time.
       </div>
     </Modal>
   )

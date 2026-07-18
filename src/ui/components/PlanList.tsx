@@ -84,30 +84,28 @@ export function PlanList({ plans, activeId, onSelect, onDelete, collapsed, onTog
 
   if (collapsed) {
     return (
-      <div className="ft">
-        <div className="ft-search">
-          {onToggleCollapse && (
-            <Tooltip content="Expand sidebar" side="right">
-              <button
-                className="sidebar-toggle"
-                onClick={onToggleCollapse}
-                aria-label="Expand sidebar"
-              >
-                <PanelLeftOpen size={16} />
-              </button>
-            </Tooltip>
-          )}
-        </div>
+      <div className="plan-list plan-list-collapsed">
+        {onToggleCollapse && (
+          <Tooltip content="Expand sidebar · b" side="right">
+            <button
+              className="sidebar-toggle"
+              onClick={onToggleCollapse}
+              aria-label="Expand sidebar"
+            >
+              <PanelLeftOpen size={16} />
+            </button>
+          </Tooltip>
+        )}
       </div>
     )
   }
 
   return (
-    <div className="ft" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div className="ft-search" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '8px' }}>
-        <div className="ft-search-row">
+    <div className="plan-list">
+      <div className="plan-list-chrome">
+        <div className="plan-list-toolbar">
           {onToggleCollapse && (
-            <Tooltip content="Collapse sidebar" side="right">
+            <Tooltip content="Collapse sidebar · b" side="right">
               <button
                 className="sidebar-toggle"
                 onClick={onToggleCollapse}
@@ -117,22 +115,24 @@ export function PlanList({ plans, activeId, onSelect, onDelete, collapsed, onTog
               </button>
             </Tooltip>
           )}
-          <div className="ft-search-wrapper">
-            <Search size={14} className="ft-search-icon" />
+          <div className="plan-list-search">
+            <Search size={14} className="plan-list-search-icon" aria-hidden="true" />
             <input
               type="text"
-              placeholder="Filter plans..."
+              placeholder="Search plans…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              className="ft-search-input"
+              className="plan-list-search-input"
+              aria-label="Search plans"
             />
           </div>
         </div>
-        <div className="ft-chips plan-list-chips" role="group" aria-label="Filter by decision">
+
+        <div className="plan-list-filters" role="group" aria-label="Filter by decision">
           {(
             [
               { id: 'all' as const, label: 'All' },
-              { id: 'pending' as const, label: pendingCount ? `Pending (${pendingCount})` : 'Pending' },
+              { id: 'pending' as const, label: pendingCount ? `Pending ${pendingCount}` : 'Pending' },
               { id: 'approved' as const, label: 'Approved' },
               { id: 'changes-requested' as const, label: 'Changes' },
               { id: 'rejected' as const, label: 'Rejected' },
@@ -141,7 +141,7 @@ export function PlanList({ plans, activeId, onSelect, onDelete, collapsed, onTog
             <button
               key={chip.id}
               type="button"
-              className={`ft-chip ${decisionFilter === chip.id ? 'ft-chip-active' : ''}`}
+              className={`plan-list-filter ${decisionFilter === chip.id ? 'is-active' : ''}`}
               aria-pressed={decisionFilter === chip.id}
               onClick={() => handleDecisionFilter(chip.id)}
             >
@@ -150,93 +150,102 @@ export function PlanList({ plans, activeId, onSelect, onDelete, collapsed, onTog
           ))}
         </div>
       </div>
-      <div className="plan-list-scroll" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+
+      <div className="plan-list-scroll">
         <div className="plan-list-header">
-          Plans ({filteredPlans.length}
-          {filteredPlans.length !== plans.length ? ` / ${plans.length}` : ''})
+          <span>
+            {filteredPlans.length === plans.length
+              ? `${plans.length} plan${plans.length === 1 ? '' : 's'}`
+              : `${filteredPlans.length} of ${plans.length}`}
+          </span>
         </div>
+
         {filteredPlans.length === 0 && (
           <div className="plan-list-empty">
-            {filter || decisionFilter !== 'all' ? 'No matching plans found.' : 'No plans submitted yet.'}
+            {filter || decisionFilter !== 'all' ? 'No matching plans.' : 'No plans yet.'}
           </div>
         )}
-        {filteredPlans.map((plan) => {
-          const meta = DECISION_ICON[plan.decision]
-          const Icon = meta.icon
-          const open = (plan.comments ?? []).filter((c) => c.status === 'open').length
-          const path = plan.sourcePath || plan.source
-          return (
-            <div
-              key={plan.id}
-              className={`plan-list-item ${plan.id === activeId ? 'plan-list-item-active' : ''}`}
-              onClick={() => onSelect(plan.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  onSelect(plan.id)
-                }
-              }}
-            >
-              <div className="plan-list-item-top">
-                <span className={`plan-badge plan-badge-dot ${meta.className}`} title={meta.label}>
-                  <Icon size={11} aria-hidden="true" />
-                </span>
-                <span className="plan-list-item-title" title={plan.title}>
-                  {plan.title}
-                </span>
-                {path && (
-                  <Tooltip content="Copy source path">
-                    <button
-                      className="plan-list-copy-path"
-                      title="Copy source path"
-                      aria-label="Copy source path"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        const full = plan.sourcePath || plan.source || ''
-                        navigator.clipboard?.writeText(full).then(
-                          () => {
-                            setCopiedId(plan.id)
-                            window.setTimeout(() => setCopiedId(null), 1200)
-                          },
-                          () => {},
-                        )
-                      }}
-                    >
-                      {copiedId === plan.id ? <Check size={12} /> : <Copy size={12} />}
-                    </button>
-                  </Tooltip>
-                )}
-                <button
-                  className="plan-list-delete"
-                  title="Delete plan"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onDelete(plan.id)
-                  }}
-                >
-                  <Trash2 size={12} aria-hidden="true" />
-                </button>
-              </div>
-              <div className="plan-list-item-sub">
-                <span>v{plan.version}</span>
-                {open > 0 && <span>· {open} open</span>}
-                {plan.model && (
-                  <span className="plan-list-item-model">
-                    · <Bot size={10} aria-hidden="true" /> {plan.model}
+
+        <div className="plan-list-items">
+          {filteredPlans.map((plan) => {
+            const meta = DECISION_ICON[plan.decision]
+            const Icon = meta.icon
+            const open = (plan.comments ?? []).filter((c) => c.status === 'open').length
+            const path = plan.sourcePath || plan.source
+            const isActive = plan.id === activeId
+            return (
+              <div
+                key={plan.id}
+                className={`plan-list-item ${isActive ? 'plan-list-item-active' : ''}`}
+                onClick={() => onSelect(plan.id)}
+                role="button"
+                tabIndex={0}
+                aria-current={isActive ? 'true' : undefined}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onSelect(plan.id)
+                  }
+                }}
+              >
+                <div className="plan-list-item-top">
+                  <span className={`plan-badge plan-badge-dot ${meta.className}`} title={meta.label}>
+                    <Icon size={11} aria-hidden="true" />
                   </span>
-                )}
-                <span className="plan-list-item-time">· {timeAgo(plan.createdAt)}</span>
-              </div>
-              {path && (
-                <div className="plan-list-item-path" title={path}>
-                  {path.replace(/\\/g, '/').split('/').slice(-2).join('/')}
+                  <span className="plan-list-item-title" title={plan.title}>
+                    {plan.title}
+                  </span>
+                  {path && (
+                    <Tooltip content="Copy source path">
+                      <button
+                        className="plan-list-copy-path"
+                        title="Copy source path"
+                        aria-label="Copy source path"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          const full = plan.sourcePath || plan.source || ''
+                          navigator.clipboard?.writeText(full).then(
+                            () => {
+                              setCopiedId(plan.id)
+                              window.setTimeout(() => setCopiedId(null), 1200)
+                            },
+                            () => {},
+                          )
+                        }}
+                      >
+                        {copiedId === plan.id ? <Check size={12} /> : <Copy size={12} />}
+                      </button>
+                    </Tooltip>
+                  )}
+                  <button
+                    className="plan-list-delete"
+                    title="Delete plan"
+                    aria-label="Delete plan"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onDelete(plan.id)
+                    }}
+                  >
+                    <Trash2 size={12} aria-hidden="true" />
+                  </button>
                 </div>
-              )}
-            </div>
-          )
-        })}
+                <div className="plan-list-item-sub">
+                  <span className="plan-list-item-version">v{plan.version}</span>
+                  {open > 0 && (
+                    <span className="plan-list-item-open">{open} open</span>
+                  )}
+                  {plan.model && (
+                    <span className="plan-list-item-model" title={plan.model}>
+                      <Bot size={10} aria-hidden="true" />
+                      {plan.model}
+                    </span>
+                  )}
+                  <span className="plan-list-item-time">{timeAgo(plan.createdAt)}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )

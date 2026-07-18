@@ -66,12 +66,13 @@ describe('ShortcutsHelpModal', () => {
   })
 
   describe('plan mode', () => {
-    it('refers to the plan content in the surrounding scrolling entries', () => {
+    it('uses a plan-specific title and scrolling entries', () => {
       render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} mode="plan" />)
 
-      // In plan mode the gg / G entries point at the plan body, not at
-      // the diffs. The new Ctrl+O / Ctrl+I entries should be grouped
-      // with them in the same section.
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Plan Review Shortcuts' }),
+      ).toBeInTheDocument()
+      // In plan mode the gg / G entries point at the plan body, not at the diffs.
       expect(screen.getByText('Scroll to Top of plan')).toBeInTheDocument()
       expect(screen.getByText('Scroll to Bottom of plan')).toBeInTheDocument()
     })
@@ -85,6 +86,18 @@ describe('ShortcutsHelpModal', () => {
       // File-navigation entries should NOT appear in plan mode.
       expect(screen.queryByText('Jump to Next File Diff')).not.toBeInTheDocument()
       expect(screen.queryByText('Jump to Previous File Diff')).not.toBeInTheDocument()
+    })
+
+    it('documents view mode cycle, split resize, and plan chrome actions', () => {
+      render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} mode="plan" />)
+
+      expect(screen.getByText(/Cycle view mode \(Source → Read → Split\)/i)).toBeInTheDocument()
+      expect(screen.getByText(/drag the center divider/i)).toBeInTheDocument()
+      expect(screen.getByText(/double-click divider to reset 50\/50/i)).toBeInTheDocument()
+      expect(screen.getAllByText(/Open Keyboard Shortcuts Guide/i).length).toBeGreaterThanOrEqual(1)
+      expect(screen.getByText(/Open Settings/i)).toBeInTheDocument()
+      expect(screen.getByText(/copy link · copy markdown · open in editor/i)).toBeInTheDocument()
+      expect(screen.getByText(/toggle Outline and Comments map/i)).toBeInTheDocument()
     })
   })
 

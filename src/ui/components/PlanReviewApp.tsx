@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { preloadHighlighter } from '@pierre/diffs'
 import { useWorkerPool } from '@pierre/diffs/react'
-import { ArrowLeft, Palette, ClipboardList, Settings, Code2, FileText, Menu } from 'lucide-react'
+import {
+  ArrowLeft,
+  Palette,
+  ClipboardList,
+  Settings,
+  Code2,
+  FileText,
+  Columns2,
+  Menu,
+} from 'lucide-react'
 import { useSettings, resolveMonoFont } from '../hooks/useSettings'
 import { useApplyFonts } from '../hooks/useApplyFonts'
 import { usePlans } from '../hooks/usePlans'
@@ -17,6 +26,7 @@ import { AgentActivityToast } from './AgentActivityToast'
 import { BrandMark } from './BrandMark'
 import { Popover } from '../primitives/Popover'
 import { Select } from '../primitives/Select'
+import { Tooltip } from '../primitives/Tooltip'
 import { SubmitPlanReviewPopover } from './SubmitPlanReviewPopover'
 import { VimStatusBar } from './VimStatusBar'
 import { ShortcutsHelpModal } from './ShortcutsHelpModal'
@@ -48,9 +58,17 @@ export function PlanReviewApp() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === ',' || e.code === 'Comma')) {
+      if (!(e.metaKey || e.ctrlKey)) return
+      // ⌘, / Ctrl+, — toggle Settings
+      if (e.key === ',' || e.code === 'Comma') {
         e.preventDefault()
         setSettingsOpen((open) => !open)
+        return
+      }
+      // ⌘? / Ctrl+? (and ⌘Shift+/ ) — open shortcuts guide
+      if (e.key === '?' || (e.key === '/' && e.shiftKey) || e.code === 'Slash' && e.shiftKey) {
+        e.preventDefault()
+        setShortcutsHelpOpen(true)
       }
     }
     window.addEventListener('keydown', onKeyDown, true)
@@ -491,46 +509,90 @@ export function PlanReviewApp() {
             >
               <Menu size={18} />
             </button>
-            <button className="btn btn-sm" onClick={() => navigate('/')} title="Back to the diff review">
-              <ArrowLeft size={14} style={{ marginRight: '6px' }} />
-              <span className="btn-label">Diff</span>
-            </button>
-            <h1 className="toolbar-title plan-app-title">
+            <Tooltip content="Back to diff review" side="bottom">
+              <button
+                className="btn btn-sm plan-toolbar-back"
+                onClick={() => navigate('/')}
+                aria-label="Back to the diff review"
+              >
+                <ArrowLeft size={14} />
+                <span className="btn-label">Diff</span>
+              </button>
+            </Tooltip>
+            <div className="plan-toolbar-brand">
               <BrandMark size={18} className="plan-app-brand" />
-              Plan review
-            </h1>
-            <span className="toolbar-stat">
-              {plans.length} plan{plans.length === 1 ? '' : 's'}
-            </span>
+              <div className="plan-toolbar-brand-text">
+                <h1 className="toolbar-title plan-app-title">Plans</h1>
+                {activePlan ? (
+                  <span className="plan-toolbar-active" title={activePlan.title}>
+                    {activePlan.title}
+                  </span>
+                ) : (
+                  <span className="plan-toolbar-count">
+                    {plans.length} plan{plans.length === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
+
+          <div className="plan-view-toggle" role="group" aria-label="Plan view mode">
+            {(
+              [
+                {
+                  id: 'source' as const,
+                  label: 'Source',
+                  icon: Code2,
+                  tip: 'Source — select lines to comment',
+                },
+                {
+                  id: 'rendered' as const,
+                  label: 'Read',
+                  icon: FileText,
+                  tip: 'Read — rendered markdown (highlight to comment)',
+                },
+                {
+                  id: 'split' as const,
+                  label: 'Split',
+                  icon: Columns2,
+                  tip: 'Split — source + rendered (drag the divider to resize)',
+                },
+              ] as const
+            ).map(({ id, label, icon: Icon, tip }) => (
+              <Tooltip key={id} content={`${tip} · m to cycle`} side="bottom">
+                <button
+                  type="button"
+                  className={`plan-view-toggle-btn ${viewMode === id ? 'is-active' : ''}`}
+                  aria-pressed={viewMode === id}
+                  aria-label={tip}
+                  onClick={() => handleViewModeChange(id)}
+                >
+                  <Icon size={13} aria-hidden="true" />
+                  <span>{label}</span>
+                </button>
+              </Tooltip>
+            ))}
+          </div>
+
           <div className="toolbar-right">
-            {/* Settings Popover for Plans page */}
             <Popover
               open={settingsOpen}
               onOpenChange={setSettingsOpen}
               ariaLabel="Settings"
               className="settings-popover"
               trigger={
-                <button className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`} title="Settings">
-                  <Settings size={14} /> <span className="btn-label">Settings</span>
+                <button
+                  className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`}
+                  title="Settings (⌘,)"
+                  aria-label="Settings"
+                >
+                  <Settings size={14} />
+                  <span className="btn-label">Settings</span>
                 </button>
               }
             >
               <div className="popover-scroll settings-panel">
-                <div className="settings-section-label">Review Options</div>
-                <div className="settings-item settings-item-spaced">
-                  <span>View mode</span>
-                  <Select
-                    value={viewMode}
-                    onValueChange={(v) => handleViewModeChange(v as PlanViewMode)}
-                    options={[
-                      { value: 'source', label: 'Source (commentable)' },
-                      { value: 'rendered', label: 'Rendered (markdown)' },
-                      { value: 'split', label: 'Split (source + rendered)' },
-                    ]}
-                    ariaLabel="Plan view mode"
-                  />
-                </div>
+                <div className="settings-section-label">Appearance</div>
                 <div className="settings-item settings-item-spaced">
                   <span>Theme</span>
                   <button
@@ -553,7 +615,7 @@ export function PlanReviewApp() {
                     checked={tocOpen}
                     onChange={(e) => handleTocOpenChange(e.target.checked)}
                   />
-                  Show outline (On this page)
+                  Show outline
                 </label>
                 <label className="settings-item">
                   <input
@@ -743,19 +805,29 @@ export function PlanReviewApp() {
 function PlanEmptyState({ hasPlans, notFound }: { hasPlans: boolean; notFound: boolean }) {
   return (
     <div className="plan-empty-state">
-      <ClipboardList size={40} style={{ opacity: 0.4 }} />
+      <div className="plan-empty-icon" aria-hidden="true">
+        <ClipboardList size={28} />
+      </div>
       {notFound ? (
-        <p>That plan no longer exists. Pick one from the list, or submit a new plan.</p>
+        <>
+          <h2 className="plan-empty-title">Plan not found</h2>
+          <p className="plan-empty-body">It may have been deleted. Pick another from the list, or submit a new one.</p>
+        </>
       ) : hasPlans ? (
-        <p>Select a plan from the list to review it.</p>
+        <>
+          <h2 className="plan-empty-title">Select a plan</h2>
+          <p className="plan-empty-body">Choose one from the sidebar to start reviewing.</p>
+        </>
       ) : (
         <>
-          <p>No plans have been submitted for review yet.</p>
-          <p className="plan-empty-hint">
-            An agent can submit one with{' '}
-            <code>diffing plan submit PLAN.md</code> (or the <code>submit_plan</code> MCP tool), then block on{' '}
-            <code>diffing plan await</code> until you approve, reject, or request changes here.
+          <h2 className="plan-empty-title">No plans yet</h2>
+          <p className="plan-empty-body">
+            Agents submit a plan, you review it here, then they continue on approval.
           </p>
+          <div className="plan-empty-steps">
+            <code>diffing plan submit PLAN.md</code>
+            <code>diffing plan await</code>
+          </div>
         </>
       )}
     </div>

@@ -19,6 +19,8 @@ import {
   ExternalLink,
   Loader2,
   MessagesSquare,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react'
 import type { Plan, PlanComment, PlanDecision, PlanVersion } from '../../lib/plan-types'
 import { sectionTitleForLine, extractPlanLines } from '../../lib/plan-format'
@@ -38,7 +40,7 @@ import {
   selectionRangeInRoot,
 } from '../lib/planSelection'
 import { setUiStateItem } from '../utils/uiState'
-import { PLAN_UI, readBoolUi } from '../lib/planUiState'
+import { PLAN_UI, readBoolUi, readSplitRatioUi, clampSplitRatio } from '../lib/planUiState'
 import {
   PlanFloatComposers,
   clampToWindow,
@@ -162,8 +164,26 @@ export function PlanReview({
   } | null>(null)
   const renderedRef = useRef<HTMLDivElement>(null)
   const headRef = useRef<HTMLDivElement>(null)
+  const splitContentRef = useRef<HTMLDivElement>(null)
+  const splitRatioRef = useRef(50)
+  /** Source pane width % in split mode (persisted). */
+  const [splitRatio, setSplitRatio] = useState(() => readSplitRatioUi(50))
+  const [splitDragging, setSplitDragging] = useState(false)
+  /** Immersive full-width Read mode (only when rendered-only). */
+  const [zenMode, setZenMode] = useState(() => readBoolUi(PLAN_UI.zenMode, false))
+  splitRatioRef.current = splitRatio
   const showSource = viewMode === 'source' || viewMode === 'split'
   const showRendered = viewMode === 'rendered' || viewMode === 'split'
+  const isSplit = showSource && showRendered
+  const isReadOnly = viewMode === 'rendered'
+  const zenActive = isReadOnly && zenMode
+
+  const setZen = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
+    const value = typeof next === 'function' ? next(zenMode) : next
+    setZenMode(value)
+    setUiStateItem(PLAN_UI.zenMode, String(value))
+  }, [zenMode])
+
 
   // Version switcher: `viewingVersion` is the body the user is reading right
   // now. Defaults to the plan's current version. The user can pick any prior
@@ -635,16 +655,23 @@ export function PlanReview({
     // our page-space overlays also keep the highlight visible after selection drops.
   }, [selectionPopup, floatComposers.length, viewingBody, buildAgentLineContent])
 
-  // Esc dismisses the lightweight "Add comment" chip first (float close is in PlanFloatComposers).
+  // Esc: dismiss Add-comment chip first; then exit zen if active.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !selectionPopup) return
-      e.preventDefault()
-      setSelectionPopup(null)
+      if (e.key !== 'Escape') return
+      if (selectionPopup) {
+        e.preventDefault()
+        setSelectionPopup(null)
+        return
+      }
+      if (zenActive) {
+        e.preventDefault()
+        setZen(false)
+      }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [selectionPopup])
+  }, [selectionPopup, zenActive, setZen])
 
   // Dismiss only the lightweight chip on scroll (not open composers).
   useEffect(() => {
@@ -659,12 +686,58 @@ export function PlanReview({
       ? `${window.location.origin}${window.location.pathname.startsWith('/plan') ? window.location.pathname : `/plan/${plan.id}`}`
       : `/plan/${plan.id}`
 
+  /**
+   * Drag the split divider: update a CSS var live (no React re-render per
+   * mousemove), then commit ratio + persistence on mouseup.
+   */
+  const handleSplitResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const container = splitContentRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    if (rect.width <= 0) return
+
+    setSplitDragging(true)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    let latest = splitRatioRef.current
+    let rafId = 0
+
+    const apply = (pct: number) => {
+      latest = clampSplitRatio(pct)
+      container.style.setProperty('--plan-split-pct', `${latest}%`)
+    }
+
+    const handleMove = (ev: MouseEvent) => {
+      const pct = ((ev.clientX - rect.left) / rect.width) * 100
+      if (!rafId) {
+        rafId = requestAnimationFrame(() => {
+          rafId = 0
+          apply(pct)
+        })
+      }
+    }
+
+    const handleUp = () => {
+      if (rafId) cancelAnimationFrame(rafId)
+      setSplitRatio(latest)
+      setUiStateItem(PLAN_UI.splitRatio, String(latest))
+      setSplitDragging(false)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      document.removeEventListener('mousemove', handleMove)
+      document.removeEventListener('mouseup', handleUp)
+    }
+
+    // Immediate feedback on mousedown position (feels snappier than waiting for first move).
+    apply(((e.clientX - rect.left) / rect.width) * 100)
+    document.addEventListener('mousemove', handleMove)
+    document.addEventListener('mouseup', handleUp)
+  }, [])
+
   const sourcePanel = (
     <div className="plan-file">
-      <div className="plan-file-hint">
-        Source — select lines (or use the gutter +) to comment.
-        {showRendered && ' Split with rendered on the right for reading.'}
-      </div>
       <DiffsFile<PlanAnnotationMeta>
         file={{ name: plan.sourcePath?.split(/[/\\]/).pop() || 'PLAN.md', contents: viewingBody, lang: 'markdown' }}
         options={{
@@ -714,12 +787,21 @@ export function PlanReview({
   )
 
   const renderedPanel = (
-    <div className="plan-rendered-layout">
-      {tocOpen && outline.length > 0 && (
+    <div
+      className={[
+        'plan-rendered-layout',
+        tocOpen && outline.length > 0 && !zenActive ? 'has-toc' : '',
+        isReadOnly ? 'plan-rendered-layout-solo' : '',
+        zenActive ? 'plan-rendered-layout-zen' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
+      {tocOpen && outline.length > 0 && !zenActive && (
         <nav className="plan-toc" aria-label="Plan outline">
           <div className="plan-toc-head">
             <ListTree size={12} aria-hidden="true" />
-            <span>On this page</span>
+            <span>Outline</span>
           </div>
           <ul className="plan-toc-list">
             {outline.map((item) => (
@@ -750,11 +832,6 @@ export function PlanReview({
         className="markdown-body plan-rendered"
         onClick={handleMarkdownClick}
       >
-        {!isHistorical && (
-          <div className="plan-rendered-select-hint">
-            Highlight text → Add comment · open several · minimize · Esc closes (asks if draft)
-          </div>
-        )}
         <Markdown content={viewingBody} />
       </div>
     </div>
@@ -771,26 +848,33 @@ export function PlanReview({
     ) : null
 
   return (
-    <div className="plan-review">
-      <div className="plan-review-head" ref={headRef}>
+    <div className={`plan-review ${zenActive ? 'plan-review-zen' : ''} ${isReadOnly ? 'plan-review-read' : ''}`}>
+      <header className="plan-review-head" ref={headRef}>
         <div className="plan-review-head-main">
-          <h2 className="plan-review-title" title={viewingTitle}>
-            {viewingTitle}
-            {isHistorical && viewingTitle !== plan.title && (
-              <span className="plan-review-title-historical" title={`Currently submitted title: ${plan.title}`}>
-                {' '}
-                (current: {plan.title})
-              </span>
-            )}
-          </h2>
-          <div className="plan-review-meta">
+          <div className="plan-review-title-row">
+            <h2 className="plan-review-title" title={viewingTitle}>
+              {viewingTitle}
+              {isHistorical && viewingTitle !== plan.title && (
+                <span
+                  className="plan-review-title-historical"
+                  title={`Currently submitted title: ${plan.title}`}
+                >
+                  {' '}
+                  · was “{plan.title}”
+                </span>
+              )}
+            </h2>
             <span className={`plan-badge ${decision.className}`}>
               <DecisionIcon size={12} aria-hidden="true" />
               {decision.label}
             </span>
-            <span className="plan-review-chip">v{viewingVersion}{versions.length > 1 ? ` / ${versions.length}` : ''}</span>
-            {versions.length > 1 && (
-              <div className="plan-review-version-switcher">
+          </div>
+
+          <div className="plan-review-meta">
+            {versions.length <= 1 ? (
+              <span className="plan-review-chip">v{viewingVersion}</span>
+            ) : (
+              <div className={`plan-review-version-switcher ${isHistorical ? 'is-historical' : ''}`}>
                 <History size={12} aria-hidden="true" className="plan-review-version-switcher-icon" />
                 <Select
                   value={String(viewingVersion)}
@@ -806,234 +890,304 @@ export function PlanReview({
                     title={`Back to current v${plan.version}`}
                   >
                     <ArrowLeft size={11} aria-hidden="true" />
-                    Back to v{plan.version}
+                    Current
                   </button>
-                )}
-                {isHistorical && (
-                  <span
-                    className="plan-review-version-current-dot"
-                    title={`This is v${viewingVersion} of ${plan.version}`}
-                    aria-label={`Viewing historical version ${viewingVersion}`}
-                  />
                 )}
               </div>
             )}
+
             {plan.model && (
-              <span className="plan-review-chip plan-review-chip-model">
+              <span className="plan-review-chip plan-review-chip-model" title={plan.model}>
                 <Bot size={11} aria-hidden="true" />
                 {plan.model}
               </span>
             )}
-            <span className="plan-review-chip" title={`${lineCount} lines · ${wordCount} words`}>
-              {lineCount} lines · {wordCount} words
+
+            <span
+              className="plan-review-meta-stat"
+              title={`${lineCount} lines · ${wordCount} words · updated ${timeAgo(plan.updatedAt)}`}
+            >
+              {lineCount}L · {wordCount}W
+              {openCount > 0 && (
+                <span className="plan-review-meta-open"> · {openCount} open</span>
+              )}
+              {comments.length > 0 && openCount === 0 && (
+                <span> · {comments.length} comment{comments.length === 1 ? '' : 's'}</span>
+              )}
+              {isHistorical && totalCommentCount !== comments.length && (
+                <span className="plan-review-chip-sub"> of {totalCommentCount}</span>
+              )}
             </span>
-            {lineComments.length + generalComments.length > 0 && (
-              <span className="plan-review-chip">
-                {comments.length} comment{comments.length === 1 ? '' : 's'}
-                {isHistorical && totalCommentCount !== comments.length && (
-                  <span className="plan-review-chip-sub"> of {totalCommentCount}</span>
-                )}
-                {openCount > 0 && (
-                  <span className="plan-review-chip-sub"> · {openCount} open</span>
-                )}
-              </span>
-            )}
+
             {(liveSelectionCount > 0 || floatComposers.length > 0) && (
               <span className="plan-review-chip plan-review-chip-selection" aria-live="polite">
                 {floatComposers.length > 0
-                  ? `${floatComposers.length} draft comment${floatComposers.length === 1 ? '' : 's'}`
-                  : `${liveSelectionCount} line${liveSelectionCount === 1 ? '' : 's'} selected`}
+                  ? `${floatComposers.length} draft${floatComposers.length === 1 ? '' : 's'}`
+                  : `${liveSelectionCount} selected`}
               </span>
             )}
-            <span className="plan-review-chip plan-review-chip-muted" title={timeAgo(plan.updatedAt)}>
-              updated {timeAgo(plan.updatedAt)}
-            </span>
-          </div>
 
-          {/* Source path row — primary DX for agent handoff */}
-          {(copyablePath || plan.source) && (
-            <div className="plan-source-row">
-              <FolderOpen size={13} className="plan-source-icon" aria-hidden="true" />
-              <code className="plan-source-path" title={copyablePath ?? plan.source}>
-                {shortPath ?? plan.source}
-              </code>
-              {copyablePath && (
-                <Tooltip content="Copy absolute source path (for agents / other tools)">
-                  <button
-                    type="button"
-                    className="plan-source-btn"
-                    onClick={() => copyText(copyablePath, 'Path copied')}
-                    aria-label="Copy plan source path"
-                  >
-                    <Copy size={12} />
-                    <span>Copy path</span>
-                  </button>
-                </Tooltip>
-              )}
-              {plan.source && plan.source !== copyablePath && (
-                <span className="plan-source-label" title={plan.source}>
-                  label: {plan.source}
-                </span>
-              )}
-              {copyFlash && (
-                <span className="plan-source-flash" role="status">
-                  {copyFlash}
-                </span>
-              )}
-            </div>
-          )}
+            {(copyablePath || plan.source) && (
+              <div className="plan-source-inline">
+                <FolderOpen size={12} className="plan-source-icon" aria-hidden="true" />
+                <code className="plan-source-path" title={copyablePath ?? plan.source}>
+                  {shortPath ?? plan.source}
+                </code>
+                {copyablePath && (
+                  <Tooltip content="Copy absolute source path" side="top">
+                    <button
+                      type="button"
+                      className="plan-icon-btn"
+                      onClick={() => copyText(copyablePath, 'Path copied')}
+                      aria-label="Copy plan source path"
+                    >
+                      <Copy size={12} />
+                    </button>
+                  </Tooltip>
+                )}
+                {copyFlash && (
+                  <span className="plan-source-flash" role="status">
+                    {copyFlash}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="plan-review-head-actions">
-          <Tooltip content="Copy deep link to this plan review">
+        <div className="plan-review-head-actions" role="toolbar" aria-label="Plan actions">
+          <Tooltip content="Copy review link" side="bottom">
             <button
               type="button"
-              className="btn btn-sm plan-action-btn"
+              className="plan-icon-btn"
               onClick={() => copyText(reviewUrl, 'Link copied')}
               aria-label="Copy review URL"
             >
-              <Link2 size={13} />
-              <span className="btn-label">Copy link</span>
+              <Link2 size={14} />
             </button>
           </Tooltip>
-          <Tooltip content="Copy the full markdown body (current version view)">
+          <Tooltip content="Copy plan markdown" side="bottom">
             <button
               type="button"
-              className="btn btn-sm plan-action-btn"
+              className="plan-icon-btn"
               onClick={() => copyText(viewingBody, 'Markdown copied')}
               aria-label="Copy plan markdown"
             >
-              <FileText size={13} />
-              <span className="btn-label">Copy MD</span>
+              <FileText size={14} />
             </button>
           </Tooltip>
           {copyablePath && (
-            <Tooltip content="Copy absolute path to the on-disk plan source">
+            <Tooltip content="Open source in editor" side="bottom">
               <button
                 type="button"
-                className="btn btn-sm plan-action-btn plan-action-btn-primary"
-                onClick={() => copyText(copyablePath, 'Path copied')}
-                aria-label="Copy plan source path"
-              >
-                <Copy size={13} />
-                <span className="btn-label">Copy path</span>
-              </button>
-            </Tooltip>
-          )}
-          {copyablePath && (
-            <Tooltip content="Open the plan source file in your editor">
-              <button
-                type="button"
-                className="btn btn-sm plan-action-btn"
+                className="plan-icon-btn"
                 onClick={openInEditor}
                 disabled={openingEditor}
                 aria-label="Open plan source in editor"
               >
-                {openingEditor ? <Loader2 size={13} className="spin" /> : <ExternalLink size={13} />}
-                <span className="btn-label">Open</span>
+                {openingEditor ? <Loader2 size={14} className="spin" /> : <ExternalLink size={14} />}
               </button>
             </Tooltip>
           )}
-          {showRendered && outline.length > 0 && (
-            <button
-              type="button"
-              className={`btn btn-sm plan-action-btn ${tocOpen ? 'btn-active' : ''}`}
-              onClick={() => setTocOpen((v) => !v)}
-              aria-pressed={tocOpen}
-              title="Toggle table of contents"
+          <span className="plan-action-divider" aria-hidden="true" />
+          {isReadOnly && (
+            <Tooltip
+              content={
+                zenActive
+                  ? 'Exit zen reading (Esc)'
+                  : 'Zen mode — full-width focus reading'
+              }
+              side="bottom"
             >
-              <ListTree size={13} />
-              <span className="btn-label">Outline</span>
-            </button>
+              <button
+                type="button"
+                className={`plan-icon-btn ${zenActive ? 'is-active' : ''}`}
+                onClick={() => setZen((v) => !v)}
+                aria-pressed={zenActive}
+                aria-label={zenActive ? 'Exit zen reading' : 'Enter zen reading mode'}
+              >
+                {zenActive ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
+            </Tooltip>
           )}
-          {comments.length > 0 && (
-            <button
-              type="button"
-              className={`btn btn-sm plan-action-btn ${commentsRailOpen ? 'btn-active' : ''}`}
-              onClick={() => setCommentsRailOpen((v) => !v)}
-              aria-pressed={commentsRailOpen}
-              title="Toggle comments map"
+          {showRendered && outline.length > 0 && !zenActive && (
+            <Tooltip
+              content={tocOpen ? 'Hide outline' : 'Show outline'}
+              side="bottom"
             >
-              <MessagesSquare size={13} />
-              <span className="btn-label">
-                Comments{openCount > 0 ? ` (${openCount})` : ''}
-              </span>
-            </button>
+              <button
+                type="button"
+                className={`plan-icon-btn ${tocOpen ? 'is-active' : ''}`}
+                onClick={() => setTocOpen((v) => !v)}
+                aria-pressed={tocOpen}
+                aria-label={tocOpen ? 'Hide outline' : 'Show outline'}
+              >
+                <ListTree size={14} />
+              </button>
+            </Tooltip>
+          )}
+          {comments.length > 0 && !zenActive && (
+            <Tooltip
+              content={
+                commentsRailOpen
+                  ? 'Hide comments map'
+                  : openCount > 0
+                    ? `Show comments map (${openCount} open)`
+                    : 'Show comments map'
+              }
+              side="bottom"
+            >
+              <button
+                type="button"
+                className={`plan-icon-btn ${commentsRailOpen ? 'is-active' : ''}`}
+                onClick={() => setCommentsRailOpen((v) => !v)}
+                aria-pressed={commentsRailOpen}
+                aria-label={
+                  commentsRailOpen
+                    ? 'Hide comments map'
+                    : openCount > 0
+                      ? `Show comments map, ${openCount} open`
+                      : 'Show comments map'
+                }
+              >
+                <MessagesSquare size={14} />
+                {openCount > 0 && <span className="plan-icon-btn-badge">{openCount}</span>}
+              </button>
+            </Tooltip>
           )}
         </div>
-      </div>
+      </header>
+
+      {zenActive && (
+        <div className="plan-zen-bar" role="status">
+          <span className="plan-zen-bar-label">Zen reading</span>
+          <span className="plan-zen-bar-hint">Esc or button to exit</span>
+          <button
+            type="button"
+            className="plan-zen-bar-exit"
+            onClick={() => setZen(false)}
+          >
+            <Minimize2 size={13} aria-hidden="true" />
+            Exit zen
+          </button>
+        </div>
+      )}
 
       {isHistorical && (
         <div className="plan-review-historical-banner" role="status">
           <History size={14} aria-hidden="true" />
           <span>
-            Viewing <strong>v{viewingVersion}</strong> of this plan (current is <strong>v{plan.version}</strong>).{' '}
-            Comments and line anchors reflect v{viewingVersion}.
+            Viewing <strong>v{viewingVersion}</strong> of this plan (current is{' '}
+            <strong>v{plan.version}</strong>). Comments and line anchors reflect v{viewingVersion}.
           </span>
-          <button type="button" className="plan-review-historical-banner-back" onClick={() => setViewingVersion(plan.version)}>
+          <button
+            type="button"
+            className="plan-review-historical-banner-back"
+            onClick={() => setViewingVersion(plan.version)}
+          >
             <ArrowLeft size={11} aria-hidden="true" />
             Back to current
           </button>
         </div>
       )}
 
-      {plan.decision !== 'pending' && (
+      {plan.decision !== 'pending' && plan.decisionComment && (
         <div className={`plan-decision-banner ${decision.className}`}>
           <DecisionIcon size={15} aria-hidden="true" />
           <div className="plan-decision-banner-text">
             <strong>{decision.label}</strong>
-            {plan.decisionComment && (
-              <Markdown
-                content={plan.decisionComment}
-                className="plan-decision-banner-note markdown-body"
-              />
-            )}
+            <Markdown
+              content={plan.decisionComment}
+              className="plan-decision-banner-note markdown-body"
+            />
           </div>
         </div>
       )}
 
       {generalComments.length > 0 && (
-        <div className="plan-general-section">
+        <section className="plan-general-section" aria-label="General comments">
           <div className="plan-general-header">
-            <MessageSquarePlus size={14} />
-            <span>General comments ({generalComments.length})</span>
+            <MessageSquarePlus size={14} aria-hidden="true" />
+            <span>General comments</span>
+            <span className="plan-general-count">{generalComments.length}</span>
           </div>
-          {generalComments.map((c) => (
-            <div key={c.id} id={`plan-comment-${c.id}`}>
-              <PlanCommentBubble
-                comment={c}
-                onResolve={() => resolvePlanComment(plan.id, c.id)}
-                onUnresolve={() => unresolvePlanComment(plan.id, c.id)}
-                onDelete={() => removePlanComment(plan.id, c.id)}
-                onEdit={(body) => editPlanComment(plan.id, c.id, body)}
-                onReply={(body) => addPlanReply(plan.id, c.id, body)}
-                onEditReply={(replyId, body) => editPlanReply(plan.id, c.id, replyId, body)}
-                onDeleteReply={(replyId) => removePlanReply(plan.id, c.id, replyId)}
-              />
-            </div>
-          ))}
-        </div>
+          <div className="plan-general-list">
+            {generalComments.map((c) => (
+              <div key={c.id} id={`plan-comment-${c.id}`}>
+                <PlanCommentBubble
+                  comment={c}
+                  onResolve={() => resolvePlanComment(plan.id, c.id)}
+                  onUnresolve={() => unresolvePlanComment(plan.id, c.id)}
+                  onDelete={() => removePlanComment(plan.id, c.id)}
+                  onEdit={(body) => editPlanComment(plan.id, c.id, body)}
+                  onReply={(body) => addPlanReply(plan.id, c.id, body)}
+                  onEditReply={(replyId, body) => editPlanReply(plan.id, c.id, replyId, body)}
+                  onDeleteReply={(replyId) => removePlanReply(plan.id, c.id, replyId)}
+                />
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       <div
-        className={`plan-review-body ${commentsRailOpen && comments.length > 0 ? 'plan-review-body-with-rail' : ''}`}
+        className={`plan-review-body ${
+          !zenActive && commentsRailOpen && comments.length > 0 ? 'plan-review-body-with-rail' : ''
+        }`}
       >
         <div
-          className={`plan-content ${
-            showSource && showRendered ? 'plan-content-split' : 'plan-content-single'
-          }`}
+          ref={splitContentRef}
+          className={`plan-content ${isSplit ? 'plan-content-split' : 'plan-content-single'} ${
+            splitDragging ? 'plan-content-split-dragging' : ''
+          } ${isReadOnly ? 'plan-content-read' : ''} ${zenActive ? 'plan-content-zen' : ''}`}
+          style={
+            isSplit
+              ? ({ '--plan-split-pct': `${splitRatio}%` } as React.CSSProperties)
+              : undefined
+          }
         >
           {showSource && sourcePanel}
+          {isSplit && (
+            <div
+              className="plan-split-resize-handle"
+              onMouseDown={handleSplitResizeStart}
+              onDoubleClick={() => {
+                const next = 50
+                setSplitRatio(next)
+                setUiStateItem(PLAN_UI.splitRatio, String(next))
+                splitContentRef.current?.style.setProperty('--plan-split-pct', `${next}%`)
+              }}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize source and rendered panes"
+              title="Drag to resize · double-click to reset 50/50"
+              aria-valuenow={Math.round(splitRatio)}
+              aria-valuemin={20}
+              aria-valuemax={80}
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+                e.preventDefault()
+                const delta = e.key === 'ArrowLeft' ? -2 : 2
+                const next = clampSplitRatio(splitRatio + delta)
+                setSplitRatio(next)
+                setUiStateItem(PLAN_UI.splitRatio, String(next))
+                splitContentRef.current?.style.setProperty('--plan-split-pct', `${next}%`)
+              }}
+            >
+              <span className="plan-split-resize-grip" aria-hidden="true" />
+            </div>
+          )}
           {showRendered && renderedPanel}
         </div>
 
-        {commentsRailOpen && comments.length > 0 && (
+        {!zenActive && commentsRailOpen && comments.length > 0 && (
           <aside className="plan-comments-rail" aria-label="Comments map">
             <div className="plan-comments-rail-head">
               <MessagesSquare size={12} aria-hidden="true" />
               <span>Comments</span>
               <span className="plan-comments-rail-count">
-                {openCount} open · {comments.length} total
+                {openCount > 0 ? `${openCount} open` : `${comments.length}`}
               </span>
             </div>
             <ul className="plan-comments-rail-list">
@@ -1058,7 +1212,9 @@ export function PlanReview({
                         {c.body.replace(/\s+/g, ' ').slice(0, 80)}
                         {c.body.length > 80 ? '…' : ''}
                       </span>
-                      <span className={`plan-comments-rail-status plan-comments-rail-status-${c.status}`}>
+                      <span
+                        className={`plan-comments-rail-status plan-comments-rail-status-${c.status}`}
+                      >
                         {c.status}
                       </span>
                     </button>
