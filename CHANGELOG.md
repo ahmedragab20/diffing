@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+## 0.10.0
+
+### Minor Changes
+
+- 177b350: Expand the experimental native TUI into a complete, diff-first
+  local review surface.
+
+  **Modern terminal review experience**
+
+  - Replace dense dashboard chrome with a one-row command header,
+    border-light file navigation, contextual status hints, quieter semantic
+    colors, gutter-only selection, and compact modal overlays.
+  - Collapse empty review drawers automatically and adapt files, diff, and
+    active comments across wide, medium, and compact terminals.
+  - Keep mouse, arrow-key, and Vim workflows accessible together, including
+    numeric motions and visible completions for pending key sequences.
+
+  **Scalable diffs and optional language intelligence**
+
+  - Stream Git output into a disk-backed sparse index and decode only visible
+    rows for unified, split, single-file, and continuous-file review modes.
+  - Add theme-aware syntax highlighting, live repository refresh, search,
+    file filters, persistent layout settings, change maps, and viewed state.
+  - Lazily integrate locally installed language servers for diagnostics,
+    hover, and changed-line definitions without downloading tools or sending
+    source outside the machine.
+
+  **Complete human-agent review loop**
+
+  - Support line, same-side range, and file-level comments with severity,
+    replies, editing, filters, resolution, deletion confirmation, and live
+    `comments.json` synchronization.
+  - Add a compact verdict/general-note handoff with unviewed-file protection,
+    byte-identical XML output, clipboard integration, review rounds, and
+    immediate wake-up for CLI and MCP waiters.
+  - Document TUI launch behavior, persistence, keymaps, headless inspection,
+    cross-platform liveness, and the shared browser/TUI review contract.
+
 ## 0.9.0
 
 ### Minor Changes
