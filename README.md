@@ -6,9 +6,8 @@
 
 A local-first code review tool and double-sided bridge designed for the modern AI coding agent workflow. Review AI-generated changes in a high-fidelity, GitHub-like web UI, leave inline comments, and hand them back to your coding agent to fix in real time — and review the agent's **plan** the same way *before* it writes any code, approving, rejecting, or requesting changes on specific lines and sections.
 
-<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/def904bb-c5b4-48f5-b899-e38350769d77" />
-
-
+<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/c1e12c28-610e-4d68-abb1-3c8dde58560e" />
+<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/95a51403-3bce-453c-a831-43a2834c5ed7" />
 
 ---
 
@@ -451,9 +450,6 @@ self-documenting `<plan-review>` envelope:
 </plan-review>
 ```
 
-<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/744fa144-151b-42b2-a1ed-8e9337841eed" />
-
-
 ---
 
 ## Reviewing a GitHub PR
@@ -743,11 +739,6 @@ For advanced features, internal API endpoints, sequence specifications, and conf
 
 Changelog for the latest release: [`CHANGELOG.md`](CHANGELOG.md) (current package version **0.7.0**).
 
----
-
-## Landing Page
-
-<img width="1287" height="6579" alt="screencapture-localhost-3000-2026-05-31-20_57_04" src="https://github.com/user-attachments/assets/a163b00e-a85a-428f-b8d5-2a33ff9fa1eb" />
 
 ---
 
