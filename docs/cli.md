@@ -429,43 +429,69 @@ On startup, the CLI:
 2. Calls `gh pr view <ref> --json …` for metadata (title, author, base/head
    SHAs, additions/deletions/changedFiles, url).
 3. Calls `gh pr diff <ref>` for the unified diff.
-4. Calls `gh api /repos/{owner}/{repo}/pulls/{n}/comments?per_page=100` and
-   `/reviews` to fetch existing review comments + their threads (read-only
-   context, never re-POSTed). Pagination is capped at 50 reviews × 100
-   comments — the first 50 reviews are fetched in detail, the rest
-   summarised.
-5. Persists `{ ref, owner, repo, pullNumber, baseSha, headSha, diff, files,
-   existingComments, comments: [] }` to `pr-session.json`.
+4. Calls the GitHub reviews and review-comments REST endpoints plus the
+   GraphQL review-thread API. This hydrates the latest 50 review verdicts and
+   overall comments, paginated inline conversations, replies, ownership, and
+   resolve/reopen state.
+5. Persists `{ ref, owner, repo, pullNumber, baseSha, headSha, diff,
+   existingReviews, existingComments, comments: [] }` to `pr-session.json`.
 6. Opens the browser at `/gh/pr` (the SPA shell mounts `<PrReviewApp>`,
    which fetches `/api/gh/session` to hydrate).
 
-If `gh` is missing and no `$GITHUB_TOKEN` is set, the session fails fast
-with a clear one-line error — no silent degradation to a broken UI.
+Opening and synchronizing a PR session requires an authenticated `gh` CLI and
+fails fast with its error when unavailable. Token environment variables are a
+submission fallback; they do not replace `gh pr view`, `gh pr diff`, or the
+review/check synchronization commands.
+
+### PR review UI and synchronization
+
+The `/gh/pr` surface shares the local review shell: file tree/filter chips,
+search, viewed-file state, split/unified diff settings, themes and fonts,
+density controls, status bar, and the same navigation/comment keymaps. Controls
+that mutate the local working tree (open in editor, revert hunks, send to agent)
+are deliberately absent in remote PR mode.
+
+- Published GitHub threads render as annotations beneath their current diff
+  line. Outdated or missing anchors use the file-level context area.
+- Replies, edits, deletes, resolve, and reopen mutate GitHub and then refresh
+  the cached thread. GitHub-side changes sync on mount, focus, manual refresh,
+  and every 30 seconds while the page is visible.
+- Suggestion fences render as before/after previews using the current anchor
+  range rather than appearing as raw fenced Markdown.
+- Overall review bodies do not masquerade as inline comments. The review
+  activity card walks submitted approval, request-changes, comment-only,
+  pending, and dismissed reviews with verdict, author, time, Markdown body,
+  and GitHub link.
+- The submit popover batches local draft comments with an overall body and one
+  of `approve`, `comment`, `request-changes`, or `draft`. Submission uses stdin
+  JSON with explicit timeout/output limits, then clears promoted local drafts.
+- Submission success feedback is page-local and opaque. It disappears when
+  dismissed and is never reconstructed from historical session metadata after
+  reload.
 
 ### `gh status`
 
 Show the active PR session.
 
 ```bash
-diffing gh status [--json]
+diffing gh status
 ```
 
-- Default: a one-line summary (ref, owner/repo#n, comment count, submitted status).
-- `--json`: the raw `PrSession` object (sans `diff`/`existingComments` to keep stdout small).
-- **Exit codes**: `0` on success; `3` if no server / no PR session.
+- Prints PR identity, head/base SHAs, published thread and review counts,
+  local-draft count, and latest submission status.
+- **Exit codes**: `0` on success; `3` if no server; `4` if no PR session.
 
 ### `gh pr-fetch`
 
-Re-fetch PR metadata (head SHA, diff, existing comments) and persist into
-`pr-session.json`. Useful when the PR has been force-pushed since the
-session started — the head SHA comparison surfaces "outdated" warnings.
+Re-fetch PR metadata, patch, published conversations, thread resolution, and
+review-level activity, then persist them into `pr-session.json`. Useful when
+the PR has been force-pushed or reviewed on GitHub since the session started.
 
 ```bash
-diffing gh pr-fetch <ref> [--repo <owner/repo>]
+diffing gh pr-fetch <ref> [--json]
 ```
 
-- `--repo <owner/repo>`: explicit repo override (skips the cwd-repo
-  detection for bare numbers).
+- `--json`: print the refreshed session as structured JSON.
 - **Exit codes**: `0` on success; `3` if no server; `5` on bad input; `1`
   on `gh` failure (with the GitHub error message on stderr).
 
@@ -476,11 +502,11 @@ local `diffing comments` subcommand, but reads from `pr-session.json` (not
 `comments.json`).
 
 ```bash
-diffing gh pr-list-comments [--open] [--json]
+diffing gh pr-list-comments
 ```
 
-- `--open`: only output comments with `status === "open"`.
-- `--json`: structured JSON instead of the `<code-review-comments>` XML.
+Outputs the current PR draft comments in the shared
+`<code-review-comments>` XML format.
 
 ### `gh pr-review`
 
@@ -488,7 +514,7 @@ Submit the current in-progress PR review to GitHub. Headless equivalent
 of clicking **Submit to GitHub** in the UI.
 
 ```bash
-diffing gh pr-review <ref> --decision <approve|comment|request-changes> [--body <text>] [--dry-run]
+diffing gh pr-review --decision <approve|comment|request-changes|draft> [--body <text>] [--dry-run] [--json]
 ```
 
 - `--decision` (required) — the verdict event:
@@ -496,6 +522,7 @@ diffing gh pr-review <ref> --decision <approve|comment|request-changes> [--body 
   - `request-changes` → GitHub event `REQUEST_CHANGES`
   - `comment` → GitHub event `COMMENT` (default when no decision is set
     but inline comments exist)
+  - `draft` → omits the event so GitHub keeps the review `PENDING`
 - `--body` (optional) — the general review comment, posted as the
   top-level review body.
 - `--dry-run` — print the JSON payload that *would* be POSTed (the same
@@ -505,27 +532,26 @@ diffing gh pr-review <ref> --decision <approve|comment|request-changes> [--body 
   → `$GH_TOKEN` / `$GITHUB_TOKEN` / `$GITHUB_API_TOKEN` env var
   → fail with a clear one-line error.
 - **Payload mapping**:
-  - Each in-progress `ReviewComment` becomes a `{ path, line, side: "RIGHT", body }` entry. `path` is the PR-relative file path (no `a/` / `b/` prefix).
-  - Multi-line comments (`startLineNumber` set) are **expanded** to N
-    single-line entries with a `[part N/M]` prefix, because GitHub's REST
-    endpoint doesn't support range anchors on a single review-comment.
-  - File-level comments (`lineNumber === 0`) and resolved comments are
-    dropped.
-  - The `<ref>` argument is currently informational (the active session
-    already knows its PR); included for symmetry with `pr-fetch` and
-    for explicit overrides.
+  - Each in-progress `ReviewComment` becomes a `{ path, line, side, body }`
+    entry. `path` is PR-relative; additions use `RIGHT` and deletions use
+    `LEFT`.
+  - Multi-line comments use GitHub's native `start_line`, `start_side`,
+    `line`, and `side` range fields.
+  - File-level comments (`lineNumber === 0`) are folded into a `### File
+    comments` section in the overall review body. Resolved comments are
+    excluded.
 - **Response on success**:
   ```text
-  Submitted review <id>
-  <review-url>
+  Review submitted via gh: <review-url>
   ```
-  Plus `DIFFING_PR_REVIEW_ID=<id>` and `DIFFING_PR_REVIEW_URL=<url>` on stderr.
+  `--json` prints the complete response object. A successful `--dry-run`
+  prints a validation message without touching GitHub.
 - **Exit codes**:
   - `0`: success.
-  - `1`: GitHub rejected the payload (4xx/5xx); the error message is on stderr.
-  - `3`: no server / no PR session.
+  - `1`: GitHub/auth/HTTP failure; the error message is on stderr.
+  - `3`: no running server.
+  - `4`: no active PR session.
   - `5`: usage error (missing `--decision`, bad value).
-  - `6`: no auth (`gh` not on $PATH and no `$GITHUB_TOKEN`).
 
 ### Diffing ↔ GitHub payload mapping (reference)
 
@@ -534,16 +560,17 @@ For each in-progress `ReviewComment`:
 | `diffing` field | GitHub field | Notes |
 |---|---|---|
 | `comment.filePath` | `path` | Stripped of any `a/` or `b/` prefix. |
-| `comment.lineNumber` | `line` | Right-side (additions) line number. |
-| `comment.side` | `side` | Always `"RIGHT"` in v1 (deletions-side anchors not posted). |
-| `comment.body` | `body` | Multi-line comments expand to N entries with `[part N/M]` prefix. |
+| `comment.lineNumber` | `line` | Inclusive end line of the anchor. |
+| `comment.startLineNumber` | `start_line` | Inclusive range start when present. |
+| `comment.side` | `side` / `start_side` | `additions` → `RIGHT`; `deletions` → `LEFT`. |
+| `comment.body` | `body` | Markdown body, including GitHub suggestion fences. |
 | `comment.status` | — | Only `open` comments are POSTed. |
 | top-level `body` (from popover) | `body` | The general review comment. |
 | `decision` (from popover) | `event` | `approve` → `APPROVE`, etc. |
 
-The `pr-session.json`'s `existingComments` are **never** included in the
-payload — they're a read-only context display in the UI, not part of the
-submit body.
+The session's `existingComments` and `existingReviews` are **never** included
+in a new-review payload. They represent already-published GitHub state;
+reply/edit/delete/resolve actions use their dedicated GitHub endpoints.
 
 ### `pr-session.json` Schema
 
@@ -579,7 +606,22 @@ unaffected.
       "updatedAt": "2026-05-01T12:00:00.000Z",
       "state": "COMMENTED",
       "replies": [],
-      "isOutdated": false
+      "isOutdated": false,
+      "threadId": "PRRT_…",
+      "isResolved": false,
+      "viewerCanResolve": true,
+      "viewerDidAuthor": false
+    }
+  ],
+  "existingReviews": [
+    {
+      "id": 12345,
+      "author": { "login": "reviewer", "avatarUrl": "https://…" },
+      "body": "Approved — looks good.",
+      "state": "APPROVED",
+      "submittedAt": "2026-05-01T12:05:00.000Z",
+      "htmlUrl": "https://github.com/acme/widget/pull/1234#pullrequestreview-12345",
+      "commitId": "abc123…"
     }
   ],
   "submittedAt": 1782782782782,
@@ -591,9 +633,10 @@ unaffected.
 
 The server watches `pr-session.json` and broadcasts a `pr-session` SSE
 event on every change (120ms debounce, mirroring the `comments.json` /
-`plans.json` paths). The UI uses this for live updates: when a background
-submit lands, the success toast and "Open in GitHub" link appear without
-a manual refresh.
+`plans.json` paths). The UI invalidates its session query on that event.
+GitHub-originated changes are also reconciled on page focus, manual refresh,
+and a 30-second visible-page interval. The success toast is deliberately
+ephemeral and appears only for a submission completed in that page lifetime.
 
 ---
 
@@ -1365,9 +1408,10 @@ Returns `{ round, waiters, lastDecidedAt }` for the plan handoff session.
 
 ### 6. GitHub PR Review
 
-All `/api/gh/*` endpoints are **no-ops (404)** when no `pr-session.json`
-exists, so the local review flow and the plan review flow are completely
-unaffected. Every response shape below assumes an active PR session.
+Mutating `/api/gh/*` endpoints return **404** when no active PR session exists,
+so the local and plan-review flows are unaffected. `GET /api/gh/session` is the
+soft mode probe: it returns `{ "prMode": false }` when the server is not in PR
+mode. Every other response shape below assumes an active PR session.
 
 #### `GET /api/gh/session`
 Returns the active `PrSession` (sans the large `diff` string) for client hydration.
@@ -1387,7 +1431,8 @@ Returns the active `PrSession` (sans the large `diff` string) for client hydrati
     "additions": 142,
     "deletions": 7,
     "changedFiles": 5,
-    "existingComments": [ /* PrExistingComment[] — read-only context */ ],
+    "existingComments": [ /* PrExistingComment[] — published threads */ ],
+    "existingReviews": [ /* PrExistingReview[] — verdicts + overall comments */ ],
     "submittedAt": null,
     "submittedReviewId": null,
     "submittedReviewUrl": null,
@@ -1415,8 +1460,36 @@ Initialise a PR session from a `ref` (programmatic equivalent of `diffing --gh-p
 - **Errors**: 400 if `ref` is missing; 500 on `gh` failure (with the GitHub error message).
 
 #### `POST /api/gh/pr/refresh`
-Re-fetches PR metadata (head SHA, diff, existing comments) and persists the result. Surfaces force-pushes by changing `headSha`.
+Re-fetches PR metadata, patch, published conversations, thread resolution, and
+review activity, then persists the result. Surfaces force-pushes by changing
+`headSha`.
 - **Response Schema** (200): `{ ok: true, headSha: "…" }`.
+
+#### `POST /api/gh/comments/sync`
+Lightweight GitHub synchronization without re-fetching the patch. Refreshes
+published comments/replies, ownership, resolve state, and review-level
+activity. The PR UI calls this on mount, focus, and every 30 seconds while the
+page is visible.
+- **Response Schema** (200): `{ ok: true, count: 4 }`.
+
+#### `GET /api/gh/checks`
+Returns check runs and commit status for the active PR head SHA. The PR summary
+uses this for its live checks popover.
+
+#### Published GitHub conversation actions
+
+These routes mutate GitHub first and then synchronize the cached session:
+
+- `POST /api/gh/existing-comments/:id/replies` — reply to a published thread.
+- `PATCH /api/gh/existing-comments/:id` — edit a published comment or reply;
+  payload `{ "body": "Updated Markdown" }`.
+- `DELETE /api/gh/existing-comments/:id` — delete a published comment or reply.
+- `PUT /api/gh/review-threads/:threadId` — resolve or reopen a thread; payload
+  `{ "resolved": true | false }`.
+
+The reverse direction is handled by the sync endpoint, so edits, deletions,
+replies, and resolution performed on GitHub appear in `diffing` after refresh,
+focus, or the background interval.
 
 #### `GET /api/gh/pr-session/comments`
 Returns the in-progress PR-mode `ReviewComment[]`. Mirrors `GET /api/comments` but reads from `pr-session.json`.
@@ -1449,11 +1522,14 @@ Append a reply to a PR-mode comment (same shape as `/api/comments/:id/replies`).
 Build the `POST /repos/{owner}/{repo}/pulls/{n}/reviews` payload from the
 current `pr-session.json` comments, POST it to GitHub, and on success
 record `submittedAt` / `submittedReviewId` / `submittedReviewUrl` on the
-session. This is the server-side equivalent of `diffing gh pr-review`.
+session. Local drafts are cleared, published threads are re-hydrated, and an
+optimistic `existingReviews` entry makes the overall review comment visible
+immediately while GitHub's reviews endpoint catches up. This is the server-side
+equivalent of `diffing gh pr-review`.
 - **Payload Schema**:
   ```json
   {
-    "decision": "approve | comment | request-changes",
+    "decision": "approve | comment | request-changes | draft",
     "body": "Optional general review comment",
     "dryRun": false
   }
@@ -1469,7 +1545,7 @@ session. This is the server-side equivalent of `diffing gh pr-review`.
     "dryRun": false
   }
   ```
-- **Errors**: 400 on bad `decision`; 500 on `gh` failure; the response body
+- **Errors**: 400 on bad `decision`; 502 on GitHub failure; the response body
   always carries the error message + the auth source that was tried.
 
 #### `GET /api/diff` (PR-mode short-circuit)

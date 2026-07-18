@@ -1,14 +1,9 @@
-import { useState, useEffect, memo } from 'react'
+import { memo } from 'react'
 import {
   GitBranch,
-  Settings,
-  Palette,
   Search,
   ClipboardList,
-  Type,
   Menu,
-  LayoutGrid,
-  Sparkles,
   CheckCheck,
 } from 'lucide-react'
 import type { DiffOptions } from '../hooks/useDiff'
@@ -18,11 +13,10 @@ import type {
   HunkSeparatorStyle,
   LineHoverHighlight,
 } from '../hooks/useSettings'
-import { Popover } from '../primitives/Popover'
-import { Select } from '../primitives/Select'
 import { SendReviewPopover } from '../components/SendReviewPopover'
 import { ReviewHistoryPopover } from '../components/ReviewHistoryPopover'
 import { BrandMark } from './BrandMark'
+import { ReviewSettingsPopover } from './ReviewSettingsPopover'
 import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
 
 interface LastSendSummary {
@@ -108,60 +102,6 @@ interface ToolbarProps {
   sidebarCollapsed?: boolean
   onToggleSidebar?: () => void
 }
-
-
-
-const INLINE_DIFF_OPTS = [
-  { value: 'word', label: 'Word' },
-  { value: 'word-alt', label: 'Word (alt)' },
-  { value: 'char', label: 'Character' },
-  { value: 'none', label: 'None' },
-]
-const INDICATOR_OPTS = [
-  { value: 'classic', label: 'Classic (+/−)' },
-  { value: 'bars', label: 'Bars' },
-  { value: 'none', label: 'None' },
-]
-const HUNK_SEP_OPTS = [
-  { value: 'line-info', label: 'Line info + context' },
-  { value: 'line-info-basic', label: 'Line info' },
-  { value: 'metadata', label: 'Metadata only' },
-  { value: 'simple', label: 'Simple' },
-]
-const HOVER_OPTS = [
-  { value: 'both', label: 'Both' },
-  { value: 'line', label: 'Line only' },
-  { value: 'number', label: 'Number only' },
-  { value: 'disabled', label: 'Disabled' },
-]
-const FONT_SIZE_OPTS = [11, 12, 13, 14, 15, 16].map((n) => ({ value: String(n), label: `${n}px` }))
-const TAB_SIZE_OPTS = [2, 4, 8].map((n) => ({ value: String(n), label: String(n) }))
-const DENSITY_OPTS = [
-  { value: 'comfortable', label: 'Comfortable' },
-  { value: 'compact', label: 'Compact' },
-]
-const AUTO_COLLAPSE_OPTS: { value: string; label: string }[] = [
-  { value: '0', label: 'Disabled' },
-  { value: '100', label: '100 lines' },
-  { value: '200', label: '200 lines' },
-  { value: '400', label: '400 lines' },
-  { value: '800', label: '800 lines' },
-] as const
-const BROWSER_OPTS = [
-  { value: '', label: 'Default' },
-  { value: 'chrome', label: 'Chrome' },
-  { value: 'firefox', label: 'Firefox' },
-  { value: 'edge', label: 'Edge' },
-  { value: 'brave', label: 'Brave' },
-]
-const IDE_OPTS = [
-  { value: 'default', label: 'Default / System' },
-  { value: 'vscode', label: 'VS Code' },
-  { value: 'zed', label: 'Zed' },
-  { value: 'vim', label: 'Vim' },
-  { value: 'neovim', label: 'Neovim' },
-]
-
 export const Toolbar = memo(function Toolbar({
   repoName,
   branch,
@@ -238,19 +178,6 @@ export const Toolbar = memo(function Toolbar({
   sidebarCollapsed,
   onToggleSidebar,
 }: ToolbarProps) {
-  const [settingsOpen, setSettingsOpen] = useState(false)
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === ',' || e.code === 'Comma')) {
-        e.preventDefault()
-        setSettingsOpen((open) => !open)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [])
-
   const filesLabel = showMode
     ? `${showCommitCount} commit${showCommitCount === 1 ? '' : 's'}`
     : fileCount === totalFileCount
@@ -353,270 +280,54 @@ export const Toolbar = memo(function Toolbar({
           </button>
         )}
 
-        <Popover
-          open={settingsOpen}
-          onOpenChange={setSettingsOpen}
-          ariaLabel="Settings"
-          className="settings-popover"
-          trigger={
-            <button
-              className={`btn btn-sm settings-btn ${settingsOpen ? 'btn-active' : ''}`}
-              title="Settings (⌘,)"
-              aria-label="Settings"
-            >
-              <Settings size={14} />
-              <span className="btn-label">Settings</span>
-            </button>
-          }
-        >
-          <div className="popover-scroll settings-panel">
-            {!customMode && (
-              <>
-                <div className="settings-section-label">Source</div>
-                <label className="settings-item">
-                  <input
-                    type="checkbox"
-                    checked={diffOptions.staged}
-                    onChange={(e) => onDiffOptionsChange({ ...diffOptions, staged: e.target.checked })}
-                  />
-                  Show staged
-                </label>
-                <label className="settings-item">
-                  <input
-                    type="checkbox"
-                    checked={diffOptions.untracked}
-                    onChange={(e) => onDiffOptionsChange({ ...diffOptions, untracked: e.target.checked })}
-                  />
-                  Show untracked
-                </label>
-              </>
-            )}
-            <div className="settings-section-label">Display</div>
-            <div className="settings-item settings-item-spaced">
-              <span>Inline diff</span>
-              <Select
-                value={lineDiffType}
-                onValueChange={(v) => onLineDiffTypeChange(v as LineDiffType)}
-                options={INLINE_DIFF_OPTS}
-                ariaLabel="Inline diff style"
-              />
-            </div>
-            <label className="settings-item">
-              <input type="checkbox" checked={lineWrap} onChange={(e) => onLineWrapChange(e.target.checked)} />
-              Wrap long lines
-            </label>
-            <div className="settings-item settings-item-spaced">
-              <span>Diff indicators</span>
-              <Select
-                value={diffIndicators}
-                onValueChange={(v) => onDiffIndicatorsChange(v as DiffIndicators)}
-                options={INDICATOR_OPTS}
-                ariaLabel="Diff indicators"
-              />
-            </div>
-            <label className="settings-item">
-              <input
-                type="checkbox"
-                checked={showLineNumbers}
-                onChange={(e) => onShowLineNumbersChange(e.target.checked)}
-              />
-              Show line numbers
-            </label>
-            <label className="settings-item">
-              <input
-                type="checkbox"
-                checked={showStatusBar}
-                onChange={(e) => onShowStatusBarChange(e.target.checked)}
-              />
-              Show status bar
-            </label>
-            <div className="settings-item settings-item-spaced">
-              <span>Hunk separator</span>
-              <Select
-                value={hunkSeparators}
-                onValueChange={(v) => onHunkSeparatorsChange(v as HunkSeparatorStyle)}
-                options={HUNK_SEP_OPTS}
-                ariaLabel="Hunk separator style"
-              />
-            </div>
-            <div className="settings-item settings-item-spaced">
-              <span>Hover highlight</span>
-              <Select
-                value={lineHoverHighlight}
-                onValueChange={(v) => onLineHoverHighlightChange(v as LineHoverHighlight)}
-                options={HOVER_OPTS}
-                ariaLabel="Hover highlight"
-              />
-            </div>
-            <div className="settings-item settings-item-spaced">
-              <span>Font size</span>
-              <Select
-                value={String(fontSize)}
-                onValueChange={(v) => onFontSizeChange(Number(v))}
-                options={FONT_SIZE_OPTS}
-                ariaLabel="Font size"
-              />
-            </div>
-            <div className="settings-item settings-item-spaced">
-              <span>Default tab size</span>
-              <Select
-                value={String(defaultTabSize)}
-                onValueChange={(v) => onDefaultTabSizeChange(Number(v))}
-                options={TAB_SIZE_OPTS}
-                ariaLabel="Default tab size"
-              />
-            </div>
-            <div className="settings-item settings-item-spaced">
-              <span>UI font</span>
-              <button
-                className="btn btn-sm settings-btn"
-                onClick={() => { setSettingsOpen(false); onOpenUiFontModal() }}
-                style={{ display: 'inline-flex', alignItems: 'center' }}
-                title={uiFont ?? 'Default (Geist Mono)'}
-              >
-                <Type size={13} style={{ marginRight: '4px' }} />
-                <span style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {uiFont ?? 'Default…'}
-                </span>
-              </button>
-            </div>
-            <div className="settings-section-label">Comfort</div>
-            <div className="settings-item settings-item-spaced">
-              <span>Density</span>
-              <Select
-                value={density}
-                onValueChange={(v) => onDensityChange(v as 'comfortable' | 'compact')}
-                options={DENSITY_OPTS}
-                ariaLabel="UI density"
-              />
-            </div>
-            <div className="settings-item settings-item-spaced">
-              <span>Auto-collapse huge files</span>
-              <Select
-                value={String(autoCollapseLineThreshold)}
-                onValueChange={(v) => onAutoCollapseLineThresholdChange(Number(v))}
-                options={AUTO_COLLAPSE_OPTS}
-                ariaLabel="Auto-collapse line threshold"
-              />
-            </div>
-            <label className="settings-item">
-              <input
-                type="checkbox"
-                checked={requireViewAllBeforeSend}
-                onChange={(e) => onRequireViewAllBeforeSendChange(e.target.checked)}
-              />
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                <Sparkles size={12} aria-hidden="true" />
-                Warn before sending if files are unviewed
-              </span>
-            </label>
-            <label className="settings-item">
-              <input
-                type="checkbox"
-                checked={showStatusBar}
-                onChange={(e) => onShowStatusBarChange(e.target.checked)}
-              />
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                <LayoutGrid size={12} aria-hidden="true" />
-                Show status bar
-              </span>
-            </label>
-            <div className="settings-section-label">Whitespace</div>
-            <label className="settings-item">
-              <input
-                type="checkbox"
-                checked={ignoreSpaceChange}
-                onChange={(e) => onIgnoreSpaceChange(e.target.checked)}
-              />
-              Ignore space-change (-b)
-            </label>
-            <label className="settings-item">
-              <input
-                type="checkbox"
-                checked={ignoreAllSpace}
-                onChange={(e) => onIgnoreAllSpaceChange(e.target.checked)}
-              />
-              Ignore all space (-w)
-            </label>
-            <div className="settings-item settings-item-spaced">
-              <span>Code font</span>
-              <button
-                className="btn btn-sm settings-btn"
-                onClick={() => { setSettingsOpen(false); onOpenMonoFontModal() }}
-                style={{ display: 'inline-flex', alignItems: 'center' }}
-                title={monoFont ?? 'Default (JetBrains Mono)'}
-              >
-                <Type size={13} style={{ marginRight: '4px' }} />
-                <span style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {monoFont ?? 'Default…'}
-                </span>
-              </button>
-            </div>
-            <div className="settings-section-label">External tools</div>
-            <div className="settings-item settings-item-spaced">
-              <span>Browser</span>
-              <Select
-                value={browser || ''}
-                onValueChange={onBrowserChange}
-                options={BROWSER_OPTS}
-                ariaLabel="Browser"
-              />
-            </div>
-            <div className="settings-item settings-item-spaced">
-              <span>Preferred IDE</span>
-              <Select
-                value={editorIDE || 'default'}
-                onValueChange={onEditorIDEChange}
-                options={IDE_OPTS}
-                ariaLabel="Preferred IDE"
-              />
-            </div>
-            <div className="settings-section-label">Appearance</div>
-            <div className="settings-item settings-item-spaced">
-              <span>Diff style</span>
-              <Select
-                value={diffStyle}
-                onValueChange={(v) => onDiffStyleChange(v as 'split' | 'unified')}
-                options={[
-                  { value: 'split', label: 'Split' },
-                  { value: 'unified', label: 'Unified' },
-                ]}
-                ariaLabel="Diff style"
-              />
-            </div>
-            <div className="settings-item settings-item-spaced">
-              <span>Theme</span>
-              <button
-                className="btn btn-sm settings-btn"
-                onClick={() => {
-                  setSettingsOpen(false)
-                  onOpenThemeModal()
-                }}
-                style={{ display: 'inline-flex', alignItems: 'center' }}
-              >
-                <Palette size={14} style={{ marginRight: '4px' }} />
-                <span>Switch Theme...</span>
-              </button>
-            </div>
-            <div className="settings-section-label">Feedback</div>
-            <label className="settings-item">
-              <input
-                type="checkbox"
-                checked={haptics}
-                onChange={(e) => onHapticsChange(e.target.checked)}
-              />
-              Haptic feedback
-            </label>
-            <label className="settings-item">
-              <input
-                type="checkbox"
-                checked={sounds}
-                onChange={(e) => onSoundsChange(e.target.checked)}
-              />
-              Sound effects
-            </label>
-          </div>
-        </Popover>
+        <ReviewSettingsPopover
+          diffStyle={diffStyle}
+          diffOptions={diffOptions}
+          defaultTabSize={defaultTabSize}
+          browser={browser}
+          editorIDE={editorIDE}
+          lineDiffType={lineDiffType}
+          lineWrap={lineWrap}
+          diffIndicators={diffIndicators}
+          showLineNumbers={showLineNumbers}
+          hunkSeparators={hunkSeparators}
+          lineHoverHighlight={lineHoverHighlight}
+          fontSize={fontSize}
+          haptics={haptics}
+          sounds={sounds}
+          uiFont={uiFont}
+          monoFont={monoFont}
+          density={density}
+          autoCollapseLineThreshold={autoCollapseLineThreshold}
+          requireViewAllBeforeSend={requireViewAllBeforeSend}
+          showStatusBar={showStatusBar}
+          ignoreSpaceChange={ignoreSpaceChange}
+          ignoreAllSpace={ignoreAllSpace}
+          onDiffStyleChange={onDiffStyleChange}
+          onDiffOptionsChange={onDiffOptionsChange}
+          onDefaultTabSizeChange={onDefaultTabSizeChange}
+          onBrowserChange={onBrowserChange}
+          onOpenThemeModal={onOpenThemeModal}
+          onEditorIDEChange={onEditorIDEChange}
+          onLineDiffTypeChange={onLineDiffTypeChange}
+          onLineWrapChange={onLineWrapChange}
+          onDiffIndicatorsChange={onDiffIndicatorsChange}
+          onShowLineNumbersChange={onShowLineNumbersChange}
+          onHunkSeparatorsChange={onHunkSeparatorsChange}
+          onLineHoverHighlightChange={onLineHoverHighlightChange}
+          onFontSizeChange={onFontSizeChange}
+          onHapticsChange={onHapticsChange}
+          onSoundsChange={onSoundsChange}
+          onDensityChange={onDensityChange}
+          onAutoCollapseLineThresholdChange={onAutoCollapseLineThresholdChange}
+          onRequireViewAllBeforeSendChange={onRequireViewAllBeforeSendChange}
+          onShowStatusBarChange={onShowStatusBarChange}
+          onIgnoreSpaceChange={onIgnoreSpaceChange}
+          onIgnoreAllSpaceChange={onIgnoreAllSpaceChange}
+          onOpenUiFontModal={onOpenUiFontModal}
+          onOpenMonoFontModal={onOpenMonoFontModal}
+          showSource={!customMode}
+        />
         <SendReviewPopover
           comments={comments}
           totalFileCount={totalFileCount}

@@ -1,11 +1,11 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { GitPullRequest, Pencil, Trash2, Check, X, MessageSquareWarning, AlertCircle, ExternalLink, FilePenLine } from 'lucide-react'
+import { GitPullRequest, Pencil, Trash2, Check, X, MessageSquare, MessageSquareWarning, AlertCircle, ExternalLink, FilePenLine } from 'lucide-react'
 import type { ReviewComment } from '../../lib/types'
 import type { PrSession, PrDecision } from '../../lib/pr-session'
 import { fileName } from '../utils'
 import { Popover } from '../primitives/Popover'
 import { MarkdownField } from './MarkdownField'
-import { useSubmitPrReview } from '../hooks/usePrSession'
+import { useSubmitPrReview, type SubmitPrReviewResult } from '../hooks/usePrSession'
 import { useFeedback } from '../hooks/useHaptics'
 import { useSubmitPanelSize, SUBMIT_PANEL_PRESETS } from '../hooks/useSubmitPanelSize'
 
@@ -14,6 +14,7 @@ interface SubmitToGitHubPopoverProps {
   comments: ReviewComment[]
   onEditComment: (id: string, body: string) => void
   onDeleteComment: (id: string) => void
+  onSubmitted?: (result: SubmitPrReviewResult) => void
 }
 
 /**
@@ -26,6 +27,7 @@ export function SubmitToGitHubPopover({
   comments,
   onEditComment,
   onDeleteComment,
+  onSubmitted,
 }: SubmitToGitHubPopoverProps) {
   const { haptic, sound } = useFeedback()
   const submitMutation = useSubmitPrReview()
@@ -56,7 +58,8 @@ export function SubmitToGitHubPopover({
     haptic('heavy')
     sound('send')
     try {
-      await submitMutation.mutateAsync({ decision: verdict, body: general })
+      const result = await submitMutation.mutateAsync({ decision: verdict, body: general })
+      onSubmitted?.(result)
       setGeneral('')
       setVerdict(null)
       setOpen(false)
@@ -161,16 +164,23 @@ export function SubmitToGitHubPopover({
         </div>
 
         {count > 0 ? (
-          <ul className="srp-list" aria-label="Comments to send">
-            {sorted.map((c) => (
-              <CommentRow
-                key={c.id}
-                comment={c}
-                onEdit={onEditComment}
-                onDelete={onDeleteComment}
-              />
-            ))}
-          </ul>
+          <section className="srp-comments-section" aria-labelledby="srp-gh-comments-title">
+            <div className="srp-section-heading" id="srp-gh-comments-title">
+              <MessageSquare size={13} aria-hidden="true" />
+              <span>Inline comments to publish</span>
+              <span className="srp-section-count">{count}</span>
+            </div>
+            <ul className="srp-list" aria-label="Comments to send">
+              {sorted.map((c) => (
+                <CommentRow
+                  key={c.id}
+                  comment={c}
+                  onEdit={onEditComment}
+                  onDelete={onDeleteComment}
+                />
+              ))}
+            </ul>
+          </section>
         ) : (
           <p className="srp-empty">No inline comments — your verdict and overall note will be sent on their own.</p>
         )}

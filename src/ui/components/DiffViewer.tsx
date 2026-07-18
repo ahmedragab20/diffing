@@ -2,6 +2,7 @@ import { memo } from 'react'
 import { GitCompare } from 'lucide-react'
 import type { FileDiffMetadata, DiffLineAnnotation, AnnotationSide } from '@pierre/diffs'
 import type { ReviewComment } from '../../lib/types'
+import type { PrExistingComment } from '../../lib/pr-session'
 import type { BinaryFileInfo } from '../hooks/useDiff'
 import type {
   LineDiffType,
@@ -35,6 +36,7 @@ interface DiffViewerProps {
   autoCollapseLineThreshold: number
   onViewedChange: (filePath: string, viewed: boolean) => void
   fileAnnotationsMap: Map<string, DiffLineAnnotation<ReviewComment>[]>
+  existingCommentsMap?: Map<string, PrExistingComment[]>
   onAddComment: (
     filePath: string,
     side: AnnotationSide,
@@ -45,6 +47,12 @@ interface DiffViewerProps {
     severity?: import('../../lib/types').CommentSeverity,
   ) => void
   onDeleteComment: (id: string) => void
+  onReplyExisting?: (commentId: number, body: string) => Promise<void>
+  onEditExisting?: (commentId: number, body: string) => Promise<void>
+  onDeleteExisting?: (commentId: number) => Promise<void>
+  onSetExistingResolved?: (threadId: string, resolved: boolean) => Promise<void>
+  /** Whether controls that mutate/open the local working tree are available. */
+  allowLocalActions?: boolean
   /**
    * Fired by `<FileDiffCard>` right after the user toggles the card's
    * collapsed state by clicking the header. The viewer does not care
@@ -106,8 +114,14 @@ export const DiffViewer = memo(function DiffViewer({
   autoCollapseLineThreshold,
   onViewedChange,
   fileAnnotationsMap,
+  existingCommentsMap,
   onAddComment,
   onDeleteComment,
+  onReplyExisting,
+  onEditExisting,
+  onDeleteExisting,
+  onSetExistingResolved,
+  allowLocalActions = true,
   onCardToggleCollapse,
 }: DiffViewerProps) {
   // Callers (App) already sort with sortFilesByName — re-sorting here was pure
@@ -149,6 +163,7 @@ export const DiffViewer = memo(function DiffViewer({
             fileDiff={file}
             filePath={filePath}
             annotations={fileAnnotationsMap.get(filePath) ?? emptyAnnotations}
+            existingComments={existingCommentsMap?.get(filePath) ?? []}
             diffStyle={diffStyle}
             tabSize={tabSizeMap[filePath] ?? defaultTabSize}
             viewed={viewedFiles.has(filePath)}
@@ -169,6 +184,11 @@ export const DiffViewer = memo(function DiffViewer({
             onViewedChange={onViewedChange}
             onAddComment={onAddComment}
             onDeleteComment={onDeleteComment}
+            onReplyExisting={onReplyExisting}
+            onEditExisting={onEditExisting}
+            onDeleteExisting={onDeleteExisting}
+            onSetExistingResolved={onSetExistingResolved}
+            allowLocalActions={allowLocalActions}
             onCardToggleCollapse={onCardToggleCollapse}
           />
         )

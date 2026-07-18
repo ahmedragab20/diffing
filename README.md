@@ -478,16 +478,35 @@ diffing --gh-pr https://github.com/ahmedragab20/diffing/pull/1234
 diffing "gh pr ahmedragab20/diffing#1234"
 ```
 
-The PR diff loads in the existing `<DiffViewer>` / `<FileTree>` machinery.
-Existing review comments on the PR are fetched and shown as a read-only
-summary strip below each file so you can see what was already said before
-adding your own. Comments you write are kept visually distinct.
+PR mode uses the same review shell as a local diff: file tree and filters,
+search, themes, fonts, density and diff settings, viewed-file tracking,
+keyboard shortcuts, inline composers, and live check status. PR metadata stays
+in a compact overview above the diff instead of crowding the action toolbar.
+
+Published GitHub conversations are anchored directly beneath their diff lines.
+Replies, edits, deletions, resolve, and reopen actions are sent to GitHub, while
+changes made on GitHub are pulled into `diffing` on refresh, window focus, and a
+30-second background interval. Outdated or otherwise unanchorable threads fall
+back to the file-level context area. GitHub suggestion fences render as
+before/after previews instead of raw Markdown.
+
+Submitted review events are separate from inline threads. A review-activity
+card walks the latest approval, request-changes, comment-only, pending, and
+dismissed reviews, including the author, verdict, timestamp, overall Markdown
+comment, and a link to the GitHub review. This includes reviews submitted from
+either `diffing` or GitHub.
 
 When you click **Submit to GitHub**, `diffing` builds a `POST
 /repos/{owner}/{repo}/pulls/{pull_number}/reviews` payload and POSTs it
-to GitHub. Multi-line comments are expanded to N single-line comments
-with a `[part N/M]` prefix. Existing comments are **never re-POSTed** —
-only the new ones you wrote in this session.
+to GitHub. Multi-line selections use GitHub's native `start_line` / `line`
+range anchors. Existing published conversations and review events are **never
+re-POSTed** — only the local drafts in the current review are submitted.
+
+The submit panel supports **Approve**, **Comment**, **Request changes**, and
+**Save as draft**. After a successful submission, local drafts are promoted to
+published GitHub conversations and the overall comment appears immediately in
+review activity. Submission feedback is page-local: dismissing it or reloading
+the page does not resurrect an old success toast.
 
 ### Headless subcommands
 
@@ -496,9 +515,9 @@ UI:
 
 ```text
 # Submit the current in-progress review to GitHub.
-diffing gh pr-review 1234 --decision request-changes --body "Please address the range"
+diffing gh pr-review --decision request-changes --body "Please address the range"
 
-# Dump PR metadata (title, owner, head SHA, existing comments) as JSON.
+# Refresh and dump PR metadata, published threads, and review activity as JSON.
 diffing gh pr-fetch 1234
 
 # List the PR-mode comments in this diffing session (mirrors `diffing comments`).
@@ -519,16 +538,20 @@ ecosystem:
 3. If neither is available, the submit fails with a clear one-line
    message telling you to run `gh auth login` or set `$GITHUB_TOKEN`.
 
-The `gh` binary is **only** used for the submit and refresh steps; the
-diff itself is rendered locally, so PR review works offline once the
-session is open.
+The `gh` binary is used to open and refresh PR metadata, synchronize reviews
+and threads, query checks, and (preferably) submit. The diff itself is rendered
+locally from the cached session; an already-open session remains readable when
+GitHub is temporarily unavailable, while synchronization and submission require
+GitHub access.
 
 ### Storage
 
 PR-mode state lives in `pr-session.json` (in the per-repo
 `~/.diffing/<repo>-<hash>/` directory) — a separate file from
 `comments.json` and `plans.json`, so a local review and a PR review can
-coexist without colliding.
+coexist without colliding. It stores the cached patch, local drafts, published
+thread state, review-level activity, and the latest submission metadata; no
+browser storage is used.
 
 ---
 

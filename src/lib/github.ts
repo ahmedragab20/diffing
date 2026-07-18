@@ -1,13 +1,79 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import type {
   PrSession,
   PrExistingComment,
+  PrExistingReview,
   PrAuthor,
 } from './pr-session.js'
 import type { ReviewComment } from './types.js'
 
 const execFileAsync = promisify(execFile)
+const GH_REQUEST_TIMEOUT_MS = 45_000
+const GH_MAX_OUTPUT_BYTES = 20 * 1024 * 1024
+
+/** Execute a command with explicit stdin delivery, output limits, and timeout. */
+export function execWithInput(
+  command: string,
+  args: string[],
+  input: string,
+  timeoutMs = GH_REQUEST_TIMEOUT_MS,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+
+    const finish = (error?: Error & { stdout?: string; stderr?: string; code?: number | null }) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error) {
+        error.stdout = stdout
+        error.stderr = stderr
+        reject(error)
+      } else {
+        resolve({ stdout, stderr })
+      }
+    }
+
+    const append = (target: 'stdout' | 'stderr', chunk: Buffer | string) => {
+      const text = chunk.toString()
+      if (target === 'stdout') stdout += text
+      else stderr += text
+      if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > GH_MAX_OUTPUT_BYTES) {
+        child.kill('SIGTERM')
+        finish(new Error('GitHub CLI response exceeded the 20 MB output limit'))
+      }
+    }
+
+    child.stdout.on('data', (chunk) => append('stdout', chunk))
+    child.stderr.on('data', (chunk) => append('stderr', chunk))
+    child.on('error', (error) => finish(error))
+    child.on('close', (code, signal) => {
+      if (settled) return
+      if (code === 0) return finish()
+      const error = new Error(
+        signal
+          ? `GitHub CLI terminated by ${signal}`
+          : `GitHub CLI exited with code ${code ?? 'unknown'}`,
+      ) as Error & { stdout?: string; stderr?: string; code?: number | null }
+      error.code = code
+      finish(error)
+    })
+
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM')
+      finish(new Error(`GitHub CLI request timed out after ${Math.ceil(timeoutMs / 1000)} seconds`))
+    }, timeoutMs)
+
+    child.stdin.on('error', () => {
+      // The close/error event carries the actionable command failure.
+    })
+    child.stdin.end(input)
+  })
+}
 
 export type AuthSource = 'gh' | 'token' | 'none'
 
@@ -98,6 +164,7 @@ export interface PrMetadata {
   repo: string
   diff: string
   existingComments: PrExistingComment[]
+  existingReviews: PrExistingReview[]
 }
 
 /**
@@ -214,8 +281,9 @@ export async function fetchPrMetadataViaGh(resolved: ResolvedPr): Promise<PrMeta
     ? { login: metaJson.author.login, avatarUrl: metaJson.author.avatarUrl }
     : null
 
-  // Existing comments (paginated) + reviews (for state).
-  const existingComments = await fetchExistingCommentsViaGh(resolved)
+  // Existing review events and their line-comment threads.
+  const existingReviews = await fetchExistingReviewsViaGh(resolved)
+  const existingComments = await fetchExistingCommentsViaGh(resolved, existingReviews)
 
   return {
     number: metaJson.number,
@@ -231,31 +299,51 @@ export async function fetchPrMetadataViaGh(resolved: ResolvedPr): Promise<PrMeta
     repo: resolved.repo,
     diff,
     existingComments,
+    existingReviews,
   }
 }
 
-async function fetchExistingCommentsViaGh(resolved: ResolvedPr): Promise<PrExistingComment[]> {
-  const repo = `${resolved.owner}/${resolved.repo}`
-  const endpoint = `repos/${resolved.owner}/${resolved.repo}/pulls/${resolved.pullNumber}/comments`
+export async function fetchExistingReviewsViaGh(resolved: ResolvedPr): Promise<PrExistingReview[]> {
   const reviewsEndpoint = `repos/${resolved.owner}/${resolved.repo}/pulls/${resolved.pullNumber}/reviews`
-
-  // Reviews: cap at 50 most-recent (sort desc, take first 50, then reverse to chronological).
-  // We need the `state` field on each review.
-  let reviews: Array<{ id: number; state: string; submitted_at: string }> = []
   try {
     const { stdout } = await execFileAsync(
       'gh',
       ['api', reviewsEndpoint, '--paginate'],
       { encoding: 'utf-8', maxBuffer: 20 * 1024 * 1024 },
     )
-    const all = JSON.parse(stdout)
-    if (Array.isArray(all)) reviews = all
+    const parsed = JSON.parse(stdout)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((review: any): PrExistingReview | null => {
+        const state = String(review.state ?? '').toUpperCase()
+        if (!['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'PENDING', 'DISMISSED'].includes(state)) return null
+        return {
+          id: review.id,
+          author: review.user?.login
+            ? { login: review.user.login, avatarUrl: review.user.avatar_url }
+            : null,
+          body: review.body ?? '',
+          state: state as PrExistingReview['state'],
+          submittedAt: review.submitted_at ?? null,
+          htmlUrl: review.html_url,
+          commitId: review.commit_id,
+        }
+      })
+      .filter((review): review is PrExistingReview => review != null)
+      .sort((a, b) => (a.submittedAt ?? '') < (b.submittedAt ?? '') ? 1 : -1)
+      .slice(0, 50)
   } catch {
-    // continue without review state — comments will be unlabelled.
+    return []
   }
-  // newest first; sort by submitted_at desc and take 50.
-  reviews.sort((a, b) => (a.submitted_at < b.submitted_at ? 1 : -1))
-  const recentReviews = reviews.slice(0, 50)
+}
+
+export async function fetchExistingCommentsViaGh(
+  resolved: ResolvedPr,
+  existingReviews?: PrExistingReview[],
+): Promise<PrExistingComment[]> {
+  const repo = `${resolved.owner}/${resolved.repo}`
+  const endpoint = `repos/${resolved.owner}/${resolved.repo}/pulls/${resolved.pullNumber}/comments`
+  const recentReviews = existingReviews ?? await fetchExistingReviewsViaGh(resolved)
   const reviewStateById = new Map<number, string>()
   for (const r of recentReviews) reviewStateById.set(r.id, r.state)
 
@@ -272,6 +360,8 @@ async function fetchExistingCommentsViaGh(resolved: ResolvedPr): Promise<PrExist
   } catch {
     return []
   }
+
+  const threadByCommentId = await fetchReviewThreadStateViaGh(resolved)
 
   // Each top-level review comment is a single "comment". Replies come back as
   // separate items on the same endpoint with `in_reply_to_id` set. We group
@@ -293,13 +383,16 @@ async function fetchExistingCommentsViaGh(resolved: ResolvedPr): Promise<PrExist
     const state = c.pull_request_review_id
       ? reviewStateById.get(c.pull_request_review_id) ?? null
       : null
+    const thread = threadByCommentId.get(c.id)
     tops.push({
       id: c.id,
       author: c.user ? { login: c.user.login, avatarUrl: c.user.avatar_url } : null,
       body: c.body ?? '',
       path: c.path,
       line: typeof c.line === 'number' ? c.line : null,
+      startLine: typeof c.start_line === 'number' ? c.start_line : null,
       side: c.side === 'LEFT' || c.side === 'RIGHT' ? c.side : null,
+      startSide: c.start_side === 'LEFT' || c.start_side === 'RIGHT' ? c.start_side : null,
       createdAt: c.created_at,
       updatedAt: c.updated_at,
       state: state as PrExistingComment['state'],
@@ -309,6 +402,7 @@ async function fetchExistingCommentsViaGh(resolved: ResolvedPr): Promise<PrExist
         body: r.body ?? '',
         createdAt: r.created_at,
         updatedAt: r.updated_at,
+        viewerDidAuthor: threadByCommentId.get(r.id)?.viewerDidAuthor,
       })),
       // Outdated when the current line is gone but an original anchor remains,
       // or when GitHub's deprecated `position` is explicitly null with history.
@@ -316,6 +410,11 @@ async function fetchExistingCommentsViaGh(resolved: ResolvedPr): Promise<PrExist
         (c.line == null && c.original_line != null) ||
           (c.position === null && c.original_position != null),
       ),
+      threadId: thread?.id,
+      isResolved: thread?.isResolved,
+      viewerCanResolve: thread?.viewerCanResolve,
+      viewerCanUnresolve: thread?.viewerCanUnresolve,
+      viewerDidAuthor: thread?.viewerDidAuthor,
     })
   }
 
@@ -325,6 +424,78 @@ async function fetchExistingCommentsViaGh(resolved: ResolvedPr): Promise<PrExist
     return (a.line ?? 0) - (b.line ?? 0)
   })
   return tops
+}
+
+interface GhReviewThreadState {
+  id: string
+  isResolved: boolean
+  viewerCanResolve: boolean
+  viewerCanUnresolve: boolean
+  viewerDidAuthor?: boolean
+}
+
+/** Fetch thread-only state unavailable from the REST review-comments API. */
+async function fetchReviewThreadStateViaGh(
+  resolved: ResolvedPr,
+): Promise<Map<number, GhReviewThreadState>> {
+  const query = `
+    query ReviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100, after: $cursor) {
+            nodes {
+              id
+              isResolved
+              viewerCanResolve
+              viewerCanUnresolve
+              comments(first: 100) { nodes { databaseId viewerDidAuthor } }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }
+  `
+  const byCommentId = new Map<number, GhReviewThreadState>()
+  let cursor: string | null = null
+  try {
+    do {
+      const { stdout } = await execWithInput(
+        'gh',
+        ['api', 'graphql', '--input', '-'],
+        JSON.stringify({
+          query,
+          variables: {
+            owner: resolved.owner,
+            repo: resolved.repo,
+            number: resolved.pullNumber,
+            cursor,
+          },
+        }),
+      )
+      const parsed = JSON.parse(stdout) as any
+      const connection = parsed?.data?.repository?.pullRequest?.reviewThreads
+      for (const node of connection?.nodes ?? []) {
+        const state: GhReviewThreadState = {
+          id: node.id,
+          isResolved: Boolean(node.isResolved),
+          viewerCanResolve: Boolean(node.viewerCanResolve),
+          viewerCanUnresolve: Boolean(node.viewerCanUnresolve),
+        }
+        for (const comment of node.comments?.nodes ?? []) {
+          if (typeof comment.databaseId === 'number') {
+            byCommentId.set(comment.databaseId, { ...state, viewerDidAuthor: Boolean(comment.viewerDidAuthor) })
+          }
+        }
+      }
+      cursor = connection?.pageInfo?.hasNextPage
+        ? connection.pageInfo.endCursor ?? null
+        : null
+    } while (cursor)
+  } catch {
+    // REST comments remain useful when GraphQL thread state is unavailable.
+  }
+  return byCommentId
 }
 
 // ── Submitting reviews ─────────────────────────────────────────────────
@@ -486,11 +657,7 @@ async function submitViaGh(input: SubmitInput): Promise<SubmitOutput> {
     '-',
   ]
   try {
-    const { stdout } = await execFileAsync('gh', args, {
-      encoding: 'utf-8',
-      maxBuffer: 20 * 1024 * 1024,
-      input: JSON.stringify(payload),
-    })
+    const { stdout } = await execWithInput('gh', args, JSON.stringify(payload))
     const result = JSON.parse(stdout)
     return {
       ok: true,
@@ -523,6 +690,7 @@ async function submitViaToken(input: SubmitInput, token: string): Promise<Submit
   try {
     const res = await fetch(url, {
       method: 'POST',
+      signal: AbortSignal.timeout(GH_REQUEST_TIMEOUT_MS),
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/vnd.github+json',
@@ -622,14 +790,25 @@ export async function replyToPrComment(input: {
   resolved: ResolvedPr
   inReplyTo: number
   body: string
-}): Promise<{ ok: boolean; id?: number; error?: string }> {
+}): Promise<{
+  ok: boolean
+  id?: number
+  reply?: {
+    id: number
+    author: PrAuthor | null
+    body: string
+    createdAt: string
+    updatedAt: string
+  }
+  error?: string
+}> {
   const endpoint = `repos/${input.resolved.owner}/${input.resolved.repo}/pulls/${input.resolved.pullNumber}/comments`
   const payload = JSON.stringify({
     body: input.body,
     in_reply_to: input.inReplyTo,
   })
   try {
-    const { stdout } = await execFileAsync(
+    const { stdout } = await execWithInput(
       'gh',
       [
         'api',
@@ -641,14 +820,112 @@ export async function replyToPrComment(input: {
         '--input',
         '-',
       ],
-      { encoding: 'utf-8', input: payload, maxBuffer: 5 * 1024 * 1024 },
+      payload,
     )
-    const result = JSON.parse(stdout) as { id?: number }
-    return { ok: true, id: result.id }
+    const result = JSON.parse(stdout) as {
+      id?: number
+      body?: string
+      user?: { login?: string; avatar_url?: string }
+      created_at?: string
+      updated_at?: string
+    }
+    if (typeof result.id !== 'number') {
+      return { ok: false, error: 'GitHub reply response did not include a comment id' }
+    }
+    const now = new Date().toISOString()
+    return {
+      ok: true,
+      id: result.id,
+      reply: {
+        id: result.id,
+        author: result.user?.login
+          ? { login: result.user.login, avatarUrl: result.user.avatar_url }
+          : null,
+        body: result.body ?? input.body,
+        createdAt: result.created_at ?? now,
+        updatedAt: result.updated_at ?? result.created_at ?? now,
+      },
+    }
   } catch (err: any) {
     const msg = err?.stderr || err?.stdout || err?.message || 'reply failed'
     return { ok: false, error: String(msg).slice(0, 500) }
   }
+}
+
+export async function updatePrReviewComment(input: {
+  resolved: ResolvedPr
+  commentId: number
+  body: string
+}): Promise<{ ok: boolean; error?: string }> {
+  const endpoint = `repos/${input.resolved.owner}/${input.resolved.repo}/pulls/comments/${input.commentId}`
+  try {
+    await execWithInput(
+      'gh',
+      ['api', '--method', 'PATCH', endpoint, '-H', 'Accept: application/vnd.github+json', '--input', '-'],
+      JSON.stringify({ body: input.body }),
+    )
+    return { ok: true }
+  } catch (error: any) {
+    return { ok: false, error: githubCommandError(error, 'Failed to edit GitHub comment') }
+  }
+}
+
+export async function deletePrReviewComment(input: {
+  resolved: ResolvedPr
+  commentId: number
+}): Promise<{ ok: boolean; error?: string }> {
+  const endpoint = `repos/${input.resolved.owner}/${input.resolved.repo}/pulls/comments/${input.commentId}`
+  try {
+    await execFileAsync('gh', ['api', '--method', 'DELETE', endpoint, '-H', 'Accept: application/vnd.github+json'], {
+      encoding: 'utf-8',
+      timeout: GH_REQUEST_TIMEOUT_MS,
+      maxBuffer: 5 * 1024 * 1024,
+    })
+    return { ok: true }
+  } catch (error: any) {
+    return { ok: false, error: githubCommandError(error, 'Failed to delete GitHub comment') }
+  }
+}
+
+export async function setPrReviewThreadResolved(input: {
+  threadId: string
+  resolved: boolean
+}): Promise<{ ok: boolean; error?: string }> {
+  const mutationName = input.resolved ? 'resolveReviewThread' : 'unresolveReviewThread'
+  const query = `
+    mutation UpdateReviewThread($threadId: ID!) {
+      ${mutationName}(input: { threadId: $threadId }) {
+        thread { id isResolved }
+      }
+    }
+  `
+  try {
+    const { stdout } = await execWithInput(
+      'gh',
+      ['api', 'graphql', '--input', '-'],
+      JSON.stringify({ query, variables: { threadId: input.threadId } }),
+    )
+    const parsed = JSON.parse(stdout) as { errors?: Array<{ message?: string }> }
+    if (parsed.errors?.length) {
+      return { ok: false, error: parsed.errors.map((item) => item.message).filter(Boolean).join('; ') || 'GitHub rejected the thread update' }
+    }
+    return { ok: true }
+  } catch (error: any) {
+    return { ok: false, error: githubCommandError(error, 'Failed to update GitHub thread') }
+  }
+}
+
+function githubCommandError(error: any, fallback: string): string {
+  const stdout = typeof error?.stdout === 'string' ? error.stdout : ''
+  try {
+    const parsed = JSON.parse(stdout) as { message?: string; errors?: Array<{ message?: string }> }
+    if (parsed.message) return parsed.message
+    const messages = parsed.errors?.map((item) => item.message).filter(Boolean)
+    if (messages?.length) return messages.join('; ')
+  } catch {
+    // Fall through to stderr/message.
+  }
+  return String(error?.stderr || error?.message || fallback).trim().slice(0, 500) || fallback
 }
 
 // ── Building a PrSession ───────────────────────────────────────────────
@@ -673,6 +950,7 @@ export async function buildPrSession(ref: string): Promise<PrSession> {
     diff: meta.diff,
     comments: [],
     existingComments: meta.existingComments,
+    existingReviews: meta.existingReviews,
   }
 }
 
@@ -697,5 +975,6 @@ export async function refreshPrSession(session: PrSession): Promise<PrSession> {
     changedFiles: meta.changedFiles,
     diff: meta.diff,
     existingComments: meta.existingComments,
+    existingReviews: meta.existingReviews,
   }
 }

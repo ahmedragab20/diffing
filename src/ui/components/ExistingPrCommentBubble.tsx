@@ -1,22 +1,35 @@
-import { useState } from 'react'
-import { MessageCircle, AlertTriangle, CheckCircle2, CornerUpLeft } from 'lucide-react'
-import type { PrExistingComment } from '../../lib/pr-session'
+import { useEffect, useState } from 'react'
+import { MessageCircle, AlertTriangle, CheckCircle2, CornerUpLeft, Pencil, RotateCcw, Trash2 } from 'lucide-react'
+import type { PrExistingComment, PrExistingReply } from '../../lib/pr-session'
+import { Markdown } from './Markdown'
 
 interface ExistingPrCommentBubbleProps {
   comment: PrExistingComment
+  /** Current diff source covered by the GitHub comment anchor. */
+  lineContent?: string
   onReply?: (commentId: number, body: string) => Promise<void> | void
+  onEdit?: (commentId: number, body: string) => Promise<void>
+  onDelete?: (commentId: number) => Promise<void>
+  onSetResolved?: (threadId: string, resolved: boolean) => Promise<void>
 }
 
 /**
- * Bubble for an existing PR review comment. Read-only body/metadata; optional
- * reply posts to GitHub via the parent handler.
+ * Bubble for an existing PR review comment, including GitHub-backed replies,
+ * edits, deletion, and thread resolution controls.
  */
-export function ExistingPrCommentBubble({ comment, onReply }: ExistingPrCommentBubbleProps) {
+export function ExistingPrCommentBubble({ comment, lineContent, onReply, onEdit, onDelete, onSetResolved }: ExistingPrCommentBubbleProps) {
   const [expanded, setExpanded] = useState(false)
   const [replying, setReplying] = useState(false)
   const [replyBody, setReplyBody] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [editBody, setEditBody] = useState(comment.body)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!editing) setEditBody(comment.body)
+  }, [comment.body, editing])
 
   const stateBadge = comment.state
     ? {
@@ -27,6 +40,7 @@ export function ExistingPrCommentBubble({ comment, onReply }: ExistingPrCommentB
         DISMISSED: { icon: AlertTriangle, label: 'Dismissed', cls: 'badge-dismissed' },
       }[comment.state]
     : null
+  const suggestion = parseGitHubSuggestion(comment.body)
 
   const handleSendReply = async () => {
     const trimmed = replyBody.trim()
@@ -45,8 +59,32 @@ export function ExistingPrCommentBubble({ comment, onReply }: ExistingPrCommentB
     }
   }
 
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await action()
+    } catch (err: any) {
+      setError(err?.message ?? 'GitHub update failed')
+      throw err
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveEdit = async () => {
+    const body = editBody.trim()
+    if (!body || !onEdit) return
+    try {
+      await run(() => onEdit(comment.id, body))
+      setEditing(false)
+    } catch {
+      // Error is rendered in the thread.
+    }
+  }
+
   return (
-    <div className="pr-existing-bubble">
+    <div className={`pr-existing-bubble ${comment.isResolved ? 'is-resolved' : ''}`}>
       <div className="pr-existing-bubble-head">
         {comment.author ? (
           <img
@@ -66,6 +104,11 @@ export function ExistingPrCommentBubble({ comment, onReply }: ExistingPrCommentB
           </span>
         </div>
         <span className="pr-existing-bubble-source">from GitHub</span>
+        {comment.line != null && (
+          <span className="pr-existing-bubble-location">
+            L{comment.line} · {comment.side === 'LEFT' ? 'base' : 'head'}
+          </span>
+        )}
         {stateBadge && (
           <span className={`pr-existing-bubble-badge ${stateBadge.cls}`}>
             <stateBadge.icon size={11} /> {stateBadge.label}
@@ -76,8 +119,81 @@ export function ExistingPrCommentBubble({ comment, onReply }: ExistingPrCommentB
             <AlertTriangle size={11} /> outdated
           </span>
         )}
+        {comment.isResolved && (
+          <span className="pr-existing-bubble-badge badge-approved">
+            <CheckCircle2 size={11} /> resolved
+          </span>
+        )}
+        <span className="pr-existing-bubble-actions">
+          {comment.threadId && onSetResolved && (
+            <button
+              type="button"
+              className="file-diff-icon-btn"
+              disabled={busy || (comment.isResolved ? comment.viewerCanUnresolve === false : comment.viewerCanResolve === false)}
+              onClick={() => { void run(() => onSetResolved(comment.threadId!, !comment.isResolved)).catch(() => undefined) }}
+              title={comment.isResolved ? 'Reopen conversation on GitHub' : 'Resolve conversation on GitHub'}
+              aria-label={comment.isResolved ? 'Reopen conversation' : 'Resolve conversation'}
+            >
+              {comment.isResolved ? <RotateCcw size={12} /> : <CheckCircle2 size={12} />}
+            </button>
+          )}
+          {onEdit && comment.viewerDidAuthor !== false && (
+            <button type="button" className="file-diff-icon-btn" disabled={busy} onClick={() => setEditing(true)} title="Edit on GitHub" aria-label="Edit GitHub comment">
+              <Pencil size={12} />
+            </button>
+          )}
+          {onDelete && comment.viewerDidAuthor !== false && (
+            <button
+              type="button"
+              className="file-diff-icon-btn danger"
+              disabled={busy}
+              onClick={() => {
+                if (!window.confirm('Delete this published comment from GitHub?')) return
+                void run(() => onDelete(comment.id)).catch(() => undefined)
+              }}
+              title="Delete from GitHub"
+              aria-label="Delete GitHub comment"
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
+        </span>
       </div>
-      <p className="pr-existing-bubble-body">{comment.body}</p>
+      {editing ? (
+        <div className="pr-existing-edit-form">
+          <textarea value={editBody} onChange={(event) => setEditBody(event.target.value)} rows={3} aria-label="Edit GitHub comment body" />
+          <div className="pr-existing-reply-form-actions">
+            <button type="button" className="btn btn-sm" disabled={busy} onClick={() => { setEditing(false); setEditBody(comment.body) }}>Cancel</button>
+            <button type="button" className="btn btn-sm btn-primary" disabled={busy || !editBody.trim()} onClick={() => { void saveEdit() }}>{busy ? 'Saving…' : 'Save on GitHub'}</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {suggestion.remainingBody && (
+            <Markdown content={suggestion.remainingBody} className="pr-existing-bubble-body markdown-body" />
+          )}
+          {suggestion.code != null && (
+            <div className="pr-existing-suggestion" aria-label="Suggested change preview">
+              <div className="pr-existing-suggestion-head">
+                <span>Suggested change</span>
+                <span className="pr-existing-suggestion-preview-label">Preview</span>
+              </div>
+              <div className="pr-existing-suggestion-diff">
+                {lineContent != null && lineContent !== '' && (
+                  <div className="pr-existing-suggestion-line is-removed">
+                    <span aria-hidden="true">−</span>
+                    <code>{lineContent}</code>
+                  </div>
+                )}
+                <div className="pr-existing-suggestion-line is-added">
+                  <span aria-hidden="true">+</span>
+                  <code>{suggestion.code}</code>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
       {comment.replies.length > 0 && (
         <button
           type="button"
@@ -90,18 +206,8 @@ export function ExistingPrCommentBubble({ comment, onReply }: ExistingPrCommentB
       )}
       {expanded && comment.replies.length > 0 && (
         <ul className="pr-existing-replies">
-          {comment.replies.map((r) => (
-            <li key={r.id} className="pr-existing-reply">
-              <div className="pr-existing-bubble-meta">
-                <span className="pr-existing-bubble-author">
-                  @{r.author?.login ?? 'unknown'}
-                </span>
-                <span className="pr-existing-bubble-date">
-                  {new Date(r.createdAt).toLocaleString()}
-                </span>
-              </div>
-              <p>{r.body}</p>
-            </li>
+          {comment.replies.map((reply) => (
+            <ExistingReplyRow key={reply.id} reply={reply} onEdit={onEdit} onDelete={onDelete} />
           ))}
         </ul>
       )}
@@ -152,6 +258,84 @@ export function ExistingPrCommentBubble({ comment, onReply }: ExistingPrCommentB
           )}
         </div>
       )}
+      {error && !replying && <p className="pr-existing-reply-error" role="alert">{error}</p>}
     </div>
+  )
+}
+
+export function parseGitHubSuggestion(body: string): { remainingBody: string; code: string | null } {
+  const match = /```suggestion[^\r\n]*\r?\n([\s\S]*?)```/i.exec(body)
+  if (!match) return { remainingBody: body, code: null }
+  return {
+    remainingBody: body.replace(/```suggestion[^\r\n]*\r?\n[\s\S]*?```/gi, '').trim(),
+    code: match[1].replace(/\r\n/g, '\n').replace(/\n$/, ''),
+  }
+}
+
+function ExistingReplyRow({
+  reply,
+  onEdit,
+  onDelete,
+}: {
+  reply: PrExistingReply
+  onEdit?: (commentId: number, body: string) => Promise<void>
+  onDelete?: (commentId: number) => Promise<void>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [body, setBody] = useState(reply.body)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!editing) setBody(reply.body)
+  }, [reply.body, editing])
+
+  const save = async () => {
+    if (!onEdit || !body.trim()) return
+    setBusy(true)
+    setError(null)
+    try {
+      await onEdit(reply.id, body.trim())
+      setEditing(false)
+    } catch (err: any) {
+      setError(err?.message ?? 'Failed to edit reply')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async () => {
+    if (!onDelete || !window.confirm('Delete this published reply from GitHub?')) return
+    setBusy(true)
+    setError(null)
+    try {
+      await onDelete(reply.id)
+    } catch (err: any) {
+      setError(err?.message ?? 'Failed to delete reply')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <li className="pr-existing-reply">
+      <div className="pr-existing-bubble-meta">
+        <span className="pr-existing-bubble-author">@{reply.author?.login ?? 'unknown'}</span>
+        <span className="pr-existing-bubble-date">{new Date(reply.createdAt).toLocaleString()}</span>
+        <span className="pr-existing-bubble-actions">
+          {onEdit && reply.viewerDidAuthor !== false && <button type="button" className="file-diff-icon-btn" disabled={busy} onClick={() => setEditing(true)} aria-label="Edit GitHub reply"><Pencil size={11} /></button>}
+          {onDelete && reply.viewerDidAuthor !== false && <button type="button" className="file-diff-icon-btn danger" disabled={busy} onClick={() => { void remove() }} aria-label="Delete GitHub reply"><Trash2 size={11} /></button>}
+        </span>
+      </div>
+      {editing ? (
+        <div className="pr-existing-edit-form is-reply">
+          <textarea value={body} onChange={(event) => setBody(event.target.value)} rows={3} aria-label="Edit GitHub reply body" />
+          <div className="pr-existing-reply-form-actions">
+            <button type="button" className="btn btn-sm" disabled={busy} onClick={() => { setEditing(false); setBody(reply.body) }}>Cancel</button>
+            <button type="button" className="btn btn-sm btn-primary" disabled={busy || !body.trim()} onClick={() => { void save() }}>{busy ? 'Saving…' : 'Save'}</button>
+          </div>
+        </div>
+      ) : <p>{reply.body}</p>}
+      {error && <p className="pr-existing-reply-error" role="alert">{error}</p>}
+    </li>
   )
 }

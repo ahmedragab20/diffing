@@ -40,6 +40,10 @@ async function ghStatus(): Promise<number> {
     return EXIT_NOT_FOUND
   }
   const s = (await res.json()) as PrSession & { prMode: boolean }
+  if (!s.prMode) {
+    console.error('No active PR session. Start one with `diffing "gh pr <ref>"`.')
+    return EXIT_NOT_FOUND
+  }
   const submittedLine = s.submittedAt
     ? `submitted at ${new Date(s.submittedAt).toISOString()} → ${s.submittedReviewUrl ?? '(no url)'}`
     : 'not submitted yet'
@@ -49,7 +53,8 @@ async function ghStatus(): Promise<number> {
   console.log(`  +${s.additions} -${s.deletions}  (${s.changedFiles} files)`)
   console.log(`  head:       ${s.headSha.slice(0, 7)}`)
   console.log(`  base:       ${s.baseSha.slice(0, 7)}`)
-  console.log(`  existing:   ${s.existingComments?.length ?? 0} review comments (read-only context)`)
+  console.log(`  threads:    ${s.existingComments?.length ?? 0} published conversations`)
+  console.log(`  reviews:    ${s.existingReviews?.length ?? 0} submitted review events`)
   console.log(`  new:        ${s.comments?.length ?? 0} comments in this session`)
   console.log(`  status:     ${submittedLine}`)
   return EXIT_OK

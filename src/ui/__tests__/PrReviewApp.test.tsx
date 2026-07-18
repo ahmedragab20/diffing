@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mockUsePrSession = vi.fn()
 vi.mock('../hooks/usePrSession', () => ({
   usePrSession: () => mockUsePrSession(),
+  usePrCommentSync: () => undefined,
   usePrComments: () => ({
     comments: [],
     addComment: vi.fn(),
@@ -26,7 +27,8 @@ vi.mock('../hooks/usePrSession', () => ({
 }))
 
 vi.mock('../hooks/useSettings', () => ({
-  useSettings: () => ({ settings: {}, loaded: true }),
+  useSettings: () => ({ settings: {}, loaded: true, updateSettings: vi.fn() }),
+  resolveMonoFont: () => 'monospace',
 }))
 
 vi.mock('../hooks/useApplyFonts', () => ({
@@ -48,7 +50,7 @@ vi.mock('../router', () => ({
 
 // The @pierre/diffs worker pool isn't usable in jsdom; stub it.
 vi.mock('@pierre/diffs/react', () => ({
-  useWorkerPool: () => ({ /* no-op */ }),
+  useWorkerPool: () => ({ setRenderOptions: vi.fn().mockResolvedValue(undefined) }),
 }))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
@@ -71,7 +73,9 @@ vi.mock('lucide-react', () => {
     'Pencil', 'Trash2', 'Check', 'X', 'MessageSquareWarning', 'AlertCircle',
     'CheckCircle2', 'Loader2', 'Eye', 'EyeOff', 'Search', 'XCircle', 'Clock',
     'ChevronDown', 'ChevronUp', 'ChevronLeft', 'ChevronRight', 'CornerUpLeft',
-    'FilePenLine',
+    'FilePenLine', 'Menu', 'Settings', 'Palette', 'Type', 'LayoutGrid', 'Sparkles',
+    'FileText', 'Code2', 'Loader2', 'GitCompare', 'CornerDownLeft', 'Layers',
+    'CircleDot', 'Clock3', 'MinusCircle', 'Terminal', 'Keyboard', 'Command',
     // CommentForm severity select
     'Minus', 'AlertOctagon', 'CircleDot', 'HelpCircle', 'Sparkles', 'ChevronsUpDown',
   ]
@@ -118,4 +122,5 @@ describe('PrReviewApp (empty state)', () => {
       screen.getByRole('button', { name: /Back to local/i }),
     ).toBeInTheDocument()
   })
+
 })

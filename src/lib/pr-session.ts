@@ -5,8 +5,7 @@ import type { ReviewComment } from './types.js'
 
 /**
  * A review comment that already exists on the PR. Fetched from GitHub at
- * session start, then displayed read-only in the UI as context. We never
- * POST these back — the reviewer can only ADD new comments on top.
+ * session start and synchronized with their published GitHub thread.
  */
 export interface PrExistingComment {
   /** GitHub's database id for the review comment. */
@@ -17,8 +16,11 @@ export interface PrExistingComment {
   path: string
   /** `null` when the comment is anchored to the file rather than a specific line. */
   line: number | null
+  /** First line of a multi-line GitHub review comment. */
+  startLine?: number | null
   /** GitHub's "LEFT" (deletions) or "RIGHT" (additions) side, or null. */
   side: 'LEFT' | 'RIGHT' | null
+  startSide?: 'LEFT' | 'RIGHT' | null
   createdAt: string
   updatedAt: string
   /** The state of the review this comment belongs to (if it's the head comment of a review). */
@@ -26,6 +28,13 @@ export interface PrExistingComment {
   replies: PrExistingReply[]
   /** GitHub returns this when the diff has shifted; we surface it as a warning. */
   isOutdated: boolean
+  /** GraphQL node id for the containing review thread (required to resolve it). */
+  threadId?: string
+  /** Resolution state lives on PullRequestReviewThread, not the REST comment. */
+  isResolved?: boolean
+  viewerCanResolve?: boolean
+  viewerCanUnresolve?: boolean
+  viewerDidAuthor?: boolean
 }
 
 export interface PrExistingReply {
@@ -34,6 +43,18 @@ export interface PrExistingReply {
   body: string
   createdAt: string
   updatedAt: string
+  viewerDidAuthor?: boolean
+}
+
+/** A submitted GitHub review event and its overall (non-inline) comment. */
+export interface PrExistingReview {
+  id: number
+  author: { login: string; avatarUrl?: string } | null
+  body: string
+  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'PENDING' | 'DISMISSED'
+  submittedAt: string | null
+  htmlUrl?: string
+  commitId?: string
 }
 
 export interface PrAuthor {
@@ -74,8 +95,10 @@ export interface PrSession {
   diff: string
   /** Comments the user is writing *right now* in this diffing session. */
   comments: ReviewComment[]
-  /** Read-only existing comments fetched from GitHub. */
+  /** Existing published comments fetched from and synchronized with GitHub. */
   existingComments: PrExistingComment[]
+  /** Submitted review verdicts and their overall GitHub comments. */
+  existingReviews?: PrExistingReview[]
   /** Set after a successful submit; allows us to surface a no-op on double-click. */
   submittedAt?: number
   submittedReviewId?: number

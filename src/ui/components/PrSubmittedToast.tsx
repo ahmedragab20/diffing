@@ -1,37 +1,27 @@
-import { useState, useEffect, useCallback } from 'react'
-import { GitPullRequest, ExternalLink, CheckCircle2 } from 'lucide-react'
-import type { PrSession } from '../../lib/pr-session'
+import { ExternalLink, CheckCircle2 } from 'lucide-react'
+import type { SubmitPrReviewResult } from '../hooks/usePrSession'
 
 interface PrSubmittedToastProps {
-  session: PrSession
+  result: SubmitPrReviewResult
+  onDismiss: () => void
 }
 
 /**
- * Persistent toast shown above the diff after a successful submit. The user
- * can dismiss it (locally; it will re-appear on refresh since `session.submittedAt`
- * is server-persisted). The "Open review" button links to the just-created
- * review on github.com.
+ * Ephemeral toast shown only for a submission completed in this page lifetime.
+ * It is deliberately not derived from persisted session metadata, so reloads
+ * and later refreshes never resurrect a dismissed or historical notification.
  */
-export function PrSubmittedToast({ session }: PrSubmittedToastProps) {
-  const [dismissed, setDismissed] = useState(false)
-
-  useEffect(() => {
-    // Reset dismissal when a new submit lands.
-    setDismissed(false)
-  }, [session.submittedAt])
-
-  if (dismissed) return null
-
+export function PrSubmittedToast({ result, onDismiss }: PrSubmittedToastProps) {
   return (
     <div className="pr-submitted-toast" role="status">
       <CheckCircle2 size={16} className="pr-submitted-icon" />
       <div className="pr-submitted-text">
         <strong>Review submitted to GitHub.</strong>
-        {session.submittedReviewUrl && (
+        {result.reviewUrl && (
           <>
             {' '}
             <a
-              href={session.submittedReviewUrl}
+              href={result.reviewUrl}
               target="_blank"
               rel="noreferrer"
             >
@@ -39,13 +29,13 @@ export function PrSubmittedToast({ session }: PrSubmittedToastProps) {
             </a>
           </>
         )}
-        {session.authSource && (
-          <span className="pr-submitted-auth">via {session.authSource}</span>
+        {result.authSource && result.authSource !== 'none' && (
+          <span className="pr-submitted-auth">via {result.authSource}</span>
         )}
       </div>
       <button
         className="pr-submitted-dismiss"
-        onClick={() => setDismissed(true)}
+        onClick={onDismiss}
         title="Dismiss"
         aria-label="Dismiss"
       >

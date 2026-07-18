@@ -6,7 +6,7 @@ import { BrandMark } from './BrandMark'
 interface ShortcutsHelpModalProps {
   isOpen: boolean
   onClose: () => void
-  mode?: 'diff' | 'plan'
+  mode?: 'diff' | 'plan' | 'pr'
 }
 
 interface ShortcutItem {
@@ -192,10 +192,29 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
     },
   ]
 
-  const categories = mode === 'plan' ? planCategories : diffCategories
+  const prCategories: ShortcutCategory[] = diffCategories
+    .filter((category) => category.title !== 'Commit Walk')
+    .map((category) => category.title === 'Review & Comments'
+      ? {
+          ...category,
+          items: [
+            { keys: ['UI'], description: 'Select lines or gutter + to start a GitHub review comment' },
+            { keys: ['v'], description: 'Toggle Viewed on the active PR file (collapses card)' },
+            { keys: ['UI'], description: 'File header icons: expand context · file comment · viewed' },
+            { keys: ['UI'], description: 'File-tree chips: Unviewed · Comments' },
+            { keys: ['click #'], description: 'Line number copies a deep permalink (?file&line&side)' },
+            { keys: ['UI'], description: 'Checks pill: live successful · failed · pending GitHub actions' },
+            { keys: ['UI'], description: 'Submit to GitHub: approve · comment · request changes · draft' },
+          ],
+        }
+      : category)
+
+  const categories = mode === 'plan' ? planCategories : mode === 'pr' ? prCategories : diffCategories
   const intro =
     mode === 'plan'
       ? 'Vim-style keybindings for plan review. Cycle Source / Read / Split with m, jump plans with J/K, and comment from line selection or text highlight.'
+      : mode === 'pr'
+        ? 'The same Vim-style diff keybindings used by local review, scoped to GitHub PR navigation, formatting, search, and comments.'
       : 'Vim-style keybindings for reviewing diffs. Jump files with J/K, walk commits with [ / ], and open search with ⌘K.'
 
   return (
@@ -204,7 +223,7 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
         <div className="shortcuts-header-title">
           <BrandMark size={22} className="shortcuts-mark" />
           <h2>
-            {mode === 'plan' ? 'Plan Review Shortcuts' : 'Developer Keyboard Shortcuts'}
+            {mode === 'plan' ? 'Plan Review Shortcuts' : mode === 'pr' ? 'GitHub PR Review Shortcuts' : 'Developer Keyboard Shortcuts'}
           </h2>
         </div>
         <button className="shortcuts-close-btn" onClick={onClose} aria-label="Close dialog">

@@ -47,9 +47,11 @@ vi.mock('@base-ui-components/react/popover', () => ({
   },
 }))
 
+const { mockSubmitReview } = vi.hoisted(() => ({ mockSubmitReview: vi.fn() }))
+
 // SubmitToGitHubPopover needs useSubmitPrReview
 vi.mock('../../hooks/usePrSession', () => ({
-  useSubmitPrReview: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
+  useSubmitPrReview: () => ({ mutateAsync: mockSubmitReview, isPending: false, error: null }),
 }))
 
 // MarkdownField uses a tabs pattern that may not render well in JSDOM
@@ -105,14 +107,15 @@ function renderPlan(open = true) {
   )
 }
 
-function renderGitHub(open = true) {
+function renderGitHub(open = true, comments: any[] = [], onSubmitted?: (result: any) => void) {
   return render(
     <Wrapper>
       <SubmitToGitHubPopover
         session={{ submittedAt: null } as any}
-        comments={[]}
+        comments={comments}
         onEditComment={noop as any}
         onDeleteComment={noop as any}
+        onSubmitted={onSubmitted}
       />
     </Wrapper>
   )
@@ -122,6 +125,8 @@ beforeEach(() => {
   mockUiStateGet.mockReset()
   mockUiStateSet.mockReset()
   mockUiStateGet.mockReturnValue(null)
+  mockSubmitReview.mockReset()
+  mockSubmitReview.mockResolvedValue({ ok: true, reviewId: 9, reviewUrl: 'https://github.test/review/9', authSource: 'gh' })
 })
 
 describe('SendReviewPopover', () => {
@@ -248,5 +253,32 @@ describe('SubmitToGitHubPopover', () => {
     // The popover mock renders the Popup with className
     const popup = screen.getByTestId('popover-popup')
     expect(popup.className).toContain('submit-to-github-popover')
+  })
+
+  it('labels and renders the inline comments that will be published', () => {
+    renderGitHub(true, [{
+      id: 'c1',
+      filePath: 'src/example.ts',
+      side: 'additions',
+      lineNumber: 12,
+      lineContent: 'const answer = 42',
+      body: 'Please explain this value.',
+      status: 'open',
+      createdAt: 1,
+      replies: [],
+    }])
+
+    expect(screen.getByText('Inline comments to publish')).toBeInTheDocument()
+    expect(screen.getByText('Please explain this value.')).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Comments to send' })).toBeInTheDocument()
+  })
+
+  it('emits a page-lifetime success event after submission', async () => {
+    const onSubmitted = vi.fn()
+    renderGitHub(true, [], onSubmitted)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('radio', { name: /^ApproveThe PR is good/i }))
+    await user.click(screen.getByRole('button', { name: 'Submit review' }))
+    expect(onSubmitted).toHaveBeenCalledWith(expect.objectContaining({ reviewId: 9, authSource: 'gh' }))
   })
 })

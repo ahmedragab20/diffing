@@ -5,6 +5,28 @@ import type { CommentStore } from "../lib/comments.js";
 import { InMemoryPrSessionStore, type PrSession } from "../lib/pr-session.js";
 import type { PlanStore } from "../lib/plans.js";
 
+const githubMocks = vi.hoisted(() => ({
+    submitReview: vi.fn(),
+    fetchExistingComments: vi.fn(),
+    fetchExistingReviews: vi.fn(),
+    updateComment: vi.fn(),
+    deleteComment: vi.fn(),
+    setThreadResolved: vi.fn(),
+}));
+
+vi.mock("../lib/github.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../lib/github.js")>();
+    return {
+        ...actual,
+        submitReview: githubMocks.submitReview,
+        fetchExistingCommentsViaGh: githubMocks.fetchExistingComments,
+        fetchExistingReviewsViaGh: githubMocks.fetchExistingReviews,
+        updatePrReviewComment: githubMocks.updateComment,
+        deletePrReviewComment: githubMocks.deleteComment,
+        setPrReviewThreadResolved: githubMocks.setThreadResolved,
+    };
+});
+
 vi.mock("../lib/git.js", () => ({
     getGitDiff: vi.fn(() => ""),
     getCustomGitDiff: vi.fn(() => ""),
@@ -160,6 +182,12 @@ describe("gh-pr endpoints (integration)", () => {
 
     beforeEach(async () => {
         vi.clearAllMocks();
+        githubMocks.submitReview.mockResolvedValue({ ok: true, reviewId: 55, reviewUrl: "https://github.test/review/55", authSource: "gh" });
+        githubMocks.fetchExistingComments.mockResolvedValue([]);
+        githubMocks.fetchExistingReviews.mockResolvedValue([]);
+        githubMocks.updateComment.mockResolvedValue({ ok: true });
+        githubMocks.deleteComment.mockResolvedValue({ ok: true });
+        githubMocks.setThreadResolved.mockResolvedValue({ ok: true });
         prStore = new InMemoryPrSessionStore();
         app = await makeApp(prStore);
     });
@@ -188,6 +216,7 @@ describe("gh-pr endpoints (integration)", () => {
         expect(body.title).toBe("A test PR");
         expect(body.existingComments).toHaveLength(1);
         expect(body.existingComments[0].body).toBe("pre-existing feedback");
+        expect(body.existingReviews).toEqual([]);
     });
 
     it("GET /api/gh/pr-session/comments returns the in-progress comments", async () => {
@@ -291,6 +320,50 @@ describe("gh-pr endpoints (integration)", () => {
         expect(res.status).toBe(200);
         const after = await prStore.get();
         expect(after?.comments).toHaveLength(0);
+    });
+
+    it("POST /api/gh/pr-session/comments/:id/replies persists a visible reply", async () => {
+        await prStore.set({
+            ...baseSession,
+            comments: [
+                {
+                    id: "c1",
+                    filePath: "src/x.ts",
+                    side: "additions",
+                    lineNumber: 1,
+                    lineContent: "+ x",
+                    body: "first",
+                    status: "open",
+                    createdAt: 1000,
+                    replies: [],
+                },
+            ],
+        });
+        const res = await app.fetch(
+            new Request("http://localhost/api/gh/pr-session/comments/c1/replies", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ body: "  follow-up  ", role: "user" }),
+            }),
+        );
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body.replies).toHaveLength(1);
+        expect(body.replies[0].body).toBe("follow-up");
+        expect((await prStore.get())?.comments[0].replies[0].body).toBe("follow-up");
+    });
+
+    it("POST /api/gh/pr-session/comments/:id/replies reports a missing comment", async () => {
+        await prStore.set(baseSession);
+        const res = await app.fetch(
+            new Request("http://localhost/api/gh/pr-session/comments/missing/replies", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ body: "follow-up" }),
+            }),
+        );
+        expect(res.status).toBe(404);
+        expect((await res.json()).error).toBe("Comment not found");
     });
 
     it("GET /api/diff short-circuits in PR mode and exposes PR metadata", async () => {
@@ -407,6 +480,143 @@ describe("gh-pr endpoints (integration)", () => {
         // Must not stamp submittedAt on a dry run.
         const after = await prStore.get();
         expect(after?.submittedAt).toBeUndefined();
+    });
+
+    it("successful submission promotes local drafts into GitHub-backed conversations", async () => {
+        const published = {
+            ...baseSession.existingComments[0],
+            id: 501,
+            body: "published feedback",
+            threadId: "PRRT_thread",
+            isResolved: false,
+        };
+        const publishedReview = {
+            id: 55,
+            author: { login: "reviewer" },
+            body: "Approved again buddy@",
+            state: "APPROVED",
+            submittedAt: "2026-07-18T20:00:00.000Z",
+        };
+        githubMocks.fetchExistingComments.mockResolvedValue([published]);
+        githubMocks.fetchExistingReviews.mockResolvedValue([publishedReview]);
+        await prStore.set({
+            ...baseSession,
+            comments: [{
+                id: "c1",
+                filePath: "src/x.ts",
+                side: "additions",
+                lineNumber: 1,
+                lineContent: "+ x",
+                body: "published feedback",
+                status: "open",
+                createdAt: 1000,
+                replies: [],
+            }],
+        });
+
+        const res = await app.fetch(new Request("http://localhost/api/gh/submit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ decision: "comment", body: "" }),
+        }));
+
+        expect(res.status).toBe(200);
+        const after = await prStore.get();
+        expect(after?.comments).toEqual([]);
+        expect(after?.existingComments).toEqual([published]);
+        expect(after?.existingReviews).toEqual([publishedReview]);
+        expect(after?.submittedAt).toEqual(expect.any(Number));
+    });
+
+    it("shows the overall review note immediately while GitHub review history is still catching up", async () => {
+        githubMocks.fetchExistingReviews.mockResolvedValue([]);
+        await prStore.set(baseSession);
+
+        const res = await app.fetch(new Request("http://localhost/api/gh/submit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ decision: "approve", body: "Approved again buddy@" }),
+        }));
+
+        expect(res.status).toBe(200);
+        expect((await prStore.get())?.existingReviews?.[0]).toMatchObject({
+            id: 55,
+            body: "Approved again buddy@",
+            state: "APPROVED",
+            htmlUrl: "https://github.test/review/55",
+        });
+    });
+
+    it("published comment actions update GitHub and refresh cached conversations", async () => {
+        const synced = [{ ...baseSession.existingComments[0], body: "edited", isResolved: true }];
+        githubMocks.fetchExistingComments.mockResolvedValue(synced);
+        await prStore.set(baseSession);
+
+        const edit = await app.fetch(new Request("http://localhost/api/gh/existing-comments/999", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ body: "edited" }),
+        }));
+        expect(edit.status).toBe(200);
+        expect(githubMocks.updateComment).toHaveBeenCalledWith(expect.objectContaining({ commentId: 999, body: "edited" }));
+        expect((await prStore.get())?.existingComments).toEqual(synced);
+
+        const resolve = await app.fetch(new Request("http://localhost/api/gh/review-threads/PRRT_thread", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ resolved: true }),
+        }));
+        expect(resolve.status).toBe(200);
+        expect(githubMocks.setThreadResolved).toHaveBeenCalledWith({ threadId: "PRRT_thread", resolved: true });
+
+        const remove = await app.fetch(new Request("http://localhost/api/gh/existing-comments/999", { method: "DELETE" }));
+        expect(remove.status).toBe(200);
+        expect(githubMocks.deleteComment).toHaveBeenCalledWith(expect.objectContaining({ commentId: 999 }));
+    });
+
+    it("review sync hydrates overall reviews, removes published drafts, and preserves newer drafts", async () => {
+        githubMocks.fetchExistingComments.mockResolvedValue(baseSession.existingComments);
+        githubMocks.fetchExistingReviews.mockResolvedValue([{
+            id: 77,
+            author: { login: "reviewer" },
+            body: "Overall approval note",
+            state: "APPROVED",
+            submittedAt: "2026-07-18T20:00:00.000Z",
+        }]);
+        await prStore.set({
+            ...baseSession,
+            submittedAt: 2000,
+            comments: [
+                {
+                    id: "published-local",
+                    filePath: "src/old.ts",
+                    side: "additions",
+                    lineNumber: 1,
+                    lineContent: "+ old",
+                    body: "already published",
+                    status: "open",
+                    createdAt: 1000,
+                    replies: [],
+                },
+                {
+                    id: "new-draft",
+                    filePath: "src/new.ts",
+                    side: "additions",
+                    lineNumber: 2,
+                    lineContent: "+ new",
+                    body: "new review draft",
+                    status: "open",
+                    createdAt: 3000,
+                    replies: [],
+                },
+            ],
+        });
+
+        const res = await app.fetch(new Request("http://localhost/api/gh/comments/sync", { method: "POST" }));
+        expect(res.status).toBe(200);
+        const synced = await prStore.get();
+        expect(synced?.comments.map((comment) => comment.id)).toEqual(["new-draft"]);
+        expect(synced?.existingReviews?.[0].body).toBe("Overall approval note");
     });
 
     it("PUT /api/gh/pr-session/comments/:id can resolve a draft comment locally", async () => {

@@ -6,6 +6,7 @@ import { Modal } from '../primitives/Modal'
 import { Tooltip } from '../primitives/Tooltip'
 import { useFileContents } from '../hooks/useFileContents'
 import type { ReviewComment } from '../../lib/types'
+import type { PrExistingComment } from '../../lib/pr-session'
 import type {
   LineDiffType,
   DiffIndicators,
@@ -14,6 +15,7 @@ import type {
 } from '../hooks/useSettings'
 import { CommentForm } from './CommentForm'
 import { CommentBubble } from './CommentBubble'
+import { ExistingPrCommentBubble } from './ExistingPrCommentBubble'
 import { DiffMinimap } from './DiffMinimap'
 import { SHIKI_THEME_MAP, scrollToLine } from '../utils'
 import {
@@ -32,6 +34,15 @@ import {
 } from '../lib/commentSelection'
 
 type PendingComment = PendingLineComment
+
+/** Keep current GitHub threads on their exact diff line; stale anchors fall back to file-level context. */
+export function canAnchorPrComment(fileDiff: FileDiffMetadata, comment: PrExistingComment): boolean {
+  if (comment.isOutdated || comment.line == null || comment.line < 1 || comment.side == null) return false
+  const side = comment.side === 'LEFT' ? 'deletions' : 'additions'
+  const startKey = side === 'additions' ? 'additionStart' : 'deletionStart'
+  const countKey = side === 'additions' ? 'additionCount' : 'deletionCount'
+  return fileDiff.hunks.some((hunk) => comment.line! >= hunk[startKey] && comment.line! < hunk[startKey] + hunk[countKey])
+}
 
 /** Min/max file line numbers present on one side of a pierre FileDiffMetadata. */
 function boundsForSide(
@@ -66,6 +77,8 @@ interface FileDiffCardProps {
   fileDiff: FileDiffMetadata
   filePath: string
   annotations: DiffLineAnnotation<ReviewComment>[]
+  /** Published GitHub threads, anchored to their PR diff line when possible. */
+  existingComments?: PrExistingComment[]
   diffStyle: 'split' | 'unified'
   tabSize: number
   viewed: boolean
@@ -99,6 +112,12 @@ interface FileDiffCardProps {
     severity?: import('../../lib/types').CommentSeverity,
   ) => void
   onDeleteComment: (id: string) => void
+  onReplyExisting?: (commentId: number, body: string) => Promise<void>
+  onEditExisting?: (commentId: number, body: string) => Promise<void>
+  onDeleteExisting?: (commentId: number) => Promise<void>
+  onSetExistingResolved?: (threadId: string, resolved: boolean) => Promise<void>
+  /** Hide editor/revert actions on remote or otherwise read-only review surfaces. */
+  allowLocalActions?: boolean
   /**
    * Fired by the header click AFTER the local `collapsed` state has been
    * flipped. Used by App.tsx to drive the auto-advance-to-next-file
@@ -114,6 +133,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   fileDiff,
   filePath,
   annotations,
+  existingComments = [],
   diffStyle,
   tabSize,
   viewed,
@@ -134,6 +154,11 @@ export const FileDiffCard = memo(function FileDiffCard({
   onViewedChange,
   onAddComment,
   onDeleteComment,
+  onReplyExisting,
+  onEditExisting,
+  onDeleteExisting,
+  onSetExistingResolved,
+  allowLocalActions = true,
   onCardToggleCollapse,
 }: FileDiffCardProps) {
   const [pending, setPending] = useState<PendingComment | null>(null)
@@ -385,8 +410,17 @@ export const FileDiffCard = memo(function FileDiffCard({
   const fileLevelAnnotations = annotations.filter((a) => a.lineNumber === 0)
   const lineAnnotations = annotations.filter((a) => a.lineNumber > 0)
 
+  const existingLineAnnotations: DiffLineAnnotation<{ _existingPr: true; comment: PrExistingComment }>[] = existingComments
+    .filter((comment) => canAnchorPrComment(fileDiff, comment))
+    .map((comment) => ({
+      side: comment.side === 'LEFT' ? 'deletions' : 'additions',
+      lineNumber: comment.line!,
+      metadata: { _existingPr: true, comment },
+    }))
+  const existingFileLevelComments = existingComments.filter((comment) => !canAnchorPrComment(fileDiff, comment))
+
   const renderAnnotationFn = (
-    annotation: DiffLineAnnotation<ReviewComment | { _pending: true }>,
+    annotation: DiffLineAnnotation<ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }>,
   ) => {
     if ('_pending' in annotation.metadata) {
       if (!pending) return null
@@ -439,6 +473,22 @@ export const FileDiffCard = memo(function FileDiffCard({
         />
       )
     }
+    if ('_existingPr' in annotation.metadata) {
+      return (
+        <ExistingPrCommentBubble
+          comment={annotation.metadata.comment}
+          lineContent={getLineContent(
+            annotation.side,
+            annotation.lineNumber,
+            annotation.metadata.comment.startLine ?? undefined,
+          )}
+          onReply={onReplyExisting}
+          onEdit={onEditExisting}
+          onDelete={onDeleteExisting}
+          onSetResolved={onSetExistingResolved}
+        />
+      )
+    }
     return (
       <CommentBubble
         comment={annotation.metadata as ReviewComment}
@@ -486,8 +536,9 @@ export const FileDiffCard = memo(function FileDiffCard({
     [openPending],
   )
 
-  const allAnnotations: DiffLineAnnotation<ReviewComment | { _pending: true }>[] = [
+  const allAnnotations: DiffLineAnnotation<ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }>[] = [
     ...lineAnnotations,
+    ...existingLineAnnotations,
     ...(pending
       ? [
           {
@@ -531,13 +582,13 @@ export const FileDiffCard = memo(function FileDiffCard({
               {pathCopyFlash ? <Check size={12} /> : <Copy size={12} />}
             </button>
             {getStatusBadge()}
-            {lineAnnotations.length > 0 && (
+            {(lineAnnotations.length + existingLineAnnotations.length) > 0 && (
               <span
                 className="file-diff-comment-badge"
-                title={`${lineAnnotations.length} inline comment${lineAnnotations.length === 1 ? '' : 's'}`}
+                title={`${lineAnnotations.length + existingLineAnnotations.length} inline comment${lineAnnotations.length + existingLineAnnotations.length === 1 ? '' : 's'}`}
               >
                 <MessageSquare size={10} />
-                {lineAnnotations.length}
+                {lineAnnotations.length + existingLineAnnotations.length}
               </span>
             )}
             {liveSelectionCount > 0 && (
@@ -584,7 +635,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               </button>
             </Tooltip>
           )}
-          {fileDiff.type !== 'deleted' && (
+          {allowLocalActions && fileDiff.type !== 'deleted' && (
             <Tooltip content="Open in editor" side="bottom">
               <button
                 className="file-diff-icon-btn"
@@ -632,7 +683,7 @@ export const FileDiffCard = memo(function FileDiffCard({
         </div>
       </div>
 
-      {!collapsed && fileDiff.hunks.length > 0 && (
+      {allowLocalActions && !collapsed && fileDiff.hunks.length > 0 && (
         <div className="file-diff-hunk-actions" onClick={(e) => e.stopPropagation()}>
           <div className="file-diff-hunk-actions-meta">
             <span className="file-diff-hunk-actions-label">
@@ -674,7 +725,7 @@ export const FileDiffCard = memo(function FileDiffCard({
       )}
 
       {/* Selective Revert Hunk Preview Modal */}
-      {previewHunkIndex !== null && (() => {
+      {allowLocalActions && previewHunkIndex !== null && (() => {
         const previewHunk = fileDiff.hunks[previewHunkIndex]
         if (!previewHunk) return null
         const previewDeletedLines = fileDiff.deletionLines.slice(
@@ -775,7 +826,7 @@ export const FileDiffCard = memo(function FileDiffCard({
             />
           )}
           {/* File-level comments section */}
-          {bodyMounted && (fileLevelAnnotations.length > 0 || showFileCommentForm) && (
+          {bodyMounted && (fileLevelAnnotations.length > 0 || existingFileLevelComments.length > 0 || showFileCommentForm) && (
             <div 
               className="file-level-comments-section"
               style={{
@@ -791,7 +842,7 @@ export const FileDiffCard = memo(function FileDiffCard({
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>
                 <MessageSquare size={14} />
-                <span>File-Level Comments ({fileLevelAnnotations.length})</span>
+                <span>File-Level Comments ({fileLevelAnnotations.length + existingFileLevelComments.length})</span>
               </div>
               
               {fileLevelAnnotations.length > 0 && (
@@ -805,6 +856,17 @@ export const FileDiffCard = memo(function FileDiffCard({
                   ))}
                 </div>
               )}
+
+              {existingFileLevelComments.map((comment) => (
+                <ExistingPrCommentBubble
+                  key={`github-${comment.id}`}
+                  comment={comment}
+                  onReply={onReplyExisting}
+                  onEdit={onEditExisting}
+                  onDelete={onDeleteExisting}
+                  onSetResolved={onSetExistingResolved}
+                />
+              ))}
 
               {showFileCommentForm && (
                 <div style={{ background: 'var(--bg-secondary)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
@@ -828,7 +890,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               the cheaper FileDiff render is used against the parsed
               partial patch. Lazy-mounted until near the viewport. */}
           {bodyMounted && contentsReady ? (
-            <MultiFileDiff<ReviewComment | { _pending: true }>
+            <MultiFileDiff<ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }>
               oldFile={{ name: oldFilePath, contents: oldContent ?? '' }}
               newFile={{ name: filePath, contents: newContent ?? '' }}
               options={{
@@ -883,7 +945,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               renderAnnotation={renderAnnotationFn}
             />
           ) : bodyMounted ? (
-          <FileDiff<ReviewComment | { _pending: true }>
+          <FileDiff<ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }>
             fileDiff={fileDiff}
             options={{
               diffStyle,

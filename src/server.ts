@@ -26,7 +26,7 @@ import { executeDiffWithMeta } from './lib/diff-engine.js'
 import type { DiffOptions } from './lib/diff-options.js'
 import { DEFAULTS } from './lib/diff-options.js'
 import { FilePrSessionStore, InMemoryPrSessionStore } from './lib/pr-session.js'
-import type { PrSessionStore, PrDecision } from './lib/pr-session.js'
+import type { PrSessionStore, PrDecision, PrExistingReview } from './lib/pr-session.js'
 import { buildPrOverview } from './lib/diff-overview.js'
 import {
   buildPrSession,
@@ -34,6 +34,11 @@ import {
   parsePrRef,
   detectCwdRepo,
   submitReview as githubSubmitReview,
+  fetchExistingCommentsViaGh,
+  fetchExistingReviewsViaGh,
+  updatePrReviewComment,
+  deletePrReviewComment,
+  setPrReviewThreadResolved,
 } from './lib/github.js'
 
 const MIME_TYPES: Record<string, string> = {
@@ -862,11 +867,53 @@ export function createApp(
       deletions: session.deletions,
       changedFiles: session.changedFiles,
       existingComments: session.existingComments,
+      existingReviews: session.existingReviews ?? [],
       submittedAt: session.submittedAt,
       submittedReviewId: session.submittedReviewId,
       submittedReviewUrl: session.submittedReviewUrl,
       authSource: session.authSource,
     })
+  })
+
+  const syncExistingPrReviewData = async (session: NonNullable<Awaited<ReturnType<PrSessionStore['get']>>>) => {
+    const resolved = {
+      owner: session.owner,
+      repo: session.repo,
+      pullNumber: session.pullNumber,
+      ref: session.ref,
+    }
+    let existingReviews = await fetchExistingReviewsViaGh(resolved)
+    const optimisticReview = session.submittedReviewId == null
+      ? undefined
+      : session.existingReviews?.find((review) => review.id === session.submittedReviewId)
+    if (
+      optimisticReview &&
+      !existingReviews.some((review) => review.id === optimisticReview.id) &&
+      session.submittedAt != null &&
+      Date.now() - session.submittedAt < 120_000
+    ) {
+      existingReviews = [optimisticReview, ...existingReviews]
+    }
+    const existingComments = await fetchExistingCommentsViaGh(resolved, existingReviews)
+    const comments = session.submittedAt
+      ? (session.comments ?? []).filter((comment) => comment.createdAt > session.submittedAt!)
+      : session.comments
+    const next = { ...session, comments, existingComments, existingReviews }
+    await prStore.set(next)
+    return next
+  }
+
+  /** Lightweight bidirectional comment sync (without re-fetching the whole diff). */
+  app.post('/api/gh/comments/sync', async (c) => {
+    if (!prMode) return notInPrMode(c)
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    try {
+      const next = await syncExistingPrReviewData(session)
+      return c.json({ ok: true, count: next.existingComments.length })
+    } catch (error: any) {
+      return c.json({ error: error?.message ?? 'Failed to sync GitHub comments' }, 502)
+    }
   })
 
   /** Re-fetch PR metadata (head SHA, diff, existing comments) and persist. */
@@ -876,7 +923,10 @@ export function createApp(
     if (!session) return notInPrMode(c)
     try {
       const refreshed = await refreshPrSession(session)
-      await prStore.set(refreshed)
+      const comments = refreshed.submittedAt
+        ? (refreshed.comments ?? []).filter((comment) => comment.createdAt > refreshed.submittedAt!)
+        : refreshed.comments
+      await prStore.set({ ...refreshed, comments })
       return c.json({ ok: true, headSha: refreshed.headSha })
     } catch (err: any) {
       return c.json({ error: err?.message ?? 'Refresh failed' }, 500)
@@ -934,13 +984,72 @@ export function createApp(
         body: text,
       })
       if (!result.ok) return c.json({ error: result.error ?? 'Reply failed' }, 500)
-      // Refresh existing comments so the new reply shows up.
-      const refreshed = await refreshPrSession(session)
-      await prStore.set(refreshed)
-      return c.json({ ok: true, id: result.id })
+      // GitHub returns the created reply. Merge it into the cached thread
+      // immediately instead of doing a second, slower metadata round-trip.
+      // The client can now re-fetch the session and render the reply at once.
+      const reply = result.reply
+      if (reply) {
+        const existingComments = session.existingComments.map((comment) =>
+          comment.id === id
+            ? { ...comment, replies: [...comment.replies, reply] }
+            : comment,
+        )
+        await prStore.set({ ...session, existingComments })
+      }
+      return c.json({ ok: true, id: result.id, reply })
     } catch (err: any) {
       return c.json({ error: err?.message ?? 'Reply failed' }, 500)
     }
+  })
+
+  /** Edit any published review comment or reply. */
+  app.patch('/api/gh/existing-comments/:id', async (c) => {
+    if (!prMode) return notInPrMode(c)
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const id = Number(c.req.param('id'))
+    if (!Number.isFinite(id)) return c.json({ error: 'Invalid comment id' }, 400)
+    const request = await c.req.json().catch(() => ({})) as { body?: string }
+    const text = typeof request.body === 'string' ? request.body.trim() : ''
+    if (!text) return c.json({ error: 'body is required' }, 400)
+    const result = await updatePrReviewComment({
+      resolved: { owner: session.owner, repo: session.repo, pullNumber: session.pullNumber, ref: session.ref },
+      commentId: id,
+      body: text,
+    })
+    if (!result.ok) return c.json({ error: result.error ?? 'Edit failed' }, 502)
+    const next = await syncExistingPrReviewData(session)
+    return c.json({ ok: true, existingComments: next.existingComments })
+  })
+
+  /** Delete any published review comment or reply. */
+  app.delete('/api/gh/existing-comments/:id', async (c) => {
+    if (!prMode) return notInPrMode(c)
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const id = Number(c.req.param('id'))
+    if (!Number.isFinite(id)) return c.json({ error: 'Invalid comment id' }, 400)
+    const result = await deletePrReviewComment({
+      resolved: { owner: session.owner, repo: session.repo, pullNumber: session.pullNumber, ref: session.ref },
+      commentId: id,
+    })
+    if (!result.ok) return c.json({ error: result.error ?? 'Delete failed' }, 502)
+    const next = await syncExistingPrReviewData(session)
+    return c.json({ ok: true, existingComments: next.existingComments })
+  })
+
+  /** Resolve or reopen a published GitHub review thread. */
+  app.put('/api/gh/review-threads/:threadId', async (c) => {
+    if (!prMode) return notInPrMode(c)
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const threadId = c.req.param('threadId')
+    const request = await c.req.json().catch(() => ({})) as { resolved?: boolean }
+    if (typeof request.resolved !== 'boolean') return c.json({ error: 'resolved must be a boolean' }, 400)
+    const result = await setPrReviewThreadResolved({ threadId, resolved: request.resolved })
+    if (!result.ok) return c.json({ error: result.error ?? 'Thread update failed' }, 502)
+    const next = await syncExistingPrReviewData(session)
+    return c.json({ ok: true, existingComments: next.existingComments })
   })
 
   /** Initialize a PR session from a ref like `1234`, `o/r#42`, or a GitHub URL. */
@@ -1034,13 +1143,18 @@ export function createApp(
     if (!prMode) return notInPrMode(c)
     const id = c.req.param('id')
     const { body, role, model } = await c.req.json()
+    const text = typeof body === 'string' ? body.trim() : ''
+    if (!text) return c.json({ error: 'body is required' }, 400)
     const session = await prStore.get()
     if (!session) return notInPrMode(c)
+    if (!(session.comments ?? []).some((cm) => cm.id === id)) {
+      return c.json({ error: 'Comment not found' }, 404)
+    }
     const comments = (session.comments ?? []).map((cm) => {
       if (cm.id !== id) return cm
       const reply = {
         id: crypto.randomUUID(),
-        body,
+        body: text,
         createdAt: Date.now(),
         role: role || (model ? 'agent' : 'user'),
         model: model || undefined,
@@ -1102,8 +1216,42 @@ export function createApp(
     })
 
     if (result.ok) {
+      let existingComments = session.existingComments
+      let existingReviews = session.existingReviews ?? []
+      try {
+        const resolved = {
+          owner: session.owner,
+          repo: session.repo,
+          pullNumber: session.pullNumber,
+          ref: session.ref,
+        }
+        existingReviews = await fetchExistingReviewsViaGh(resolved)
+        existingComments = await fetchExistingCommentsViaGh(resolved, existingReviews)
+      } catch {
+        // Submission succeeded; a later refresh/background sync can hydrate it.
+      }
+      if (result.reviewId != null && !existingReviews.some((review) => review.id === result.reviewId)) {
+        const stateByDecision: Record<PrDecision, PrExistingReview['state']> = {
+          approve: 'APPROVED',
+          'request-changes': 'CHANGES_REQUESTED',
+          comment: 'COMMENTED',
+          draft: 'PENDING',
+        }
+        existingReviews = [{
+          id: result.reviewId,
+          author: null,
+          body: generalBody,
+          state: stateByDecision[decision as PrDecision],
+          submittedAt: new Date().toISOString(),
+          htmlUrl: result.reviewUrl,
+          commitId: session.headSha,
+        }, ...existingReviews]
+      }
       const next = {
         ...session,
+        comments: [],
+        existingComments,
+        existingReviews,
         submittedAt: Date.now(),
         submittedReviewId: result.reviewId,
         submittedReviewUrl: result.reviewUrl,
@@ -1112,7 +1260,7 @@ export function createApp(
       await prStore.set(next)
     }
 
-    return c.json({
+    const responseBody = {
       ok: result.ok,
       reviewId: result.reviewId,
       reviewUrl: result.reviewUrl,
@@ -1120,7 +1268,8 @@ export function createApp(
       authSource: result.authSource,
       error: result.error,
       dryRun: false,
-    })
+    }
+    return result.ok ? c.json(responseBody) : c.json(responseBody, 502)
   })
 
   // ── Agent handoff: "agent waits, human releases" ──────────────────────────

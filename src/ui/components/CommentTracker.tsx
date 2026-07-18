@@ -22,7 +22,7 @@ interface CommentTrackerProps {
   resolveComment: (id: string) => void
   unresolveComment: (id: string) => void
   removeComment: (id: string) => void
-  addReply: (id: string, body: string) => void
+  addReply: (id: string, body: string) => unknown | Promise<unknown>
   editComment: (id: string, body: string) => void
   editReply: (commentId: string, replyId: string, body: string) => void
   removeReply: (commentId: string, replyId: string) => void
@@ -208,6 +208,7 @@ function CommentCard({
   const [replying, setReplying] = useState(false)
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [replyError, setReplyError] = useState<string | null>(null)
 
   const jump = useCallback(() => {
     if (comment.lineNumber > 0) {
@@ -320,16 +321,27 @@ function CommentCard({
       )}
 
       {replying && (
-        <CommentForm
-          draftKey={`reply:${comment.id}`}
-          onCancel={() => setReplying(false)}
-          onSubmit={(body) => {
-            addReply(comment.id, body)
-            haptic('light'); sound('success')
-            setReplying(false)
-            setExpanded(true)
-          }}
-        />
+        <div className="cmt-reply-composer">
+          <CommentForm
+            draftKey={`reply:${comment.id}`}
+            onCancel={() => {
+              setReplying(false)
+              setReplyError(null)
+            }}
+            onSubmit={async (body) => {
+              setReplyError(null)
+              setExpanded(true)
+              try {
+                await addReply(comment.id, body)
+                haptic('light'); sound('success')
+                setReplying(false)
+              } catch (error) {
+                setReplyError(error instanceof Error ? error.message : 'Failed to save reply')
+              }
+            }}
+          />
+          {replyError && <p className="cmt-reply-error" role="alert">{replyError}</p>}
+        </div>
       )}
     </li>
   )
@@ -380,4 +392,3 @@ function ReplyRow({
     </li>
   )
 }
-
