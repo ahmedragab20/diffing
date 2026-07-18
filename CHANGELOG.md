@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+## 0.8.0
+
+### Minor Changes
+
+- Live plan editing on the plan review page (`/plan`).
+
+  **Edit the plan in the browser**
+  - Enter Edit (`e` or pencil) on the current version: Source becomes a line-numbered markdown editor with live Read preview (prefers Split).
+  - Debounced **autosave** via existing `PUT /api/plans/:id` — mutates the current version only (no version bump, decision preserved); rewrites `plan-sources/<id>.md`.
+  - **⌘/Ctrl+S** flushes autosave immediately; status chip shows Unsaved / Saving / Saved / error.
+  - **Save as new version** (confirm) uses `POST /api/plans` with the same id — version bump, decision → `pending` (same as agent resubmit).
+  - Title is inline-editable while editing; historical versions stay read-only.
+  - New comments are disabled in edit mode; existing threads remain resolvable.
+
+  **Split pane + face-sync**
+  - Edit + Split locks Source and Read to independent viewport-height scrollers so the caret does not jump.
+  - Active Source line faces the matching Read segment by scrolling **only** the Read pane (never `window.scrollTo`).
+
+  **Discard edits**
+  - **Original** snapshot is pinned on first enter for a plan version (survives exit/re-enter).
+  - **Recent** = this session’s start. Discard is dual-choice only when re-entering after prior autosaves *and* making further edits; otherwise a single action (discard session or roll back to original).
+  - Leaving edit after session changes shows an **Edits saved** notice explaining the re-entry baseline.
+  - **Esc** opens Discard while editing (works in the textarea); Esc with nothing to discard exits edit mode.
+
+  **API / hooks / tests**
+  - UI wires `updatePlan` (PUT) and `submitPlanVersion` (POST) in `usePlans`.
+  - Endpoint and component tests cover in-place PUT, version bump, edit/discard flows, and line-sync helpers.
+
+  **Docs**
+  - README, `docs/cli.md`, `AGENTS.md`, and plan-review skills document live edit, shortcuts, and PUT vs POST semantics.
+
 ## 0.7.0
 
 ### Minor Changes

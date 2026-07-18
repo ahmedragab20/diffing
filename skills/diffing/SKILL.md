@@ -54,7 +54,7 @@ Shared by code review and plan review agent XML:
 | Severity (optional) | `blocking` \| `nit` \| `question` \| `praise`; omit = untriaged |
 | Body / code context | Markdown body + optional `<code>` / quote / source snapshot |
 
-UI supports multi-line selection, range adjust, collapsible threads, and severity dropdown. Plan Read mode shows inline comments under sections; `c` toggles comments map; `z` toggles zen Read; `m` cycles Source/Read/Split.
+UI supports multi-line selection, range adjust, collapsible threads, and severity dropdown. Plan Read mode shows inline comments under sections; `c` toggles comments map; `z` toggles zen Read; `m` cycles Source/Read/Split; `e` live-edits the plan (autosave PUT / Save as new version POST; Esc discard).
 
 ## Behavioral contract
 

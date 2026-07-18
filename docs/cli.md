@@ -379,9 +379,11 @@ diffing plan resolve <commentId>
 The browser plan surface (`/plan`, `/plan/:id`) is the human half of this loop:
 
 - **Source / Read / Split** — view mode is always visible in the plan toolbar; `m` cycles modes.
-- **Zen Read** — `z` toggles immersive full-width focus (switches to Read if needed); toolbar expand control does the same; Esc exits. Preference is persisted.
+- **Zen Read** — `z` toggles immersive full-width focus (switches to Read if needed); toolbar expand control does the same; Esc exits zen when not editing. Preference is persisted.
+- **Live plan edit** — `e` or the pencil control edits the **current** version’s markdown and title (Source editor + live Read preview; prefers Split). Debounced **autosave** uses `PUT /api/plans/:id` (no version bump; decision kept; mirrors `plan-sources/<id>.md`). **⌘/Ctrl+S** flushes save. **Save as new version** confirms then `POST /api/plans` with the same id (version++, decision `pending`). Historical versions stay read-only. New comments are disabled while editing.
+- **Discard** — Esc (or the discard control) opens discard UI. Session **recent** edits restore to when this edit session started; **original** is pinned on first enter for that plan version and survives exit/re-enter. Dual choice only when original ≠ session *and* the session has further edits; otherwise a single action. Exiting after session changes shows an “Edits saved” notice.
 - **Outline / Comments map** — `o` toggles the left TOC; `c` toggles the right comments rail (also header icons).
-- **Resizable split** — drag the divider between Source and Read; double-click resets 50/50.
+- **Resizable split** — drag the divider between Source and Read; double-click resets 50/50. Edit mode uses independent pane scroll so face-sync only moves Read.
 - **Inline comments** — Source: select lines or gutter `+` (range-aware). Read: highlight text → Add comment (multiple floating drafts, range steppers, minimize tray). **Submitted threads always render inline in Read** under the matching section.
 - **Severity** — optional `blocking` | `nit` | `question` | `praise` on plan comments (same as code review; included in handoff XML).
 - **Collapsible threads** — collapse cards and in-card source preview; delete resolved comments/replies.

@@ -74,11 +74,13 @@ The human reviews at `/plan` or `/plan/<id>`:
 | Feature | Behavior |
 |---------|----------|
 | Source / Read / Split | `m` cycles modes; toolbar switches the same modes |
-| Zen Read | `z` toggles full-width focus (switches to Read if needed); Esc exits |
+| Zen Read | `z` toggles full-width focus (switches to Read if needed); Esc exits zen when not editing |
+| Live edit | `e` / pencil: edit current version markdown + title; autosave `PUT` (no version bump); Save as new version = `POST` same id; Esc opens Discard |
+| Discard | Recent = this session; original = first enter for this version (survives exit/re-enter). Dual choice only when both apply |
 | Comments map (right rail) | `c` toggles; lists open threads with `L` / `Lstart–Lend` labels |
-| Inline comments | Source: gutter + / line selection; Read: text highlight → Add comment; multi-line ranges with optional severity |
+| Inline comments | Source: gutter + / line selection; Read: text highlight → Add comment; multi-line ranges with optional severity (paused while live-editing) |
 | Read mode threads | Comments render inline under the matching section (React-owned; survives mode switches) |
 | Comment cards | Collapsible thread; collapsible source preview inside the card |
 | Submit review | Verdict that unblocks `plan await` |
 
-Plans may be versioned; comments are version-anchored when the human browses history.
+Plans may be versioned; comments are version-anchored when the human browses history. Human in-page edits use `PUT` (same version) unless they explicitly Save as new version.

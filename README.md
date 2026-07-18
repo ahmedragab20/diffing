@@ -149,10 +149,12 @@ Full keyboard-driven navigation with vim-like motions and a modal status bar:
 |-----|--------|
 | `m` | Cycle Source → Read → Split |
 | `z` | Toggle zen reading (switches to Read if needed); Esc also exits zen |
+| `e` | Toggle **live plan edit** (current version; prefers Split + source editor) |
+| `⌘/Ctrl+S` | While editing: flush autosave now |
 | `o` | Toggle Outline (left TOC) |
 | `c` | Toggle Comments map (right rail) |
 | `J` / `K` | Next / previous plan |
-| Esc | Exit zen / dismiss Add-comment chip / close draft |
+| Esc | Edit mode: open Discard (or exit edit if nothing to discard); else exit zen / dismiss Add-comment chip / close draft |
 
 A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), file path, and a help button. Multi-key sequences use an 800ms key buffer.
 
@@ -411,8 +413,9 @@ sections and **approve**, **request changes**, **reject**, or **comment only**
 ```
 
 - **Source / Read / Split** — always-visible view modes in the plan toolbar (`m` cycles). Read uses full main-column width; **Zen** (`z`) immersive full-width focus (Esc exits).
-- **Resizable split** — drag the Source|Read divider; double-click resets 50/50.
-- **Renders any markdown plan** — Source via `@pierre/diffs` (commentable lines); Read as polished markdown with outline (`o`) and comments map (`c`).
+- **Live plan edit** — `e` / pencil edits markdown + title on the current version with a Source editor and live Read preview. **Autosave** (`PUT /api/plans/:id`, no version bump); **⌘S** to flush; **Save as new version** (`POST` same id, version bump + decision pending). **Discard** (Esc) restores this session and/or rolls back to the pre-edit original across exit/re-enter. New comments are paused while editing.
+- **Resizable split** — drag the Source|Read divider; double-click resets 50/50. Edit mode uses independent pane scroll so the caret stays put.
+- **Renders any markdown plan** — Source via `@pierre/diffs` when viewing (commentable lines); Read as polished markdown with outline (`o`) and comments map (`c`).
 - **Line, range & section comments** — gutter `+` or select lines (Source); highlight text → Add comment in Read (multiple floating drafts, range steppers, minimize tray, Esc). **Read mode always shows submitted threads inline** under the matching section.
 - **Severity** — optional blocking / nit / question / praise on plan comments (same labels as code review; included in `<plan-review>` handoff XML).
 - **Collapsible threads** — collapse open or resolved cards; collapse the in-card source preview; delete resolved comments and replies.
@@ -420,7 +423,7 @@ sections and **approve**, **request changes**, **reject**, or **comment only**
 - **Four-way verdict** — Approve / Request changes / Reject / Comment only (no file edits). Resubmit with the same id bumps version and re-opens review.
 - **Browse plan versions** — version dropdown, historical banner, comments filtered to the viewed version. CLI / MCP / HTTP as below.
 - **Live "Plans" badge** — toolbar badge for plans awaiting review; green dot when an agent is waiting.
-- **Same channels everywhere** — CLI (`diffing plan …`), MCP (`submit_plan`, `await_plan_review`, …), HTTP (`POST /api/plans`, `POST /api/plans/:id/decision`, `GET /api/plan-review/await`).
+- **Same channels everywhere** — CLI (`diffing plan …`), MCP (`submit_plan`, `await_plan_review`, …), HTTP (`POST /api/plans`, `PUT /api/plans/:id` for in-page edit, `POST /api/plans/:id/decision`, `GET /api/plan-review/await`).
 - **Scratch outside the tree** — plan sources under `~/.diffing/<repo>/plan-sources/` (`--save-source`); never commit agent plans into the consumer project.
 
 ### Plan Review XML Specification
@@ -737,7 +740,7 @@ For advanced features, internal API endpoints, sequence specifications, and conf
 > - Web API endpoints (`/api/review/await`, `/api/comments`, `/api/plans`, `/api/agent/progress`, …).
 > - Agent guidance: root [`Agents.md`](Agents.md) and installable skills under `skills/`.
 
-Changelog for the latest release: [`CHANGELOG.md`](CHANGELOG.md) (current package version **0.7.0**).
+Changelog for the latest release: [`CHANGELOG.md`](CHANGELOG.md) (current package version **0.8.0**).
 
 
 ---

@@ -150,7 +150,7 @@ diffing plan resolve <comment-id>
 
 ### Plan UI (human)
 
-Source / Read / Split (`m`), zen Read (`z`), outline (`o`), comments map (`c`), resizable split, inline comments on Source and Read (with severity + multi-line ranges), Submit review for verdict. See `docs/cli.md` §4b Plan review UI.
+Source / Read / Split (`m`), zen Read (`z`), **live edit** (`e` — autosave via `PUT`, Save as new version via `POST`, Discard / Esc for recent vs original rollback), outline (`o`), comments map (`c`), resizable split, inline comments on Source and Read (with severity + multi-line ranges), Submit review for verdict. See `docs/cli.md` §4b Plan review UI.
 
 ---
 
