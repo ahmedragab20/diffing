@@ -91,6 +91,28 @@ describe('formatPlanReview', () => {
     expect(out).toContain('<source line="4"><![CDATA[Do the first thing]]></source>')
   })
 
+  it('emits severity on plan comments for the agent handoff', () => {
+    const out = formatPlanReview({
+      ...base,
+      comments: [
+        {
+          id: 'c1',
+          lineNumber: 4,
+          lineContent: 'Do the first thing',
+          sectionTitle: 'Phase 1',
+          severity: 'blocking',
+          body: 'Must fix',
+          status: 'open',
+          createdAt: 3000,
+          createdAtPlanVersion: 1,
+          replies: [],
+        },
+      ],
+    })
+    expect(out).toContain('severity="blocking"')
+    expect(out).toContain('severity="blocking|nit|question|praise"')
+  })
+
   it('renders a range comment and a whole-plan comment label', () => {
     const out = formatPlanReview({
       ...base,

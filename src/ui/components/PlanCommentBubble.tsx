@@ -78,6 +78,11 @@ export function PlanCommentBubble({
           {isRange ? `L${comment.startLineNumber}-${comment.lineNumber}` : `L${comment.lineNumber}`}
         </span>
       )}
+      {comment.severity && comment.severity !== 'none' && (
+        <span className={`plan-comment-severity plan-comment-severity-${comment.severity}`}>
+          {comment.severity}
+        </span>
+      )}
     </>
   )
 

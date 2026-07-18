@@ -52,7 +52,12 @@ describe('formatComments', () => {
   it('emits severity attribute when set (skips none)', () => {
     const out = formatComments([{ ...base, severity: 'blocking' }])
     expect(out).toContain('severity="blocking"')
-    expect(formatComments([{ ...base, severity: 'none' }])).not.toContain('severity=')
+    // Instructions mention the vocabulary; the <comment> tag itself must not
+    // carry severity when unset / none.
+    const noneOut = formatComments([{ ...base, severity: 'none' }])
+    expect(noneOut).not.toMatch(/<comment[^>]*\sseverity=/)
+    const bareOut = formatComments([base])
+    expect(bareOut).not.toMatch(/<comment[^>]*\sseverity=/)
   })
 
   it('renders a line range when startLineNumber differs', () => {

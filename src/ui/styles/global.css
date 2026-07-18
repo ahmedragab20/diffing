@@ -9160,17 +9160,27 @@ button.toolbar-last-send-btn:hover {
     background: var(--bg-elevated, var(--bg-secondary));
     box-shadow: var(--shadow-md);
 }
-/* Pinned next to the highlight (viewport coords from selection popup). */
+/* Quote-selection composer: fixed, but clamped into the plan content pane. */
 .plan-selection-comment-floating {
     position: fixed;
     z-index: 110;
     margin: 0;
-    width: min(400px, calc(100vw - 32px));
+    max-width: min(400px, calc(100vw - 32px));
     max-height: min(70vh, 520px);
     overflow: auto;
     border: 1px solid var(--primary);
     box-shadow: var(--shadow-lg);
     opacity: 1;
+}
+/* Whole-line / block comment from rendered mode: in document flow, not floating. */
+.plan-selection-comment-docked {
+    position: relative;
+    z-index: 2;
+    margin: 16px 0 0;
+    width: 100%;
+    max-width: none;
+    border: 1px solid var(--border-strong, var(--border-color));
+    box-shadow: var(--shadow-md);
 }
 .plan-selection-comment-meta {
     font-size: 12px;
@@ -9224,6 +9234,38 @@ button.toolbar-last-send-btn:hover {
     white-space: pre-wrap;
     word-break: break-word;
     line-height: 1.4;
+}
+.plan-comment-severity {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: var(--radius-round, 999px);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+.plan-comment-severity-blocking {
+    color: var(--feedback-danger-text, #f87171);
+    border-color: var(--feedback-danger-border, rgba(248, 113, 113, 0.4));
+    background: var(--feedback-danger-bg, rgba(248, 113, 113, 0.12));
+}
+.plan-comment-severity-nit {
+    color: var(--text-muted);
+}
+.plan-comment-severity-question {
+    color: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+    background: var(--accent-subtle);
+}
+.plan-comment-severity-praise {
+    color: var(--feedback-success-text, #4ade80);
+    border-color: var(--feedback-success-border, rgba(74, 222, 128, 0.4));
+    background: var(--feedback-success-bg, rgba(74, 222, 128, 0.12));
 }
 
 /* Comments map rail */

@@ -63,9 +63,13 @@ interface PendingComment {
   /** Exact text the user highlighted in the rendered pane (agent quote). */
   selectedQuote?: string
   /**
+   * `float` = quote selection, clamped inside the plan content pane.
+   * `dock`  = whole-line / block comment, non-floating panel under the plan body.
+   */
+  presentation?: 'float' | 'dock'
+  /**
    * Viewport position for a floating composer (from the selection popup).
-   * When set, the form opens next to the selection instead of at the
-   * bottom of the document.
+   * Only used when presentation === 'float'.
    */
   anchor?: { x: number; y: number; placement: 'above' | 'below' }
 }
@@ -255,7 +259,11 @@ export function PlanReview({
 
   const lineRange = (start: number | undefined, end: number) => extractPlanLines(viewingBody, start ?? end, end)
 
-  const commitComment = (p: PendingComment, body: string) => {
+  const commitComment = (
+    p: PendingComment,
+    body: string,
+    severity?: import('../../lib/types').CommentSeverity,
+  ) => {
     const start = p.startLineNumber ?? p.lineNumber
     const sourceLines = lineRange(p.startLineNumber, p.lineNumber)
     const quote = p.selectedQuote?.trim()
@@ -269,11 +277,49 @@ export function PlanReview({
       selectedQuote: quote && quote !== sourceLines.trim() ? quote : quote || undefined,
       sectionTitle: sectionTitleForLine(viewingBody, start),
       body,
+      severity: severity && severity !== 'none' ? severity : undefined,
       createdAtPlanVersion: viewingVersion,
     })
     setPending(null)
     setSelectedRange(null)
+    setLiveSelectionCount(0)
   }
+
+  /** Clamp a floating panel into the plan content viewport (not over sidebars). */
+  const clampComposerPosition = useCallback(
+    (anchor: { x: number; y: number; placement: 'above' | 'below' }) => {
+      const host =
+        renderedRef.current?.closest('.plan-main') ??
+        renderedRef.current?.closest('main') ??
+        renderedRef.current
+      const bounds = host?.getBoundingClientRect()
+      const pad = 12
+      const panelW = Math.min(400, (bounds?.width ?? 400) - pad * 2)
+      const panelH = 360 // approximate; used for flip/clamp
+      const leftMin = (bounds?.left ?? 0) + pad
+      const leftMax = (bounds?.right ?? window.innerWidth) - panelW - pad
+      let left = anchor.x - panelW / 2
+      left = Math.max(leftMin, Math.min(left, leftMax))
+
+      let top = anchor.placement === 'below' ? anchor.y + 8 : anchor.y - 12
+      let placement = anchor.placement
+      const topMin = (bounds?.top ?? 0) + pad
+      const topMax = (bounds?.bottom ?? window.innerHeight) - pad
+
+      if (placement === 'below' && top + panelH > topMax) {
+        placement = 'above'
+        top = anchor.y - 12
+      }
+      if (placement === 'above' && top - panelH < topMin) {
+        placement = 'below'
+        top = anchor.y + 8
+      }
+      top = Math.max(topMin, Math.min(top, topMax - 80))
+
+      return { left, top, placement, panelW }
+    },
+    [],
+  )
 
   const annotations: LineAnnotation<PlanAnnotationMeta>[] = useMemo(() => {
     const list: LineAnnotation<PlanAnnotationMeta>[] = lineComments.map((c) => ({
@@ -297,7 +343,8 @@ export function PlanReview({
         <CommentForm
           draftKey={`plan-new:${plan.id}:${p.startLineNumber ?? p.lineNumber}:${p.lineNumber}`}
           lineContent={lineRange(p.startLineNumber, p.lineNumber)}
-          onSubmit={(body) => commitComment(p, body)}
+          showSeverity
+          onSubmit={(body, severity) => commitComment(p, body, severity)}
           onCancel={() => {
             setPending(null)
             setSelectedRange(null)
@@ -471,7 +518,7 @@ export function PlanReview({
           ? selectionPopup.startLine
           : undefined,
       selectedQuote: selectionPopup.text,
-      // Keep the composer pinned to where the user was reading.
+      presentation: 'float',
       anchor: {
         x: selectionPopup.x,
         y: selectionPopup.y,
@@ -484,6 +531,56 @@ export function PlanReview({
     setSelectionPopup(null)
     window.getSelection()?.removeAllRanges()
   }, [selectionPopup])
+
+  /** Whole-line / block comment from rendered mode — docked (not floating). */
+  const startDockedLineComment = useCallback(
+    (startLine: number, endLine: number, blockText?: string) => {
+      setSelectionPopup(null)
+      window.getSelection()?.removeAllRanges()
+      setPending({
+        lineNumber: endLine,
+        startLineNumber: startLine !== endLine ? startLine : undefined,
+        // No selectedQuote for whole-line comments — full source is the context.
+        selectedQuote: undefined,
+        presentation: 'dock',
+      })
+      setLiveSelectionCount(Math.abs(endLine - startLine) + 1)
+      // Scroll the docked panel into view after paint.
+      requestAnimationFrame(() => {
+        document.getElementById('plan-selection-comment')?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest',
+        })
+      })
+      void blockText
+    },
+    [],
+  )
+
+  const handleRenderedClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      handleMarkdownClick(e)
+      if (isHistorical || pending) return
+      // Don't steal clicks when the user just finished a drag-select.
+      const sel = window.getSelection()
+      if (sel && !sel.isCollapsed && sel.toString().trim().length > 1) return
+
+      const target = e.target as HTMLElement
+      if (target.closest('a, button, .md-code-copy, .md-heading-anchor')) return
+
+      const block = target.closest(
+        'p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, td, th',
+      ) as HTMLElement | null
+      if (!block || !renderedRef.current?.contains(block)) return
+
+      const text = (block.innerText || block.textContent || '').trim()
+      if (text.length < 2) return
+      const mapped = mapSelectionToLines(viewingBody, text)
+      if (!mapped) return
+      startDockedLineComment(mapped.startLine, mapped.endLine, text)
+    },
+    [handleMarkdownClick, isHistorical, pending, viewingBody, startDockedLineComment],
+  )
 
   // Dismiss the floating chip when the user scrolls — fixed positioning would
   // otherwise drift away from the selection and look like an overlap bug.
@@ -588,52 +685,62 @@ export function PlanReview({
       <div
         ref={renderedRef}
         className="markdown-body plan-rendered"
-        onClick={handleMarkdownClick}
+        onClick={handleRenderedClick}
         onMouseUp={handleRenderedMouseUp}
       >
         {!isHistorical && (
           <div className="plan-rendered-select-hint">
-            Highlight any text to add a comment
+            Highlight text for a quote comment · click a paragraph/heading to comment on that line
           </div>
         )}
         <Markdown content={viewingBody} />
+        {/* Docked line-comment composer (non-floating) lives in the content flow. */}
+        {pending &&
+          showRendered &&
+          pending.presentation === 'dock' &&
+          renderedSelectionComposer('dock')}
       </div>
     </div>
   )
 
-  /** Composer opened from rendered-pane selection — float next to the quote. */
-  const floatingSelectionComposer =
-    pending && showRendered && (pending.selectedQuote || pending.anchor) ? (
+  function renderedSelectionComposer(mode: 'float' | 'dock') {
+    if (!pending || !showRendered) return null
+    if (mode === 'float' && pending.presentation !== 'float') return null
+    if (mode === 'dock' && pending.presentation !== 'dock') return null
+
+    const section = sectionTitleForLine(
+      viewingBody,
+      pending.startLineNumber ?? pending.lineNumber,
+    )
+    const source = lineRange(pending.startLineNumber, pending.lineNumber)
+    const clamped =
+      mode === 'float' && pending.anchor
+        ? clampComposerPosition(pending.anchor)
+        : null
+
+    return (
       <div
         className={`plan-selection-comment ${
-          pending.anchor ? 'plan-selection-comment-floating' : ''
+          mode === 'float' ? 'plan-selection-comment-floating' : 'plan-selection-comment-docked'
         }`}
         id="plan-selection-comment"
         style={
-          pending.anchor
+          clamped
             ? {
-                left: Math.min(
-                  Math.max(16, pending.anchor.x - 200),
-                  typeof window !== 'undefined' ? window.innerWidth - 420 : 16,
-                ),
-                top:
-                  pending.anchor.placement === 'below'
-                    ? pending.anchor.y + 8
-                    : Math.max(8, pending.anchor.y - 12),
-                transform:
-                  pending.anchor.placement === 'above' ? 'translateY(-100%)' : undefined,
+                left: clamped.left,
+                top: clamped.top,
+                width: clamped.panelW,
+                transform: clamped.placement === 'above' ? 'translateY(-100%)' : undefined,
               }
             : undefined
         }
       >
         <div className="plan-selection-comment-meta">
-          Commenting on{' '}
+          {mode === 'dock' ? 'Line comment on ' : 'Commenting on '}
           {pending.startLineNumber && pending.startLineNumber !== pending.lineNumber
             ? `lines ${pending.startLineNumber}–${pending.lineNumber}`
             : `line ${pending.lineNumber}`}
-          {sectionTitleForLine(viewingBody, pending.startLineNumber ?? pending.lineNumber)
-            ? ` · § ${sectionTitleForLine(viewingBody, pending.startLineNumber ?? pending.lineNumber)}`
-            : ''}
+          {section ? ` · § ${section}` : ''}
         </div>
         <div className="plan-selection-comment-context">
           {pending.selectedQuote?.trim() ? (
@@ -642,14 +749,14 @@ export function PlanReview({
             </blockquote>
           ) : null}
           <pre className="plan-comment-source" aria-label="Source lines">
-            {lineRange(pending.startLineNumber, pending.lineNumber) || '(no source lines)'}
+            {source || '(no source lines)'}
           </pre>
         </div>
         <CommentForm
           draftKey={`plan-new:${plan.id}:${pending.startLineNumber ?? pending.lineNumber}:${pending.lineNumber}`}
-          lineContent={lineRange(pending.startLineNumber, pending.lineNumber)}
-          showSeverity={false}
-          onSubmit={(body) => commitComment(pending, body)}
+          lineContent={source}
+          showSeverity
+          onSubmit={(body, severity) => commitComment(pending, body, severity)}
           onCancel={() => {
             setPending(null)
             setSelectedRange(null)
@@ -657,7 +764,10 @@ export function PlanReview({
           }}
         />
       </div>
-    ) : null
+    )
+  }
+
+  const floatingSelectionComposer = renderedSelectionComposer('float')
 
   return (
     <div className="plan-review">

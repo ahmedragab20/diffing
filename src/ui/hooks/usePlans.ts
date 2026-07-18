@@ -33,6 +33,7 @@ interface AddCommentParams {
   selectedQuote?: string
   sectionTitle?: string
   body: string
+  severity?: import('../../lib/types').CommentSeverity
   /**
    * The plan version the comment is anchored to. Defaults to the plan's
    * current version; pass an older number when the user is commenting on a

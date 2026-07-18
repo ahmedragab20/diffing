@@ -88,6 +88,8 @@ export function formatPlanReview(plan: Plan, options: FormatPlanReviewOptions = 
     lines.push('      "section" names the nearest markdown heading for context. Only address comments with status="open".')
     lines.push('    - <context> is structured: <quote> is the exact text the human highlighted (when present);')
     lines.push('      <source line="N" end-line="M"> is the full plan source line(s). Prefer <quote> when deciding what they meant.')
+    lines.push('    - Optional severity="blocking|nit|question|praise" on <comment>: treat blocking as must-fix,')
+    lines.push('      nit as optional polish, question as needing an answer, praise as positive note (no action required).')
     lines.push('')
     lines.push('    HOW TO RESPOND:')
     lines.push('    - If approved: proceed with the work.')
@@ -128,8 +130,12 @@ export function formatPlanReview(plan: Plan, options: FormatPlanReviewOptions = 
       const sectionAttr = comment.sectionTitle ? ` section="${escapeAttr(comment.sectionTitle)}"` : ''
       const isoDate = new Date(comment.createdAt).toISOString()
       const versionAttr = ` plan-version="${comment.createdAtPlanVersion ?? plan.version}"`
+      const severityAttr =
+        comment.severity && comment.severity !== 'none'
+          ? ` severity="${comment.severity}"`
+          : ''
       lines.push(
-        `      <comment id="${escapeAttr(comment.id)}" line="${lineLabel(comment)}"${sectionAttr} status="${comment.status}" created-at="${isoDate}"${versionAttr}>`,
+        `      <comment id="${escapeAttr(comment.id)}" line="${lineLabel(comment)}"${sectionAttr} status="${comment.status}"${severityAttr} created-at="${isoDate}"${versionAttr}>`,
       )
       if (comment.lineNumber !== 0 && (comment.lineContent || comment.selectedQuote)) {
         const start = comment.startLineNumber && comment.startLineNumber !== comment.lineNumber

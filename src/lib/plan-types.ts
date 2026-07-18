@@ -1,4 +1,4 @@
-import type { CommentReply } from './types.js'
+import type { CommentReply, CommentSeverity } from './types.js'
 
 /**
  * Plan review data model. A "plan" is any markdown document an AI agent emits
@@ -41,6 +41,11 @@ export interface PlanComment {
   selectedQuote?: string
   /** Nearest preceding markdown heading, captured so the agent knows the section. */
   sectionTitle?: string
+  /**
+   * Optional triage severity (same vocabulary as diff comments).
+   * Emitted as `severity="blocking|nit|question|praise"` in the agent handoff.
+   */
+  severity?: CommentSeverity
   body: string
   status: 'open' | 'resolved'
   createdAt: number

@@ -1368,6 +1368,15 @@ export function createApp(
       typeof body.selectedQuote === 'string' && body.selectedQuote.trim()
         ? body.selectedQuote.trim()
         : undefined
+    const severityRaw = body.severity
+    const severity =
+      severityRaw === 'blocking' ||
+      severityRaw === 'nit' ||
+      severityRaw === 'question' ||
+      severityRaw === 'praise' ||
+      severityRaw === 'none'
+        ? severityRaw
+        : undefined
     const comment = {
       id: crypto.randomUUID(),
       lineNumber,
@@ -1380,6 +1389,7 @@ export function createApp(
       createdAt: Date.now(),
       createdAtPlanVersion,
       replies: [],
+      ...(severity && severity !== 'none' ? { severity } : {}),
     }
     const updated = await plans.addComment(planId, comment)
     if (!updated) return c.json({ error: 'Plan not found' }, 404)
