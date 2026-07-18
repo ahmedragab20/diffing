@@ -66,5 +66,4 @@ the page was verified against the `diffing` source.
 | `main.js` | All behavior: audio synth, haptics, themes, boot animation, shell, diff showcase, carousel, keybindings, vim bar, toast, help overlay. |
 | `BUILD-SPEC.md` | The build specification this page implements. |
 
-Repo: <https://github.com/ahmedragab20/diffing> · Originally forked from
-[wong2/diffx](https://github.com/wong2/diffx). MIT.
+Repo: <https://github.com/ahmedragab20/diffing> · MIT.
