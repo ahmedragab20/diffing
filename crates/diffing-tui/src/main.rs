@@ -23,6 +23,7 @@ mod app;
 mod diff;
 mod handoff;
 mod keys;
+mod lsp;
 mod persistence;
 mod server_lock;
 mod themes;

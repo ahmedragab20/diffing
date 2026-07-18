@@ -5,12 +5,11 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, StatefulWidget, Widget};
+use ratatui::widgets::{List, ListItem, StatefulWidget};
 
 use crate::themes::Palette;
 use crate::ui::file_tree::{FileNodeKind, FileTree};
-
-const FILE_TREE_TITLE: &str = " files ";
+use crate::ui::gridline::{fill, focus_rail};
 
 pub fn render_file_tree(
     tree: &FileTree,
@@ -18,23 +17,42 @@ pub fn render_file_tree(
     focused: bool,
     scroll: usize,
     palette: &Palette,
-    _files: &[FileDiff],
+    files: &[FileDiff],
     buf: &mut Buffer,
 ) {
-    let border_color = if focused {
-        palette.border_focused
-    } else {
-        palette.border
-    };
-    let title_style = Style::default().fg(palette.fg).add_modifier(Modifier::BOLD);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .style(Style::default().bg(palette.panel))
-        .border_style(Style::default().fg(border_color))
-        .title(Span::styled(FILE_TREE_TITLE, title_style));
-    let inner = block.inner(area);
-    block.render(area, buf);
+    fill(area, palette.panel, buf);
+    focus_rail(area, focused, palette, buf);
+    if area.width > 0 {
+        for y in area.y..area.y.saturating_add(area.height) {
+            buf[(area.x + area.width - 1, y)]
+                .set_symbol("│")
+                .set_style(Style::default().fg(palette.border).bg(palette.panel));
+        }
+    }
+    buf.set_string(
+        area.x + 2,
+        area.y,
+        "FILES",
+        Style::default()
+            .fg(palette.fg)
+            .bg(palette.panel)
+            .add_modifier(Modifier::BOLD),
+    );
+    let count = files.len().to_string();
+    if count.len() as u16 + 3 < area.width {
+        buf.set_string(
+            area.x + area.width - count.len() as u16 - 2,
+            area.y,
+            count,
+            Style::default().fg(palette.dim).bg(palette.panel),
+        );
+    }
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
 
     let body_height = inner.height as usize;
     let items: Vec<ListItem> = tree
@@ -103,6 +121,12 @@ fn build_item<'a>(
         spans.push(Span::styled(
             viewed_dot.to_string(),
             Style::default().fg(palette.dim),
+        ));
+    }
+    if node.comment_count > 0 {
+        spans.push(Span::styled(
+            format!("  [{}]", node.comment_count),
+            Style::default().fg(palette.comment),
         ));
     }
     ListItem::new(Line::from(spans))

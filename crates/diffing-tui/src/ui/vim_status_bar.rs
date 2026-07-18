@@ -34,24 +34,21 @@ pub fn render_status_bar(
         .add_modifier(Modifier::BOLD);
     let file_style = Style::default().fg(palette.fg);
     let mut spans: Vec<Span<'static>> = vec![
-        Span::styled("─".to_string(), dim),
-        Span::styled(" ".to_string(), bg),
-        Span::styled(format!(" {} ", context.mode), accent),
-        Span::styled(" ".to_string(), bg),
+        Span::styled(
+            format!(" {} ", context.mode),
+            accent.bg(palette.status_bar_bg),
+        ),
+        Span::styled("  ".to_string(), bg),
     ];
     if let Some(f) = context.current_file {
         spans.push(Span::styled(f.to_string(), file_style));
     } else {
         spans.push(Span::styled("(no file)", dim));
     }
-    spans.push(Span::styled(" ".to_string(), bg));
     spans.push(Span::styled(
-        format!("  {}/{}", context.file_idx + 1, context.file_count.max(1)),
+        format!(" · {}/{}", context.file_idx + 1, context.file_count.max(1)),
         dim,
     ));
-    spans.push(Span::styled(" ".to_string(), bg));
-    // Keymap hint.
-    spans.push(Span::styled(format!("  {}", context.hint), dim));
 
     let line = Line::from(spans);
     let mut cx = area.x;
@@ -65,6 +62,17 @@ pub fn render_status_bar(
             cell.set_style(span.style);
             cx += 1;
         }
+    }
+
+    let hint = format!("{}  ", context.hint);
+    let hint_width = hint.chars().count() as u16;
+    if hint_width + 2 < area.width && area.x + area.width - hint_width > cx + 1 {
+        buf.set_string(
+            area.x + area.width - hint_width,
+            area.y,
+            hint,
+            dim.bg(palette.status_bar_bg),
+        );
     }
 }
 

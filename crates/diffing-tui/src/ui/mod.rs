@@ -5,5 +5,7 @@ pub mod comment_tracker;
 pub mod file_diff_card;
 pub mod file_tree;
 pub mod file_tree_render;
+pub mod gridline;
 pub mod send_review_popover;
+pub mod settings_sheet;
 pub mod vim_status_bar;

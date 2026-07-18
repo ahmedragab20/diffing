@@ -3,7 +3,7 @@
 //! inside the comment tracker (each row).
 
 #[allow(unused_imports)]
-use diffing_core::comments::{CommentReply, CommentStatus, ReviewComment};
+use diffing_core::comments::{CommentReply, CommentSide, CommentStatus, ReviewComment};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -22,10 +22,14 @@ pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf
         CommentStatus::Open => "open",
         CommentStatus::Resolved => "resolved",
     };
-    let title = format!(" {} · {} ", comment.file_path, status_label);
+    let title = format!(
+        " {} · {} ",
+        comment_location_label(comment, &comment.file_path),
+        status_label
+    );
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .border_type(BorderType::Plain)
         .style(Style::default().bg(palette.elevated))
         .border_style(Style::default().fg(status_color))
         .title(Span::styled(
@@ -35,11 +39,16 @@ pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf
     let inner = block.inner(area);
     block.render(area, buf);
 
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(Span::styled(
-        comment.body.clone(),
-        Style::default().fg(palette.fg),
-    )));
+    let mut lines: Vec<Line> = comment
+        .body
+        .split('\n')
+        .map(|body_line| {
+            Line::from(Span::styled(
+                body_line.to_string(),
+                Style::default().fg(palette.fg),
+            ))
+        })
+        .collect();
     for reply in &comment.replies {
         let prefix = match reply.role.as_deref() {
             Some("agent") => "↳ agent",
@@ -55,7 +64,7 @@ pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf
             format!("{prefix}{model}"),
             Style::default().fg(palette.dim),
         )));
-        for rl in reply.body.lines() {
+        for rl in reply.body.split('\n') {
             lines.push(Line::from(Span::styled(
                 format!("  {rl}"),
                 Style::default().fg(palette.fg),
@@ -69,6 +78,7 @@ pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf
 pub fn render_tracker_row(
     comment: &ReviewComment,
     is_cursor: bool,
+    outdated: bool,
     palette: &Palette,
 ) -> ListItem<'static> {
     let marker = match comment.status {
@@ -80,11 +90,7 @@ pub fn render_tracker_row(
         CommentStatus::Resolved => palette.dim,
     };
     let file = shorten_path(&comment.file_path);
-    let line = if comment.line_number == 0 {
-        "(file)".to_string()
-    } else {
-        format!("{}:{}", file, comment.line_number)
-    };
+    let line = comment_location_label(comment, &file);
     let body = comment
         .body
         .lines()
@@ -99,13 +105,26 @@ pub fn render_tracker_row(
     } else {
         String::new()
     };
+    let body_lines = comment.body.split('\n').count();
+    let body_suffix = if body_lines > 1 {
+        format!("  ↵{body_lines}")
+    } else {
+        String::new()
+    };
     let mut spans: Vec<Span<'static>> = vec![
         Span::styled(format!("{marker} "), Style::default().fg(marker_color)),
         Span::styled(
             format!("{:<24}", truncate(&line, 24)),
             Style::default().fg(palette.comment),
         ),
+        Span::styled(
+            if outdated { " ! outdated" } else { "" },
+            Style::default()
+                .fg(palette.removed)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(format!(" {body}"), Style::default().fg(palette.fg)),
+        Span::styled(body_suffix, Style::default().fg(palette.dim)),
         Span::styled(reply_suffix, Style::default().fg(palette.dim)),
     ];
     if is_cursor {
@@ -123,6 +142,24 @@ pub fn render_tracker_row(
         spans.insert(0, Span::styled("  ".to_string(), Style::default()));
     }
     ListItem::new(Line::from(spans))
+}
+
+fn comment_location_label(comment: &ReviewComment, path: &str) -> String {
+    if comment.line_number == 0 {
+        return format!("{path} · file");
+    }
+    let side = match comment.side {
+        CommentSide::Additions => "new",
+        CommentSide::Deletions => "old",
+    };
+    match comment.start_line_number {
+        Some(start) if start != comment.line_number => format!(
+            "{path}:{}–{} · {side}",
+            start.min(comment.line_number),
+            start.max(comment.line_number)
+        ),
+        _ => format!("{path}:{} · {side}", comment.line_number),
+    }
 }
 
 fn shorten_path(p: &str) -> String {
@@ -168,6 +205,7 @@ mod tests {
                 role: Some("agent".to_string()),
                 model: Some("gpt-4o".to_string()),
             }],
+            severity: None,
         }
     }
 
@@ -175,7 +213,7 @@ mod tests {
     fn tracker_row_marks_open_status() {
         let c = sample_comment();
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
-        let item = render_tracker_row(&c, false, &palette);
+        let item = render_tracker_row(&c, false, false, &palette);
         // We can't easily inspect a ListItem's text, but at least make sure
         // it builds without panicking.
         let _ = item;
@@ -186,7 +224,7 @@ mod tests {
         let mut c = sample_comment();
         c.body = "x".repeat(200);
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
-        let _ = render_tracker_row(&c, true, &palette);
+        let _ = render_tracker_row(&c, true, false, &palette);
     }
 
     #[test]
@@ -196,5 +234,40 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
         render_thread(&c, area, &palette, &mut buf);
+    }
+
+    #[test]
+    fn range_labels_are_normalized_and_side_explicit() {
+        let mut c = sample_comment();
+        c.start_line_number = Some(45);
+        c.line_number = 42;
+        c.side = CommentSide::Deletions;
+        assert_eq!(
+            comment_location_label(&c, "src/a.rs"),
+            "src/a.rs:42–45 · old"
+        );
+    }
+
+    #[test]
+    fn thread_renders_every_comment_body_line() {
+        let mut c = sample_comment();
+        c.start_line_number = Some(40);
+        c.body = "first line\nsecond line\nthird line".to_string();
+        let area = Rect::new(0, 0, 72, 10);
+        let mut buf = Buffer::empty(area);
+        let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
+        render_thread(&c, area, &palette, &mut buf);
+        let rendered = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("first line"));
+        assert!(rendered.contains("second line"));
+        assert!(rendered.contains("third line"));
+        assert!(rendered.contains("40–42 · new"));
     }
 }

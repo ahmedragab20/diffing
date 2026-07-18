@@ -20,7 +20,6 @@ pub struct FileNode {
     pub file_diff_idx: Option<usize>,
     pub expanded: bool,
     pub viewed: bool,
-    #[allow(dead_code)]
     pub comment_count: u32,
     pub change_marker: char,
 }
@@ -35,6 +34,7 @@ pub struct FileTree {
     pub nodes: Vec<FileNode>,
     pub cursor: usize,
     all_nodes: Vec<FileNode>,
+    filtered_file_indices: Vec<usize>,
     file_positions: HashMap<usize, usize>,
     collapsed: std::collections::HashSet<PathBuf>,
 }
@@ -105,6 +105,7 @@ impl FileTree {
             all_nodes: nodes.clone(),
             nodes,
             cursor,
+            filtered_file_indices: (0..files.len()).collect(),
             file_positions: HashMap::new(),
             collapsed: std::collections::HashSet::new(),
         };
@@ -184,10 +185,55 @@ impl FileTree {
         }
     }
 
+    pub fn set_comment_count(&mut self, file_idx: usize, count: u32) {
+        for node in self
+            .nodes
+            .iter_mut()
+            .chain(self.all_nodes.iter_mut())
+            .filter(|node| node.file_diff_idx == Some(file_idx))
+        {
+            node.comment_count = count;
+        }
+    }
+
+    pub fn apply_filter(&mut self, query: &str, unviewed_only: bool, comments_only: bool) {
+        let query = query.trim().to_ascii_lowercase();
+        let matching_files: Vec<usize> = self
+            .all_nodes
+            .iter()
+            .filter(|node| node.kind == FileNodeKind::File)
+            .filter(|node| {
+                query.is_empty()
+                    || node
+                        .path
+                        .to_string_lossy()
+                        .to_ascii_lowercase()
+                        .contains(&query)
+            })
+            .filter(|node| !unviewed_only || !node.viewed)
+            .filter(|node| !comments_only || node.comment_count > 0)
+            .filter_map(|node| node.file_diff_idx)
+            .collect();
+        let selected = self.nodes.get(self.cursor).map(|node| node.path.clone());
+        self.filtered_file_indices = matching_files;
+        self.rebuild_visible(selected);
+    }
+
     fn rebuild_visible(&mut self, selected_path: Option<PathBuf>) {
+        let filtered = &self.filtered_file_indices;
         self.nodes = self
             .all_nodes
             .iter()
+            .filter(|node| match node.kind {
+                FileNodeKind::File => node
+                    .file_diff_idx
+                    .is_some_and(|index| filtered.contains(&index)),
+                FileNodeKind::Dir => self.all_nodes.iter().any(|file| {
+                    file.file_diff_idx
+                        .is_some_and(|index| filtered.contains(&index))
+                        && file.path.starts_with(&node.path)
+                }),
+            })
             .filter(|node| {
                 node.kind == FileNodeKind::Dir
                     || !self
@@ -205,7 +251,12 @@ impl FileTree {
         self.cursor = selected_path
             .as_ref()
             .and_then(|path| self.nodes.iter().position(|node| &node.path == path))
-            .unwrap_or_else(|| self.cursor.min(self.nodes.len().saturating_sub(1)));
+            .or_else(|| {
+                self.nodes
+                    .iter()
+                    .position(|node| node.kind == FileNodeKind::File)
+            })
+            .unwrap_or(0);
         self.rebuild_positions();
     }
 
@@ -302,6 +353,38 @@ mod tests {
         assert_eq!(change_marker_for(&fd("x", ChangeKind::Added)), 'A');
         assert_eq!(change_marker_for(&fd("x", ChangeKind::Deleted)), 'D');
         assert_eq!(change_marker_for(&fd("x", ChangeKind::Renamed)), 'R');
+    }
+
+    #[test]
+    fn filters_preserve_original_file_indices() {
+        let files = vec![
+            fd("src/alpha.rs", ChangeKind::Modified),
+            fd("src/beta.rs", ChangeKind::Added),
+        ];
+        let mut tree = FileTree::build(&files);
+        tree.apply_filter("beta", false, false);
+        assert_eq!(tree.selected_file_idx(), Some(1));
+    }
+
+    #[test]
+    fn filters_survive_directory_collapse_and_expand() {
+        let files = vec![
+            fd("src/alpha.rs", ChangeKind::Modified),
+            fd("src/beta.rs", ChangeKind::Added),
+            fd("docs/beta.md", ChangeKind::Modified),
+        ];
+        let mut tree = FileTree::build(&files);
+        tree.apply_filter("alpha", false, false);
+        tree.cursor = 0;
+        tree.collapse_selected();
+        tree.expand_selected();
+        assert_eq!(
+            tree.nodes
+                .iter()
+                .filter_map(|node| node.file_diff_idx)
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
     }
 
     #[test]

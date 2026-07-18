@@ -3,21 +3,82 @@
 //! jumps the diff view to the comment's file/line; `e`/`r`/`x`/`d` act
 //! on the focused comment.
 
-use diffing_core::comments::{CommentStatus, ReviewComment};
+use diffing_core::comments::{CommentSeverity, CommentStatus, ReviewComment};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Span;
-use ratatui::widgets::{Block, BorderType, Borders, List, StatefulWidget, Widget};
+use ratatui::widgets::{List, StatefulWidget, Widget};
+use std::collections::HashSet;
 
 use crate::themes::Palette;
 use crate::ui::comment_thread::render_tracker_row;
-
-const TRACKER_TITLE: &str = " comments ";
+use crate::ui::gridline::square_block;
 
 pub struct TrackerState {
     pub cursor: usize,
     pub scroll: usize,
+    pub status_filter: TrackerStatusFilter,
+    pub severity_filter: TrackerSeverityFilter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackerStatusFilter {
+    All,
+    Open,
+    Replied,
+    Resolved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackerSeverityFilter {
+    Any,
+    Blocking,
+    Question,
+    Nit,
+    Praise,
+}
+
+impl TrackerStatusFilter {
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::Open,
+            Self::Open => Self::Replied,
+            Self::Replied => Self::Resolved,
+            Self::Resolved => Self::All,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Open => "open",
+            Self::Replied => "replied",
+            Self::Resolved => "resolved",
+        }
+    }
+}
+
+impl TrackerSeverityFilter {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Any => Self::Blocking,
+            Self::Blocking => Self::Question,
+            Self::Question => Self::Nit,
+            Self::Nit => Self::Praise,
+            Self::Praise => Self::Any,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Any => "any severity",
+            Self::Blocking => "blocking",
+            Self::Question => "question",
+            Self::Nit => "nit",
+            Self::Praise => "praise",
+        }
+    }
 }
 
 impl TrackerState {
@@ -25,22 +86,58 @@ impl TrackerState {
         Self {
             cursor: 0,
             scroll: 0,
+            status_filter: TrackerStatusFilter::All,
+            severity_filter: TrackerSeverityFilter::Any,
         }
     }
 
-    pub fn move_cursor(&mut self, delta: isize, total: usize) {
-        if total == 0 {
+    pub fn visible_indices(&self, comments: &[ReviewComment]) -> Vec<usize> {
+        comments
+            .iter()
+            .enumerate()
+            .filter(|(_, comment)| match self.status_filter {
+                TrackerStatusFilter::All => true,
+                TrackerStatusFilter::Open => {
+                    comment.status == CommentStatus::Open && comment.replies.is_empty()
+                }
+                TrackerStatusFilter::Replied => {
+                    comment.status == CommentStatus::Open && !comment.replies.is_empty()
+                }
+                TrackerStatusFilter::Resolved => comment.status == CommentStatus::Resolved,
+            })
+            .filter(|(_, comment)| match self.severity_filter {
+                TrackerSeverityFilter::Any => true,
+                TrackerSeverityFilter::Blocking => {
+                    comment.severity == Some(CommentSeverity::Blocking)
+                }
+                TrackerSeverityFilter::Question => {
+                    comment.severity == Some(CommentSeverity::Question)
+                }
+                TrackerSeverityFilter::Nit => comment.severity == Some(CommentSeverity::Nit),
+                TrackerSeverityFilter::Praise => comment.severity == Some(CommentSeverity::Praise),
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    pub fn move_visible_cursor(&mut self, delta: isize, comments: &[ReviewComment]) {
+        let visible = self.visible_indices(comments);
+        if visible.is_empty() {
             self.cursor = 0;
             return;
         }
-        let mut next = self.cursor as isize + delta;
-        if next < 0 {
-            next = 0;
-        }
-        if next as usize >= total {
-            next = total as isize - 1;
-        }
-        self.cursor = next as usize;
+        let current = visible
+            .iter()
+            .position(|index| *index == self.cursor)
+            .unwrap_or(0);
+        let next = (current as isize + delta).clamp(0, visible.len() as isize - 1) as usize;
+        self.cursor = visible[next];
+    }
+
+    pub fn normalize_filter_cursor(&mut self, comments: &[ReviewComment]) {
+        let visible = self.visible_indices(comments);
+        self.cursor = visible.first().copied().unwrap_or(0);
+        self.scroll = 0;
     }
 
     #[allow(dead_code)]
@@ -58,32 +155,47 @@ impl TrackerState {
 
 pub fn render_tracker(
     comments: &[ReviewComment],
+    outdated_comments: &HashSet<String>,
     state: &mut TrackerState,
     area: Rect,
     palette: &Palette,
     buf: &mut Buffer,
 ) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .style(Style::default().bg(palette.panel))
-        .border_style(Style::default().fg(palette.border))
-        .title(Span::styled(TRACKER_TITLE, Style::default().fg(palette.fg)));
+    let title = format!(
+        " comments · {} · {} ",
+        state.status_filter.label(),
+        state.severity_filter.label()
+    );
+    let block = square_block(
+        Span::styled(title, Style::default().fg(palette.fg)),
+        palette,
+        false,
+    );
     let inner = block.inner(area);
     block.render(area, buf);
 
-    let items: Vec<_> = comments
+    let visible = state.visible_indices(comments);
+    let items: Vec<_> = visible
         .iter()
         .skip(state.scroll)
         .take(inner.height as usize)
-        .enumerate()
-        .map(|(i, c)| render_tracker_row(c, state.scroll + i == state.cursor, palette))
+        .filter_map(|index| comments.get(*index).map(|comment| (*index, comment)))
+        .map(|(index, comment)| {
+            render_tracker_row(
+                comment,
+                index == state.cursor,
+                outdated_comments.contains(&comment.id),
+                palette,
+            )
+        })
         .collect();
     let list = List::new(items).highlight_style(Style::default().bg(palette.selection_bg));
     let mut ls = ratatui::widgets::ListState::default();
-    let visible_cursor = state.cursor.saturating_sub(state.scroll);
-    if visible_cursor < inner.height as usize {
-        ls.select(Some(visible_cursor));
+    let visible_cursor = visible.iter().position(|index| *index == state.cursor);
+    if let Some(cursor) = visible_cursor.and_then(|cursor| cursor.checked_sub(state.scroll)) {
+        if cursor < inner.height as usize {
+            ls.select(Some(cursor));
+        }
     }
     StatefulWidget::render(&list, inner, buf, &mut ls);
 }
@@ -106,15 +218,21 @@ mod tests {
             status,
             created_at: 1,
             replies: vec![],
+            severity: None,
         }
     }
 
     #[test]
     fn cursor_clamped_within_bounds() {
+        let comments = vec![
+            make_comment("a", CommentStatus::Open),
+            make_comment("b", CommentStatus::Open),
+            make_comment("c", CommentStatus::Open),
+        ];
         let mut s = TrackerState::new();
-        s.move_cursor(5, 3);
+        s.move_visible_cursor(5, &comments);
         assert_eq!(s.cursor, 2);
-        s.move_cursor(-100, 3);
+        s.move_visible_cursor(-100, &comments);
         assert_eq!(s.cursor, 0);
     }
 
@@ -144,7 +262,7 @@ mod tests {
         let area = Rect::new(0, 0, 80, 5);
         let mut buf = Buffer::empty(area);
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
-        render_tracker(&[], &mut s, area, &palette, &mut buf);
+        render_tracker(&[], &HashSet::new(), &mut s, area, &palette, &mut buf);
     }
 
     #[test]
@@ -157,6 +275,6 @@ mod tests {
         let area = Rect::new(0, 0, 80, 5);
         let mut buf = Buffer::empty(area);
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
-        render_tracker(&comments, &mut s, area, &palette, &mut buf);
+        render_tracker(&comments, &HashSet::new(), &mut s, area, &palette, &mut buf);
     }
 }

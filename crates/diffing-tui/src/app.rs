@@ -12,16 +12,22 @@ use diffing_core::comments::{
 use diffing_core::diff::{ChangeKind, FileDiff};
 use diffing_core::index::{
     build_git_diff_index, DiffIndex, IndexedChangeKind, IndexedLineKind, ViewRow,
+    DEFAULT_VIEWPORT_MAX_BYTES,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget};
+use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
 
 use crate::agent_api::AgentApi;
 use crate::handoff::{CommentsWatcher, RepoWatcher};
 use crate::keys::{help_text, Action, Command, Keymap};
+use crate::lsp::{
+    utf16_column, DefinitionTarget, LanguageResponse, LspManager, RequestKind, RequestToken,
+    ServerState,
+};
+use crate::persistence::FileDisplay;
 use crate::themes::{Palette, ThemeName};
 use crate::ui::agent_activity_toast::{render_toast, Toast};
 use crate::ui::comment_form::{render_form, CommentFormState};
@@ -29,9 +35,11 @@ use crate::ui::comment_tracker::{render_tracker, TrackerState};
 use crate::ui::file_diff_card::render_card;
 use crate::ui::file_tree::FileTree;
 use crate::ui::file_tree_render::render_file_tree;
+use crate::ui::gridline::{horizontal_rule, overlay_block};
 use crate::ui::send_review_popover::{
     build_send_payload, render_send_popover, send_review_regions, SendField, SendReviewState,
 };
+use crate::ui::settings_sheet::{render_settings, settings_row_at, SettingsState, SettingsValues};
 use crate::ui::vim_status_bar::{render_status_bar, StatusBarContext};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,9 +55,37 @@ pub enum Mode {
     CommentForm,
     SendReview,
     Search,
+    FileFilter,
     Command,
     Help,
     ThemePicker,
+    Settings,
+    Hover,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileFilterMode {
+    All,
+    Unviewed,
+    Comments,
+}
+
+impl FileFilterMode {
+    fn next(self) -> Self {
+        match self {
+            Self::All => Self::Unviewed,
+            Self::Unviewed => Self::Comments,
+            Self::Comments => Self::All,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Unviewed => "Unviewed",
+            Self::Comments => "Has comments",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,12 +96,6 @@ pub enum AgentStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolbarAction {
-    ToggleSidebar,
-    ToggleLayout,
-    ToggleWrap,
-    OpenTheme,
-    ToggleComments,
-    OpenHelp,
     SendReview,
 }
 
@@ -90,6 +120,67 @@ struct UiRegions {
     theme_rows: Vec<(Rect, ThemeName)>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingCommentTarget {
+    file_path: String,
+    side: CommentSide,
+    start_line_number: Option<u32>,
+    line_number: u32,
+    line_content: String,
+}
+
+fn inline_comment_target(
+    file_path: String,
+    rows: Vec<ViewRow>,
+) -> std::result::Result<PendingCommentTarget, &'static str> {
+    let mut side = None;
+    let mut line_numbers: Vec<u32> = Vec::with_capacity(rows.len());
+    let mut contents = Vec::with_capacity(rows.len());
+    for row in rows {
+        let ViewRow::Line {
+            kind,
+            old_lineno,
+            new_lineno,
+            content,
+            ..
+        } = row
+        else {
+            return Err("select code lines only");
+        };
+        let row_side = if kind == IndexedLineKind::Del {
+            CommentSide::Deletions
+        } else {
+            CommentSide::Additions
+        };
+        if side.is_some_and(|existing| existing != row_side) {
+            return Err("selection must stay on one diff side");
+        }
+        side = Some(row_side);
+        let number = match row_side {
+            CommentSide::Deletions => old_lineno,
+            CommentSide::Additions => new_lineno.or(old_lineno),
+        }
+        .ok_or("selected line has no comment anchor")?;
+        if line_numbers
+            .last()
+            .is_some_and(|previous| previous.checked_add(1) != Some(number))
+        {
+            return Err("selection must be contiguous on one diff side");
+        }
+        line_numbers.push(number);
+        contents.push(content);
+    }
+    let line_number = *line_numbers.last().ok_or("select at least one code line")?;
+    let start_line_number = (line_numbers.len() > 1).then(|| line_numbers[0]);
+    Ok(PendingCommentTarget {
+        file_path,
+        side: side.unwrap_or(CommentSide::Additions),
+        start_line_number,
+        line_number,
+        line_content: contents.join("\n"),
+    })
+}
+
 pub struct App {
     #[allow(dead_code)]
     pub repo_root: PathBuf,
@@ -108,12 +199,28 @@ pub struct App {
     pub mode: Mode,
     pub wrap: bool,
     pub split: bool,
+    pub file_display: FileDisplay,
+    pub tab_size: u8,
+    pub line_numbers: bool,
     pub theme: ThemeName,
     pub palette: Palette,
     pub scroll: usize,
     pub cursor_row: u64,
+    pub continuous_scroll: u64,
+    pub continuous_cursor: u64,
     pub viewport_height: usize,
     pub horizontal_offset: usize,
+    code_column: Option<usize>,
+    lsp: LspManager,
+    lsp_active_path: Option<PathBuf>,
+    lsp_last_state: ServerState,
+    lsp_revision: u64,
+    queued_lsp: Option<RequestKind>,
+    pending_lsp: Option<RequestToken>,
+    hover_content: Option<String>,
+    hover_scroll: u16,
+    visual_anchor: Option<(usize, u64)>,
+    pending_comment_target: Option<PendingCommentTarget>,
     pub sidebar_width: u16,
     pub comment_height: u16,
     pub sidebar_visible: bool,
@@ -123,12 +230,17 @@ pub struct App {
     mouse_position: Option<(u16, u16)>,
     theme_cursor: usize,
     theme_original: ThemeName,
+    theme_return_to_settings: bool,
+    settings_state: SettingsState,
     pub keymap: Keymap,
     pub modal_input: String,
     pub search_hits: Vec<diffing_core::index::SearchHit>,
     pub search_cursor: usize,
     pub file_tree_scroll: usize,
+    file_filter_query: String,
+    file_filter_mode: FileFilterMode,
     pub status_message: Option<String>,
+    pending_delete_id: Option<String>,
     pub quit: bool,
     pub comments: Vec<ReviewComment>,
     pub comment_store: FileCommentStore,
@@ -187,6 +299,7 @@ impl App {
         let repo_str = repo_root.to_str().unwrap_or(".");
         let persisted = crate::persistence::load(repo_str);
         let theme = persisted.theme;
+        let lsp = LspManager::new(repo_root.clone(), persisted.intelligence_mode);
         let store = FileCommentStore::new(repo_str);
         let comments = store.load().unwrap_or_default();
         let last_comment_count = comments.len();
@@ -215,12 +328,28 @@ impl App {
             mode: Mode::Normal,
             wrap: persisted.wrap,
             split: persisted.split,
+            file_display: persisted.file_display,
+            tab_size: persisted.tab_size,
+            line_numbers: persisted.line_numbers,
             theme,
             palette: Palette::for_theme(theme),
             scroll: 0,
             cursor_row: 0,
+            continuous_scroll: 0,
+            continuous_cursor: 0,
             viewport_height: 1,
             horizontal_offset: 0,
+            code_column: None,
+            lsp,
+            lsp_active_path: None,
+            lsp_last_state: ServerState::Unavailable,
+            lsp_revision: 0,
+            queued_lsp: None,
+            pending_lsp: None,
+            hover_content: None,
+            hover_scroll: 0,
+            visual_anchor: None,
+            pending_comment_target: None,
             sidebar_width: persisted.sidebar_width,
             comment_height: persisted.comment_height,
             sidebar_visible: persisted.sidebar_visible,
@@ -230,12 +359,17 @@ impl App {
             mouse_position: None,
             theme_cursor: 0,
             theme_original: theme,
+            theme_return_to_settings: false,
+            settings_state: SettingsState::default(),
             keymap: Keymap::default(),
             modal_input: String::new(),
             search_hits: Vec::new(),
             search_cursor: 0,
             file_tree_scroll: 0,
+            file_filter_query: String::new(),
+            file_filter_mode: FileFilterMode::All,
             status_message: None,
+            pending_delete_id: None,
             quit: false,
             tracker: TrackerState::new(),
             comments,
@@ -279,6 +413,7 @@ impl App {
             .and_then(|index| self.files.get(index))
             .map(|file| file.display_path().to_path_buf());
         self.files = metadata_files(&snapshot);
+        self.visual_anchor = None;
         self.file_tree = FileTree::build(&self.files);
         for index in 0..self.files.len() {
             let viewed = self
@@ -297,8 +432,10 @@ impl App {
                 self.file_tree.jump_to_file(file_index);
             }
         }
+        self.apply_file_filter();
         let complete = snapshot.complete;
         self.index = Arc::new(snapshot);
+        self.lsp_active_path = None;
         if let Ok(mut shared) = self.shared_index.write() {
             *shared = self.index.clone();
         }
@@ -326,6 +463,7 @@ impl App {
                 }
                 self.comments = comments;
                 self.last_comment_count = self.comments.len();
+                self.apply_file_filter();
             }
             Err(e) => {
                 self.status_message = Some(format!("reload failed: {e}"));
@@ -346,7 +484,220 @@ impl App {
 
     pub fn poll_background(&mut self) -> bool {
         let repo_dirty = self.tick_repo_watcher();
-        self.tick_index() | self.tick_watcher() | repo_dirty
+        self.tick_index() | self.tick_watcher() | self.tick_lsp() | repo_dirty
+    }
+
+    fn tick_lsp(&mut self) -> bool {
+        let mut dirty = false;
+        let revision = self.lsp.diagnostics_revision();
+        if revision != self.lsp_revision {
+            self.lsp_revision = revision;
+            dirty = true;
+        }
+
+        let path = self
+            .file_tree
+            .selected_file_idx()
+            .and_then(|index| self.files.get(index))
+            .map(|file| file.display_path().to_path_buf());
+        if path != self.lsp_active_path {
+            self.lsp_active_path = None;
+            self.code_column = None;
+            self.queued_lsp = None;
+            self.cancel_pending_language_request();
+        }
+        if let Some(path) = path {
+            if self.lsp_active_path.is_none() || self.lsp_last_state == ServerState::Starting {
+                let previous = self.lsp_last_state;
+                self.lsp_last_state = match self.lsp.sync_document(&path) {
+                    Ok(state) => state,
+                    Err(error) => {
+                        self.status_message = Some(format!("language server: {error}"));
+                        ServerState::Error
+                    }
+                };
+                self.lsp_active_path = Some(path);
+                dirty |= previous != self.lsp_last_state;
+            }
+        }
+
+        if self.lsp_last_state == ServerState::Ready {
+            if let Some(kind) = self.queued_lsp.take() {
+                self.start_language_request(kind);
+                dirty = true;
+            }
+        }
+
+        if let Some(token) = self.pending_lsp.clone() {
+            if let Some(response) = self.lsp.take_response(&token) {
+                self.pending_lsp = None;
+                match response {
+                    Ok(LanguageResponse::Hover(Some(content))) => {
+                        self.hover_content = Some(content);
+                        self.hover_scroll = 0;
+                        self.mode = Mode::Hover;
+                    }
+                    Ok(LanguageResponse::Hover(None)) => {
+                        self.status_message =
+                            Some("no hover information at this symbol".to_string());
+                    }
+                    Ok(LanguageResponse::Definition(targets)) => {
+                        self.open_definition(targets);
+                    }
+                    Err(error) => {
+                        self.status_message = Some(format!("language request failed: {error}"));
+                    }
+                }
+                dirty = true;
+            }
+        }
+        dirty
+    }
+
+    fn request_language(&mut self, kind: RequestKind) {
+        self.cancel_pending_language_request();
+        let Some((path, _, _)) = self.current_language_position() else {
+            self.status_message = Some(
+                "language actions require an added or context line in a supported file".to_string(),
+            );
+            return;
+        };
+        match self.lsp.sync_document(&path) {
+            Ok(ServerState::Ready) => self.start_language_request(kind),
+            Ok(ServerState::Starting) => {
+                self.queued_lsp = Some(kind);
+                self.lsp_last_state = ServerState::Starting;
+                self.lsp_active_path = Some(path);
+                self.status_message = Some("language server starting…".to_string());
+            }
+            Ok(ServerState::Off) => {
+                self.status_message = Some("language intelligence is off in Settings".to_string());
+            }
+            Ok(ServerState::Unavailable) => {
+                let server = LspManager::expected_server(&path).unwrap_or("language server");
+                self.status_message = Some(format!("{server} is not installed or not on PATH"));
+            }
+            Ok(ServerState::Error) | Err(_) => {
+                self.status_message = Some("language server could not start".to_string());
+            }
+        }
+    }
+
+    fn start_language_request(&mut self, kind: RequestKind) {
+        let Some((path, line, character)) = self.current_language_position() else {
+            self.status_message = Some("current diff row has no working-tree position".to_string());
+            return;
+        };
+        let request = match kind {
+            RequestKind::Hover => self.lsp.request_hover(&path, line, character),
+            RequestKind::Definition => self.lsp.request_definition(&path, line, character),
+        };
+        match request {
+            Ok(token) => {
+                self.pending_lsp = Some(token);
+                self.status_message = Some(match kind {
+                    RequestKind::Hover => "loading hover…".to_string(),
+                    RequestKind::Definition => "finding definition…".to_string(),
+                });
+            }
+            Err(error) => {
+                self.status_message = Some(format!("language request failed: {error}"));
+            }
+        }
+    }
+
+    fn cancel_pending_language_request(&mut self) {
+        if let Some(token) = self.pending_lsp.take() {
+            self.lsp.cancel_request(&token);
+        }
+    }
+
+    fn current_language_position(&self) -> Option<(PathBuf, u32, u32)> {
+        let file = self.current_file()?;
+        let path = file.display_path().to_path_buf();
+        let ViewRow::Line {
+            kind,
+            new_lineno,
+            content,
+            ..
+        } = self.current_view_row()?
+        else {
+            return None;
+        };
+        if kind == IndexedLineKind::Del {
+            return None;
+        }
+        let line = new_lineno?.checked_sub(1)?;
+        let character_count = content.chars().count();
+        let column = self.effective_code_column().min(character_count);
+        Some((path, line, utf16_column(&content, column)))
+    }
+
+    fn effective_code_column(&self) -> usize {
+        self.code_column.unwrap_or_else(|| {
+            self.current_line_content()
+                .chars()
+                .position(|character| !character.is_whitespace())
+                .unwrap_or(0)
+        })
+    }
+
+    fn open_definition(&mut self, targets: Vec<DefinitionTarget>) {
+        let Some(target) = targets.first() else {
+            self.status_message = Some("no definition found".to_string());
+            return;
+        };
+        let extra = targets.len().saturating_sub(1);
+        let relative = target
+            .path
+            .strip_prefix(&self.repo_root)
+            .unwrap_or(&target.path)
+            .to_path_buf();
+        let line_number = target.line.saturating_add(1);
+        let Some(file_index) = self
+            .files
+            .iter()
+            .position(|file| file.display_path() == relative)
+        else {
+            self.status_message = Some(format!(
+                "definition: {}:{}:{}{}",
+                relative.display(),
+                line_number,
+                target.character.saturating_add(1),
+                if extra == 0 {
+                    String::new()
+                } else {
+                    format!(" (+{extra})")
+                }
+            ));
+            return;
+        };
+        let row = self
+            .index
+            .find_line_row(file_index, IndexedLineKind::Add, line_number)
+            .ok()
+            .flatten();
+        let Some(row) = row else {
+            self.status_message = Some(format!(
+                "definition is outside the visible diff: {}:{}",
+                relative.display(),
+                line_number
+            ));
+            return;
+        };
+        self.file_tree.jump_to_file(file_index);
+        self.focus = Focus::Diff;
+        self.cursor_row = row;
+        self.code_column = Some(target.character as usize);
+        if self.file_display == FileDisplay::Continuous {
+            self.continuous_cursor = self.continuous_offset_for_file(file_index) + row;
+            self.continuous_scroll = self
+                .continuous_cursor
+                .saturating_sub((self.viewport_height / 2) as u64);
+        } else {
+            self.scroll = row.saturating_sub((self.viewport_height / 2) as u64) as usize;
+        }
+        self.status_message = Some(format!("→ {}:{line_number}", relative.display()));
     }
 
     pub fn has_animations(&self) -> bool {
@@ -387,17 +738,26 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
+        self.status_message = None;
         match self.mode {
             Mode::CommentForm => self.handle_form_key(key),
             Mode::SendReview => self.handle_send_review_key(key),
             Mode::Search => self.handle_search_key(key),
+            Mode::FileFilter => self.handle_file_filter_key(key),
             Mode::Command => self.handle_command_key(key),
             Mode::ThemePicker => self.handle_theme_picker_key(key),
+            Mode::Settings => self.handle_settings_key(key),
+            Mode::Hover => self.handle_hover_key(key),
             Mode::Help => {
                 self.mode = Mode::Normal;
                 self.keymap.clear();
             }
             Mode::Normal => {
+                if key.code == crossterm::event::KeyCode::Esc && self.visual_anchor.take().is_some()
+                {
+                    self.status_message = Some("line selection cancelled".to_string());
+                    return;
+                }
                 if let Some(command) = self.keymap.feed(&key) {
                     self.dispatch_command(command);
                 }
@@ -434,9 +794,45 @@ impl App {
                         self.palette = Palette::for_theme(theme);
                         self.persist_settings();
                         self.status_message = Some(format!("theme: {}", theme.display_name()));
-                        self.mode = Mode::Normal;
+                        self.mode = if self.theme_return_to_settings {
+                            Mode::Settings
+                        } else {
+                            Mode::Normal
+                        };
                         self.modal_input.clear();
                     }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if self.mode == Mode::Settings {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.settings_state.move_cursor(1),
+                MouseEventKind::ScrollUp => self.settings_state.move_cursor(-1),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(root) = self.regions.root {
+                        if let Some(index) = settings_row_at(root, mouse.column, mouse.row) {
+                            self.settings_state.cursor = index;
+                            self.activate_setting();
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if self.mode == Mode::Hover {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => {
+                    self.hover_scroll = self.hover_scroll.saturating_add(3)
+                }
+                MouseEventKind::ScrollUp => self.hover_scroll = self.hover_scroll.saturating_sub(3),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.mode = Mode::Normal;
+                    self.hover_content = None;
                 }
                 _ => {}
             }
@@ -477,24 +873,6 @@ impl App {
                         }
                     }
                 }
-                MouseEventKind::ScrollDown
-                    if regions
-                        .preview
-                        .is_some_and(|area| contains(area, mouse.column, mouse.row)) =>
-                {
-                    if let Some(state) = self.send_review.as_mut() {
-                        state.preview_scroll = state.preview_scroll.saturating_add(3);
-                    }
-                }
-                MouseEventKind::ScrollUp
-                    if regions
-                        .preview
-                        .is_some_and(|area| contains(area, mouse.column, mouse.row)) =>
-                {
-                    if let Some(state) = self.send_review.as_mut() {
-                        state.preview_scroll = state.preview_scroll.saturating_sub(3);
-                    }
-                }
                 _ => {}
             }
             return;
@@ -502,7 +880,10 @@ impl App {
 
         // Text-entry modals own the pointer; do not let clicks leak through to
         // the diff underneath them.
-        if matches!(self.mode, Mode::CommentForm | Mode::Search | Mode::Command) {
+        if matches!(
+            self.mode,
+            Mode::CommentForm | Mode::Search | Mode::FileFilter | Mode::Command
+        ) {
             return;
         }
 
@@ -549,8 +930,17 @@ impl App {
                     if self.file_tree.selected_file_idx().is_none() {
                         self.file_tree.toggle_selected();
                     } else if self.file_tree.selected_file_idx() != previous {
-                        self.scroll = 0;
-                        self.cursor_row = 0;
+                        self.visual_anchor = None;
+                        if self.file_display == FileDisplay::Continuous {
+                            if let Some(file) = self.file_tree.selected_file_idx() {
+                                let offset = self.continuous_offset_for_file(file);
+                                self.continuous_cursor = offset;
+                                self.continuous_scroll = offset;
+                            }
+                        } else {
+                            self.scroll = 0;
+                            self.cursor_row = 0;
+                        }
                         self.horizontal_offset = 0;
                     }
                     return;
@@ -562,9 +952,17 @@ impl App {
                     .filter(|(inner, _)| contains(*inner, mouse.column, mouse.row))
                 {
                     self.focus = Focus::Diff;
-                    self.cursor_row = (self.scroll as u64)
-                        .saturating_add(mouse.row.saturating_sub(inner.y) as u64)
-                        .min(self.current_file_rows().saturating_sub(1));
+                    if self.file_display == FileDisplay::Continuous {
+                        self.continuous_cursor = self
+                            .continuous_scroll
+                            .saturating_add(mouse.row.saturating_sub(inner.y) as u64)
+                            .min(self.continuous_total_rows().saturating_sub(1));
+                        self.sync_continuous_active();
+                    } else {
+                        self.cursor_row = (self.scroll as u64)
+                            .saturating_add(mouse.row.saturating_sub(inner.y) as u64)
+                            .min(self.current_file_rows().saturating_sub(1));
+                    }
                     return;
                 }
                 if let Some(comment) = self
@@ -619,7 +1017,7 @@ impl App {
                     .unwrap_or(false)
                 {
                     self.focus = Focus::Tracker;
-                    self.tracker.move_cursor(3, self.comments.len());
+                    self.tracker.move_visible_cursor(3, &self.comments);
                 } else {
                     self.focus = Focus::Diff;
                     self.move_diff_cursor(3);
@@ -643,7 +1041,7 @@ impl App {
                     .unwrap_or(false)
                 {
                     self.focus = Focus::Tracker;
-                    self.tracker.move_cursor(-3, self.comments.len());
+                    self.tracker.move_visible_cursor(-3, &self.comments);
                 } else {
                     self.focus = Focus::Diff;
                     self.move_diff_cursor(-3);
@@ -661,29 +1059,14 @@ impl App {
 
     fn activate_toolbar(&mut self, action: ToolbarAction) {
         match action {
-            ToolbarAction::ToggleSidebar => {
-                self.sidebar_visible = !self.sidebar_visible;
-                self.persist_layout();
-            }
-            ToolbarAction::ToggleLayout => {
-                self.split = !self.split;
-                self.persist_settings();
-            }
-            ToolbarAction::ToggleWrap => {
-                self.wrap = !self.wrap;
-                self.persist_settings();
-            }
-            ToolbarAction::OpenTheme => self.open_theme_picker(),
-            ToolbarAction::ToggleComments => {
-                self.comments_visible = !self.comments_visible;
-                self.persist_layout();
-            }
-            ToolbarAction::OpenHelp => self.mode = Mode::Help,
             ToolbarAction::SendReview => self.open_send_review(),
         }
     }
 
     fn dispatch_command(&mut self, command: Command) {
+        if command.action != Action::DeleteComment {
+            self.pending_delete_id = None;
+        }
         match command.action {
             Action::Quit => self.quit = true,
             Action::OpenSendReview => self.open_send_review(),
@@ -695,19 +1078,52 @@ impl App {
                 self.mode = Mode::Search;
                 self.modal_input.clear();
             }
+            Action::OpenFileFilter => {
+                self.mode = Mode::FileFilter;
+                self.modal_input = self.file_filter_query.clone();
+            }
+            Action::CycleFileFilter => {
+                self.file_filter_mode = self.file_filter_mode.next();
+                self.apply_file_filter();
+                self.status_message = Some(format!("files: {}", self.file_filter_mode.label()));
+            }
             Action::OpenCommand => {
                 self.mode = Mode::Command;
                 self.modal_input.clear();
             }
+            Action::OpenSettings => self.open_settings(),
+            Action::LanguageHover => self.request_language(RequestKind::Hover),
+            Action::LanguageDefinition => self.request_language(RequestKind::Definition),
+            Action::CodeColumnLeft => {
+                let column = self
+                    .effective_code_column()
+                    .saturating_sub(command.count as usize);
+                self.code_column = Some(column);
+                self.status_message = Some(format!("symbol column {}", column + 1));
+            }
+            Action::CodeColumnRight => {
+                let column = self
+                    .effective_code_column()
+                    .saturating_add(command.count as usize);
+                self.code_column = Some(column);
+                self.status_message = Some(format!("symbol column {}", column + 1));
+            }
+            Action::ResolveAllComments => self.resolve_all_comments(),
             Action::NextSearch => self.jump_search(command.count as isize),
             Action::PrevSearch => self.jump_search(-(command.count as isize)),
             Action::NextHunk => self.jump_relative_hunk(command.count as isize),
             Action::PrevHunk => self.jump_relative_hunk(-(command.count as isize)),
             Action::CenterCursor => {
-                self.scroll = self
-                    .cursor_row
-                    .saturating_sub((self.viewport_height / 2) as u64)
-                    as usize;
+                if self.file_display == FileDisplay::Continuous {
+                    self.continuous_scroll = self
+                        .continuous_cursor
+                        .saturating_sub((self.viewport_height / 2) as u64);
+                } else {
+                    self.scroll = self
+                        .cursor_row
+                        .saturating_sub((self.viewport_height / 2) as u64)
+                        as usize;
+                }
             }
             Action::ScrollLeft if self.focus == Focus::FileTree => {
                 self.file_tree.collapse_selected();
@@ -733,6 +1149,8 @@ impl App {
             }
             Action::NextFile => self.jump_to_relative_file(command.count as isize),
             Action::PrevFile => self.jump_to_relative_file(-(command.count as isize)),
+            Action::FocusFileTree => self.cycle_focus(1),
+            Action::FocusDiff => self.cycle_focus(-1),
             action => {
                 for _ in 0..command.count.min(10_000) {
                     match self.focus {
@@ -743,6 +1161,22 @@ impl App {
                 }
             }
         }
+    }
+
+    fn cycle_focus(&mut self, delta: isize) {
+        let mut order = vec![Focus::Diff];
+        if self.sidebar_visible {
+            order.push(Focus::FileTree);
+        }
+        if self.comments_visible && !self.comments.is_empty() {
+            order.push(Focus::Tracker);
+        }
+        let current = order
+            .iter()
+            .position(|focus| *focus == self.focus)
+            .unwrap_or(0);
+        let next = (current as isize + delta).rem_euclid(order.len() as isize) as usize;
+        self.focus = order[next];
     }
 
     fn handle_search_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -759,6 +1193,87 @@ impl App {
             KeyCode::Char(character) => self.modal_input.push(character),
             _ => {}
         }
+    }
+
+    fn handle_hover_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = Mode::Normal;
+                self.hover_content = None;
+                self.hover_scroll = 0;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.hover_scroll = self.hover_scroll.saturating_add(1)
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.hover_scroll = self.hover_scroll.saturating_sub(1)
+            }
+            KeyCode::PageDown => self.hover_scroll = self.hover_scroll.saturating_add(10),
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.hover_scroll = self.hover_scroll.saturating_add(10)
+            }
+            KeyCode::PageUp => self.hover_scroll = self.hover_scroll.saturating_sub(10),
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.hover_scroll = self.hover_scroll.saturating_sub(10)
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_file_filter_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.modal_input.clear();
+            }
+            KeyCode::Enter => {
+                self.file_filter_query = self.modal_input.trim().to_string();
+                self.apply_file_filter();
+                self.mode = Mode::Normal;
+                self.status_message = Some(format!(
+                    "files: {}{}",
+                    self.file_filter_mode.label(),
+                    if self.file_filter_query.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {}", self.file_filter_query)
+                    }
+                ));
+            }
+            KeyCode::Backspace => {
+                self.modal_input.pop();
+                self.file_filter_query = self.modal_input.clone();
+                self.apply_file_filter();
+            }
+            KeyCode::Char(character) => {
+                self.modal_input.push(character);
+                self.file_filter_query = self.modal_input.clone();
+                self.apply_file_filter();
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_file_filter(&mut self) {
+        for index in 0..self.files.len() {
+            let path = self.files[index].display_path();
+            let count = self
+                .comments
+                .iter()
+                .filter(|comment| std::path::Path::new(&comment.file_path) == path)
+                .count() as u32;
+            self.file_tree.set_comment_count(index, count);
+            self.file_tree
+                .set_viewed(index, self.viewed_paths.contains(path));
+        }
+        self.file_tree.apply_filter(
+            &self.file_filter_query,
+            self.file_filter_mode == FileFilterMode::Unviewed,
+            self.file_filter_mode == FileFilterMode::Comments,
+        );
+        self.file_tree_scroll = 0;
     }
 
     fn execute_search(&mut self) {
@@ -815,7 +1330,14 @@ impl App {
         };
         self.file_tree.jump_to_file(hit.file_index);
         self.cursor_row = hit.row;
-        self.scroll = hit.row.saturating_sub((self.viewport_height / 2) as u64) as usize;
+        if self.file_display == FileDisplay::Continuous {
+            self.continuous_cursor = self.continuous_offset_for_file(hit.file_index) + hit.row;
+            self.continuous_scroll = self
+                .continuous_cursor
+                .saturating_sub((self.viewport_height / 2) as u64);
+        } else {
+            self.scroll = hit.row.saturating_sub((self.viewport_height / 2) as u64) as usize;
+        }
         self.focus = Focus::Diff;
     }
 
@@ -845,6 +1367,8 @@ impl App {
                 self.persist_settings();
             }
             "theme" => self.open_theme_picker(),
+            "settings" | "set" => self.open_settings(),
+            "files" | "display" => self.open_settings(),
             "help" | "h" => self.mode = Mode::Help,
             "top" => {
                 self.cursor_row = 0;
@@ -870,6 +1394,14 @@ impl App {
         }
         if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.submit_send_review();
+            return;
+        }
+        if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let Some(form) = self.comment_form.as_mut() {
+                if form.kind == crate::ui::comment_form::FormKind::New {
+                    form.cycle_severity();
+                }
+            }
             return;
         }
         let Some(sr) = self.send_review.as_mut() else {
@@ -911,11 +1443,27 @@ impl App {
     }
 
     fn open_send_review(&mut self) {
-        self.send_review = Some(SendReviewState::new());
+        let unviewed = self
+            .files
+            .iter()
+            .filter(|file| !self.viewed_paths.contains(file.display_path()))
+            .count();
+        self.send_review = Some(SendReviewState::new(unviewed));
         self.mode = Mode::SendReview;
     }
 
     fn submit_send_review(&mut self) {
+        if let Some(state) = self.send_review.as_mut() {
+            if state.unviewed_files > 0 && !state.guard_acknowledged {
+                state.guard_acknowledged = true;
+                self.status_message = Some(format!(
+                    "{} unviewed file{} · press Ctrl-S again to send",
+                    state.unviewed_files,
+                    if state.unviewed_files == 1 { "" } else { "s" }
+                ));
+                return;
+            }
+        }
         let Some(sr) = self.send_review.take() else {
             return;
         };
@@ -959,12 +1507,21 @@ impl App {
         use crossterm::event::{KeyCode, KeyModifiers};
         if key.code == KeyCode::Esc {
             self.comment_form = None;
+            self.pending_comment_target = None;
             self.mode = Mode::Normal;
             self.status_message = Some("comment cancelled".to_string());
             return;
         }
         if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.submit_form();
+            return;
+        }
+        if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let Some(form) = self.comment_form.as_mut() {
+                if form.kind == crate::ui::comment_form::FormKind::New {
+                    form.cycle_severity();
+                }
+            }
             return;
         }
         if let Some(form) = self.comment_form.as_mut() {
@@ -977,6 +1534,7 @@ impl App {
             return;
         };
         let body = form.body();
+        let severity = form.severity;
         self.mode = Mode::Normal;
         if body.trim().is_empty() {
             self.status_message = Some("comment empty, discarded".to_string());
@@ -985,22 +1543,37 @@ impl App {
         let now = now_ms();
         let result: Result<()> = match form.kind {
             crate::ui::comment_form::FormKind::New => {
-                let file = self.current_file();
-                let line = self.current_line();
-                let content = self.current_line_content();
-                let side = self.current_side();
-                let file_path = file
-                    .map(|f| f.display_path().to_string_lossy().to_string())
-                    .unwrap_or_default();
+                let target = self.pending_comment_target.take().unwrap_or_else(|| {
+                    let file_path = self
+                        .current_file()
+                        .map(|file| file.display_path().to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    PendingCommentTarget {
+                        file_path,
+                        side: self.current_side(),
+                        start_line_number: None,
+                        line_number: self.current_line(),
+                        line_content: self.current_line_content(),
+                    }
+                });
                 self.comment_store
                     .add(
-                        NewComment::Inline {
-                            file_path: &file_path,
-                            side,
-                            start_line_number: None,
-                            line_number: line,
-                            line_content: &content,
-                            body: &body,
+                        if target.line_number == 0 {
+                            NewComment::FileLevel {
+                                file_path: &target.file_path,
+                                body: &body,
+                                severity,
+                            }
+                        } else {
+                            NewComment::Inline {
+                                file_path: &target.file_path,
+                                side: target.side,
+                                start_line_number: target.start_line_number,
+                                line_number: target.line_number,
+                                line_content: &target.line_content,
+                                body: &body,
+                                severity,
+                            }
                         },
                         now,
                     )
@@ -1074,19 +1647,41 @@ impl App {
                 self.move_diff_cursor(-((self.viewport_height / 2).max(1) as isize))
             }
             Action::ScrollTop => {
-                self.cursor_row = 0;
-                self.scroll = 0;
+                if self.file_display == FileDisplay::Continuous {
+                    self.continuous_cursor = 0;
+                    self.continuous_scroll = 0;
+                    self.sync_continuous_active();
+                } else {
+                    self.cursor_row = 0;
+                    self.scroll = 0;
+                }
             }
             Action::ScrollBottom => {
-                let last = self.current_file_rows().saturating_sub(1);
-                self.cursor_row = last;
-                self.scroll =
-                    last.saturating_sub(self.viewport_height.saturating_sub(1) as u64) as usize;
+                if self.file_display == FileDisplay::Continuous {
+                    let last = self.continuous_total_rows().saturating_sub(1);
+                    self.continuous_cursor = last;
+                    self.continuous_scroll =
+                        last.saturating_sub(self.viewport_height.saturating_sub(1) as u64);
+                    self.sync_continuous_active();
+                } else {
+                    let last = self.current_file_rows().saturating_sub(1);
+                    self.cursor_row = last;
+                    self.scroll =
+                        last.saturating_sub(self.viewport_height.saturating_sub(1) as u64) as usize;
+                }
             }
             Action::NextFile => self.jump_to_relative_file(1),
             Action::PrevFile => self.jump_to_relative_file(-1),
             Action::FocusFileTree => self.focus = Focus::FileTree,
-            Action::FocusTracker => self.focus = Focus::Tracker,
+            Action::FocusTracker => {
+                if self.comments.is_empty() {
+                    self.status_message = Some("No comments yet · c adds one".to_string());
+                    return;
+                }
+                self.comments_visible = true;
+                self.focus = Focus::Tracker;
+                self.persist_layout();
+            }
             Action::ToggleWrap => {
                 self.wrap = !self.wrap;
                 self.persist_settings();
@@ -1098,13 +1693,19 @@ impl App {
             Action::ToggleViewed => self.toggle_viewed_current(),
             Action::OpenThemePicker => self.open_theme_picker(),
             Action::AddComment => self.open_new_comment_form(),
+            Action::AddFileComment => self.open_file_comment_form(),
+            Action::ToggleVisualSelection => self.toggle_visual_selection(),
             Action::EditComment => self.open_edit_form_for_focused(),
             Action::ReplyComment => self.open_reply_form_for_focused(),
             Action::ResolveComment => self.resolve_focused(),
             Action::DeleteComment => self.delete_focused(),
             Action::NextComment => self.jump_relative_comment(1),
             Action::PrevComment => self.jump_relative_comment(-1),
-            Action::OpenCommentThread => self.focus = Focus::Tracker,
+            Action::OpenCommentThread => {
+                self.comments_visible = true;
+                self.focus = Focus::Tracker;
+                self.persist_layout();
+            }
             _ => {}
         }
     }
@@ -1112,10 +1713,10 @@ impl App {
     fn handle_tracker_action(&mut self, action: Action) {
         match action {
             Action::ScrollDown | Action::NextComment => {
-                self.tracker.move_cursor(1, self.comments.len());
+                self.tracker.move_visible_cursor(1, &self.comments);
             }
             Action::ScrollUp | Action::PrevComment => {
-                self.tracker.move_cursor(-1, self.comments.len());
+                self.tracker.move_visible_cursor(-1, &self.comments);
             }
             Action::ScrollTop => self.tracker.cursor = 0,
             Action::ScrollBottom => match self.comments.len() {
@@ -1129,12 +1730,21 @@ impl App {
             Action::ResolveComment => self.resolve_focused(),
             Action::DeleteComment => self.delete_focused(),
             Action::OpenCommentThread => self.jump_to_focused_comment(),
+            Action::CycleCommentStatus => {
+                self.tracker.status_filter = self.tracker.status_filter.next();
+                self.tracker.normalize_filter_cursor(&self.comments);
+            }
+            Action::CycleCommentSeverity => {
+                self.tracker.severity_filter = self.tracker.severity_filter.next();
+                self.tracker.normalize_filter_cursor(&self.comments);
+            }
             Action::OpenThemePicker => self.open_theme_picker(),
             _ => {}
         }
     }
 
     fn open_theme_picker(&mut self) {
+        self.theme_return_to_settings = self.mode == Mode::Settings;
         self.theme_original = self.theme;
         self.theme_cursor = ThemeName::all()
             .iter()
@@ -1142,6 +1752,95 @@ impl App {
             .unwrap_or(0);
         self.modal_input.clear();
         self.mode = Mode::ThemePicker;
+    }
+
+    fn open_settings(&mut self) {
+        self.settings_state.cursor = 0;
+        self.mode = Mode::Settings;
+    }
+
+    fn handle_settings_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char(',') => self.mode = Mode::Normal,
+            KeyCode::Up | KeyCode::Char('k') => self.settings_state.move_cursor(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.settings_state.move_cursor(1),
+            KeyCode::Left | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
+                self.activate_setting()
+            }
+            _ => {}
+        }
+    }
+
+    fn activate_setting(&mut self) {
+        match self.settings_state.cursor {
+            0 => self.toggle_file_display(),
+            1 => {
+                self.split = !self.split;
+                self.persist_settings();
+            }
+            2 => {
+                self.wrap = !self.wrap;
+                self.persist_settings();
+            }
+            3 => {
+                self.tab_size = match self.tab_size {
+                    2 => 4,
+                    4 => 8,
+                    _ => 2,
+                };
+                self.persist_settings();
+            }
+            4 => {
+                self.line_numbers = !self.line_numbers;
+                self.persist_settings();
+            }
+            5 => {
+                self.comments_visible = !self.comments_visible;
+                if !self.comments_visible && self.focus == Focus::Tracker {
+                    self.focus = Focus::Diff;
+                }
+                self.persist_layout();
+            }
+            6 => {
+                let mode = self.lsp.mode().toggle();
+                self.lsp.set_mode(mode);
+                self.lsp_active_path = None;
+                self.lsp_last_state = if mode == crate::lsp::IntelligenceMode::Off {
+                    ServerState::Off
+                } else {
+                    ServerState::Unavailable
+                };
+                self.queued_lsp = None;
+                self.cancel_pending_language_request();
+                self.persist_settings();
+                self.status_message = Some(format!("language intelligence: {}", mode.label()));
+            }
+            7 => self.open_theme_picker(),
+            _ => {}
+        }
+    }
+
+    fn toggle_file_display(&mut self) {
+        self.file_display = self.file_display.toggle();
+        match self.file_display {
+            FileDisplay::Single => {
+                if let Some((file, row)) = self.continuous_position(self.continuous_cursor) {
+                    self.file_tree.jump_to_file(file);
+                    self.cursor_row = row;
+                    self.scroll = row.saturating_sub((self.viewport_height / 3) as u64) as usize;
+                }
+            }
+            FileDisplay::Continuous => {
+                let file = self.file_tree.selected_file_idx().unwrap_or(0);
+                self.continuous_cursor = self.continuous_offset_for_file(file) + self.cursor_row;
+                self.continuous_scroll = self
+                    .continuous_cursor
+                    .saturating_sub((self.viewport_height / 3) as u64);
+            }
+        }
+        self.persist_layout();
+        self.status_message = Some(format!("file display: {}", self.file_display.label()));
     }
 
     fn filtered_themes(&self) -> Vec<ThemeName> {
@@ -1174,14 +1873,22 @@ impl App {
             KeyCode::Esc => {
                 self.theme = self.theme_original;
                 self.palette = Palette::for_theme(self.theme);
-                self.mode = Mode::Normal;
+                self.mode = if self.theme_return_to_settings {
+                    Mode::Settings
+                } else {
+                    Mode::Normal
+                };
                 self.modal_input.clear();
             }
             KeyCode::Enter => {
                 self.preview_theme_at_cursor();
                 self.persist_settings();
                 self.status_message = Some(format!("theme: {}", self.theme.display_name()));
-                self.mode = Mode::Normal;
+                self.mode = if self.theme_return_to_settings {
+                    Mode::Settings
+                } else {
+                    Mode::Normal
+                };
                 self.modal_input.clear();
             }
             KeyCode::Down => {
@@ -1228,10 +1935,18 @@ impl App {
         };
         self.file_tree.set_viewed(index, viewed);
         crate::persistence::save_viewed(self.repo_root.to_str().unwrap_or("."), &self.viewed_paths);
+        self.apply_file_filter();
     }
 
     fn persist_settings(&self) {
-        crate::persistence::save_settings(self.theme, self.wrap, self.split);
+        crate::persistence::save_settings(
+            self.theme,
+            self.wrap,
+            self.split,
+            self.tab_size,
+            self.line_numbers,
+            self.lsp.mode(),
+        );
     }
 
     fn persist_layout(&self) {
@@ -1241,6 +1956,7 @@ impl App {
             self.comment_height,
             self.sidebar_visible,
             self.comments_visible,
+            self.file_display,
         );
     }
 
@@ -1255,12 +1971,43 @@ impl App {
             .min(self.files.len() - 1);
         let next = (current as isize + delta).rem_euclid(self.files.len() as isize) as usize;
         self.file_tree.jump_to_file(next);
-        self.scroll = 0;
-        self.cursor_row = 0;
+        self.visual_anchor = None;
+        if self.file_display == FileDisplay::Continuous {
+            let offset = self.continuous_offset_for_file(next);
+            self.continuous_cursor = offset;
+            self.continuous_scroll = offset;
+            self.sync_continuous_active();
+        } else {
+            self.scroll = 0;
+            self.cursor_row = 0;
+        }
         self.horizontal_offset = 0;
+        self.code_column = None;
     }
 
     fn move_diff_cursor(&mut self, delta: isize) {
+        self.code_column = None;
+        if self.file_display == FileDisplay::Continuous {
+            let rows = self.continuous_total_rows();
+            if rows == 0 {
+                return;
+            }
+            self.continuous_cursor = (self.continuous_cursor as isize + delta)
+                .clamp(0, rows.saturating_sub(1) as isize)
+                as u64;
+            let top = self.continuous_scroll;
+            let height = self.viewport_height.max(1) as u64;
+            if self.continuous_cursor < top {
+                self.continuous_scroll = self.continuous_cursor;
+            } else if self.continuous_cursor >= top + height {
+                self.continuous_scroll = self
+                    .continuous_cursor
+                    .saturating_add(1)
+                    .saturating_sub(height);
+            }
+            self.sync_continuous_active();
+            return;
+        }
         let rows = self.current_file_rows();
         if rows == 0 {
             return;
@@ -1274,6 +2021,47 @@ impl App {
             self.scroll = next as usize;
         } else if next >= top + height {
             self.scroll = next.saturating_add(1).saturating_sub(height) as usize;
+        }
+    }
+
+    fn continuous_total_rows(&self) -> u64 {
+        self.index.files.iter().map(|file| file.row_count).sum()
+    }
+
+    fn continuous_offset_for_file(&self, file_index: usize) -> u64 {
+        self.index
+            .files
+            .iter()
+            .take(file_index)
+            .map(|file| file.row_count)
+            .sum()
+    }
+
+    fn continuous_position(&self, mut global_row: u64) -> Option<(usize, u64)> {
+        for (index, file) in self.index.files.iter().enumerate() {
+            if global_row < file.row_count {
+                return Some((index, global_row));
+            }
+            global_row = global_row.saturating_sub(file.row_count);
+        }
+        self.index.files.len().checked_sub(1).and_then(|index| {
+            self.index
+                .files
+                .get(index)
+                .map(|file| (index, file.row_count.saturating_sub(1)))
+        })
+    }
+
+    fn sync_continuous_active(&mut self) {
+        if let Some((file, row)) = self.continuous_position(self.continuous_cursor) {
+            if self
+                .visual_anchor
+                .is_some_and(|(anchor_file, _)| anchor_file != file)
+            {
+                self.visual_anchor = None;
+            }
+            self.file_tree.jump_to_file(file);
+            self.cursor_row = row;
         }
     }
 
@@ -1318,10 +2106,18 @@ impl App {
             .partition_point(|hunk| hunk.row_start <= self.cursor_row)
             .saturating_sub(1);
         let next = (current as isize + delta).rem_euclid(file.hunks.len() as isize) as usize;
+        self.code_column = None;
         self.cursor_row = file.hunks[next].row_start;
-        self.scroll = self
-            .cursor_row
-            .saturating_sub((self.viewport_height / 3) as u64) as usize;
+        if self.file_display == FileDisplay::Continuous {
+            self.continuous_cursor = self.continuous_offset_for_file(file_index) + self.cursor_row;
+            self.continuous_scroll = self
+                .continuous_cursor
+                .saturating_sub((self.viewport_height / 3) as u64);
+        } else {
+            self.scroll =
+                self.cursor_row
+                    .saturating_sub((self.viewport_height / 3) as u64) as usize;
+        }
     }
 
     fn jump_to_focused_comment(&mut self) {
@@ -1335,17 +2131,26 @@ impl App {
         {
             self.file_tree.jump_to_file(file_idx);
             self.focus = Focus::Diff;
-            let side = match c.side {
-                CommentSide::Deletions => IndexedLineKind::Del,
-                CommentSide::Additions => IndexedLineKind::Add,
+            let target_row = if c.line_number == 0 {
+                Some(0)
+            } else {
+                self.find_comment_row(file_idx, &c)
             };
-            match self.index.find_line_row(file_idx, side, c.line_number) {
-                Ok(Some(row)) => {
+            match target_row {
+                Some(row) => {
                     self.cursor_row = row;
-                    self.scroll = row.saturating_sub((self.viewport_height / 2) as u64) as usize;
+                    if self.file_display == FileDisplay::Continuous {
+                        self.continuous_cursor = self.continuous_offset_for_file(file_idx) + row;
+                        self.continuous_scroll = self
+                            .continuous_cursor
+                            .saturating_sub((self.viewport_height / 2) as u64);
+                    } else {
+                        self.scroll =
+                            row.saturating_sub((self.viewport_height / 2) as u64) as usize;
+                    }
                     self.status_message = Some(format!("→ {}:{}", c.file_path, c.line_number));
                 }
-                _ => {
+                None => {
                     self.status_message = Some(format!(
                         "comment target is outdated: {}:{}",
                         c.file_path, c.line_number
@@ -1358,14 +2163,104 @@ impl App {
     }
 
     fn open_new_comment_form(&mut self) {
-        let file = self.current_file();
-        let line = self.current_line();
-        let label = match file {
-            Some(f) => format!("new comment · {}:{line}", f.display_path().display()),
-            None => "new comment".to_string(),
+        let Some(target) = self.build_comment_target(false) else {
+            return;
         };
+        let label = if let Some(start) = target.start_line_number {
+            format!(
+                "new comment · {}:{start}-{}",
+                target.file_path, target.line_number
+            )
+        } else {
+            format!("new comment · {}:{}", target.file_path, target.line_number)
+        };
+        self.pending_comment_target = Some(target);
+        self.visual_anchor = None;
         self.comment_form = Some(CommentFormState::new(label));
         self.mode = Mode::CommentForm;
+    }
+
+    fn open_file_comment_form(&mut self) {
+        let Some(target) = self.build_comment_target(true) else {
+            return;
+        };
+        let label = format!("new file comment · {}", target.file_path);
+        self.pending_comment_target = Some(target);
+        self.comment_form = Some(CommentFormState::new(label));
+        self.mode = Mode::CommentForm;
+    }
+
+    fn toggle_visual_selection(&mut self) {
+        let Some(file) = self.file_tree.selected_file_idx() else {
+            return;
+        };
+        if self.visual_anchor.take().is_some() {
+            self.status_message = Some("line selection cancelled".to_string());
+        } else {
+            self.visual_anchor = Some((file, self.cursor_row));
+            self.status_message =
+                Some("line selection started · move, then c to comment".to_string());
+        }
+    }
+
+    fn build_comment_target(&mut self, file_level: bool) -> Option<PendingCommentTarget> {
+        let file_index = self.file_tree.selected_file_idx()?;
+        let file_path = self
+            .files
+            .get(file_index)?
+            .display_path()
+            .to_string_lossy()
+            .to_string();
+        if file_level {
+            return Some(PendingCommentTarget {
+                file_path,
+                side: CommentSide::Additions,
+                start_line_number: None,
+                line_number: 0,
+                line_content: String::new(),
+            });
+        }
+
+        let (start_row, end_row) = match self.visual_anchor {
+            Some((anchor_file, anchor_row)) if anchor_file == file_index => (
+                anchor_row.min(self.cursor_row),
+                anchor_row.max(self.cursor_row),
+            ),
+            Some(_) => {
+                self.status_message = Some("line selection cannot cross files".to_string());
+                return None;
+            }
+            None => (self.cursor_row, self.cursor_row),
+        };
+        let Ok(count) = usize::try_from(end_row.saturating_sub(start_row).saturating_add(1)) else {
+            self.status_message = Some("selected range is too large".to_string());
+            return None;
+        };
+        let viewport =
+            match self
+                .index
+                .viewport(file_index, start_row, count, DEFAULT_VIEWPORT_MAX_BYTES)
+            {
+                Ok(viewport) => viewport,
+                Err(error) => {
+                    self.status_message = Some(format!("could not select lines: {error}"));
+                    return None;
+                }
+            };
+        if viewport.truncated || viewport.rows.len() != count {
+            self.status_message = Some(
+                "selection exceeds the safe comment range; choose fewer or smaller lines"
+                    .to_string(),
+            );
+            return None;
+        }
+        match inline_comment_target(file_path, viewport.rows) {
+            Ok(target) => Some(target),
+            Err(message) => {
+                self.status_message = Some(message.to_string());
+                None
+            }
+        }
     }
 
     fn open_edit_form_for_focused(&mut self) {
@@ -1417,11 +2312,79 @@ impl App {
         }
     }
 
+    fn resolve_all_comments(&mut self) {
+        match self.comment_store.resolve_all() {
+            Ok(0) => self.status_message = Some("no open comments".to_string()),
+            Ok(count) => {
+                self.status_message = Some(format!("resolved {count} comment threads"));
+                self.reload_comments();
+            }
+            Err(_) => self.status_message = Some("resolve all failed".to_string()),
+        }
+    }
+
+    fn comment_is_outdated(&self, comment: &ReviewComment) -> bool {
+        let Some(file_index) = self
+            .files
+            .iter()
+            .position(|file| file.display_path() == std::path::Path::new(&comment.file_path))
+        else {
+            return true;
+        };
+        if comment.line_number == 0 {
+            return false;
+        }
+        let end = comment
+            .line_number
+            .max(comment.start_line_number.unwrap_or(comment.line_number));
+        let start = comment
+            .line_number
+            .min(comment.start_line_number.unwrap_or(comment.line_number));
+        self.find_comment_line_row(file_index, comment.side, start)
+            .zip(self.find_comment_line_row(file_index, comment.side, end))
+            .is_none()
+    }
+
+    fn find_comment_row(&self, file_index: usize, comment: &ReviewComment) -> Option<u64> {
+        self.find_comment_line_row(
+            file_index,
+            comment.side,
+            comment
+                .line_number
+                .max(comment.start_line_number.unwrap_or(comment.line_number)),
+        )
+    }
+
+    fn find_comment_line_row(
+        &self,
+        file_index: usize,
+        side: CommentSide,
+        line_number: u32,
+    ) -> Option<u64> {
+        let kinds: &[IndexedLineKind] = match side {
+            CommentSide::Deletions => &[IndexedLineKind::Del],
+            CommentSide::Additions => &[IndexedLineKind::Add, IndexedLineKind::Context],
+        };
+        kinds.iter().find_map(|kind| {
+            self.index
+                .find_line_row(file_index, *kind, line_number)
+                .ok()
+                .flatten()
+        })
+    }
+
     fn delete_focused(&mut self) {
         let Some(c) = self.comments.get(self.tracker.cursor) else {
             return;
         };
         let id = c.id.clone();
+        if self.pending_delete_id.as_deref() != Some(&id) {
+            self.pending_delete_id = Some(id);
+            self.status_message =
+                Some("press d again to permanently delete this thread".to_string());
+            return;
+        }
+        self.pending_delete_id = None;
         match self.comment_store.remove(&id) {
             Ok(true) => {
                 self.status_message = Some("comment deleted".to_string());
@@ -1471,6 +2434,36 @@ impl App {
             .next()
     }
 
+    fn current_diagnostic_hint(&self) -> Option<String> {
+        let file = self.current_file()?;
+        let ViewRow::Line {
+            kind, new_lineno, ..
+        } = self.current_view_row()?
+        else {
+            return None;
+        };
+        if kind == IndexedLineKind::Del {
+            return None;
+        }
+        let line = new_lineno?.checked_sub(1)?;
+        let diagnostic = self
+            .lsp
+            .diagnostics_for(file.display_path())
+            .into_iter()
+            .filter(|diagnostic| diagnostic.line == line)
+            .min_by_key(|diagnostic| diagnostic.severity)?;
+        Some(format!(
+            "{} {}{}",
+            diagnostic.marker(),
+            diagnostic
+                .source
+                .as_deref()
+                .map(|source| format!("{source}: "))
+                .unwrap_or_default(),
+            diagnostic.message.replace(['\n', '\r'], " ")
+        ))
+    }
+
     fn current_file(&self) -> Option<&diffing_core::diff::FileDiff> {
         let idx = self.file_tree.selected_file_idx()?;
         self.files.get(idx)
@@ -1489,33 +2482,55 @@ impl App {
             return;
         }
 
-        let header = Rect::new(area.x, area.y, area.width, 3);
+        if self.comments.is_empty() && self.focus == Focus::Tracker {
+            self.focus = Focus::Diff;
+        }
+
+        let header = Rect::new(area.x, area.y, area.width, 2);
         let status = Rect::new(area.x, area.y + area.height - 1, area.width, 1);
-        let (show_sidebar, show_comments) = panel_visibility(
+        let comments_requested = self.comments_visible && !self.comments.is_empty();
+        let (mut show_sidebar, mut show_comments) = panel_visibility(
             area.width,
             area.height,
             self.sidebar_visible,
-            self.comments_visible,
+            comments_requested,
         );
-        self.render_header(header, show_sidebar, show_comments, buf);
+        let compact_workspace = area.width < 88;
+        let show_diff = !compact_workspace || self.focus == Focus::Diff;
+        if compact_workspace {
+            show_sidebar = self.sidebar_visible && self.focus == Focus::FileTree;
+            show_comments = self.comments_visible && self.focus == Focus::Tracker;
+        }
+        self.render_header(header, buf);
 
-        let tracker_height = if show_comments {
+        let comments_right = show_comments && area.width >= 132;
+        let comments_workspace = compact_workspace && show_comments;
+        let tracker_height = if show_comments && !comments_right && !comments_workspace {
             self.comment_height
                 .clamp(4, area.height.saturating_sub(18).min(20))
         } else {
             0
         };
-        let tracker_divider_height = u16::from(show_comments);
+        let tracker_divider_height =
+            u16::from(show_comments && !comments_right && !comments_workspace);
         let body_height = area
             .height
-            .saturating_sub(3 + 1 + tracker_height + tracker_divider_height);
-        let body = Rect::new(area.x, area.y + 3, area.width, body_height);
-        let sidebar_width = if show_sidebar {
+            .saturating_sub(2 + 1 + tracker_height + tracker_divider_height);
+        let body = Rect::new(area.x, area.y + 2, area.width, body_height);
+        let sidebar_width = if show_sidebar && compact_workspace {
+            body.width
+        } else if show_sidebar {
             self.sidebar_width.clamp(22, area.width.saturating_sub(42))
         } else {
             0
         };
-        let sidebar_divider_width = u16::from(show_sidebar);
+        let sidebar_divider_width = u16::from(show_sidebar && !compact_workspace);
+        let review_width = if comments_right {
+            38.min(body.width.saturating_sub(sidebar_width + 44))
+        } else {
+            0
+        };
+        let review_divider_width = u16::from(comments_right);
         let file_area = show_sidebar.then(|| Rect::new(body.x, body.y, sidebar_width, body.height));
         let divider = show_sidebar.then(|| {
             Rect::new(
@@ -1528,8 +2543,13 @@ impl App {
         let diff_area = Rect::new(
             body.x + sidebar_width + sidebar_divider_width,
             body.y,
-            body.width
-                .saturating_sub(sidebar_width + sidebar_divider_width),
+            if show_diff {
+                body.width.saturating_sub(
+                    sidebar_width + sidebar_divider_width + review_width + review_divider_width,
+                )
+            } else {
+                0
+            },
             body.height,
         );
         if let Some(file_area) = file_area {
@@ -1559,18 +2579,52 @@ impl App {
             fill_area(divider, self.palette.bg, buf);
             self.regions.sidebar_divider = Some(divider);
         }
-        self.regions.diff = Some(diff_area);
-        self.regions.diff_inner = Some(inset(diff_area, 1));
-        self.render_diff(diff_area, buf);
+        if show_diff && diff_area.width > 0 {
+            let diff_header = Rect::new(diff_area.x, diff_area.y, diff_area.width, 1);
+            let diff_content = Rect::new(
+                diff_area.x,
+                diff_area.y + 1,
+                diff_area.width,
+                diff_area.height.saturating_sub(1),
+            );
+            self.render_active_file_header(diff_header, buf);
+            self.regions.diff = Some(diff_content);
+            self.regions.diff_inner = Some(diff_content);
+            self.render_diff(diff_content, buf);
+        }
 
         if show_comments {
-            let divider_y = body.y + body.height;
-            let divider = Rect::new(area.x, divider_y, area.width, 1);
-            fill_area(divider, self.palette.bg, buf);
-            self.regions.comment_divider = Some(divider);
-            let tracker_area = Rect::new(area.x, divider_y + 1, area.width, tracker_height);
+            let tracker_area = if comments_workspace {
+                body
+            } else if comments_right {
+                let divider = Rect::new(
+                    diff_area.x + diff_area.width,
+                    body.y,
+                    review_divider_width,
+                    body.height,
+                );
+                fill_area(divider, self.palette.border, buf);
+                Rect::new(divider.x + divider.width, body.y, review_width, body.height)
+            } else {
+                let divider_y = body.y + body.height;
+                let divider = Rect::new(area.x, divider_y, area.width, 1);
+                fill_area(divider, self.palette.bg, buf);
+                self.regions.comment_divider = Some(divider);
+                Rect::new(area.x, divider_y + 1, area.width, tracker_height)
+            };
+            let outdated_comments: HashSet<String> = self
+                .tracker
+                .visible_indices(&self.comments)
+                .into_iter()
+                .skip(self.tracker.scroll)
+                .take(tracker_area.height as usize)
+                .filter_map(|index| self.comments.get(index))
+                .filter(|comment| self.comment_is_outdated(comment))
+                .map(|comment| comment.id.clone())
+                .collect();
             render_tracker(
                 &self.comments,
+                &outdated_comments,
                 &mut self.tracker,
                 tracker_area,
                 &self.palette,
@@ -1578,63 +2632,85 @@ impl App {
             );
             self.regions.comment_panel = Some(tracker_area);
             let inner = inset(tracker_area, 1);
+            let visible_comments = self.tracker.visible_indices(&self.comments);
             self.regions.comment_rows = (0..inner.height as usize)
                 .filter_map(|offset| {
-                    let comment = self.tracker.scroll + offset;
-                    (comment < self.comments.len()).then_some((
-                        Rect::new(inner.x, inner.y + offset as u16, inner.width, 1),
-                        comment,
-                    ))
+                    visible_comments
+                        .get(self.tracker.scroll + offset)
+                        .copied()
+                        .map(|comment| {
+                            (
+                                Rect::new(inner.x, inner.y + offset as u16, inner.width, 1),
+                                comment,
+                            )
+                        })
                 })
                 .collect();
         }
 
         // Agent status indicator in the status line.
-        let mode_str = match self.mode {
-            Mode::Normal => "NORMAL",
-            Mode::CommentForm => "EDIT",
-            Mode::SendReview => "SEND",
-            Mode::Search => "SEARCH",
-            Mode::Command => "COMMAND",
-            Mode::Help => "HELP",
-            Mode::ThemePicker => "THEME",
+        let mode_str = if self.mode == Mode::Normal && self.visual_anchor.is_some() {
+            "VISUAL"
+        } else {
+            match self.mode {
+                Mode::Normal => "NORMAL",
+                Mode::CommentForm => "EDIT",
+                Mode::SendReview => "SEND",
+                Mode::Search => "SEARCH",
+                Mode::FileFilter => "FILTER",
+                Mode::Command => "COMMAND",
+                Mode::Help => "HELP",
+                Mode::ThemePicker => "THEME",
+                Mode::Settings => "SETTINGS",
+                Mode::Hover => "HOVER",
+            }
         };
         self.agent_status = if self.agent_api.waiter_count() > 0 {
             AgentStatus::Waiting
         } else {
             AgentStatus::Idle
         };
-        let agent_str = match self.agent_status {
-            AgentStatus::Waiting => "● agent waiting",
-            AgentStatus::Idle => "○ agent idle",
-        };
-        let current = self
-            .file_tree
-            .selected_file_idx()
-            .and_then(|i| self.files.get(i))
-            .map(|f| f.display_path().to_string_lossy().to_string());
         let file_idx = self.file_tree.selected_file_idx().unwrap_or(0);
         let file_count = self.files.len();
-        let current_label = current.as_deref().unwrap_or("(no file)");
         let hint = match self.mode {
             Mode::ThemePicker => "type to filter · ↑↓ preview · Enter apply · Esc restore",
             Mode::CommentForm => "Ctrl-S save · Esc cancel",
             Mode::SendReview => "Tab field · ←→ verdict · Ctrl-S send · Esc cancel",
             Mode::Search => "type query · Enter search · Esc cancel",
+            Mode::FileFilter => "type filename · Enter apply · Esc close",
+            Mode::Settings => "↑↓ select · ←→ change · Esc close",
+            Mode::Hover => "j/k or wheel scroll · Esc close",
             _ => match self.focus {
                 Focus::FileTree => "click/jk select · h/l collapse · v viewed · Tab diff",
-                Focus::Tracker => "click/jk select · o open · r reply · x resolve",
-                Focus::Diff => "wheel/jk move · c comment · / search · t theme · ? help",
+                Focus::Tracker => "jk select · s status · p severity · o open · x resolve",
+                Focus::Diff => "wheel/jk move · c comment · / search · , settings · ? help",
             },
         };
+        let diagnostic_hint = self.current_diagnostic_hint();
+        let pending_key_hint = self.keymap.pending_hint();
+        let selection_hint = self.visual_anchor.map(|(_, anchor)| {
+            let rows = anchor.abs_diff(self.cursor_row).saturating_add(1);
+            format!("{rows} rows selected · c comment · V/Esc cancel")
+        });
+        let hint = self
+            .status_message
+            .as_deref()
+            .or(selection_hint.as_deref())
+            .or(diagnostic_hint.as_deref())
+            .or(pending_key_hint)
+            .unwrap_or(hint);
         render_status_bar(
             status,
             StatusBarContext {
                 mode: mode_str,
                 current_file: Some(&format!(
-                    "{current_label} · row {} · {} comments · {agent_str}{}",
+                    "Ln {}{}{}",
                     self.cursor_row + 1,
-                    self.comments.len(),
+                    if self.comments.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {} comments", self.comments.len())
+                    },
                     if self.keymap.pending_display().is_empty() {
                         String::new()
                     } else {
@@ -1659,8 +2735,31 @@ impl App {
         match self.mode {
             Mode::Help => self.render_help(area, buf),
             Mode::Search => self.render_prompt(area, '/', "search changed paths and lines", buf),
+            Mode::FileFilter => self.render_prompt(
+                area,
+                'f',
+                &format!("filter files · {}", self.file_filter_mode.label()),
+                buf,
+            ),
             Mode::Command => self.render_prompt(area, ':', "command", buf),
             Mode::ThemePicker => self.render_theme_picker(area, buf),
+            Mode::Settings => render_settings(
+                &self.settings_state,
+                SettingsValues {
+                    file_display: self.file_display,
+                    split: self.split,
+                    wrap: self.wrap,
+                    tab_size: self.tab_size,
+                    line_numbers: self.line_numbers,
+                    comments_visible: self.comments_visible,
+                    intelligence_mode: self.lsp.mode(),
+                    theme_name: self.theme.display_name(),
+                },
+                area,
+                &self.palette,
+                buf,
+            ),
+            Mode::Hover => self.render_hover(area, buf),
             _ => {}
         }
 
@@ -1702,42 +2801,254 @@ impl App {
             Paragraph::new(message)
                 .style(Style::default().fg(self.palette.dim).bg(self.palette.bg))
                 .centered()
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(self.palette.border))
-                        .title(" review "),
-                )
                 .render(area, buf);
             return;
         };
+        if self.file_display == FileDisplay::Continuous {
+            self.render_continuous_diff(area, buf);
+            return;
+        }
         let Some(file) = self.index.files.get(idx) else {
             return;
         };
-        self.viewport_height = area.height.saturating_sub(2).max(1) as usize;
+        self.viewport_height = area.height.max(1) as usize;
         let total = file.row_count as usize;
         if self.scroll + self.viewport_height > total {
             self.scroll = total.saturating_sub(self.viewport_height);
         }
         let hovered_row = self.mouse_position.and_then(|(column, row)| {
-            let inner = inset(area, 1);
-            contains(inner, column, row)
-                .then_some(self.scroll as u64 + row.saturating_sub(inner.y) as u64)
+            contains(area, column, row)
+                .then_some(self.scroll as u64 + row.saturating_sub(area.y) as u64)
         });
+        let diagnostics = self.lsp.diagnostics_for(file.display_path());
         render_card(
             &self.index,
             idx,
             area,
             self.scroll as u64,
             self.cursor_row,
+            self.visual_anchor.and_then(|(file, anchor)| {
+                (file == idx).then_some((anchor.min(self.cursor_row), anchor.max(self.cursor_row)))
+            }),
             hovered_row,
             self.horizontal_offset,
             self.wrap,
             self.split,
+            self.line_numbers,
+            self.tab_size,
+            self.theme,
+            &self.comments,
+            &diagnostics,
             &self.palette,
             buf,
         );
+        self.render_change_map(area, Some(idx), self.scroll as u64, file.row_count, buf);
+    }
+
+    fn render_active_file_header(&self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        fill_area(area, self.palette.panel, buf);
+        let Some(index) = self.file_tree.selected_file_idx() else {
+            buf.set_string(
+                area.x + 1,
+                area.y,
+                "Local changes",
+                Style::default().fg(self.palette.dim).bg(self.palette.panel),
+            );
+            return;
+        };
+        let Some(file) = self.index.files.get(index) else {
+            return;
+        };
+        let path = file.display_path().to_string_lossy();
+        let marker = match file.kind {
+            IndexedChangeKind::Modified => "M",
+            IndexedChangeKind::Added => "A",
+            IndexedChangeKind::Deleted => "D",
+            IndexedChangeKind::Renamed => "R",
+            IndexedChangeKind::Untracked => "U",
+            IndexedChangeKind::Binary => "B",
+        };
+        let comments = self
+            .comments
+            .iter()
+            .filter(|comment| comment.file_path == path)
+            .count();
+        let diagnostics = self.lsp.diagnostic_count(file.display_path());
+        let language_state = self.lsp.state_for_path(file.display_path());
+        let viewed = self.viewed_paths.contains(file.display_path());
+        let left = format!(" ▌ {marker}  {path}");
+        buf.set_string(
+            area.x,
+            area.y,
+            ellipsize(&left, area.width.saturating_sub(2) as usize),
+            Style::default()
+                .fg(self.palette.fg)
+                .bg(self.palette.panel)
+                .add_modifier(Modifier::BOLD),
+        );
+        let mut metadata = vec![
+            format!("+{} -{}", file.additions, file.deletions),
+            format!("{} hunks", file.hunks.len()),
+        ];
+        if comments > 0 {
+            metadata.push(format!("{comments} comments"));
+        }
+        if diagnostics > 0 {
+            metadata.push(format!("{diagnostics} diagnostics"));
+        }
+        if matches!(language_state, ServerState::Starting | ServerState::Error) {
+            metadata.push(format!("lsp {}", language_state.label()));
+        }
+        metadata.push(if viewed {
+            "✓ viewed".to_string()
+        } else {
+            "unviewed".to_string()
+        });
+        let metadata = metadata.join(" · ");
+        let metadata_width = metadata.chars().count() as u16;
+        if metadata_width + 4 < area.width {
+            buf.set_string(
+                area.x + area.width - metadata_width - 1,
+                area.y,
+                metadata,
+                Style::default().fg(self.palette.dim).bg(self.palette.panel),
+            );
+        }
+    }
+
+    fn render_continuous_diff(&mut self, area: Rect, buf: &mut Buffer) {
+        self.viewport_height = area.height.max(1) as usize;
+        let total = self.continuous_total_rows();
+        if total == 0 {
+            return;
+        }
+        self.continuous_cursor = self.continuous_cursor.min(total.saturating_sub(1));
+        self.continuous_scroll = self
+            .continuous_scroll
+            .min(total.saturating_sub(area.height.max(1) as u64));
+        self.sync_continuous_active();
+
+        let mut global = self.continuous_scroll;
+        let mut y = area.y;
+        let bottom = area.y.saturating_add(area.height);
+        while y < bottom && global < total {
+            let Some((file_index, local_start)) = self.continuous_position(global) else {
+                break;
+            };
+            let Some(file) = self.index.files.get(file_index) else {
+                break;
+            };
+            let available = file.row_count.saturating_sub(local_start);
+            if available == 0 {
+                global = self.continuous_offset_for_file(file_index.saturating_add(1));
+                continue;
+            }
+            let height = available.min(bottom.saturating_sub(y) as u64) as u16;
+            let segment = Rect::new(area.x, y, area.width, height);
+            let cursor = if global <= self.continuous_cursor
+                && self.continuous_cursor < global.saturating_add(height as u64)
+            {
+                local_start + self.continuous_cursor.saturating_sub(global)
+            } else {
+                u64::MAX
+            };
+            let hovered = self.mouse_position.and_then(|(column, row)| {
+                contains(segment, column, row)
+                    .then_some(local_start + row.saturating_sub(segment.y) as u64)
+            });
+            let diagnostics = self.lsp.diagnostics_for(file.display_path());
+            render_card(
+                &self.index,
+                file_index,
+                segment,
+                local_start,
+                cursor,
+                self.visual_anchor.and_then(|(anchor_file, anchor)| {
+                    (anchor_file == file_index)
+                        .then_some((anchor.min(self.cursor_row), anchor.max(self.cursor_row)))
+                }),
+                hovered,
+                self.horizontal_offset,
+                self.wrap,
+                self.split,
+                self.line_numbers,
+                self.tab_size,
+                self.theme,
+                &self.comments,
+                &diagnostics,
+                &self.palette,
+                buf,
+            );
+            y = y.saturating_add(height);
+            global = global.saturating_add(height as u64);
+        }
+        self.render_change_map(area, None, self.continuous_scroll, total, buf);
+    }
+
+    fn render_change_map(
+        &self,
+        area: Rect,
+        single_file: Option<usize>,
+        scroll: u64,
+        total_rows: u64,
+        buf: &mut Buffer,
+    ) {
+        if area.width < 8 || area.height < 3 || total_rows == 0 {
+            return;
+        }
+        let x = area.x + area.width - 1;
+        for y in area.y..area.y + area.height {
+            buf[(x, y)]
+                .set_symbol("│")
+                .set_style(Style::default().fg(self.palette.border).bg(self.palette.bg));
+        }
+        let mut base = 0u64;
+        for (file_index, file) in self.index.files.iter().enumerate() {
+            if single_file.is_some_and(|selected| selected != file_index) {
+                continue;
+            }
+            for hunk in &file.hunks {
+                let logical = if single_file.is_some() {
+                    hunk.row_start
+                } else {
+                    base + hunk.row_start
+                };
+                let y = area.y
+                    + ((logical.saturating_mul(area.height.saturating_sub(1) as u64)
+                        / total_rows.max(1)) as u16)
+                        .min(area.height.saturating_sub(1));
+                let color = if hunk.new_lines > hunk.old_lines {
+                    self.palette.added
+                } else if hunk.old_lines > hunk.new_lines {
+                    self.palette.removed
+                } else {
+                    self.palette.accent
+                };
+                buf[(x, y)]
+                    .set_symbol("▪")
+                    .set_style(Style::default().fg(color).bg(self.palette.bg));
+            }
+            if single_file.is_none() {
+                base = base.saturating_add(file.row_count);
+            }
+        }
+        let viewport_start = ((scroll.saturating_mul(area.height as u64) / total_rows) as u16)
+            .min(area.height.saturating_sub(1));
+        let viewport_rows = ((self.viewport_height as u64)
+            .saturating_mul(area.height as u64)
+            .div_ceil(total_rows))
+        .max(1) as u16;
+        for offset in 0..viewport_rows.min(area.height) {
+            let y = area.y + (viewport_start + offset).min(area.height.saturating_sub(1));
+            buf[(x, y)].set_symbol("█").set_style(
+                Style::default()
+                    .fg(self.palette.fg)
+                    .bg(self.palette.selection_bg),
+            );
+        }
     }
 
     fn sync_file_tree_scroll_for(&mut self, body_height: usize) {
@@ -1749,40 +3060,45 @@ impl App {
         }
     }
 
-    fn render_header(
-        &mut self,
-        area: Rect,
-        show_sidebar: bool,
-        show_comments: bool,
-        buf: &mut Buffer,
-    ) {
+    fn render_header(&mut self, area: Rect, buf: &mut Buffer) {
         fill_area(area, self.palette.panel, buf);
         let repo = self
             .repo_root
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("repository");
+        let title = if repo == "diffing" {
+            "◆ diffing".to_string()
+        } else {
+            format!("◆ diffing · {repo}")
+        };
         buf.set_string(
-            area.x + 2,
+            area.x + 1,
             area.y,
-            "◆ diffing",
+            &title,
             Style::default()
                 .fg(self.palette.accent)
                 .bg(self.palette.panel)
                 .add_modifier(Modifier::BOLD),
         );
+        let agent = if self.agent_api.waiter_count() > 0 {
+            "  · ● agent"
+        } else {
+            ""
+        };
         let summary = format!(
-            "{repo}  {} files  +{} -{}{}",
+            "{} files  +{} -{}{}{}",
             self.files.len(),
             self.index.additions,
             self.index.deletions,
-            if self.indexing { "  ◌" } else { "" }
+            agent,
+            if self.indexing { "  ◌" } else { "" },
         );
-        if summary.chars().count() as u16 + 14 < area.width {
-            let summary_x = area.x.saturating_add(
-                area.width
-                    .saturating_sub(summary.chars().count() as u16 + 2),
-            );
+        let summary_width = summary.chars().count() as u16;
+        let summary_x = area
+            .x
+            .saturating_add(area.width.saturating_sub(summary_width + 1));
+        if summary_width + 14 < area.width {
             buf.set_string(
                 summary_x,
                 area.y,
@@ -1790,42 +3106,24 @@ impl App {
                 Style::default().fg(self.palette.dim).bg(self.palette.panel),
             );
         }
-        let theme_label = ellipsize(self.theme.display_name(), 16);
-        let controls = [
-            (ToolbarAction::ToggleSidebar, "Files", show_sidebar),
-            (
-                ToolbarAction::ToggleLayout,
-                if self.split { "Split" } else { "Unified" },
-                true,
-            ),
-            (ToolbarAction::ToggleWrap, "Wrap", self.wrap),
-            (ToolbarAction::OpenTheme, theme_label.as_str(), false),
-            (ToolbarAction::ToggleComments, "Comments", show_comments),
-            (ToolbarAction::OpenHelp, "Help", false),
-            (ToolbarAction::SendReview, "Send review", false),
-        ];
-        let mut x = area.x + 2;
-        for (action, label, active) in controls {
-            if x + label.chars().count() as u16 + 2 >= area.x + area.width {
-                break;
-            }
+        let action_x = area.x + title.chars().count() as u16 + 3;
+        if action_x + 15 < summary_x {
             let rect = render_chip(
-                x,
-                area.y + 1,
-                label,
-                active,
+                action_x,
+                area.y,
+                "S  Send review",
+                true,
                 self.mouse_position,
                 &self.palette,
                 buf,
             );
-            self.regions.toolbar.push((rect, action));
-            x += rect.width + 1;
+            self.regions.toolbar.push((rect, ToolbarAction::SendReview));
         }
-        for x in area.x..area.x + area.width {
-            buf[(x, area.y + 2)]
-                .set_symbol("─")
-                .set_style(Style::default().fg(self.palette.border).bg(self.palette.bg));
-        }
+        horizontal_rule(
+            Rect::new(area.x, area.y + 1, area.width, 1),
+            &self.palette,
+            buf,
+        );
     }
 
     fn render_theme_picker(&mut self, area: Rect, buf: &mut Buffer) {
@@ -1839,17 +3137,15 @@ impl App {
             height,
         );
         Clear.render(popup, buf);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(self.palette.border_focused))
-            .style(Style::default().bg(self.palette.elevated))
-            .title(Span::styled(
+        let block = overlay_block(
+            Span::styled(
                 format!(" Theme · {} available ", ThemeName::all().len()),
                 Style::default()
                     .fg(self.palette.fg)
                     .add_modifier(Modifier::BOLD),
-            ));
+            ),
+            &self.palette,
+        );
         let inner = block.inner(popup);
         block.render(popup, buf);
         buf.set_string(
@@ -1948,13 +3244,39 @@ impl App {
                     .fg(self.palette.fg)
                     .bg(self.palette.elevated),
             )
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(self.palette.border_focused))
-                    .title(" keyboard help · any key closes "),
+            .block(overlay_block(
+                " keyboard help · any key closes ",
+                &self.palette,
+            ))
+            .render(popup, buf);
+    }
+
+    fn render_hover(&self, area: Rect, buf: &mut Buffer) {
+        let Some(content) = self.hover_content.as_deref() else {
+            return;
+        };
+        dim_area(area, self.palette.bg, self.palette.dim, buf);
+        let width = area.width.saturating_sub(4).min(84);
+        let height = area.height.saturating_sub(4).clamp(6, 24);
+        let popup = Rect::new(
+            area.x + area.width.saturating_sub(width) / 2,
+            area.y + area.height.saturating_sub(height) / 2,
+            width,
+            height,
+        );
+        Clear.render(popup, buf);
+        Paragraph::new(content)
+            .style(
+                Style::default()
+                    .fg(self.palette.fg)
+                    .bg(self.palette.elevated),
             )
+            .wrap(Wrap { trim: false })
+            .scroll((self.hover_scroll, 0))
+            .block(overlay_block(
+                " language hover · j/k scroll · Esc close ",
+                &self.palette,
+            ))
             .render(popup, buf);
     }
 
@@ -1974,13 +3296,10 @@ impl App {
                     .fg(self.palette.fg)
                     .bg(self.palette.elevated),
             )
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(self.palette.border_focused))
-                    .title(format!(" {title} · Enter confirm · Esc cancel ")),
-            )
+            .block(overlay_block(
+                format!(" {title} · Enter confirm · Esc cancel "),
+                &self.palette,
+            ))
             .render(popup, buf);
     }
 }
@@ -2239,6 +3558,75 @@ fn _quiet_duration(_: Duration) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn diff_line(kind: IndexedLineKind, old: Option<u32>, new: Option<u32>, text: &str) -> ViewRow {
+        ViewRow::Line {
+            hunk_index: 0,
+            kind,
+            old_lineno: old,
+            new_lineno: new,
+            content: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn multi_line_comment_target_is_inclusive_and_preserves_source() {
+        let target = inline_comment_target(
+            "src/lib.rs".to_string(),
+            vec![
+                diff_line(IndexedLineKind::Context, Some(11), Some(11), "alpha"),
+                diff_line(IndexedLineKind::Add, None, Some(12), "beta"),
+                diff_line(IndexedLineKind::Add, None, Some(13), "gamma"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(target.side, CommentSide::Additions);
+        assert_eq!(target.start_line_number, Some(11));
+        assert_eq!(target.line_number, 13);
+        assert_eq!(target.line_content, "alpha\nbeta\ngamma");
+    }
+
+    #[test]
+    fn deletion_ranges_keep_old_side_anchors() {
+        let target = inline_comment_target(
+            "src/lib.rs".to_string(),
+            vec![
+                diff_line(IndexedLineKind::Del, Some(7), None, "old one"),
+                diff_line(IndexedLineKind::Del, Some(8), None, "old two"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(target.side, CommentSide::Deletions);
+        assert_eq!(target.start_line_number, Some(7));
+        assert_eq!(target.line_number, 8);
+    }
+
+    #[test]
+    fn multi_line_comment_target_rejects_cross_side_and_gapped_ranges() {
+        let cross_side = inline_comment_target(
+            "src/lib.rs".to_string(),
+            vec![
+                diff_line(IndexedLineKind::Del, Some(7), None, "old"),
+                diff_line(IndexedLineKind::Add, None, Some(7), "new"),
+            ],
+        );
+        assert_eq!(
+            cross_side.unwrap_err(),
+            "selection must stay on one diff side"
+        );
+
+        let gapped = inline_comment_target(
+            "src/lib.rs".to_string(),
+            vec![
+                diff_line(IndexedLineKind::Add, None, Some(7), "one"),
+                diff_line(IndexedLineKind::Add, None, Some(9), "three"),
+            ],
+        );
+        assert_eq!(
+            gapped.unwrap_err(),
+            "selection must be contiguous on one diff side"
+        );
+    }
 
     #[test]
     fn responsive_panels_preserve_the_diff_on_compact_terminals() {

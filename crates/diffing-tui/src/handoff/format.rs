@@ -96,7 +96,7 @@ pub fn format_comments(
 
     if let Some(g) = trimmed_general {
         lines.push("  <general-comment>".to_string());
-        lines.push(format!("    <![CDATA[{g}]]>"));
+        lines.push(format!("    <![CDATA[{}]]>", escape_cdata(g)));
         lines.push("  </general-comment>".to_string());
     }
 
@@ -107,7 +107,11 @@ pub fn format_comments(
                 "file".to_string()
             } else if let Some(start) = comment.start_line_number {
                 if start != comment.line_number {
-                    format!("{}-{}", start, comment.line_number)
+                    format!(
+                        "{}-{}",
+                        start.min(comment.line_number),
+                        start.max(comment.line_number)
+                    )
                 } else {
                     comment.line_number.to_string()
                 }
@@ -124,9 +128,14 @@ pub fn format_comments(
                 diffing_core::comments::CommentSide::Additions => "additions",
                 diffing_core::comments::CommentSide::Deletions => "deletions",
             };
+            let severity_attr = comment
+                .severity
+                .filter(|severity| *severity != diffing_core::comments::CommentSeverity::None)
+                .map(|severity| format!(" severity=\"{}\"", severity.as_str()))
+                .unwrap_or_default();
             lines.push(format!(
-                "    <comment id=\"{}\" line=\"{}\" side=\"{}\" status=\"{}\" created-at=\"{}\">",
-                comment.id, line_attr, side_str, status_str, iso_date
+                "    <comment id=\"{}\" line=\"{}\" side=\"{}\" status=\"{}\"{} created-at=\"{}\">",
+                comment.id, line_attr, side_str, status_str, severity_attr, iso_date
             ));
 
             if comment.line_number != 0 {
@@ -146,9 +155,15 @@ pub fn format_comments(
                 } else {
                     format!("{prefix} {}", comment.line_content)
                 };
-                lines.push(format!("      <code><![CDATA[{code_val}]]></code>"));
+                lines.push(format!(
+                    "      <code><![CDATA[{}]]></code>",
+                    escape_cdata(&code_val)
+                ));
             }
-            lines.push(format!("      <body><![CDATA[{}]]></body>", comment.body));
+            lines.push(format!(
+                "      <body><![CDATA[{}]]></body>",
+                escape_cdata(&comment.body)
+            ));
 
             if !comment.replies.is_empty() {
                 lines.push("      <replies>".to_string());
@@ -164,7 +179,10 @@ pub fn format_comments(
                         "        <reply id=\"{}\" created-at=\"{}\" role=\"{}\"{}>",
                         reply.id, reply_iso, role, model_attr
                     ));
-                    lines.push(format!("          <![CDATA[{}]]>", reply.body));
+                    lines.push(format!(
+                        "          <![CDATA[{}]]>",
+                        escape_cdata(&reply.body)
+                    ));
                     lines.push("        </reply>".to_string());
                 }
                 lines.push("      </replies>".to_string());
@@ -177,6 +195,10 @@ pub fn format_comments(
     lines.push("</code-review-comments>".to_string());
 
     lines.join("\n")
+}
+
+fn escape_cdata(value: &str) -> String {
+    value.replace("]]>", "]]]]><![CDATA[>")
 }
 
 fn ms_to_iso(ms: u64) -> String {
@@ -234,6 +256,7 @@ mod tests {
             status,
             created_at: 1000,
             replies: Vec::new(),
+            severity: None,
         }
     }
 
@@ -300,6 +323,23 @@ mod tests {
         c.start_line_number = Some(8);
         let out = format_comments(&[c], None, None);
         assert!(out.contains("line=\"8-10\""));
+    }
+
+    #[test]
+    fn normalizes_legacy_reverse_ranges() {
+        let mut c = sample_comment("c1", "x", CommentStatus::Open);
+        c.start_line_number = Some(12);
+        c.line_number = 10;
+        let out = format_comments(&[c], None, None);
+        assert!(out.contains("line=\"10-12\""));
+    }
+
+    #[test]
+    fn includes_comment_severity() {
+        let mut c = sample_comment("c1", "must fix", CommentStatus::Open);
+        c.severity = Some(diffing_core::comments::CommentSeverity::Blocking);
+        let out = format_comments(&[c], None, None);
+        assert!(out.contains("severity=\"blocking\""));
     }
 
     #[test]
@@ -370,6 +410,18 @@ mod tests {
         c.line_content = "raw <tag>".to_string();
         let out = format_comments(&[c], None, None);
         assert!(out.contains("raw <tag> & ampersand"));
+    }
+
+    #[test]
+    fn multiline_comment_cannot_terminate_cdata_early() {
+        let c = sample_comment(
+            "c1",
+            "first line\ncontains ]]> safely\nlast line",
+            CommentStatus::Open,
+        );
+        let out = format_comments(&[c], None, None);
+        assert!(out.contains("contains ]]]]><![CDATA[> safely"));
+        assert!(!out.contains("contains ]]> safely"));
     }
 
     #[test]

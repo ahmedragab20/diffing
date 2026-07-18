@@ -1,8 +1,7 @@
 //! Send-review popover. A modal that asks for:
 //!  - a verdict (Approved / Request changes / Rejected) — radios
 //!  - an optional overall comment — multi-line textarea
-//!  - a live preview of the XML that will be sent (read-only)
-//!  - "Copy" and "Send" buttons
+//!  - a compact summary of the review handoff
 //!
 //! On Send: writes the XML to `pending-review.xml` in the per-repo
 //! storage dir, updates the lockfile with a `pendingReview` marker so
@@ -16,7 +15,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget};
 use tui_textarea::TextArea;
 
 use diffing_core::comments::{CommentStatus, ReviewComment};
@@ -25,26 +24,15 @@ use diffing_core::diff::FileDiff;
 use crate::handoff::format::format_comments;
 use crate::handoff::review::ReviewDecision;
 use crate::themes::Palette;
+use crate::ui::gridline::{dim_buffer, overlay_block};
 
-/// Centred rect helper (copied from `comment_form` so the two modals can
-/// have different sizes without a public surface coupling).
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -54,35 +42,19 @@ pub struct SendReviewRegions {
     verdict_panel: Rect,
     general_panel: Rect,
     pub general: Rect,
-    pub preview: Option<Rect>,
-    preview_panel: Option<Rect>,
     footer: Rect,
     compact: bool,
 }
 
 /// Shared geometry for rendering and mouse hit-testing.
 pub fn send_review_regions(area: Rect) -> SendReviewRegions {
-    let compact = area.width < 100;
-    let popup = if compact {
-        Rect::new(
-            area.x + 2.min(area.width),
-            area.y + 1.min(area.height),
-            area.width.saturating_sub(4),
-            area.height.saturating_sub(2),
-        )
-    } else {
-        centered_rect(85, 80, area)
-    };
+    let compact = area.width < 100 || area.height < 18;
+    let popup = centered_rect(
+        area.width.saturating_sub(4).min(78),
+        area.height.saturating_sub(2).min(20),
+        area,
+    );
     let inner = Block::default().borders(Borders::ALL).inner(popup);
-    let chunks = if compact {
-        vec![inner, Rect::default()]
-    } else {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-            .split(inner)
-            .to_vec()
-    };
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -90,7 +62,7 @@ pub fn send_review_regions(area: Rect) -> SendReviewRegions {
             Constraint::Min(4),
             Constraint::Length(1),
         ])
-        .split(chunks[0]);
+        .split(inner);
     let verdict_panel = left_chunks[0];
     let general_panel = left_chunks[1];
     let verdict_inner = Block::default().borders(Borders::ALL).inner(verdict_panel);
@@ -116,8 +88,6 @@ pub fn send_review_regions(area: Rect) -> SendReviewRegions {
         verdict_panel,
         general_panel,
         general: Block::default().borders(Borders::ALL).inner(general_panel),
-        preview: (!compact).then(|| Block::default().borders(Borders::ALL).inner(chunks[1])),
-        preview_panel: (!compact).then_some(chunks[1]),
         footer: left_chunks[2],
         compact,
     }
@@ -133,18 +103,20 @@ pub struct SendReviewState {
     pub verdict: ReviewDecision,
     pub general: TextArea<'static>,
     pub focused: SendField,
-    pub preview_scroll: u16,
+    pub unviewed_files: usize,
+    pub guard_acknowledged: bool,
 }
 
 impl SendReviewState {
-    pub fn new() -> Self {
+    pub fn new(unviewed_files: usize) -> Self {
         let mut ta = TextArea::new(vec![String::new()]);
         ta.set_placeholder_text("optional — overall note for the agent");
         Self {
             verdict: ReviewDecision::ChangesRequested,
             general: ta,
             focused: SendField::Verdict,
-            preview_scroll: 0,
+            unviewed_files,
+            guard_acknowledged: false,
         }
     }
 
@@ -173,19 +145,16 @@ pub fn render_send_popover(
 ) {
     let regions = send_review_regions(area);
     let popup = regions.popup;
-    let dim = Block::default().style(Style::default().bg(palette.bg).fg(palette.dim));
-    dim.render(area, buf);
+    dim_buffer(area, buf);
     Clear.render(popup, buf);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .style(Style::default().bg(palette.elevated))
-        .border_style(Style::default().fg(palette.accent))
-        .title(Span::styled(
-            " send review to agent ",
+    let block = overlay_block(
+        Span::styled(
+            " Send review ",
             Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
-        ));
+        ),
+        palette,
+    );
     block.render(popup, buf);
 
     // Verdict radios
@@ -209,7 +178,7 @@ pub fn render_send_popover(
         .collect();
     let verdict_block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .border_type(BorderType::Plain)
         .border_style(Style::default().fg(if state.focused == SendField::Verdict {
             palette.accent
         } else {
@@ -243,7 +212,7 @@ pub fn render_send_popover(
     );
     let general_block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .border_type(BorderType::Plain)
         .border_style(Style::default().fg(if state.focused == SendField::General {
             palette.accent
         } else {
@@ -263,19 +232,28 @@ pub fn render_send_popover(
         .filter(|c| c.status == CommentStatus::Open)
         .count();
     let total = comments.len();
+    let guard = if state.unviewed_files == 0 {
+        String::new()
+    } else if state.guard_acknowledged {
+        format!(" · {} unviewed · Ctrl-S confirm", state.unviewed_files)
+    } else {
+        format!(" · {} unviewed · Ctrl-S review", state.unviewed_files)
+    };
     let footer = if regions.compact {
         format!(
-            "{} files · {} comments ({} open) · Ctrl-S send · Esc cancel",
+            "{} files · {} comments ({} open){} · Ctrl-S send · Esc cancel",
             files.len(),
             total,
-            open_count
+            open_count,
+            guard,
         )
     } else {
         format!(
-            " ↑/↓: focus · ←/→: verdict · {} files · {} cmts ({} open) · Ctrl-S: send · Esc: cancel",
+            " ↑/↓: focus · ←/→: verdict · {} files · {} cmts ({} open){} · Ctrl-S: send · Esc: cancel",
             files.len(),
             total,
-            open_count
+            open_count,
+            guard,
         )
     };
     Paragraph::new(Line::from(Span::styled(
@@ -284,40 +262,6 @@ pub fn render_send_popover(
     )))
     .alignment(Alignment::Center)
     .render(regions.footer, buf);
-
-    // ── Right: live XML preview ──
-    let (Some(preview_panel), Some(preview_inner)) = (regions.preview_panel, regions.preview)
-    else {
-        return;
-    };
-    let xml = format_comments(comments, Some(&state.body()), Some(state.verdict));
-    let preview_lines: Vec<Line> = if xml.is_empty() {
-        vec![Line::from(Span::styled(
-            " (nothing to send — no comments, no verdict, no general note) ",
-            Style::default().fg(palette.comment),
-        ))]
-    } else {
-        xml.lines()
-            .take(preview_inner.height as usize)
-            .map(|l| {
-                let s = Style::default().fg(palette.fg);
-                Line::from(Span::styled(l.to_string(), s))
-            })
-            .collect()
-    };
-    let preview_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(palette.border))
-        .title(Span::styled(
-            " preview (xml sent to agent) ",
-            Style::default().fg(palette.fg),
-        ));
-    preview_block.render(preview_panel, buf);
-    Paragraph::new(preview_lines)
-        .wrap(Wrap { trim: false })
-        .scroll((0, state.preview_scroll))
-        .render(preview_inner, buf);
 }
 
 /// What the send action actually does on disk. The TUI:
@@ -363,6 +307,7 @@ mod tests {
             status: CommentStatus::Open,
             created_at: 1,
             replies: vec![],
+            severity: None,
         }]
     }
 
@@ -370,7 +315,7 @@ mod tests {
     fn cycle_verdict_wraps_around() {
         // The default order is [Approved, ChangesRequested, Rejected].
         // Start at ChangesRequested (index 1).
-        let mut s = SendReviewState::new();
+        let mut s = SendReviewState::new(0);
         assert_eq!(s.verdict, ReviewDecision::ChangesRequested);
         // -1 → Approved (index 0).
         s.cycle_verdict(-1);
@@ -404,9 +349,16 @@ mod tests {
 
     #[test]
     fn new_state_starts_in_changes_requested() {
-        let s = SendReviewState::new();
+        let s = SendReviewState::new(0);
         assert_eq!(s.verdict, ReviewDecision::ChangesRequested);
         assert_eq!(s.focused, SendField::Verdict);
+    }
+
+    #[test]
+    fn state_tracks_unviewed_review_guard() {
+        let s = SendReviewState::new(3);
+        assert_eq!(s.unviewed_files, 3);
+        assert!(!s.guard_acknowledged);
     }
 
     #[test]
@@ -415,19 +367,17 @@ mod tests {
         assert_eq!(regions.verdict_rows.len(), ReviewDecision::ALL.len());
         assert!(regions.general.width > 0);
         assert!(regions.general.height > 0);
-        assert!(regions.preview.unwrap().width > regions.general.width);
         for (index, (_, decision)) in regions.verdict_rows.iter().enumerate() {
             assert_eq!(*decision, ReviewDecision::ALL[index]);
         }
     }
 
     #[test]
-    fn compact_modal_keeps_controls_wide_and_hides_verbose_preview() {
+    fn compact_modal_keeps_controls_wide() {
         let regions = send_review_regions(Rect::new(0, 0, 80, 24));
         assert!(regions.compact);
         assert_eq!(regions.popup.width, 76);
         assert!(regions.general.width > 70);
-        assert!(regions.preview.is_none());
         assert_eq!(regions.verdict_rows.len(), ReviewDecision::ALL.len());
     }
 }

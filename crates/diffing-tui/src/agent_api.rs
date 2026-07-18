@@ -12,7 +12,9 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use diffing_core::comments::{CommentSide, CommentStatus, FileCommentStore, NewComment};
+use diffing_core::comments::{
+    CommentSeverity, CommentSide, CommentStatus, FileCommentStore, NewComment,
+};
 use diffing_core::index::DiffIndex;
 use serde_json::{json, Value};
 
@@ -253,10 +255,18 @@ fn route(
         } else {
             CommentSide::Additions
         };
+        let severity = match value.get("severity").and_then(Value::as_str) {
+            Some("blocking") => Some(CommentSeverity::Blocking),
+            Some("nit") => Some(CommentSeverity::Nit),
+            Some("question") => Some(CommentSeverity::Question),
+            Some("praise") => Some(CommentSeverity::Praise),
+            _ => None,
+        };
         let new_comment = if line_number == 0 {
             NewComment::FileLevel {
                 file_path,
                 body: comment_body,
+                severity,
             }
         } else {
             NewComment::Inline {
@@ -269,6 +279,7 @@ fn route(
                     .and_then(Value::as_str)
                     .unwrap_or(""),
                 body: comment_body,
+                severity,
             }
         };
         let comment = store.add(new_comment, now_ms())?;

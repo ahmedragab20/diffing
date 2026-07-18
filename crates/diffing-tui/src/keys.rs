@@ -15,6 +15,8 @@ pub enum Action {
     ScrollBottom,
     ScrollLeft,
     ScrollRight,
+    CodeColumnLeft,
+    CodeColumnRight,
     NextFile,
     PrevFile,
     NextHunk,
@@ -29,17 +31,27 @@ pub enum Action {
     ToggleLayout,
     OpenHelp,
     OpenSearch,
+    OpenFileFilter,
+    CycleFileFilter,
     OpenCommand,
     ToggleViewed,
     OpenThemePicker,
+    OpenSettings,
+    LanguageHover,
+    LanguageDefinition,
     AddComment,
+    AddFileComment,
+    ToggleVisualSelection,
     EditComment,
     ReplyComment,
     ResolveComment,
+    ResolveAllComments,
     DeleteComment,
     NextComment,
     PrevComment,
     OpenCommentThread,
+    CycleCommentStatus,
+    CycleCommentSeverity,
     OpenSendReview,
     CycleVerdict,
     FocusVerdict,
@@ -87,6 +99,8 @@ impl Keymap {
         if let Some(prefix) = self.pending.take() {
             let action = match (prefix, key.code) {
                 ('g', KeyCode::Char('g')) => Some(Action::ScrollTop),
+                ('g', KeyCode::Char('h')) => Some(Action::LanguageHover),
+                ('g', KeyCode::Char('d')) => Some(Action::LanguageDefinition),
                 (']', KeyCode::Char('h')) => Some(Action::NextHunk),
                 ('[', KeyCode::Char('h')) => Some(Action::PrevHunk),
                 (']', KeyCode::Char('c')) => Some(Action::NextComment),
@@ -123,6 +137,16 @@ impl Keymap {
         display
     }
 
+    pub fn pending_hint(&self) -> Option<&'static str> {
+        match self.pending {
+            Some('g') => Some("g: top · h: hover · d: definition"),
+            Some(']') => Some("]h: next hunk · ]c: next comment"),
+            Some('[') => Some("[h: previous hunk · [c: previous comment"),
+            Some('z') => Some("zz: center cursor"),
+            _ => None,
+        }
+    }
+
     pub fn clear(&mut self) {
         self.pending = None;
         self.count = 0;
@@ -140,6 +164,7 @@ impl Keymap {
 
 pub fn classify(key: &KeyEvent) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
     match key.code {
         KeyCode::Char('c') if ctrl => Action::Quit,
         KeyCode::Char('q') if !ctrl => Action::Quit,
@@ -159,24 +184,34 @@ pub fn classify(key: &KeyEvent) -> Action {
         KeyCode::Char('w') if !ctrl => Action::ToggleWrap,
         KeyCode::Char('?') if !ctrl => Action::OpenHelp,
         KeyCode::Char('/') if !ctrl => Action::OpenSearch,
+        KeyCode::Char('f') if !ctrl => Action::OpenFileFilter,
+        KeyCode::Char('a') if !ctrl => Action::CycleFileFilter,
         KeyCode::Char(':') if !ctrl => Action::OpenCommand,
         KeyCode::Char('n') if !ctrl => Action::NextSearch,
         KeyCode::Char('N') if !ctrl => Action::PrevSearch,
         KeyCode::Char('m') if !ctrl => Action::ToggleLayout,
         KeyCode::Char('v') if !ctrl => Action::ToggleViewed,
         KeyCode::Char('t') if !ctrl => Action::OpenThemePicker,
+        KeyCode::Char(',') if !ctrl => Action::OpenSettings,
         KeyCode::Char('c') if !ctrl => Action::AddComment,
+        KeyCode::Char('C') if !ctrl => Action::AddFileComment,
+        KeyCode::Char('V') if !ctrl => Action::ToggleVisualSelection,
         KeyCode::Char('e') if !ctrl => Action::EditComment,
         KeyCode::Char('r') if !ctrl => Action::ReplyComment,
         KeyCode::Char('x') if !ctrl => Action::ResolveComment,
+        KeyCode::Char('X') if !ctrl => Action::ResolveAllComments,
         KeyCode::Char('d') if !ctrl => Action::DeleteComment,
         KeyCode::Char(']') if !ctrl => Action::NextComment,
         KeyCode::Char('[') if !ctrl => Action::PrevComment,
         KeyCode::Char('o') if !ctrl => Action::OpenCommentThread,
+        KeyCode::Char('s') if !ctrl => Action::CycleCommentStatus,
+        KeyCode::Char('p') if !ctrl => Action::CycleCommentSeverity,
         KeyCode::Char('T') if !ctrl => Action::FocusTracker,
         KeyCode::Char('S') if !ctrl => Action::OpenSendReview,
-        KeyCode::Char('h') if !ctrl => Action::ScrollLeft,
-        KeyCode::Char('l') if !ctrl => Action::ScrollRight,
+        KeyCode::Char('h') if alt => Action::CodeColumnLeft,
+        KeyCode::Char('l') if alt => Action::CodeColumnRight,
+        KeyCode::Char('h') if key.modifiers.is_empty() => Action::ScrollLeft,
+        KeyCode::Char('l') if key.modifiers.is_empty() => Action::ScrollRight,
         KeyCode::Tab if ctrl => Action::FocusGeneral,
         KeyCode::BackTab if ctrl => Action::FocusVerdict,
         KeyCode::PageDown => Action::ScrollHalfDown,
@@ -190,7 +225,7 @@ pub fn classify(key: &KeyEvent) -> Action {
 }
 
 pub fn help_text() -> &'static str {
-    "NAVIGATION\n  j/k, ↑/↓       row down/up\n  {count}j/k     repeat motion\n  gg / G         first/last row\n  Ctrl-d/u       half page down/up\n  J / K          next/previous file\n  ]h / [h        next/previous hunk\n  ]c / [c        next/previous comment\n  h / l          horizontal scroll\n  zz             center cursor\n\nREVIEW\n  c              comment at cursor\n  e / r          edit/reply\n  x / d          resolve/delete thread\n  v              toggle viewed\n  m              split/unified layout\n  S              send review\n\nTOOLS\n  /              search changed content\n  n / N          next/previous search hit\n  :              command line\n  t / w          theme / wrap\n  Tab / Shift-Tab focus panes\n  ?              this help\n  q              quit\n  Esc            cancel current mode"
+    "NAVIGATION\n  j/k, ↑/↓       row down/up\n  {count}j/k     repeat motion\n  gg / G         first/last row\n  Ctrl-d/u       half page down/up\n  J / K          next/previous file\n  ]h / [h        next/previous hunk\n  ]c / [c        next/previous comment\n  h / l          horizontal scroll\n  Alt-h/l        symbol column left/right\n  zz             center cursor\n\nLANGUAGE\n  gh             hover at symbol\n  gd             go to definition\n  Local servers  diagnostics in the gutter\n\nREVIEW\n  c / C          line / file comment\n  V              start/cancel line selection\n  e / r          edit/reply\n  x / X          resolve thread / all\n  d d            delete thread\n  s / p          filter status/severity\n  v              toggle viewed\n  m              split/unified layout\n  S              send review\n\nTOOLS\n  /              search changed content\n  n / N          next/previous search hit\n  f              filter file paths\n  a              all/unviewed/commented files\n  :              command line\n  ,              settings (file display + language)\n  t / w          theme / wrap\n  Tab / Shift-Tab focus panes\n  ?              this help\n  q              quit\n  Esc            cancel current mode"
 }
 
 #[cfg(test)]
@@ -334,6 +369,51 @@ mod tests {
                 action: Action::ScrollTop,
                 count: 1
             })
+        );
+    }
+
+    #[test]
+    fn pending_sequences_explain_available_completions() {
+        let mut keymap = Keymap::default();
+        assert!(keymap
+            .feed(&key(KeyCode::Char(']'), KeyModifiers::NONE))
+            .is_none());
+        assert_eq!(
+            keymap.pending_hint(),
+            Some("]h: next hunk · ]c: next comment")
+        );
+    }
+
+    #[test]
+    fn keymap_exposes_language_actions_without_stealing_horizontal_scroll() {
+        let mut keymap = Keymap::default();
+        assert!(keymap
+            .feed(&key(KeyCode::Char('g'), KeyModifiers::NONE))
+            .is_none());
+        assert_eq!(
+            keymap.feed(&key(KeyCode::Char('h'), KeyModifiers::NONE)),
+            Some(Command {
+                action: Action::LanguageHover,
+                count: 1,
+            })
+        );
+        assert!(keymap
+            .feed(&key(KeyCode::Char('g'), KeyModifiers::NONE))
+            .is_none());
+        assert_eq!(
+            keymap.feed(&key(KeyCode::Char('d'), KeyModifiers::NONE)),
+            Some(Command {
+                action: Action::LanguageDefinition,
+                count: 1,
+            })
+        );
+        assert_eq!(
+            classify(&key(KeyCode::Char('h'), KeyModifiers::NONE)),
+            Action::ScrollLeft
+        );
+        assert_eq!(
+            classify(&key(KeyCode::Char('l'), KeyModifiers::ALT)),
+            Action::CodeColumnRight
         );
     }
 }

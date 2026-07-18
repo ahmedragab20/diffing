@@ -30,6 +30,28 @@ pub enum CommentStatus {
     Resolved,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CommentSeverity {
+    Blocking,
+    Nit,
+    Question,
+    Praise,
+    None,
+}
+
+impl CommentSeverity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Blocking => "blocking",
+            Self::Nit => "nit",
+            Self::Question => "question",
+            Self::Praise => "praise",
+            Self::None => "none",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CommentReply {
     pub id: String,
@@ -62,6 +84,8 @@ pub struct ReviewComment {
     #[serde(rename = "createdAt")]
     pub created_at: u64,
     pub replies: Vec<CommentReply>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub severity: Option<CommentSeverity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,10 +97,12 @@ pub enum NewComment<'a> {
         line_number: u32,
         line_content: &'a str,
         body: &'a str,
+        severity: Option<CommentSeverity>,
     },
     FileLevel {
         file_path: &'a str,
         body: &'a str,
+        severity: Option<CommentSeverity>,
     },
 }
 
@@ -147,7 +173,7 @@ impl FileCommentStore {
         self.with_lock(|| {
             let mut comments = self.load_unlocked()?;
             let id = new_uuid();
-            let (file_path, side, start_line_number, line_number, line_content, body) =
+            let (file_path, side, start_line_number, line_number, line_content, body, severity) =
                 match comment {
                     NewComment::Inline {
                         file_path,
@@ -156,21 +182,35 @@ impl FileCommentStore {
                         line_number,
                         line_content,
                         body,
+                        severity,
+                    } => {
+                        if line_number == 0 {
+                            anyhow::bail!("inline comments require a positive line number");
+                        }
+                        let (start_line_number, line_number) =
+                            normalize_comment_range(start_line_number, line_number);
+                        (
+                            file_path.to_string(),
+                            side,
+                            start_line_number,
+                            line_number,
+                            line_content.to_string(),
+                            body.to_string(),
+                            severity.filter(|value| *value != CommentSeverity::None),
+                        )
+                    }
+                    NewComment::FileLevel {
+                        file_path,
+                        body,
+                        severity,
                     } => (
-                        file_path.to_string(),
-                        side,
-                        start_line_number,
-                        line_number,
-                        line_content.to_string(),
-                        body.to_string(),
-                    ),
-                    NewComment::FileLevel { file_path, body } => (
                         file_path.to_string(),
                         CommentSide::Additions,
                         None,
                         0,
                         String::new(),
                         body.to_string(),
+                        severity.filter(|value| *value != CommentSeverity::None),
                     ),
                 };
             let new = ReviewComment {
@@ -184,6 +224,7 @@ impl FileCommentStore {
                 status: CommentStatus::Open,
                 created_at: now_ms,
                 replies: Vec::new(),
+                severity,
             };
             comments.push(new.clone());
             self.save_unlocked(&comments)?;
@@ -224,6 +265,23 @@ impl FileCommentStore {
                 self.save_unlocked(&comments)?;
             }
             Ok(removed)
+        })
+    }
+
+    pub fn resolve_all(&self) -> Result<usize> {
+        self.with_lock(|| {
+            let mut comments = self.load_unlocked()?;
+            let mut resolved = 0;
+            for comment in &mut comments {
+                if comment.status == CommentStatus::Open {
+                    comment.status = CommentStatus::Resolved;
+                    resolved += 1;
+                }
+            }
+            if resolved > 0 {
+                self.save_unlocked(&comments)?;
+            }
+            Ok(resolved)
         })
     }
 
@@ -279,6 +337,13 @@ impl FileCommentStore {
                 Err(error) => return Err(error).context("acquiring comment store lock"),
             }
         }
+    }
+}
+
+fn normalize_comment_range(start: Option<u32>, end: u32) -> (Option<u32>, u32) {
+    match start.filter(|line| *line > 0) {
+        Some(start) if start != end => (Some(start.min(end)), start.max(end)),
+        _ => (None, end),
     }
 }
 
@@ -367,6 +432,7 @@ mod tests {
             line_number: 42,
             line_content: "let x = 1;",
             body,
+            severity: None,
         }
     }
 
@@ -374,6 +440,7 @@ mod tests {
         NewComment::FileLevel {
             file_path: "src/a.rs",
             body,
+            severity: None,
         }
     }
 
@@ -516,6 +583,7 @@ mod tests {
                             NewComment::FileLevel {
                                 file_path: "src/concurrent.rs",
                                 body: &format!("worker {worker} comment {index}"),
+                                severity: None,
                             },
                             index,
                         )
@@ -528,5 +596,93 @@ mod tests {
         }
         let comments = FileCommentStore::new(&repo).load().unwrap();
         assert_eq!(comments.len(), 100);
+    }
+
+    #[test]
+    fn severity_survives_mutation_round_trip() {
+        let dir = tempdir();
+        let store = FileCommentStore::new(dir.to_str().unwrap());
+        let created = store
+            .add(
+                NewComment::Inline {
+                    file_path: "src/a.rs",
+                    side: CommentSide::Additions,
+                    start_line_number: Some(40),
+                    line_number: 42,
+                    line_content: "line 40\nline 41\nline 42",
+                    body: "must fix",
+                    severity: Some(CommentSeverity::Blocking),
+                },
+                1000,
+            )
+            .unwrap();
+        store
+            .update(&created.id, None, Some(CommentStatus::Resolved))
+            .unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded[0].severity, Some(CommentSeverity::Blocking));
+        assert_eq!(loaded[0].start_line_number, Some(40));
+        assert_eq!(loaded[0].line_content, "line 40\nline 41\nline 42");
+    }
+
+    #[test]
+    fn inline_ranges_are_normalized_and_multiline_bodies_round_trip() {
+        let dir = tempdir();
+        let store = FileCommentStore::new(dir.to_str().unwrap());
+        let created = store
+            .add(
+                NewComment::Inline {
+                    file_path: "src/a.rs",
+                    side: CommentSide::Deletions,
+                    start_line_number: Some(12),
+                    line_number: 10,
+                    line_content: "ten\neleven\ntwelve",
+                    body: "first paragraph\n\nsecond paragraph",
+                    severity: None,
+                },
+                1000,
+            )
+            .unwrap();
+        assert_eq!(created.start_line_number, Some(10));
+        assert_eq!(created.line_number, 12);
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded[0].body, "first paragraph\n\nsecond paragraph");
+        assert_eq!(loaded[0].line_content, "ten\neleven\ntwelve");
+    }
+
+    #[test]
+    fn inline_comments_reject_file_level_line_zero() {
+        let dir = tempdir();
+        let store = FileCommentStore::new(dir.to_str().unwrap());
+        let result = store.add(
+            NewComment::Inline {
+                file_path: "src/a.rs",
+                side: CommentSide::Additions,
+                start_line_number: None,
+                line_number: 0,
+                line_content: "",
+                body: "invalid",
+                severity: None,
+            },
+            1000,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_all_updates_only_open_threads() {
+        let dir = tempdir();
+        let store = FileCommentStore::new(dir.to_str().unwrap());
+        let first = store.add(sample_inline("first"), 1000).unwrap();
+        store.add(sample_inline("second"), 1001).unwrap();
+        store
+            .update(&first.id, None, Some(CommentStatus::Resolved))
+            .unwrap();
+        assert_eq!(store.resolve_all().unwrap(), 1);
+        assert!(store
+            .load()
+            .unwrap()
+            .iter()
+            .all(|comment| comment.status == CommentStatus::Resolved));
     }
 }

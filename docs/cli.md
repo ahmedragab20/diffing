@@ -658,6 +658,38 @@ handoff; the TUI binary is a self-contained `ratatui` + `crossterm`
 renderer that watches the same `comments.json` and writes back through the
 same atomic file APIs.
 
+The terminal surface uses the diff-first **Gridline** design system: a
+one-row command header, border-light file navigation, one-cell separators, a
+dedicated review gutter, semantic diff colors, and keyboard-visible focus
+rails. Rounded borders are reserved for modal overlays. Empty review drawers
+collapse automatically. Layout adapts by terminal width: wide terminals can
+show files, diff, and active comments together; medium terminals move active
+comments below the diff; compact terminals show one focused workspace at a
+time so the diff remains usable instead of collapsing into narrow columns.
+
+Press `,` to open Settings. **File display** lives there and is persisted per
+repository: **Single file** keeps navigation focused on one patch, while
+**Continuous files** creates a bounded, virtualized review stream across all
+changed files. The renderer still decodes only visible index slices, so large
+patches do not have to be materialized in memory. Split/unified layout, wrap,
+tab size, line numbers, review-drawer visibility, optional language
+intelligence, and theme are configured in the same sheet.
+
+Syntax highlighting is theme-aware in both unified and split layouts. Token
+colors are contrast-corrected against addition and deletion backgrounds so
+meaning is not conveyed by low-contrast color alone.
+
+Language intelligence defaults to **Auto**. It lazily starts a compatible
+server already installed on `PATH` for the selected file:
+`rust-analyzer`, `typescript-language-server --stdio`,
+`pyright-langserver --stdio`, `gopls`, or `clangd`. diffing never downloads a
+server and all document traffic stays on the local stdio connection. The file
+header surfaces LSP state only while starting or on error; diagnostics appear
+as `E`, `W`, `I`, or `H` in the gutter and their message appears in the status
+line. Use `gh` for hover, `gd` for a definition, and `Alt-h` / `Alt-l` to move
+the symbol column. Definitions outside changed rows are reported in the status
+line because the TUI remains a diff reviewer rather than a full-file editor.
+
 ```bash
 diffing --tui                       # Open current working tree in the TUI
 diffing --tui --staged              # Review staged changes in the TUI
@@ -708,8 +740,9 @@ lock is detected and replaced on every supported host.
 ### Keymap (vim-style)
 
 The TUI mirrors the web UI's vim-style motions and adds the comment
-shortcuts. The status bar at the bottom shows the current mode (NORMAL /
-INSERT), the active file path, and the agent-status dot.
+shortcuts. Arrow-key equivalents remain available. The status bar keeps the
+current mode and position on the left, contextual shortcuts on the right, and
+shows valid completions while a multi-key sequence is pending.
 
 | Key | Action |
 |---|---|
@@ -717,17 +750,26 @@ INSERT), the active file path, and the agent-status dot.
 | `gg` / `G` | Jump to top / bottom of diff |
 | `Ctrl+d` / `Ctrl+u` | Half-page down / up |
 | `J` / `K` | Next / previous file |
-| `Tab` | Toggle focus between file tree and diff |
+| `Tab` / `Shift+Tab` | Cycle files, diff, and review focus |
 | `w` | Toggle line wrap |
-| `t` | Cycle tab size (2 → 4 → 8) |
+| `t` | Open the theme picker |
+| `,` | Open Settings |
 | `m` | Toggle split / unified view |
 | `/` | Open text search palette |
+| `f` | Filter changed-file paths |
+| `a` | Cycle all / unviewed / commented files |
 | `?` | Open shortcuts help |
 | `c` | New comment on the current line |
+| `C` | New file-level comment |
+| `V` | Start / cancel a same-side multi-line selection |
 | `e` | Edit the current comment |
 | `r` | Reply to the current comment thread |
 | `x` | Resolve the current comment |
-| `]` / `[` | Jump to the next / previous open comment thread |
+| `X` | Resolve all open comment threads |
+| `d d` | Confirm and permanently delete the current thread |
+| `s` / `p` | Cycle comment status / severity filters |
+| `]c` / `[c` | Jump to the next / previous comment thread |
+| `S` | Open Send Review |
 | `Esc` | Exit insert / popover mode |
 | `q` | Quit |
 
@@ -738,12 +780,18 @@ the Node server for comment operations, but it shares the same
 `comments.json` file path and the same JSON shape as the web UI. The
 following operations are byte-identical between the two clients:
 
-- Creating a new inline / multi-line / file-level comment.
+- Creating a new inline / same-side multi-line / file-level comment, with an
+  optional `blocking`, `question`, `nit`, or `praise` severity.
 - Editing a comment's `body` or `status` (`open` / `resolved`).
 - Appending a reply (`role: "user"` for the human, with the model
   recorded if set).
-- Resolving a comment.
-- Deleting a comment or reply.
+- Resolving or reopening a comment.
+- Deleting a comment thread after an explicit second-key confirmation.
+
+The diff review gutter distinguishes open, resolved, blocking, question, nit,
+and praise threads without relying on color alone. The review drawer can be
+filtered by status and severity, and file filters combine path search with
+all/unviewed/commented scopes.
 
 The TUI watches `comments.json` (120ms debounce) and broadcasts every
 change through the same atomic-write protocol the web server uses, so a
@@ -752,9 +800,10 @@ clients are open, and vice versa.
 
 ### Send review & agent handoff
 
-The TUI's "send review" popover (verdict radios + general-comment field +
-live XML preview) calls the same `format_comments` Rust port that the web
-UI uses — the output is byte-identical to `<code-review-comments>`. On
+The TUI's compact "send review" popover (verdict radios + general-comment
+field) calls the same `format_comments` Rust port that the web UI uses — the
+generated output remains byte-identical to `<code-review-comments>` without
+exposing the transport payload in the primary review workflow. On
 send it:
 
 1. Snapshots the current comment store.
@@ -766,14 +815,11 @@ send it:
    `Set-Clipboard` on Windows.
 4. Increments the review-session `round` and refreshes `server.json`
    with `mode: "tui"`.
-5. Updates the agent-status dot in the status bar.
+5. Releases CLI/MCP `await-review` waiters through the embedded loopback API.
+6. Updates the agent-status dot and a persistent status message in the TUI.
 
-**Known limitation** — the TUI's "Send to agent" writes the review to
-disk + clipboard but does not actively unblock a long-polling `diffing
-await-review` (which would require a Node-side change in a follow-up).
-The web UI's send button remains the supported native handoff path. The
-`pending-review.xml` is still produced and the review session is still
-round-incremented — only the long-poll wake-up is missing.
+If any changed files are still unviewed, the popover shows the count and the
+first `Ctrl+S` arms the review guard; a second `Ctrl+S` confirms the handoff.
 
 ### Cross-platform notes
 

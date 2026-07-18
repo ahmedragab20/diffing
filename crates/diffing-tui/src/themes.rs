@@ -134,8 +134,13 @@ fn parse_theme(id: &str, block: &str) -> Option<ThemeDefinition> {
     let bg = css_color(block, "bg-primary")?;
     let panel = css_color(block, "bg-secondary").unwrap_or(bg);
     let elevated = css_color(block, "bg-tertiary").unwrap_or_else(|| blend(panel, bg, 0.5));
-    let fg = css_color(block, "text-primary")?;
-    let dim = css_color(block, "text-muted").unwrap_or_else(|| blend(fg, bg, 0.55));
+    let surfaces = [bg, panel];
+    let fg = ensure_contrast(css_color(block, "text-primary")?, &surfaces, 4.5);
+    let dim = ensure_contrast(
+        css_color(block, "text-muted").unwrap_or_else(|| blend(fg, bg, 0.55)),
+        &surfaces,
+        4.5,
+    );
     let accent = css_color(block, "border-focus")
         .or_else(|| css_color(block, "primary"))
         .unwrap_or(fg);
@@ -163,10 +168,10 @@ fn parse_theme(id: &str, block: &str) -> Option<ThemeDefinition> {
             accent,
             added,
             removed,
-            added_bg: blend(added, bg, if light { 0.12 } else { 0.18 }),
-            removed_bg: blend(removed, bg, if light { 0.10 } else { 0.18 }),
+            added_bg: blend(added, bg, if light { 0.10 } else { 0.13 }),
+            removed_bg: blend(removed, bg, if light { 0.09 } else { 0.13 }),
             gutter: dim,
-            selection_bg: blend(accent, bg, if light { 0.16 } else { 0.28 }),
+            selection_bg: blend(accent, bg, if light { 0.13 } else { 0.18 }),
             border,
             border_focused: accent,
             comment,
@@ -224,7 +229,51 @@ fn blend(foreground: Color, background: Color, amount: f32) -> Color {
 
 fn relative_luminance(color: Color) -> f32 {
     let (r, g, b) = rgb(color);
-    0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32
+    let linear = |channel: u8| {
+        let value = channel as f32 / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+}
+
+fn contrast_ratio(foreground: Color, background: Color) -> f32 {
+    let foreground = relative_luminance(foreground);
+    let background = relative_luminance(background);
+    let lighter = foreground.max(background);
+    let darker = foreground.min(background);
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+fn ensure_contrast(foreground: Color, backgrounds: &[Color], minimum: f32) -> Color {
+    let passes = |candidate| {
+        backgrounds
+            .iter()
+            .all(|background| contrast_ratio(candidate, *background) >= minimum)
+    };
+    if passes(foreground) {
+        return foreground;
+    }
+    let black = Color::Rgb(0, 0, 0);
+    let white = Color::Rgb(255, 255, 255);
+    let minimum_ratio = |candidate| {
+        backgrounds
+            .iter()
+            .map(|background| contrast_ratio(candidate, *background))
+            .fold(f32::INFINITY, f32::min)
+    };
+    let target = if minimum_ratio(black) > minimum_ratio(white) {
+        black
+    } else {
+        white
+    };
+    (1..=20)
+        .map(|step| blend(target, foreground, step as f32 / 20.0))
+        .find(|candidate| passes(*candidate))
+        .unwrap_or(target)
 }
 
 fn display_name(id: &str) -> String {
@@ -267,8 +316,22 @@ mod tests {
     fn every_theme_has_readable_foreground_and_distinct_surfaces() {
         for theme in ThemeName::all() {
             let palette = Palette::for_theme(*theme);
-            let contrast = (relative_luminance(palette.fg) - relative_luminance(palette.bg)).abs();
-            assert!(contrast >= 45.0, "low contrast for {}", theme.label());
+            assert!(
+                contrast_ratio(palette.fg, palette.bg) >= 4.5,
+                "low text contrast for {}",
+                theme.label()
+            );
+            assert!(
+                contrast_ratio(palette.fg, palette.panel) >= 4.5,
+                "low panel text contrast for {}",
+                theme.label()
+            );
+            assert!(
+                contrast_ratio(palette.dim, palette.bg) >= 4.5
+                    && contrast_ratio(palette.dim, palette.panel) >= 4.5,
+                "low muted text contrast for {}",
+                theme.label()
+            );
             assert_ne!(
                 rgb(palette.panel),
                 rgb(palette.fg),
