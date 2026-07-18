@@ -73,6 +73,7 @@ const SUBCOMMANDS = new Set([
   'doctor',
   'completion',
   'progress',
+  'inspect',
 ])
 if (SUBCOMMANDS.has(args[0])) {
   if (args[0] === 'mcp') {
@@ -217,6 +218,10 @@ const resolvedClientDir = existsSync(clientDir)
   ? clientDir
   : resolve(process.cwd(), 'dist/client')
 
+// Kick off the browser module load in parallel with server start so open is
+// ready the moment the port is bound.
+const openModulePromise = opts.noOpen ? null : import('open')
+
 let repoRoot: string
 try {
   repoRoot = getRepoRoot()
@@ -273,7 +278,32 @@ startupLease.release()
 const localUrl = `http://${host}:${actualPort}`
 
 console.log(`diffing server running at ${localUrl}`)
-await playStartupDisplay()
+
+// Open the browser as soon as the server is listening. The decorative quote
+// animation used to block here (typewriter can take seconds) so the UI felt
+// stuck until the quote finished — never gate the browser on that.
+if (openModulePromise) {
+  try {
+    const settings = loadSettings()
+    const openHost = host === '0.0.0.0' ? '127.0.0.1' : host
+    // PR mode mounts <PrReviewApp> only on `/gh/pr` — open that path so the
+    // user lands on Submit-to-GitHub instead of the local review surface.
+    const openUrl = `http://${openHost}:${actualPort}${prMode ? '/gh/pr' : ''}`
+    const openModule = await openModulePromise
+    let appName: string | readonly string[] | undefined
+    if (settings.browser) {
+      const apps = openModule.apps as Record<string, string | readonly string[]>
+      appName = apps[settings.browser] || settings.browser
+    }
+    const options = appName ? { app: { name: appName } } : {}
+    void openModule.default(openUrl, options)
+  } catch (err) {
+    console.error('Failed to open browser:', err instanceof Error ? err.message : err)
+  }
+}
+
+// Decorative startup quote — non-blocking; never delay the review UI for it.
+void playStartupDisplay()
 
 try {
   const updateInfo = await updateCheckPromise
@@ -283,22 +313,6 @@ try {
   }
 } catch {
   // best-effort update check
-}
-
-if (!opts.noOpen) {
-  const settings = loadSettings()
-  const openHost = host === '0.0.0.0' ? '127.0.0.1' : host
-  // PR mode mounts <PrReviewApp> only on `/gh/pr` — open that path so the
-  // user lands on Submit-to-GitHub instead of the local review surface.
-  const openUrl = `http://${openHost}:${actualPort}${prMode ? '/gh/pr' : ''}`
-  const openModule = await import('open')
-  let appName: string | readonly string[] | undefined
-  if (settings.browser) {
-    const apps = openModule.apps as Record<string, string | readonly string[]>
-    appName = apps[settings.browser] || settings.browser
-  }
-  const options = appName ? { app: { name: appName } } : {}
-  openModule.default(openUrl, options)
 }
 
 const shutdown = () => {
