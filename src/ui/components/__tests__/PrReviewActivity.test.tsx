@@ -23,10 +23,20 @@ const reviews = [
 
 describe('PrReviewActivity', () => {
   it('shows the latest overall review comment and verdict', () => {
-    render(<PrReviewActivity reviews={reviews} />)
+    const { container } = render(<PrReviewActivity reviews={reviews} />)
     expect(screen.getByText('Approved again buddy@')).toBeInTheDocument()
     expect(screen.getByText('Approved')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /View on GitHub/i })).toHaveAttribute('href', 'https://github.test/review/2')
+    expect(container.querySelector('img.pr-review-activity-avatar')).toHaveAttribute(
+      'src',
+      `/api/gh/avatar?url=${encodeURIComponent('https://example.test/avatar.png')}`,
+    )
+  })
+
+  it('falls back to the verdict icon when the avatar proxy cannot load', () => {
+    const { container } = render(<PrReviewActivity reviews={reviews} />)
+    fireEvent.error(container.querySelector('img.pr-review-activity-avatar')!)
+    expect(container.querySelector('img.pr-review-activity-avatar')).not.toBeInTheDocument()
   })
 
   it('walks older review submissions without changing the diff', () => {

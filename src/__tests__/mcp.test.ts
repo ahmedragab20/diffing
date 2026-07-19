@@ -61,6 +61,9 @@ describe('diffing MCP', () => {
         'submit_plan', 'await_plan_review', 'list_plans', 'get_plan',
         'get_plan_versions', 'get_plan_version', 'reply_to_plan_comment', 'resolve_plan_comment',
         'review_session_status', 'start_review_session', 'get_diff', 'create_comment',
+        'diff_summary', 'diff_files', 'diff_hunks', 'diff_slice', 'diff_search',
+        'gh_overview', 'gh_list_threads', 'gh_list_reviews', 'gh_list_draft_comments',
+        'gh_create_draft_comment', 'gh_refresh', 'gh_submit_review',
       ]))
       expect(tools.tools.every((tool) => tool.outputSchema && tool.annotations)).toBe(true)
       for (const name of ['await_review', 'await_plan_review']) {
@@ -197,6 +200,82 @@ describe('diffing MCP', () => {
         status: 'created', comment: { id: 'comment-1', filePath: 'a.ts' },
       })
       expect(requests).toEqual([expect.objectContaining({ body: 'Please cover this branch.' })])
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('exposes slim PR reads and local draft creation in gh-pr mode', async () => {
+    const fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.includes('/api/gh/overview')) {
+        return new Response(JSON.stringify({
+          prMode: true,
+          owner: 'acme',
+          repo: 'widget',
+          pullNumber: 12,
+          counts: { unresolvedThreads: 1 },
+        }), { headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.includes('/api/gh/threads')) {
+        return new Response('<pr-review-threads pr="acme/widget#12" />', {
+          headers: { 'Content-Type': 'application/xml' },
+        })
+      }
+      if (init?.method === 'POST' && url.endsWith('/api/gh/pr-session/comments')) {
+        const body = JSON.parse(String(init.body))
+        return new Response(JSON.stringify({
+          id: 'draft-1', ...body, status: 'open', createdAt: 10, replies: [],
+        }), { status: 201, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    const lock: ServerLock = {
+      port: 43135,
+      host: '127.0.0.1',
+      pid: process.pid,
+      repoRoot,
+      startedAt: Date.now(),
+      version: MCP_VERSION,
+      mode: 'gh-pr',
+      prRef: 'acme/widget#12',
+    }
+    const session = await connect({
+      repoRoot,
+      readLock: () => lock,
+      lockIsAlive: () => true,
+    })
+    try {
+      const overview = await session.client.callTool({ name: 'gh_overview', arguments: {} })
+      expect(overview.isError, JSON.stringify(overview.content)).not.toBe(true)
+      expect(overview.structuredContent).toMatchObject({
+        result: { owner: 'acme', pullNumber: 12 },
+      })
+
+      const threads = await session.client.callTool({
+        name: 'gh_list_threads',
+        arguments: { unresolvedOnly: true, format: 'xml' },
+      })
+      expect(threads.isError, JSON.stringify(threads.content)).not.toBe(true)
+      expect(threads.structuredContent).toMatchObject({
+        result: { format: 'xml', xml: expect.stringContaining('pr-review-threads') },
+      })
+
+      const draft = await session.client.callTool({
+        name: 'gh_create_draft_comment',
+        arguments: {
+          filePath: 'src/a.ts',
+          side: 'additions',
+          lineNumber: 4,
+          body: 'Please cover this path.',
+          severity: 'blocking',
+        },
+      })
+      expect(draft.isError, JSON.stringify(draft.content)).not.toBe(true)
+      expect(draft.structuredContent).toMatchObject({
+        comment: { id: 'draft-1', severity: 'blocking' },
+      })
     } finally {
       await session.close()
     }

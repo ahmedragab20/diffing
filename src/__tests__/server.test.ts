@@ -509,6 +509,44 @@ describe('server', () => {
       })
     })
 
+    describe('bounded diff inspect', () => {
+      it('indexes and pages the current web-session patch', async () => {
+        mockGetGitDiffAsync.mockResolvedValue(`diff --git a/src/index.ts b/src/index.ts
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1 +1,2 @@
+-old
++new
++extra
+`)
+
+        const summaryRes = await app.fetch(new Request('http://localhost/api/diff/summary'))
+        expect(summaryRes.status).toBe(200)
+        const summary = await summaryRes.json()
+        expect(summary).toMatchObject({ files: 1, hunks: 1, additions: 2, deletions: 1 })
+
+        const sliceRes = await app.fetch(new Request(
+          `http://localhost/api/diff/slice?file=0&maxLines=3&generation=${summary.generation}`,
+        ))
+        expect(sliceRes.status).toBe(200)
+        const slice = await sliceRes.json()
+        expect(slice.rows).toHaveLength(3)
+        expect(slice.nextRow).toBe(3)
+      })
+
+      it('rejects a stale generation after the web patch changes', async () => {
+        mockGetGitDiffAsync.mockResolvedValue('diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+b\n')
+        const first = await app.fetch(new Request('http://localhost/api/diff/summary'))
+        const { generation } = await first.json()
+
+        mockGetGitDiffAsync.mockResolvedValue('diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+c\n')
+        const stale = await app.fetch(new Request(
+          `http://localhost/api/diff/hunks?file=0&generation=${generation}`,
+        ))
+        expect(stale.status).toBe(409)
+      })
+    })
+
     describe('GET /api/gh/session', () => {
       it('returns 200 prMode:false when a stale PR session exists but the server is not in PR mode', async () => {
         const { createApp } = await import('../server.js')

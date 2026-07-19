@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { Hono } from "hono";
 import type { CommentStore } from "../lib/comments.js";
 import { InMemoryPrSessionStore, type PrSession } from "../lib/pr-session.js";
@@ -12,6 +12,7 @@ const githubMocks = vi.hoisted(() => ({
     updateComment: vi.fn(),
     deleteComment: vi.fn(),
     setThreadResolved: vi.fn(),
+    fetchPrFileContent: vi.fn(),
 }));
 
 vi.mock("../lib/github.js", async (importOriginal) => {
@@ -24,6 +25,7 @@ vi.mock("../lib/github.js", async (importOriginal) => {
         updatePrReviewComment: githubMocks.updateComment,
         deletePrReviewComment: githubMocks.deleteComment,
         setPrReviewThreadResolved: githubMocks.setThreadResolved,
+        fetchPrFileContentViaGh: githubMocks.fetchPrFileContent,
     };
 });
 
@@ -188,8 +190,13 @@ describe("gh-pr endpoints (integration)", () => {
         githubMocks.updateComment.mockResolvedValue({ ok: true });
         githubMocks.deleteComment.mockResolvedValue({ ok: true });
         githubMocks.setThreadResolved.mockResolvedValue({ ok: true });
+        githubMocks.fetchPrFileContent.mockResolvedValue(null);
         prStore = new InMemoryPrSessionStore();
         app = await makeApp(prStore);
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
     });
 
     it("GET /api/gh/session returns 200 prMode:false when no session", async () => {
@@ -217,6 +224,64 @@ describe("gh-pr endpoints (integration)", () => {
         expect(body.existingComments).toHaveLength(1);
         expect(body.existingComments[0].body).toBe("pre-existing feedback");
         expect(body.existingReviews).toEqual([]);
+    });
+
+    it("GET /api/file-text loads PR base/head content instead of the local checkout", async () => {
+        await prStore.set(baseSession);
+        githubMocks.fetchPrFileContent
+            .mockResolvedValueOnce(Buffer.from("old vue source"))
+            .mockResolvedValueOnce(Buffer.from("new vue source"));
+
+        const oldRes = await app.fetch(new Request("http://localhost/api/file-text?path=src%2FOld.vue&version=old"));
+        const newRes = await app.fetch(new Request("http://localhost/api/file-text?path=src%2FNew.vue&version=new"));
+
+        expect(await oldRes.json()).toEqual({ content: "old vue source", missing: false });
+        expect(await newRes.json()).toEqual({ content: "new vue source", missing: false });
+        expect(githubMocks.fetchPrFileContent).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({ owner: "acme", repo: "widget" }),
+            "src/Old.vue",
+            "base",
+        );
+        expect(githubMocks.fetchPrFileContent).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({ owner: "acme", repo: "widget" }),
+            "src/New.vue",
+            "head",
+        );
+    });
+
+    it("GET /api/gh/avatar proxies only avatar URLs from the active session", async () => {
+        const avatarUrl = "https://avatars.githubusercontent.com/u/1?v=4";
+        await prStore.set({
+            ...baseSession,
+            existingReviews: [{
+                id: 7,
+                author: { login: "reviewer", avatarUrl },
+                body: "Looks good",
+                state: "APPROVED",
+                submittedAt: "2026-01-01T00:00:00.000Z",
+            }],
+        });
+        const remoteFetch = vi.fn().mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), {
+            headers: { "Content-Type": "image/png" },
+        }));
+        vi.stubGlobal("fetch", remoteFetch);
+
+        const res = await app.fetch(new Request(
+            `http://localhost/api/gh/avatar?url=${encodeURIComponent(avatarUrl)}`,
+        ));
+
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toBe("image/png");
+        expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual([1, 2, 3]);
+        expect(remoteFetch).toHaveBeenCalledWith(new URL(avatarUrl), { redirect: "error" });
+
+        const forbidden = await app.fetch(new Request(
+            `http://localhost/api/gh/avatar?url=${encodeURIComponent("http://127.0.0.1/private")}`,
+        ));
+        expect(forbidden.status).toBe(403);
+        expect(remoteFetch).toHaveBeenCalledTimes(1);
     });
 
     it("GET /api/gh/pr-session/comments returns the in-progress comments", async () => {
@@ -545,6 +610,169 @@ describe("gh-pr endpoints (integration)", () => {
             state: "APPROVED",
             htmlUrl: "https://github.test/review/55",
         });
+    });
+
+    it("GET /api/gh/overview returns slim counts without embedding thread bodies", async () => {
+        await prStore.set({
+            ...baseSession,
+            existingComments: [
+                { ...baseSession.existingComments[0], isResolved: false },
+                {
+                    ...baseSession.existingComments[0],
+                    id: 1000,
+                    body: "resolved one",
+                    isResolved: true,
+                },
+            ],
+            existingReviews: [
+                {
+                    id: 1,
+                    author: { login: "r" },
+                    body: "LGTM later",
+                    state: "COMMENTED",
+                    submittedAt: "2026-01-01T00:00:00.000Z",
+                },
+            ],
+        });
+        const res = await app.fetch(new Request("http://localhost/api/gh/overview"));
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body.prMode).toBe(true);
+        expect(body.counts.publishedThreads).toBe(2);
+        expect(body.counts.unresolvedThreads).toBe(1);
+        expect(body.counts.reviews).toBe(1);
+        expect(JSON.stringify(body)).not.toContain("pre-existing feedback");
+    });
+
+    it("GET /api/gh/threads returns paged XML for agents", async () => {
+        await prStore.set({
+            ...baseSession,
+            existingComments: [
+                {
+                    ...baseSession.existingComments[0],
+                    isResolved: false,
+                    threadId: "PRRT_x",
+                },
+            ],
+        });
+        const res = await app.fetch(
+            new Request("http://localhost/api/gh/threads?unresolvedOnly=true&format=xml"),
+        );
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toContain("<pr-review-threads");
+        expect(text).toContain("pre-existing feedback");
+        expect(text).toContain('resolved="false"');
+    });
+
+    it("GET /api/gh/threads and reviews filter and paginate JSON", async () => {
+        await prStore.set({
+            ...baseSession,
+            existingComments: [
+                { ...baseSession.existingComments[0], id: 10, isResolved: false },
+                {
+                    ...baseSession.existingComments[0],
+                    id: 11,
+                    path: "src/other.ts",
+                    author: { login: "someone-else" },
+                    isResolved: false,
+                },
+            ],
+            existingReviews: [
+                {
+                    id: 20,
+                    author: { login: "reviewer" },
+                    body: "Needs work",
+                    state: "CHANGES_REQUESTED",
+                    submittedAt: "2026-01-01T00:00:00.000Z",
+                },
+                {
+                    id: 21,
+                    author: { login: "approver" },
+                    body: "Looks good",
+                    state: "APPROVED",
+                    submittedAt: "2026-01-02T00:00:00.000Z",
+                },
+            ],
+        });
+
+        const threadsRes = await app.fetch(new Request(
+            "http://localhost/api/gh/threads?author=reviewer&limit=1&bodyMaxChars=5",
+        ));
+        const threads = await threadsRes.json();
+        expect(threads).toMatchObject({ returned: 1, total: 1, nextCursor: null });
+        expect(threads.threads[0]).toMatchObject({ id: 10, bodyTruncated: true });
+
+        const reviewsRes = await app.fetch(new Request(
+            "http://localhost/api/gh/reviews?state=changes_requested&limit=1",
+        ));
+        const reviews = await reviewsRes.json();
+        expect(reviews).toMatchObject({ returned: 1, total: 1, nextCursor: null });
+        expect(reviews.reviews[0].id).toBe(20);
+    });
+
+    it("GET /api/diff/summary and slice work for PR mode without full patch transfer", async () => {
+        await prStore.set({
+            ...baseSession,
+            diff: `diff --git a/src/a.ts b/src/a.ts
+index 111..222 100644
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1 +1,2 @@
+ line
++added
+`,
+        });
+        const summaryRes = await app.fetch(new Request("http://localhost/api/diff/summary"));
+        expect(summaryRes.status).toBe(200);
+        const summary = await summaryRes.json();
+        expect(summary.files).toBe(1);
+        expect(summary.complete).toBe(true);
+        expect(typeof summary.generation).toBe("number");
+        expect(summary).toMatchObject({
+            prMode: true,
+            owner: baseSession.owner,
+            repo: baseSession.repo,
+            pullNumber: baseSession.pullNumber,
+            headSha: baseSession.headSha,
+        });
+
+        const filesRes = await app.fetch(new Request("http://localhost/api/diff/files"));
+        const files = await filesRes.json();
+        expect(files.files[0].path).toBe("src/a.ts");
+
+        const sliceRes = await app.fetch(
+            new Request(
+                `http://localhost/api/diff/slice?file=0&start=0&maxLines=20&generation=${summary.generation}`,
+            ),
+        );
+        expect(sliceRes.status).toBe(200);
+        const slice = await sliceRes.json();
+        expect(slice.rows[0].type).toBe("fileHeader");
+        expect(slice.rows.some((r: any) => r.type === "line" && r.kind === "add")).toBe(true);
+    });
+
+    it("POST /api/gh/pr-session/comments accepts severity", async () => {
+        await prStore.set(baseSession);
+        const res = await app.fetch(
+            new Request("http://localhost/api/gh/pr-session/comments", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    filePath: "src/a.ts",
+                    side: "additions",
+                    lineNumber: 2,
+                    lineContent: "+added",
+                    body: "blocking concern",
+                    severity: "blocking",
+                }),
+            }),
+        );
+        expect(res.status).toBe(201);
+        const comment = await res.json();
+        expect(comment.severity).toBe("blocking");
+        const stored = await prStore.get();
+        expect(stored?.comments[0].severity).toBe("blocking");
     });
 
     it("published comment actions update GitHub and refresh cached conversations", async () => {
