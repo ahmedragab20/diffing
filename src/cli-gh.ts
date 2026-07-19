@@ -3,6 +3,7 @@ import { readServerLock, isLockAlive } from './lib/server-lock.js'
 import { formatComments } from './lib/comment-format.js'
 import type { ReviewComment } from './lib/types.js'
 import type { PrSession } from './lib/pr-session.js'
+import type { PrOverviewPayload } from './lib/pr-agent-format.js'
 
 /**
  * `diffing gh …` — the headless / port-agnostic surface for the PR review
@@ -10,14 +11,16 @@ import type { PrSession } from './lib/pr-session.js'
  * the running server from the per-repo lockfile and talks to it via
  * localhost HTTP. No port ever leaves the lockfile.
  *
- *   diffing gh pr-fetch <ref>           → GET  /api/gh/pr/init then dump
- *   diffing gh pr-review                → POST /api/gh/submit (current session)
- *   diffing gh pr-list-comments         → GET  /api/gh/pr-session/comments (XML)
- *   diffing gh status                   → GET  /api/gh/session (one-line summary)
+ *   diffing gh status                   → slim one-line summary (overview)
+ *   diffing gh overview [--json]        → compact PR metadata (no patch/threads)
+ *   diffing gh threads […]             → paged published threads (xml|json)
+ *   diffing gh reviews […]             → paged submitted reviews (xml|json)
+ *   diffing gh pr-fetch <ref>           → refresh / init PR session
+ *   diffing gh pr-review                → POST /api/gh/submit (authorized mutation)
+ *   diffing gh pr-list-comments         → local draft comments as XML
  */
 
 const EXIT_OK = 0
-const EXIT_AWAIT_TIMEOUT = 2
 const EXIT_NO_SERVER = 3
 const EXIT_NOT_FOUND = 4
 const EXIT_USAGE = 5
@@ -32,9 +35,68 @@ function baseUrl(): string {
   return `http://${host}:${lock.port}`
 }
 
+async function fetchJson<T>(path: string): Promise<{ ok: true; data: T } | { ok: false; status: number; error: string }> {
+  const res = await fetch(`${baseUrl()}${path}`)
+  if (res.status === 404) {
+    return { ok: false, status: 404, error: 'No active PR session. Start one with `diffing "gh pr <ref>"`.' }
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    return { ok: false, status: res.status, error: (err as any).error ?? res.statusText }
+  }
+  return { ok: true, data: (await res.json()) as T }
+}
+
+async function ghOverview(args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: { json: { type: 'boolean' } },
+    allowPositionals: false,
+  })
+  const result = await fetchJson<PrOverviewPayload & { prMode?: boolean }>('/api/gh/overview')
+  if (!result.ok) {
+    console.error(result.error)
+    return result.status === 404 ? EXIT_NOT_FOUND : 1
+  }
+  const s = result.data
+  if (values.json) {
+    process.stdout.write(JSON.stringify(s, null, 2) + '\n')
+    return EXIT_OK
+  }
+  const submittedLine = s.submittedAt
+    ? `submitted at ${new Date(s.submittedAt).toISOString()} → ${s.submittedReviewUrl ?? '(no url)'}`
+    : 'not submitted yet'
+  console.log(`${s.owner}/${s.repo}#${s.pullNumber}  ${s.title}`)
+  console.log(`  url:        ${s.url}`)
+  console.log(`  author:     ${s.author?.login ?? '(unknown)'}`)
+  console.log(`  +${s.additions} -${s.deletions}  (${s.changedFiles} files)  patchBytes=${s.patchBytes}`)
+  console.log(`  head:       ${s.headSha.slice(0, 7)}`)
+  console.log(`  base:       ${s.baseSha.slice(0, 7)}`)
+  console.log(
+    `  threads:    ${s.counts.publishedThreads} published (${s.counts.unresolvedThreads} unresolved, ${s.counts.outdatedThreads} outdated)`,
+  )
+  console.log(`  reviews:    ${s.counts.reviews} submitted review events`)
+  console.log(`  drafts:     ${s.counts.localDrafts} local (${s.counts.openDrafts} open)`)
+  console.log(`  status:     ${submittedLine}`)
+  return EXIT_OK
+}
+
 async function ghStatus(): Promise<number> {
-  const base = baseUrl()
-  const res = await fetch(`${base}/api/gh/session`)
+  // Prefer slim overview; fall back to fat session for older servers.
+  const overview = await fetch(`${baseUrl()}/api/gh/overview`)
+  if (overview.ok) {
+    const session = (await overview.json()) as PrOverviewPayload
+    const submitted = session.submittedAt
+      ? `submitted ${new Date(session.submittedAt).toISOString()}`
+      : 'not submitted'
+    console.log(
+      `PR #${session.pullNumber} ${session.owner}/${session.repo} ` +
+      `[${session.headSha.slice(0, 7)}] — ${session.counts.localDrafts} local draft(s), ` +
+      `${session.counts.unresolvedThreads} unresolved thread(s) — ${submitted}`,
+    )
+    return EXIT_OK
+  }
+  const res = await fetch(`${baseUrl()}/api/gh/session`)
   if (res.status === 404) {
     console.error('No active PR session. Start one with `diffing "gh pr <ref>"`.')
     return EXIT_NOT_FOUND
@@ -57,6 +119,102 @@ async function ghStatus(): Promise<number> {
   console.log(`  reviews:    ${s.existingReviews?.length ?? 0} submitted review events`)
   console.log(`  new:        ${s.comments?.length ?? 0} comments in this session`)
   console.log(`  status:     ${submittedLine}`)
+  return EXIT_OK
+}
+
+async function ghThreads(args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      unresolved: { type: 'boolean' },
+      path: { type: 'string' },
+      author: { type: 'string' },
+      cursor: { type: 'string' },
+      limit: { type: 'string' },
+      format: { type: 'string' },
+      'full-body': { type: 'boolean' },
+      'body-max': { type: 'string' },
+      json: { type: 'boolean' },
+    },
+    allowPositionals: false,
+  })
+  const params = new URLSearchParams()
+  if (values.unresolved) params.set('unresolvedOnly', 'true')
+  if (values.path) params.set('path', values.path)
+  if (values.author) params.set('author', values.author)
+  if (values.cursor) params.set('cursor', values.cursor)
+  if (values.limit) params.set('limit', values.limit)
+  if (values['full-body']) params.set('fullBody', 'true')
+  if (values['body-max']) params.set('bodyMaxChars', values['body-max'])
+  const format = values.json ? 'json' : (values.format ?? 'xml')
+  if (format !== 'xml' && format !== 'json') {
+    console.error('diffing gh threads: --format must be xml or json')
+    return EXIT_USAGE
+  }
+  params.set('format', format)
+
+  const res = await fetch(`${baseUrl()}/api/gh/threads?${params}`)
+  if (res.status === 404) {
+    console.error('No active PR session.')
+    return EXIT_NOT_FOUND
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    console.error((err as any).error ?? res.statusText)
+    return 1
+  }
+  if (format === 'xml') {
+    process.stdout.write((await res.text()) + '\n')
+  } else {
+    const body = await res.json()
+    process.stdout.write(JSON.stringify(body, null, values.json ? 2 : undefined) + '\n')
+  }
+  return EXIT_OK
+}
+
+async function ghReviews(args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      cursor: { type: 'string' },
+      limit: { type: 'string' },
+      format: { type: 'string' },
+      state: { type: 'string' },
+      'full-body': { type: 'boolean' },
+      'body-max': { type: 'string' },
+      json: { type: 'boolean' },
+    },
+    allowPositionals: false,
+  })
+  const params = new URLSearchParams()
+  if (values.cursor) params.set('cursor', values.cursor)
+  if (values.limit) params.set('limit', values.limit)
+  if (values.state) params.set('state', values.state)
+  if (values['full-body']) params.set('fullBody', 'true')
+  if (values['body-max']) params.set('bodyMaxChars', values['body-max'])
+  const format = values.json ? 'json' : (values.format ?? 'xml')
+  if (format !== 'xml' && format !== 'json') {
+    console.error('diffing gh reviews: --format must be xml or json')
+    return EXIT_USAGE
+  }
+  params.set('format', format)
+
+  const res = await fetch(`${baseUrl()}/api/gh/reviews?${params}`)
+  if (res.status === 404) {
+    console.error('No active PR session.')
+    return EXIT_NOT_FOUND
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    console.error((err as any).error ?? res.statusText)
+    return 1
+  }
+  if (format === 'xml') {
+    process.stdout.write((await res.text()) + '\n')
+  } else {
+    const body = await res.json()
+    process.stdout.write(JSON.stringify(body, null, values.json ? 2 : undefined) + '\n')
+  }
   return EXIT_OK
 }
 
@@ -89,7 +247,17 @@ async function ghPrFetch(args: string[]): Promise<number> {
     console.error(`Failed to fetch PR: ${(err as any).error ?? res.statusText}`)
     return 1
   }
-  // After refresh, session details live on GET /api/gh/session.
+  // Prefer slim overview after refresh to avoid dumping full session JSON.
+  const overviewRes = await fetch(`${base}/api/gh/overview`)
+  if (overviewRes.ok) {
+    const result = (await overviewRes.json()) as Record<string, unknown>
+    if (values.json) {
+      process.stdout.write(JSON.stringify(result, null, 2) + '\n')
+    } else {
+      console.log(`${result.owner}/${result.repo}#${result.pullNumber}  ${result.url}`)
+    }
+    return EXIT_OK
+  }
   const sessionRes = await fetch(`${base}/api/gh/session`)
   const result = sessionRes.ok
     ? ((await sessionRes.json()) as Record<string, unknown>)
@@ -183,6 +351,12 @@ export async function runGhSubcommand(args: string[]): Promise<number> {
   switch (action) {
     case 'status':
       return ghStatus()
+    case 'overview':
+      return ghOverview(rest)
+    case 'threads':
+      return ghThreads(rest)
+    case 'reviews':
+      return ghReviews(rest)
     case 'pr-fetch':
       return ghPrFetch(rest)
     case 'pr-review':
@@ -190,7 +364,9 @@ export async function runGhSubcommand(args: string[]): Promise<number> {
     case 'pr-list-comments':
       return ghPrListComments()
     default:
-      console.error('Usage: diffing gh <status|pr-fetch|pr-review|pr-list-comments> [...]')
+      console.error(
+        'Usage: diffing gh <status|overview|threads|reviews|pr-fetch|pr-review|pr-list-comments> [...]',
+      )
       return EXIT_USAGE
   }
 }

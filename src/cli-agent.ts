@@ -730,13 +730,14 @@ async function inspect(args: string[]): Promise<number> {
   if (parsed.values.help || !resource || extra.length > 0) {
     console.error(`Usage: diffing inspect <summary|files|hunks|slice|search> [options]
 
-Read bounded data from a running native TUI without transferring the full patch.
+Read bounded data from a running session (web, TUI, or gh-pr) without transferring the full patch.
+  summary
   files   [--cursor N] [--limit N]
   hunks   --file N [--cursor N] [--limit N] [--generation N]
   slice   --file N [--start N] [--max-lines N] [--max-bytes N] [--generation N]
-  search  <text>|--query <text> [--file N] [--row N] [--limit N] [--max-bytes N]
+  search  <text>|--query <text> [--file N] [--row N] [--limit N] [--max-bytes N] [--generation N]
 
-Add --pretty for indented JSON.`)
+Add --pretty for indented JSON. Compact JSON is the token-efficient default.`)
     return parsed.values.help ? EXIT_OK : EXIT_USAGE
   }
 
@@ -777,7 +778,8 @@ Add --pretty for indented JSON.`)
     return EXIT_USAGE
   }
   if (resource === 'search') {
-    const query = parsed.values.query ?? positionalQuery
+    const queryOption = parsed.values.query
+    const query = typeof queryOption === 'string' ? queryOption : positionalQuery
     if (!query) {
       console.error('diffing inspect search: provide search text or --query')
       return EXIT_USAGE
@@ -793,7 +795,7 @@ Add --pretty for indented JSON.`)
   try {
     response = await apiFetch(`${base}${endpoint}${params.size ? `?${params}` : ''}`)
   } catch (error: any) {
-    console.error(`Failed to reach diffing TUI: ${error?.message ?? error}`)
+    console.error(`Failed to reach diffing server: ${error?.message ?? error}`)
     return EXIT_NO_SERVER
   }
   const body = await response.json().catch(() => ({ error: response.statusText }))

@@ -50,7 +50,7 @@ if (args[0]?.startsWith('gh pr ') === true) {
 if (ghPrConsumed > 0) {
   // Remove only the `gh pr <ref>` tokens from `args` so the SUBCOMMANDS check
   // below doesn't match the leading `gh` and route to the agent-side
-  // `diffing gh ...` verbs (status, pr-fetch, pr-review, pr-list-comments)
+  // `diffing gh ...` verbs (overview/threads/reviews plus review lifecycle)
   // instead of opening the web UI.
   args.splice(0, ghPrConsumed)
 }
