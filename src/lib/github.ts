@@ -168,10 +168,11 @@ export interface PrMetadata {
 }
 
 /**
- * Parse a `gh pr <ref>` input into `{ owner, repo, pullNumber }`. Accepts:
- *   - `1234`                              → uses the cwd repo
+ * Parse a `gh pr <ref>` input into `{ owner, repo, pullNumber [, host] }`. Accepts:
+ *   - `1234`                              → uses the cwd repo (github.com or GHES)
  *   - `https://github.com/o/r/pull/1234`  → extracts from the URL
- *   - `o/r#1234`                          → shorthand
+ *   - `https://ghe.example.com/o/r/pull/1`→ GitHub Enterprise Server / GHE Cloud
+ *   - `o/r#1234`                          → shorthand (host from cwd when present)
  * If `cwdRepo` is provided, bare numbers and `o/r#1234` resolve against it.
  */
 export interface ResolvedPr {
@@ -180,25 +181,141 @@ export interface ResolvedPr {
   pullNumber: number
   /** The original input, for diagnostic / persistence. */
   ref: string
+  /**
+   * GitHub host. `github.com` (or omitted) for github.com; a GHES / GHE Cloud
+   * hostname otherwise (e.g. `github.company.com`). Used to route `gh -R` /
+   * `gh api --hostname` and token REST calls.
+   */
+  host?: string
 }
 
-export function parsePrRef(input: string, cwdRepo?: { owner: string; repo: string }): ResolvedPr {
-  const trimmed = input.trim()
-  // URL form
-  const urlMatch =
-    /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/i.exec(trimmed)
-  if (urlMatch) {
-    return { owner: urlMatch[1], repo: urlMatch[2], pullNumber: Number(urlMatch[3]), ref: trimmed }
+/** Repo identity derived from a git remote or `gh repo view`. */
+export interface DetectedRepo {
+  owner: string
+  repo: string
+  /** Hostname including optional port (e.g. `ghe.example.com` or `ghe.local:8443`). */
+  host: string
+}
+
+/** True when the host is github.com (or unspecified, which we treat the same). */
+export function isGithubDotCom(host?: string | null): boolean {
+  return !host || host === 'github.com'
+}
+
+/**
+ * `gh -R` selector: `OWNER/REPO` on github.com, `HOST/OWNER/REPO` on GHES.
+ * See `gh help environment` / `--repo [HOST/]OWNER/REPO`.
+ */
+export function ghRepoSelector(resolved: Pick<ResolvedPr, 'owner' | 'repo' | 'host'>): string {
+  if (isGithubDotCom(resolved.host)) {
+    return `${resolved.owner}/${resolved.repo}`
   }
-  // `o/r#1234` shorthand
+  return `${resolved.host}/${resolved.owner}/${resolved.repo}`
+}
+
+/** Extra argv for `gh api` / GraphQL when targeting a non-github.com host. */
+export function ghHostnameArgs(resolved: Pick<ResolvedPr, 'host'> | { host?: string }): string[] {
+  if (isGithubDotCom(resolved.host)) return []
+  return ['--hostname', resolved.host as string]
+}
+
+/** REST API origin for token-based fetch (GHES uses `/api/v3`). */
+export function githubApiBase(host?: string): string {
+  if (isGithubDotCom(host)) return 'https://api.github.com'
+  const withScheme = host!.includes('://') ? host! : `https://${host}`
+  return `${withScheme.replace(/\/$/, '')}/api/v3`
+}
+
+/** Build a ResolvedPr from a persisted PR session (host optional for legacy JSON). */
+export function resolvedFromSession(session: {
+  owner: string
+  repo: string
+  pullNumber: number
+  ref: string
+  host?: string
+}): ResolvedPr {
+  return {
+    owner: session.owner,
+    repo: session.repo,
+    pullNumber: session.pullNumber,
+    ref: session.ref,
+    host: session.host,
+  }
+}
+
+/**
+ * Parse a git remote URL into `{ host, owner, repo }`.
+ * Supports scp-like SSH, `ssh://`, and `https://` for github.com and GHES.
+ */
+export function parseGitRemoteUrl(url: string): DetectedRepo | null {
+  const trimmed = url.trim()
+  if (!trimmed) return null
+
+  // scp-like: git@host:owner/repo.git  (also org-1234@github.com:owner/repo.git)
+  // Reject URL schemes so we don't treat `https://…` as scp.
+  if (!trimmed.includes('://')) {
+    const scp = /^(?:[^@\s]+@)?([^:\s]+):([^/\s]+)\/([^/\s]+?)(?:\.git)?\s*$/.exec(trimmed)
+    if (scp) {
+      return { host: scp[1], owner: scp[2], repo: scp[3] }
+    }
+  }
+
+  // URL forms: https://host/owner/repo.git, ssh://git@host/owner/repo.git
+  try {
+    const normalized = trimmed.replace(/^git\+/, '')
+    const u = new URL(normalized)
+    // Prefer `.host` so GHES with a non-default port keeps it (hostname strips port).
+    const host = u.host
+    const parts = u.pathname.replace(/^\/+/, '').split('/').filter(Boolean)
+    if (host && parts.length >= 2) {
+      const owner = parts[0]
+      const repo = parts[1].replace(/\.git$/i, '')
+      if (owner && repo) return { host, owner, repo }
+    }
+  } catch {
+    // not a URL
+  }
+  return null
+}
+
+export function parsePrRef(
+  input: string,
+  cwdRepo?: { owner: string; repo: string; host?: string },
+): ResolvedPr {
+  const trimmed = input.trim()
+  // URL form — github.com *and* enterprise hosts
+  const urlMatch =
+    /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/(\d+)/i.exec(trimmed)
+  if (urlMatch) {
+    return {
+      host: urlMatch[1],
+      owner: urlMatch[2],
+      repo: urlMatch[3],
+      pullNumber: Number(urlMatch[4]),
+      ref: trimmed,
+    }
+  }
+  // `o/r#1234` shorthand (host inherited from cwd when available)
   const shorthand = /^([^/\s]+)\/([^#\s]+)#(\d+)$/.exec(trimmed)
   if (shorthand) {
-    return { owner: shorthand[1], repo: shorthand[2], pullNumber: Number(shorthand[3]), ref: trimmed }
+    return {
+      owner: shorthand[1],
+      repo: shorthand[2],
+      pullNumber: Number(shorthand[3]),
+      ref: trimmed,
+      host: cwdRepo?.host,
+    }
   }
   // bare number — use cwd repo
   const bare = /^#?(\d+)$/.exec(trimmed)
   if (bare && cwdRepo) {
-    return { owner: cwdRepo.owner, repo: cwdRepo.repo, pullNumber: Number(bare[1]), ref: trimmed }
+    return {
+      owner: cwdRepo.owner,
+      repo: cwdRepo.repo,
+      pullNumber: Number(bare[1]),
+      ref: trimmed,
+      host: cwdRepo.host,
+    }
   }
   if (bare) {
     throw new Error(
@@ -209,21 +326,42 @@ export function parsePrRef(input: string, cwdRepo?: { owner: string; repo: strin
 }
 
 /**
- * Best-effort: derive `{ owner, repo }` for the current working directory
- * from `git remote get-url origin`. Falls back to throwing.
+ * Best-effort: derive `{ host, owner, repo }` for the current working directory
+ * from `git remote get-url origin`, then fall back to `gh repo view` (which
+ * understands GHES remotes when `gh` is logged in to that host).
  */
-export async function detectCwdRepo(): Promise<{ owner: string; repo: string } | null> {
+export async function detectCwdRepo(): Promise<DetectedRepo | null> {
   try {
     const { stdout } = await execFileAsync(
       'git',
       ['remote', 'get-url', 'origin'],
       { encoding: 'utf-8' },
     )
-    const url = stdout.trim()
-    // ssh://git@github.com/owner/repo.git or git@github.com:owner/repo.git or https://github.com/owner/repo.git
-    const m =
-      /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\s*$/.exec(url)
-    if (m) return { owner: m[1], repo: m[2] }
+    const parsed = parseGitRemoteUrl(stdout.trim())
+    if (parsed) return parsed
+  } catch {
+    // fall through to gh
+  }
+
+  // `gh repo view` resolves the repo (and host) from the local git remote even
+  // on GHES, provided the user is authenticated to that host.
+  try {
+    const { stdout } = await execFileAsync(
+      'gh',
+      ['repo', 'view', '--json', 'nameWithOwner,url'],
+      { encoding: 'utf-8' },
+    )
+    const data = JSON.parse(stdout) as { nameWithOwner?: string; url?: string }
+    if (data.url) {
+      const fromUrl = parseGitRemoteUrl(data.url)
+      if (fromUrl) return fromUrl
+    }
+    if (data.nameWithOwner) {
+      const [owner, repo] = data.nameWithOwner.split('/')
+      if (owner && repo) {
+        return { owner, repo, host: 'github.com' }
+      }
+    }
   } catch {
     // fall through
   }
@@ -235,11 +373,10 @@ export async function detectCwdRepo(): Promise<{ owner: string; repo: string } |
  * Throws with a user-readable message on failure.
  */
 export async function fetchPrMetadataViaGh(resolved: ResolvedPr): Promise<PrMetadata> {
-  // `gh pr view <ref> -R <owner>/<repo> --json ...` for the metadata.
-  // `gh pr diff <ref> -R <owner>/<repo>` for the unified diff.
-  // `gh api ...` for the existing comments (paginated).
-  const repo = `${resolved.owner}/${resolved.repo}`
-  const args = ['-R', repo]
+  // `gh pr view <ref> -R [HOST/]OWNER/REPO --json ...` for the metadata.
+  // `gh pr diff <ref> -R [HOST/]OWNER/REPO` for the unified diff.
+  // `gh api --hostname HOST ...` for the existing comments (paginated).
+  const args = ['-R', ghRepoSelector(resolved)]
 
   let metaJson: any
   try {
@@ -308,7 +445,7 @@ export async function fetchExistingReviewsViaGh(resolved: ResolvedPr): Promise<P
   try {
     const { stdout } = await execFileAsync(
       'gh',
-      ['api', reviewsEndpoint, '--paginate'],
+      ['api', ...ghHostnameArgs(resolved), reviewsEndpoint, '--paginate'],
       { encoding: 'utf-8', maxBuffer: 20 * 1024 * 1024 },
     )
     const parsed = JSON.parse(stdout)
@@ -341,7 +478,6 @@ export async function fetchExistingCommentsViaGh(
   resolved: ResolvedPr,
   existingReviews?: PrExistingReview[],
 ): Promise<PrExistingComment[]> {
-  const repo = `${resolved.owner}/${resolved.repo}`
   const endpoint = `repos/${resolved.owner}/${resolved.repo}/pulls/${resolved.pullNumber}/comments`
   const recentReviews = existingReviews ?? await fetchExistingReviewsViaGh(resolved)
   const reviewStateById = new Map<number, string>()
@@ -352,7 +488,7 @@ export async function fetchExistingCommentsViaGh(
   try {
     const { stdout } = await execFileAsync(
       'gh',
-      ['api', `${endpoint}?per_page=100`, '--paginate'],
+      ['api', ...ghHostnameArgs(resolved), `${endpoint}?per_page=100`, '--paginate'],
       { encoding: 'utf-8', maxBuffer: 20 * 1024 * 1024 },
     )
     const parsed = JSON.parse(stdout)
@@ -462,7 +598,7 @@ async function fetchReviewThreadStateViaGh(
     do {
       const { stdout } = await execWithInput(
         'gh',
-        ['api', 'graphql', '--input', '-'],
+        ['api', 'graphql', ...ghHostnameArgs(resolved), '--input', '-'],
         JSON.stringify({
           query,
           variables: {
@@ -642,12 +778,12 @@ function stripBPrefix(path: string): string {
 
 async function submitViaGh(input: SubmitInput): Promise<SubmitOutput> {
   const payload = buildReviewPayload(input)
-  const repo = `${input.resolved.owner}/${input.resolved.repo}`
   const endpoint = `repos/${input.resolved.owner}/${input.resolved.repo}/pulls/${input.resolved.pullNumber}/reviews`
   // `gh api` accepts a JSON body via `--input -` + stdin. Pass it via env to
   // avoid argv length limits on huge reviews.
   const args = [
     'api',
+    ...ghHostnameArgs(input.resolved),
     '--method',
     'POST',
     endpoint,
@@ -686,7 +822,7 @@ async function submitViaGh(input: SubmitInput): Promise<SubmitOutput> {
 
 async function submitViaToken(input: SubmitInput, token: string): Promise<SubmitOutput> {
   const payload = buildReviewPayload(input)
-  const url = `https://api.github.com/repos/${input.resolved.owner}/${input.resolved.repo}/pulls/${input.resolved.pullNumber}/reviews`
+  const url = `${githubApiBase(input.resolved.host)}/repos/${input.resolved.owner}/${input.resolved.repo}/pulls/${input.resolved.pullNumber}/reviews`
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -743,7 +879,7 @@ export async function fetchPrChecks(resolved: ResolvedPr, headSha: string): Prom
     const endpoint = `repos/${resolved.owner}/${resolved.repo}/commits/${headSha}/check-runs?per_page=50`
     const { stdout } = await execFileAsync(
       'gh',
-      ['api', endpoint, '-H', 'Accept: application/vnd.github+json'],
+      ['api', ...ghHostnameArgs(resolved), endpoint, '-H', 'Accept: application/vnd.github+json'],
       { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 },
     )
     const parsed = JSON.parse(stdout) as {
@@ -812,6 +948,7 @@ export async function replyToPrComment(input: {
       'gh',
       [
         'api',
+        ...ghHostnameArgs(input.resolved),
         '--method',
         'POST',
         endpoint,
@@ -861,7 +998,17 @@ export async function updatePrReviewComment(input: {
   try {
     await execWithInput(
       'gh',
-      ['api', '--method', 'PATCH', endpoint, '-H', 'Accept: application/vnd.github+json', '--input', '-'],
+      [
+        'api',
+        ...ghHostnameArgs(input.resolved),
+        '--method',
+        'PATCH',
+        endpoint,
+        '-H',
+        'Accept: application/vnd.github+json',
+        '--input',
+        '-',
+      ],
       JSON.stringify({ body: input.body }),
     )
     return { ok: true }
@@ -876,11 +1023,23 @@ export async function deletePrReviewComment(input: {
 }): Promise<{ ok: boolean; error?: string }> {
   const endpoint = `repos/${input.resolved.owner}/${input.resolved.repo}/pulls/comments/${input.commentId}`
   try {
-    await execFileAsync('gh', ['api', '--method', 'DELETE', endpoint, '-H', 'Accept: application/vnd.github+json'], {
-      encoding: 'utf-8',
-      timeout: GH_REQUEST_TIMEOUT_MS,
-      maxBuffer: 5 * 1024 * 1024,
-    })
+    await execFileAsync(
+      'gh',
+      [
+        'api',
+        ...ghHostnameArgs(input.resolved),
+        '--method',
+        'DELETE',
+        endpoint,
+        '-H',
+        'Accept: application/vnd.github+json',
+      ],
+      {
+        encoding: 'utf-8',
+        timeout: GH_REQUEST_TIMEOUT_MS,
+        maxBuffer: 5 * 1024 * 1024,
+      },
+    )
     return { ok: true }
   } catch (error: any) {
     return { ok: false, error: githubCommandError(error, 'Failed to delete GitHub comment') }
@@ -890,6 +1049,8 @@ export async function deletePrReviewComment(input: {
 export async function setPrReviewThreadResolved(input: {
   threadId: string
   resolved: boolean
+  /** GHES host when the PR is not on github.com. */
+  host?: string
 }): Promise<{ ok: boolean; error?: string }> {
   const mutationName = input.resolved ? 'resolveReviewThread' : 'unresolveReviewThread'
   const query = `
@@ -902,7 +1063,7 @@ export async function setPrReviewThreadResolved(input: {
   try {
     const { stdout } = await execWithInput(
       'gh',
-      ['api', 'graphql', '--input', '-'],
+      ['api', 'graphql', ...ghHostnameArgs({ host: input.host }), '--input', '-'],
       JSON.stringify({ query, variables: { threadId: input.threadId } }),
     )
     const parsed = JSON.parse(stdout) as { errors?: Array<{ message?: string }> }
@@ -934,11 +1095,18 @@ export async function buildPrSession(ref: string): Promise<PrSession> {
   const cwdRepo = await detectCwdRepo()
   const resolved = parsePrRef(ref, cwdRepo ?? undefined)
   const meta = await fetchPrMetadataViaGh(resolved)
+  // Prefer host from the resolved ref; fall back to parsing the PR html_url
+  // (gh returns the enterprise URL) so later API calls keep the right host.
+  const host =
+    resolved.host ??
+    parseGitRemoteUrl(meta.url)?.host ??
+    cwdRepo?.host
   return {
     ref,
     owner: meta.owner,
     repo: meta.repo,
     pullNumber: meta.number,
+    host: isGithubDotCom(host) ? undefined : host,
     baseSha: meta.baseSha,
     headSha: meta.headSha,
     title: meta.title,
@@ -956,12 +1124,7 @@ export async function buildPrSession(ref: string): Promise<PrSession> {
 
 /** Refresh `diff` + `existingComments` + head SHA in an existing session. */
 export async function refreshPrSession(session: PrSession): Promise<PrSession> {
-  const resolved: ResolvedPr = {
-    owner: session.owner,
-    repo: session.repo,
-    pullNumber: session.pullNumber,
-    ref: session.ref,
-  }
+  const resolved = resolvedFromSession(session)
   const meta = await fetchPrMetadataViaGh(resolved)
   return {
     ...session,

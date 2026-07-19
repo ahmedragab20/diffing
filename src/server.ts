@@ -33,6 +33,7 @@ import {
   refreshPrSession,
   parsePrRef,
   detectCwdRepo,
+  resolvedFromSession,
   submitReview as githubSubmitReview,
   fetchExistingCommentsViaGh,
   fetchExistingReviewsViaGh,
@@ -876,12 +877,7 @@ export function createApp(
   })
 
   const syncExistingPrReviewData = async (session: NonNullable<Awaited<ReturnType<PrSessionStore['get']>>>) => {
-    const resolved = {
-      owner: session.owner,
-      repo: session.repo,
-      pullNumber: session.pullNumber,
-      ref: session.ref,
-    }
+    const resolved = resolvedFromSession(session)
     let existingReviews = await fetchExistingReviewsViaGh(resolved)
     const optimisticReview = session.submittedReviewId == null
       ? undefined
@@ -940,15 +936,7 @@ export function createApp(
     if (!session) return notInPrMode(c)
     try {
       const { fetchPrChecks } = await import('./lib/github.js')
-      const checks = await fetchPrChecks(
-        {
-          owner: session.owner,
-          repo: session.repo,
-          pullNumber: session.pullNumber,
-          ref: session.ref,
-        },
-        session.headSha,
-      )
+      const checks = await fetchPrChecks(resolvedFromSession(session), session.headSha)
       const summary = {
         total: checks.length,
         success: checks.filter((x) => x.state === 'success').length,
@@ -974,12 +962,7 @@ export function createApp(
     try {
       const { replyToPrComment } = await import('./lib/github.js')
       const result = await replyToPrComment({
-        resolved: {
-          owner: session.owner,
-          repo: session.repo,
-          pullNumber: session.pullNumber,
-          ref: session.ref,
-        },
+        resolved: resolvedFromSession(session),
         inReplyTo: id,
         body: text,
       })
@@ -1013,7 +996,7 @@ export function createApp(
     const text = typeof request.body === 'string' ? request.body.trim() : ''
     if (!text) return c.json({ error: 'body is required' }, 400)
     const result = await updatePrReviewComment({
-      resolved: { owner: session.owner, repo: session.repo, pullNumber: session.pullNumber, ref: session.ref },
+      resolved: resolvedFromSession(session),
       commentId: id,
       body: text,
     })
@@ -1030,7 +1013,7 @@ export function createApp(
     const id = Number(c.req.param('id'))
     if (!Number.isFinite(id)) return c.json({ error: 'Invalid comment id' }, 400)
     const result = await deletePrReviewComment({
-      resolved: { owner: session.owner, repo: session.repo, pullNumber: session.pullNumber, ref: session.ref },
+      resolved: resolvedFromSession(session),
       commentId: id,
     })
     if (!result.ok) return c.json({ error: result.error ?? 'Delete failed' }, 502)
@@ -1046,7 +1029,11 @@ export function createApp(
     const threadId = c.req.param('threadId')
     const request = await c.req.json().catch(() => ({})) as { resolved?: boolean }
     if (typeof request.resolved !== 'boolean') return c.json({ error: 'resolved must be a boolean' }, 400)
-    const result = await setPrReviewThreadResolved({ threadId, resolved: request.resolved })
+    const result = await setPrReviewThreadResolved({
+      threadId,
+      resolved: request.resolved,
+      host: session.host,
+    })
     if (!result.ok) return c.json({ error: result.error ?? 'Thread update failed' }, 502)
     const next = await syncExistingPrReviewData(session)
     return c.json({ ok: true, existingComments: next.existingComments })
@@ -1204,12 +1191,7 @@ export function createApp(
     }
 
     const result = await githubSubmitReview({
-      resolved: {
-        owner: session.owner,
-        repo: session.repo,
-        pullNumber: session.pullNumber,
-        ref: session.ref,
-      },
+      resolved: resolvedFromSession(session),
       decision: decision as PrDecision,
       body: generalBody,
       comments: session.comments ?? [],
@@ -1219,12 +1201,7 @@ export function createApp(
       let existingComments = session.existingComments
       let existingReviews = session.existingReviews ?? []
       try {
-        const resolved = {
-          owner: session.owner,
-          repo: session.repo,
-          pullNumber: session.pullNumber,
-          ref: session.ref,
-        }
+        const resolved = resolvedFromSession(session)
         existingReviews = await fetchExistingReviewsViaGh(resolved)
         existingComments = await fetchExistingCommentsViaGh(resolved, existingReviews)
       } catch {

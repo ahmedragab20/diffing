@@ -4,6 +4,9 @@ import {
   buildReviewPayload,
   decisionToEvent,
   expandMultiLineComments,
+  ghRepoSelector,
+  githubApiBase,
+  parseGitRemoteUrl,
   parsePrRef,
 } from '../github.js'
 import type { ReviewComment } from '../types.js'
@@ -184,13 +187,25 @@ describe('buildReviewPayload', () => {
 
 describe('parsePrRef', () => {
   const cwdRepo = { owner: 'acme', repo: 'widget' }
+  const ghesCwd = { owner: 'acme', repo: 'widget', host: 'ghe.example.com' }
 
   it('parses a full URL', () => {
     expect(parsePrRef('https://github.com/foo/bar/pull/42', cwdRepo)).toEqual({
+      host: 'github.com',
       owner: 'foo',
       repo: 'bar',
       pullNumber: 42,
       ref: 'https://github.com/foo/bar/pull/42',
+    })
+  })
+
+  it('parses a GitHub Enterprise PR URL', () => {
+    expect(parsePrRef('https://ghe.example.com/foo/bar/pull/99')).toEqual({
+      host: 'ghe.example.com',
+      owner: 'foo',
+      repo: 'bar',
+      pullNumber: 99,
+      ref: 'https://ghe.example.com/foo/bar/pull/99',
     })
   })
 
@@ -200,6 +215,17 @@ describe('parsePrRef', () => {
       repo: 'bar',
       pullNumber: 42,
       ref: 'foo/bar#42',
+      host: undefined,
+    })
+  })
+
+  it('inherits GHES host for owner/repo#N from cwd', () => {
+    expect(parsePrRef('foo/bar#42', ghesCwd)).toEqual({
+      owner: 'foo',
+      repo: 'bar',
+      pullNumber: 42,
+      ref: 'foo/bar#42',
+      host: 'ghe.example.com',
     })
   })
 
@@ -209,6 +235,17 @@ describe('parsePrRef', () => {
       repo: 'widget',
       pullNumber: 42,
       ref: '42',
+      host: undefined,
+    })
+  })
+
+  it('resolves a bare number against a GHES cwd repo', () => {
+    expect(parsePrRef('584', ghesCwd)).toEqual({
+      owner: 'acme',
+      repo: 'widget',
+      pullNumber: 584,
+      ref: '584',
+      host: 'ghe.example.com',
     })
   })
 
@@ -226,6 +263,83 @@ describe('parsePrRef', () => {
       repo: 'widget',
       pullNumber: 7,
       ref: '7',
+      host: undefined,
     })
+  })
+})
+
+describe('parseGitRemoteUrl', () => {
+  it('parses github.com HTTPS remotes', () => {
+    expect(parseGitRemoteUrl('https://github.com/acme/widget.git')).toEqual({
+      host: 'github.com',
+      owner: 'acme',
+      repo: 'widget',
+    })
+  })
+
+  it('parses github.com SSH scp-like remotes', () => {
+    expect(parseGitRemoteUrl('git@github.com:acme/widget.git')).toEqual({
+      host: 'github.com',
+      owner: 'acme',
+      repo: 'widget',
+    })
+  })
+
+  it('parses GHES HTTPS remotes', () => {
+    expect(parseGitRemoteUrl('https://ghe.example.com/acme/widget.git')).toEqual({
+      host: 'ghe.example.com',
+      owner: 'acme',
+      repo: 'widget',
+    })
+  })
+
+  it('parses GHES SSH remotes', () => {
+    expect(parseGitRemoteUrl('git@github.foodics.com:foodics/pay.git')).toEqual({
+      host: 'github.foodics.com',
+      owner: 'foodics',
+      repo: 'pay',
+    })
+  })
+
+  it('parses ssh:// GHES remotes', () => {
+    expect(parseGitRemoteUrl('ssh://git@ghe.example.com/acme/widget.git')).toEqual({
+      host: 'ghe.example.com',
+      owner: 'acme',
+      repo: 'widget',
+    })
+  })
+
+  it('preserves non-default ports on HTTPS remotes', () => {
+    expect(parseGitRemoteUrl('https://ghe.local:8443/acme/widget.git')).toEqual({
+      host: 'ghe.local:8443',
+      owner: 'acme',
+      repo: 'widget',
+    })
+  })
+
+  it('returns null for empty input', () => {
+    expect(parseGitRemoteUrl('')).toBeNull()
+  })
+})
+
+describe('ghRepoSelector / githubApiBase', () => {
+  it('uses OWNER/REPO on github.com', () => {
+    expect(ghRepoSelector({ owner: 'a', repo: 'b' })).toBe('a/b')
+    expect(ghRepoSelector({ owner: 'a', repo: 'b', host: 'github.com' })).toBe('a/b')
+  })
+
+  it('uses HOST/OWNER/REPO on GHES', () => {
+    expect(ghRepoSelector({ owner: 'a', repo: 'b', host: 'ghe.example.com' })).toBe(
+      'ghe.example.com/a/b',
+    )
+  })
+
+  it('uses api.github.com for github.com token calls', () => {
+    expect(githubApiBase()).toBe('https://api.github.com')
+    expect(githubApiBase('github.com')).toBe('https://api.github.com')
+  })
+
+  it('uses /api/v3 on GHES for token calls', () => {
+    expect(githubApiBase('ghe.example.com')).toBe('https://ghe.example.com/api/v3')
   })
 })

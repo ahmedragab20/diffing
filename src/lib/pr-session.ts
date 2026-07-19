@@ -81,6 +81,11 @@ export interface PrSession {
   /** Resolved `repository.name`. */
   repo: string
   pullNumber: number
+  /**
+   * GitHub host when not github.com (GHES / GHE Cloud). Omitted for
+   * github.com and for sessions created before host tracking existed.
+   */
+  host?: string
   /** The PR's head SHA — used to detect "force-pushed" between fetches. */
   headSha: string
   /** The PR's base SHA (often just `refs/heads/main`). */
