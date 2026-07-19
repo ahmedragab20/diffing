@@ -1,7 +1,6 @@
 ---
 name: diffing-plan-review
 description: Submit an implementation plan to diffing for human approval and obey the verdict before writing code. Use for plan sign-off, architecture review, risky work, or any request to let the human comment on a plan before implementation.
-user_invocable: true
 ---
 
 # Review an implementation plan with diffing
@@ -12,7 +11,7 @@ Use diffing as a real implementation gate: submit clean markdown, wait for the h
 
 Prefer MCP when available:
 
-1. `review_session_status`, then `start_review_session` if needed.
+1. `review_session_status`, then `start_review_session` only for `mode: none`. Reuse `mode: web`. Plan tools do not run against the native TUI or GitHub PR API, and MCP will not replace those user-owned sessions; ask the human to end the incompatible session before retrying.
 2. `submit_plan` with complete markdown body, title, and model/source when known.
 3. `await_plan_review`. Timeout is normal; retry while the user still wants you to wait.
 
@@ -20,8 +19,9 @@ CLI fallback:
 
 ```bash
 diffing --web --no-open
-diffing plan submit <plan.md> [--save-source] --title "..." --model "<model-name>"
-diffing plan await
+diffing plan submit [<plan.md>|-] [--title T] [--source S] [--model M] [--id ID] [--save-source]
+diffing plan submit [<plan.md>|-] --wait [--timeout N]
+diffing plan await [--timeout N]
 # or: cat PLAN.md | diffing plan submit --model "..."
 ```
 
@@ -31,9 +31,15 @@ Useful reads:
 
 ```bash
 diffing plan list [--json]
-diffing plan show <id> [--json] [--version n]
+diffing plan show [<id>] [--json] [--version n]  # omit id for latest
 diffing plan versions <id> [--json]
 ```
+
+Minimize duplicate reads: `await_plan_review` already returns the reviewed plan and relevant comments. Use `get_plan` / `plan show` only to refresh the current plan, `get_plan_versions` / `plan versions` for lightweight history metadata, and `get_plan_version` / `plan show --version` only for a specific historical body. Do not fetch every historical body by default.
+
+Use plan CLI/MCP/API operations instead of editing `plans.json`; the file-backed store, version snapshots, comment anchors, and `plan-sources/<id>.md` mirror are implementation-owned state under per-repository `~/.diffing/` storage.
+
+MCP intentionally exposes reply and resolve for plan comments, but not edit/delete/reply-edit operations. When correcting a mis-posted plan thread and no native command exists, use the documented loopback `/api/plans/:id/comments*` endpoints; deletion is destructive and requires clear intent.
 
 ## Obey the verdict
 

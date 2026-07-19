@@ -1,22 +1,23 @@
 ---
 name: diffing-review
-description: Review local git changes in diffing, inspect every changed file, and post actionable inline feedback for the human. Use when the user asks for a code review of working-tree, staged, commit, or branch changes through diffing.
-user_invocable: true
+description: Review code with diffing, inspect every changed file, and post actionable inline feedback. Use when the user asks to review working-tree, staged, commit, branch, or GitHub pull-request changes through diffing.
 ---
 
 # Review changes with diffing
 
 Perform a review rather than implementing: inspect the complete diff, account for existing discussion, and post only findings that are specific and actionable.
 
-## Prefer native MCP
+## Local web or TUI review
 
 When MCP tools are available:
 
-1. `review_session_status`; `start_review_session` only if no matching session is running.
-2. Inspect the patch:
-   - Full: `get_diff`
-   - Large diffs (preferred): `diff_summary` → `diff_files` → `diff_hunks` / `diff_slice` / `diff_search` as needed
-3. `list_comments` so you do not duplicate existing feedback.
+1. Call `review_session_status` and branch on `mode`. Use `start_review_session` only for `none`; it creates a web session and never replaces a user-owned TUI or GitHub PR session. If the mode is `gh-pr`, use the separate workflow below.
+2. Inspect with the cheapest complete path for that mode:
+   - **TUI**: call `diff_summary` until `complete` is true → page all `diff_files` via `nextCursor` → inspect each changed file with `diff_hunks` and bounded `diff_slice` pages. Continue slices with `nextRow`.
+   - Carry the summary `generation` into hunks, slices, and searches. On a stale-generation error, rerun the summary and restart traversal. Continue search with both `nextFile` and `nextRow`.
+   - Use `diff_search` only to target literal, case-insensitive matches in changed paths/content; it does not prove full review coverage.
+   - **Web**: call `get_diff` once. Check `truncated`, `binaryFiles`, and `untrackedFiles`; inspect omitted/binary/untracked changes separately so coverage is real. Bounded `diff_*` tools are TUI-only; use the exact status `diffArgs` plus local repository reads/git inspection for missing or surrounding context instead of fetching the patch repeatedly.
+3. `list_comments` with `openOnly: true` so you do not duplicate active feedback. Fetch resolved history only when it is relevant.
 4. For each real finding, `create_comment` with:
    - exact repo-relative path
    - diff **side** (`additions` | `deletions`)
@@ -28,7 +29,21 @@ When MCP tools are available:
 
 Comment only on lines that exist on the selected side. When no changed line is an honest anchor, put the concern in the summary instead of fabricating a location. Small exact fixes may use a fenced ```suggestion block (human/agent can apply via `apply_suggestion`).
 
-### Severity (triage labels)
+For rows returned by `diff_slice`, anchor `add` and `context` rows on `side: additions` with `newLineno`; anchor `del` rows on `side: deletions` with `oldLineno`. Use the exact `path` from `diff_files` and the row `content` as `lineContent`.
+
+## GitHub PR review
+
+There are no GitHub PR MCP tools. When status reports `mode: gh-pr`, use the port-agnostic CLI and loopback API:
+
+1. Run `diffing gh status` and confirm it is the requested PR. Report a mismatch rather than replacing the live session. Refresh matching stale or force-pushed state with `diffing gh pr-fetch <ref>`.
+2. Resolve the server with `diffing url`. Fetch `GET /api/diff` once for the PR patch and `GET /api/gh/session` for metadata, published conversations, and prior review activity.
+3. Read every changed file and relevant repository context. Fetch local drafts with `diffing gh pr-list-comments` or `GET /api/gh/pr-session/comments`; do not duplicate drafts or published findings.
+4. Create each local draft with `POST /api/gh/pr-session/comments` using `filePath`, `side`, `lineNumber`, optional inclusive `startLineNumber`, exact `lineContent`, and actionable `body`. Use `lineNumber: 0` only for an honest file-level concern with no changed-line anchor. The PR draft endpoint does not currently store severity.
+5. Return a summary and the local PR UI URL. Do not publish, reply to published threads, edit/delete published comments, or resolve/reopen GitHub threads unless the user explicitly requested that external mutation.
+
+When publication is authorized, validate first with `diffing gh pr-review --decision <approve|comment|request-changes|draft> --dry-run`; then omit `--dry-run` to submit. Only open draft comments are included. A `draft` decision keeps the GitHub review pending. Use the dedicated `/api/gh/existing-comments/*` and `/api/gh/review-threads/*` routes for authorized published-thread actions.
+
+### Local severity (triage labels)
 
 | Value | Meaning for you later (handoff XML) |
 |-------|-------------------------------------|
@@ -54,10 +69,15 @@ diffing url
 diffing comments --json
 # TUI-only bounded reads (when a TUI session is active):
 diffing inspect summary
-diffing inspect files --limit 50
+diffing inspect files --cursor 0 --limit 50
+diffing inspect hunks --file 0 --generation <generation>
+diffing inspect slice --file 0 --start 0 --max-lines 120 --generation <generation>
+diffing inspect search "literal" --generation <generation> --limit 25
 ```
 
-Fetch `GET /api/diff` and post `POST /api/comments` (JSON body may include `severity`, `startLineNumber`) against `diffing url` only when native tools are unavailable. Do not hard-code a port.
+Follow `nextCursor`, `nextRow`, or the `nextFile` + `nextRow` pair until null. Compact JSON is the token-efficient default; omit `--pretty`. The inspect commands require an active native TUI session.
+
+Fetch `GET /api/diff` and post `POST /api/comments` (JSON body may include `severity`, `startLineNumber`) against `diffing url` only when native tools are unavailable. Do not hard-code a port or directly edit diffing's storage JSON.
 
 Pasted `<code-review-comments>` XML is an offline discussion fallback and cannot create new live inline comments.
 
