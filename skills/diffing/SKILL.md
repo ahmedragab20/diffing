@@ -32,21 +32,21 @@ Never guess the repository or hard-code a port. For global MCP clients, bind the
 | Mode | Valid agent path |
 |------|------------------|
 | `none` | Start a loopback web session with MCP `start_review_session`, or CLI `diffing --web --no-open`. |
-| `web` | Use `get_diff`; all local comment, handoff, history, progress, suggestion, and plan tools are available. |
+| `web` | Prefer bounded `diff_*` inspection; all local comment, handoff, history, progress, suggestion, and plan tools are available. |
 | `tui` | Use bounded `diff_*` inspection. Available review operations are create/list/edit/delete comment, reply, resolve/unresolve, and await. No browser UI, plan API, progress/history, bulk resolve, suggestion apply, or reply edit/delete. |
-| `gh-pr` | Use `diffing gh …` and `/api/gh/*`. Local `get_diff`/comment/handoff/plan MCP workflows do not apply. Publishing or mutating GitHub requires explicit user authorization. |
+| `gh-pr` | Use `gh_overview`, bounded `diff_*`, and `gh_list_threads` / `gh_list_reviews`. Local handoff/plan workflows do not apply. Publishing or mutating GitHub requires explicit user authorization. |
 
 ## Minimize tokens while preserving coverage
 
 Choose inspection tools from the active session mode:
 
-- **`mode: tui`**: use the sparse, disk-backed index. Wait until `diff_summary.complete` is true, page every `diff_files` result via `nextCursor`, then inspect each relevant file with `diff_hunks` and bounded `diff_slice` calls. Continue slices with `nextRow`. Use `diff_search` for literal, case-insensitive path/content targeting, not as a substitute for reviewing every changed file.
+- **All modes**: start with `diff_summary`, page `diff_files` via `nextCursor`, then inspect relevant files with `diff_hunks` and bounded `diff_slice` calls. TUI uses its sparse disk-backed index; web and PR sessions use an in-process patch index.
 - Carry the `generation` returned by `diff_summary` into `diff_hunks`, `diff_slice`, and `diff_search`. If a call reports a stale generation (HTTP 409 through CLI/API), rerun `diff_summary` and restart that traversal; never combine rows from different generations.
 - Continue `diff_search` with both `nextFile` and `nextRow`. Keep default or smaller line/byte budgets unless more context is necessary.
-- **`mode: web`**: bounded `diff_*` tools are unavailable. Call `get_diff` once, then use repository-local reads/search for surrounding source instead of repeatedly transferring the full patch.
-- **`mode: gh-pr`**: use the GitHub PR workflow advertised by status; do not assume local-diff tools apply.
+- **`mode: web`**: use repository-local reads/search for surrounding source. Keep `get_diff` as an escape hatch when a consumer needs the complete patch.
+- **`mode: gh-pr`**: call `gh_overview` first, then bounded diff tools. Fetch published discussion with `gh_list_threads` (prefer `unresolvedOnly`) and `gh_list_reviews`; avoid the fat `/api/gh/session` payload.
 
-The CLI mirror is TUI-only: `diffing inspect summary|files|hunks|slice|search`. Its compact JSON default is best for agents; use `--pretty` only for human debugging. `start_review_session` cannot create a TUI session.
+The CLI mirror works in web, TUI, and PR sessions: `diffing inspect summary|files|hunks|slice|search`. Its compact JSON default is best for agents; use `--pretty` only for human debugging. `start_review_session` cannot create a TUI session.
 
 ## Route by intent
 
@@ -54,6 +54,8 @@ The CLI mirror is TUI-only: `diffing inspect summary|files|hunks|slice|search`. 
 |--------|------------------|
 | Open the UI or send changes to the human | `diffing-start-review` |
 | Review local changes or a GitHub PR and create findings | `diffing-review` |
+| Read or summarize a GitHub PR token-efficiently | `diffing-pr-read` |
+| Turn PR feedback into an approved local implementation | `diffing-pr-address` |
 | Wait for human code-review feedback and address it | `diffing-finish-review` |
 | Get a plan approved before implementation | `diffing-plan-review` |
 
@@ -68,8 +70,9 @@ If the harness does not expose named skills, apply those workflows from this rou
 | Comments | `create_comment` (path, side, line/range, body, optional **severity**), `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment`, `edit_comment`, `delete_comment`, `edit_reply`, `delete_reply`, `apply_suggestion`, `resolve_all_comments` |
 | Loop | `await_review`, `report_progress`, `get_review_history` |
 | Plan | `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment` |
+| GitHub PR | `gh_overview`, `gh_list_threads`, `gh_list_reviews`, `gh_list_draft_comments`, `gh_create_draft_comment`, `gh_refresh`, `gh_submit_review` |
 
-MCP also advertises workflow prompts `review_local_changes` and `submit_plan_for_review`, plus resource `diffing://agent-guide`. They aid discovery but do not replace the focused skills or tool schemas. GitHub PR operations have no MCP mirror.
+MCP also advertises workflow prompts `review_local_changes` and `submit_plan_for_review`, plus resource `diffing://agent-guide`. They aid discovery but do not replace the focused skills or tool schemas.
 
 ## Complete CLI map
 
@@ -82,8 +85,8 @@ MCP also advertises workflow prompts `review_local_changes` and `submit_plan_for
 | Reply/lifecycle | `diffing reply`; `resolve`; `unresolve`; `comment edit|delete` |
 | Human-visible status | `diffing progress --message "…" [--pct N] [--comment-id ID] [--agent-id ID]` |
 | Plan gate | `diffing plan submit|await|list|show|versions|reply|resolve` |
-| GitHub PR | `diffing "gh pr <ref>"`; `diffing gh status|pr-fetch|pr-list-comments|pr-review` |
-| Bounded TUI reads | `diffing inspect summary|files|hunks|slice|search` |
+| GitHub PR | `diffing "gh pr <ref>"`; `diffing gh status|overview|threads|reviews|pr-fetch|pr-list-comments|pr-review` |
+| Bounded diff reads | `diffing inspect summary|files|hunks|slice|search` |
 | Discovery/DX | `diffing url`; `doctor`; `completion bash|zsh|fish`; `update` |
 
 Use `diffing --help` and `docs/cli.md` for the full git-compatible option set and exact exit codes. Prefer stdin for long Markdown bodies/replies. `comment delete`, `delete_comment`, `delete_reply`, and GitHub publication are destructive or externally visible; use them only when the request clearly authorizes them.
@@ -94,7 +97,7 @@ Resolve the base URL with `diffing url`; never hard-code it. Prefer the native t
 
 - Local review: `GET /api/diff`, `/api/comments`, `/api/review/await|status|history`, and `/api/agent/progress`; mutate through the documented comment/reply/resolve/suggestion endpoints.
 - Plans: `/api/plans*` and `/api/plan-review/await|status` (web only).
-- GitHub PRs: `/api/gh/session`, `/api/gh/pr/*`, `/api/gh/pr-session/comments*`, `/api/gh/comments/sync`, published-conversation endpoints, and `/api/gh/submit`.
+- GitHub PRs: prefer slim `/api/gh/overview`, `/api/gh/threads`, and `/api/gh/reviews`; use `/api/gh/session` only for UI/full-state needs. PR refresh, drafts, published-conversation mutation, and submission remain under the documented `/api/gh/*` routes.
 - The remaining UI-oriented routes (attachments, search, settings, file text, hunk history, open/save/revert) are documented in `docs/cli.md`. Do not invoke working-tree or external mutations unless the user requested that action.
 
 Use CLI/MCP/API operations instead of editing `comments.json`, `plans.json`, or `server.json`. Those are implementation-owned files in per-repository `~/.diffing/` storage, not a public database API.

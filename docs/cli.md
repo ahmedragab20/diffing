@@ -112,7 +112,7 @@ A specialized suite of subcommands is integrated into the `diffing` binary to co
 | `plan …` | Plan-review loop (see §4b) |
 | `gh …` | GitHub PR automation (see §4c) |
 | `mcp` | Stdio MCP server (see §5) |
-| `inspect …` | Bounded TUI data reads (see below) |
+| `inspect …` | Bounded web, TUI, or PR diff reads (see below) |
 | `doctor` / `completion` / `update` | DX |
 
 ### `await-review`
@@ -269,19 +269,30 @@ diffing completion <bash|zsh|fish>
 ---
 
 ### `inspect`
-Read **bounded** diff data from a running **native TUI** session without transferring the full patch (TUI-only agent inspection API).
+Read **bounded** diff data from any running web, native TUI, or GitHub PR session without transferring the full patch.
 
 ```bash
 diffing inspect summary
 diffing inspect files [--cursor N] [--limit N]
 diffing inspect hunks --file N [--cursor N] [--limit N] [--generation N]
 diffing inspect slice --file N [--start N] [--max-lines N] [--max-bytes N] [--generation N]
-diffing inspect search <text>|--query <text> [--file N] [--row N] [--limit N] [--max-bytes N]
+diffing inspect search <text>|--query <text> [--file N] [--row N] [--limit N] [--max-bytes N] [--generation N]
 # Add --pretty for indented JSON.
 ```
 
-- Requires an active TUI lock (`mode: "tui"`) with agent HTTP endpoints.
+- Web and PR sessions build an in-process index from their current patch; TUI sessions use the sparse disk-backed index.
+- Carry `generation` from `summary` into hunk, slice, and search requests. A `409` means the patch changed and traversal must restart.
 - Prefer MCP `diff_summary` / `diff_files` / `diff_hunks` / `diff_slice` / `diff_search` when available — they target the same bounded data model.
+
+The loopback HTTP contract is shared across modes:
+
+| Route | Purpose |
+|-------|---------|
+| `GET /api/diff/summary` | Generation, completion, totals, kind counts, and PR identity when applicable |
+| `GET /api/diff/files?cursor&limit` | Paged file metadata |
+| `GET /api/diff/hunks?file&cursor&limit&generation` | Paged hunk metadata with stale-generation protection |
+| `GET /api/diff/slice?file&start&maxLines&maxBytes&generation` | Strictly bounded logical rows; continue with `nextRow` |
+| `GET /api/diff/search?q&file&row&limit&maxBytes&generation` | Literal case-insensitive path/content search; continue with `nextFile` + `nextRow` |
 
 ---
 
@@ -480,6 +491,39 @@ diffing gh status
 - Prints PR identity, head/base SHAs, published thread and review counts,
   local-draft count, and latest submission status.
 - **Exit codes**: `0` on success; `3` if no server; `4` if no PR session.
+
+### `gh overview`
+
+Return compact PR identity, SHAs, patch size, and conversation/draft counts without the patch or thread bodies.
+
+```bash
+diffing gh overview [--json]
+```
+
+Use this instead of `/api/gh/session` for agent status probes. Human-readable output is the default; `--json` emits the structured payload.
+
+### `gh threads`
+
+Page published GitHub review threads independently of local drafts.
+
+```bash
+diffing gh threads [--unresolved] [--path P] [--author A]
+  [--cursor N] [--limit N] [--body-max N] [--full-body]
+  [--format xml|json] [--json]
+```
+
+XML is the token-efficient default. Bodies are truncated unless `--full-body` is explicit; use the returned cursor in JSON mode to continue large result sets.
+
+### `gh reviews`
+
+Page published review verdicts and overall review bodies.
+
+```bash
+diffing gh reviews [--state STATE] [--cursor N] [--limit N]
+  [--body-max N] [--full-body] [--format xml|json] [--json]
+```
+
+This list is separate from inline threads so agents can fetch `CHANGES_REQUESTED` context without loading all conversations.
 
 ### `gh pr-fetch`
 
@@ -910,6 +954,7 @@ declared explicitly.
 | Comment lifecycle | `edit_comment`, `delete_comment`, `edit_reply`, `delete_reply`, `apply_suggestion`, `resolve_all_comments` | Edit/delete threads and replies; apply ```suggestion fences; bulk-resolve |
 | Progress / history | `report_progress`, `get_review_history` | Live agent progress toast; multi-round handoff history |
 | Plan review | `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment` | Gate implementation on a versioned human-reviewed plan |
+| GitHub PR | `gh_overview`, `gh_list_threads`, `gh_list_reviews`, `gh_list_draft_comments`, `gh_create_draft_comment`, `gh_refresh`, `gh_submit_review` | Slim PR reads, local drafts, refresh, and explicitly authorized review publication |
 
 `start_review_session` accepts an optional array of safe git-diff scope,
 filtering, whitespace, context, and rename-detection arguments. Output files,
@@ -932,7 +977,8 @@ CLI mirrors for the expanded tool surface:
 | `reply_to_comment` / `resolve_comment` / `unresolve_comment` | `diffing reply` / `resolve` / `unresolve` |
 | `edit_comment` / `delete_comment` | `diffing comment edit` / `comment delete` |
 | `report_progress` | `diffing progress --message "..."` |
-| `diff_*` (bounded) | `diffing inspect <summary\|files\|hunks\|slice\|search>` (TUI session) |
+| `diff_*` (bounded) | `diffing inspect <summary\|files\|hunks\|slice\|search>` |
+| `gh_overview` / `gh_list_threads` / `gh_list_reviews` | `diffing gh overview` / `gh threads` / `gh reviews` |
 | Plan tools | `diffing plan …` |
 
 ### MCP Prompts and Resource
@@ -945,8 +991,7 @@ CLI mirrors for the expanded tool surface:
 These are supplemental. Essential behavior remains in initialization
 instructions and tool descriptions for clients that expose tools only.
 
-GitHub PR automation remains available through the `diffing gh ...` CLI
-subcommands; no `gh_pr_*` MCP tools are currently advertised.
+GitHub PR automation is available through the `gh_*` MCP tools and the matching `diffing gh ...` CLI subcommands. Tool descriptions mark remote publication as requiring explicit user authorization.
 
 ---
 
@@ -1475,6 +1520,28 @@ so the local and plan-review flows are unaffected. `GET /api/gh/session` is the
 soft mode probe: it returns `{ "prMode": false }` when the server is not in PR
 mode. Every other response shape below assumes an active PR session.
 
+Agents should prefer the slim endpoints below. The existing `/api/gh/session`
+payload remains unchanged for UI compatibility.
+
+#### `GET /api/gh/overview`
+
+Returns PR identity, SHAs, additions/deletions, changed-file and patch-byte
+counts, authentication source, submission metadata, and counts for published,
+unresolved, resolved, outdated, review, and local-draft records. It never
+embeds the patch or conversation bodies.
+
+#### `GET /api/gh/threads`
+
+Returns a page of published inline threads. Query parameters:
+`unresolvedOnly=true`, `path`, `author`, numeric `cursor` / `limit`,
+`bodyMaxChars`, `fullBody=true`, and `format=json|xml`. JSON includes
+`nextCursor`; XML emits `<pr-review-threads>` agent handoff data.
+
+#### `GET /api/gh/reviews`
+
+Returns a page of submitted review events. Supports numeric `cursor` / `limit`,
+`state`, `bodyMaxChars`, `fullBody=true`, and `format=json|xml`.
+
 #### `GET /api/gh/session`
 Returns the active `PrSession` (sans the large `diff` string) for client hydration.
 - **Response Schema**:
@@ -1566,7 +1633,8 @@ Append a new PR-mode inline comment.
     "lineNumber": 142,
     "startLineNumber": 140,        // optional, for range select
     "lineContent": "const x = …",
-    "body": "Markdown comment"
+    "body": "Markdown comment",
+    "severity": "blocking | nit | question | praise | none"
   }
   ```
 - **Response**: 201 with the saved comment.

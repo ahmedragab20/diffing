@@ -38,6 +38,8 @@ Load a skill when your task matches its trigger. All skills live in `.agents/ski
 | `diffing-review` | Performing a code review of local git changes; fetching diff/comments; posting inline comments; applying suggestions |
 | `diffing-start-review` | Launching the diffing server so a human can review changes in the browser |
 | `diffing-finish-review` | Waiting for human handoff ("Send to agent"), applying requested changes, resolving comments |
+| `diffing-pr-read` | Reading or summarizing a GitHub PR through bounded, token-efficient inspect APIs |
+| `diffing-pr-address` | Turning unresolved PR feedback into an approved local implementation |
 
 Load the matching skill through the harness's normal skill mechanism. Each skill
 is self-contained and uses natural-language triggers; no slash command or
