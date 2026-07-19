@@ -18,10 +18,20 @@ const SUBCOMMANDS = [
   'show',
   'completion',
   'progress',
+  'inspect',
 ]
 
 const PLAN_ACTIONS = ['submit', 'await', 'list', 'show', 'versions', 'reply', 'resolve']
-const GH_ACTIONS = ['status', 'pr-fetch', 'pr-review', 'pr-list-comments']
+const GH_ACTIONS = [
+  'status',
+  'overview',
+  'threads',
+  'reviews',
+  'pr-fetch',
+  'pr-review',
+  'pr-list-comments',
+]
+const INSPECT_ACTIONS = ['summary', 'files', 'hunks', 'slice', 'search']
 const GLOBAL_FLAGS = [
   '--help',
   '--version',
@@ -44,6 +54,7 @@ _diffing() {
   case "\${words[1]}" in
     plan) COMPREPLY=( $(compgen -W "${PLAN_ACTIONS.join(' ')}" -- "$cur") ) ;;
     gh) COMPREPLY=( $(compgen -W "${GH_ACTIONS.join(' ')}" -- "$cur") ) ;;
+    inspect) COMPREPLY=( $(compgen -W "${INSPECT_ACTIONS.join(' ')}" -- "$cur") ) ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ) ;;
     comments) COMPREPLY=( $(compgen -W "--open --json --format" -- "$cur") ) ;;
     *)
@@ -76,6 +87,7 @@ _diffing() {
     'doctor:Diagnose setup'
     'show:Show commit(s) like git show'
     'completion:Print shell completions'
+    'inspect:Read bounded diff data'
   )
   _arguments -C \\
     '1: :->cmd' \\
@@ -86,6 +98,7 @@ _diffing() {
       case $words[1] in
         plan) _values 'plan action' ${PLAN_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
         gh) _values 'gh action' ${GH_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
+        inspect) _values 'inspect action' ${INSPECT_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
         completion) _values 'shell' bash zsh fish ;;
       esac
       ;;
@@ -110,6 +123,9 @@ export function fishCompletion(): string {
     ),
     ...GH_ACTIONS.map(
       (a) => `complete -c diffing -n "__fish_seen_subcommand_from gh" -a ${a}`,
+    ),
+    ...INSPECT_ACTIONS.map(
+      (a) => `complete -c diffing -n "__fish_seen_subcommand_from inspect" -a ${a}`,
     ),
     'complete -c diffing -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"',
   ]

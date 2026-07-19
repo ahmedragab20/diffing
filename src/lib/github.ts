@@ -244,6 +244,54 @@ export function resolvedFromSession(session: {
 }
 
 /**
+ * Fetch one repository file exactly as it existed at a PR base/head SHA.
+ * The raw media type preserves binary files while `gh` supplies the user's
+ * existing GitHub/GHES authentication. A missing path at that revision is a
+ * normal result for added/deleted files and is returned as `null`.
+ */
+export async function fetchPrFileContentViaGh(
+  resolved: Pick<ResolvedPr, 'owner' | 'repo' | 'host'>,
+  path: string,
+  sha: string,
+): Promise<Buffer | null> {
+  const normalizedPath = path.replace(/\\/g, '/')
+  if (
+    !normalizedPath ||
+    normalizedPath.startsWith('/') ||
+    normalizedPath.includes('\0') ||
+    normalizedPath.split('/').some((segment) => segment === '..')
+  ) {
+    throw new Error('Invalid repository file path')
+  }
+
+  const encodedPath = normalizedPath.split('/').map(encodeURIComponent).join('/')
+  const endpoint = `repos/${encodeURIComponent(resolved.owner)}/${encodeURIComponent(resolved.repo)}/contents/${encodedPath}?ref=${encodeURIComponent(sha)}`
+  try {
+    const { stdout } = await execFileAsync(
+      'gh',
+      [
+        'api',
+        ...ghHostnameArgs(resolved),
+        endpoint,
+        '-H',
+        'Accept: application/vnd.github.raw+json',
+      ],
+      {
+        encoding: 'buffer',
+        maxBuffer: GH_MAX_OUTPUT_BYTES,
+        timeout: GH_REQUEST_TIMEOUT_MS,
+      },
+    )
+    return Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout)
+  } catch (error) {
+    const details = error as Error & { stderr?: string | Buffer; stdout?: string | Buffer }
+    const output = `${details.message}\n${details.stderr?.toString() ?? ''}\n${details.stdout?.toString() ?? ''}`
+    if (/\bHTTP\s+404\b/i.test(output) || /\bnot found\b/i.test(output)) return null
+    throw error
+  }
+}
+
+/**
  * Parse a git remote URL into `{ host, owner, repo }`.
  * Supports scp-like SSH, `ssh://`, and `https://` for github.com and GHES.
  */
