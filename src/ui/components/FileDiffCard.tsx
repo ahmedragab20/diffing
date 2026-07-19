@@ -235,13 +235,14 @@ export const FileDiffCard = memo(function FileDiffCard({
 
   const isChangedFile = fileDiff.type === 'change' || fileDiff.type === 'rename-changed'
   const canExpandContext = !collapsed && isChangedFile
+  const oldFilePath = fileDiff.prevName ?? filePath
   const { loading: contentsLoading, oldContent, newContent } = useFileContents(
     filePath,
     contextExpanded && canExpandContext,
+    oldFilePath,
   )
   const contentsReady =
     contextExpanded && oldContent !== null && newContent !== null
-  const oldFilePath = fileDiff.prevName ?? filePath
 
   // Synchronize collapse with viewed state changes from parent.
   // Must use `useLayoutEffect` (NOT `useEffect`) so the collapse commits

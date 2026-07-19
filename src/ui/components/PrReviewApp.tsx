@@ -6,7 +6,7 @@ import {
   useState,
   useTransition,
 } from 'react'
-import { parsePatchFiles, preloadHighlighter } from '@pierre/diffs'
+import { getFiletypeFromFileName, parsePatchFiles, preloadHighlighter } from '@pierre/diffs'
 import type { FileDiffMetadata } from '@pierre/diffs'
 import { useWorkerPool } from '@pierre/diffs/react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -273,6 +273,11 @@ export function PrReviewApp() {
   }, [settings.theme, settings.density])
 
   const shikiConfig = useMemo(() => SHIKI_THEME_MAP[settings.theme || 'nord'] || SHIKI_THEME_MAP.nord, [settings.theme])
+  const diffLanguages = useMemo(() => Array.from(new Set(
+    files
+      .flatMap((file) => [getFiletypeFromFileName(file.name), file.prevName ? getFiletypeFromFileName(file.prevName) : null])
+      .filter((lang): lang is Exclude<typeof lang, null> => lang != null && lang !== 'text'),
+  )), [files])
   useEffect(() => {
     if (!poolManager) return
     poolManager.setRenderOptions({
@@ -285,8 +290,8 @@ export function PrReviewApp() {
   useEffect(() => {
     const dark = shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord'
     const light = shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light'
-    preloadHighlighter({ themes: Array.from(new Set([dark, light])), langs: [] }).catch(() => {})
-  }, [shikiConfig])
+    preloadHighlighter({ themes: Array.from(new Set([dark, light])), langs: diffLanguages }).catch(() => {})
+  }, [shikiConfig, diffLanguages])
 
   useEffect(() => {
     if (!session) return

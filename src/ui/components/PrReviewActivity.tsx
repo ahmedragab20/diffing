@@ -15,10 +15,15 @@ const REVIEW_STATE = {
 /** Walk submitted GitHub reviews without mixing review-level notes into line threads or PR alerts. */
 export function PrReviewActivity({ reviews }: { reviews: PrExistingReview[] }) {
   const [activeId, setActiveId] = useState<number | null>(reviews[0]?.id ?? null)
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null)
 
   useEffect(() => {
     setActiveId(reviews[0]?.id ?? null)
   }, [reviews[0]?.id])
+
+  useEffect(() => {
+    setFailedAvatarUrl(null)
+  }, [activeId])
 
   if (reviews.length === 0) return null
   const activeIndex = Math.max(0, reviews.findIndex((review) => review.id === activeId))
@@ -31,8 +36,14 @@ export function PrReviewActivity({ reviews }: { reviews: PrExistingReview[] }) {
     <section className="pr-review-activity" aria-label="GitHub review activity">
       <header className="pr-review-activity-head">
         <div className="pr-review-activity-identity">
-          {review.author?.avatarUrl ? (
-            <img src={review.author.avatarUrl} alt="" className="pr-review-activity-avatar" />
+          {review.author?.avatarUrl && failedAvatarUrl !== review.author.avatarUrl ? (
+            <img
+              src={`/api/gh/avatar?url=${encodeURIComponent(review.author.avatarUrl)}`}
+              alt=""
+              className="pr-review-activity-avatar"
+              referrerPolicy="no-referrer"
+              onError={() => setFailedAvatarUrl(review.author?.avatarUrl ?? null)}
+            />
           ) : (
             <span className="pr-review-activity-avatar is-fallback" aria-hidden="true"><StateIcon size={14} /></span>
           )}

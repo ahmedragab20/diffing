@@ -32,7 +32,7 @@ async function fetchVersion(path: string, version: Version): Promise<string | nu
  * partial patch render to a MultiFileDiff render so hunk context becomes
  * expandable. Pass `enabled=false` until the user opts in.
  */
-export function useFileContents(filePath: string, enabled: boolean) {
+export function useFileContents(filePath: string, enabled: boolean, oldFilePath = filePath) {
   const [state, setState] = useState<FileContentsState>({
     loading: false,
     error: null,
@@ -46,7 +46,7 @@ export function useFileContents(filePath: string, enabled: boolean) {
     let cancelled = false
     setState((s) => ({ ...s, loading: true, error: null }))
 
-    Promise.all([fetchVersion(filePath, 'old'), fetchVersion(filePath, 'new')])
+    Promise.all([fetchVersion(oldFilePath, 'old'), fetchVersion(filePath, 'new')])
       .then(([oldContent, newContent]) => {
         if (cancelled) return
         setState({ loading: false, error: null, oldContent, newContent })
@@ -64,7 +64,7 @@ export function useFileContents(filePath: string, enabled: boolean) {
     return () => {
       cancelled = true
     }
-  }, [filePath, enabled])
+  }, [filePath, oldFilePath, enabled])
 
   return state
 }

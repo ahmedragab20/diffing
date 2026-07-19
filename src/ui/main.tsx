@@ -27,6 +27,11 @@ createRoot(document.getElementById('root')!).render(
             dark: 'nord',
             light: 'github-light',
           },
+          // Vue's compound grammar is comparatively expensive to resolve. If
+          // it is loaded on the first render task, pierre can leave that first
+          // FileDiff on its plain-text placeholder until a remount. Initial
+          // worker loading makes the highlighted AST available on first paint.
+          langs: ['vue'],
         }}
       >
         <TooltipProvider>
@@ -36,4 +41,3 @@ createRoot(document.getElementById('root')!).render(
     </HotkeysProvider>
   </QueryClientProvider>,
 )
-
