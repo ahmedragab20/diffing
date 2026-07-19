@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.10.2
+
+### Minor Changes
+
+- f92ab1b: Add PR Address and PR Read agent workflows.
+
+  - `diffing gh pr address`: Turn unresolved PR feedback into a human-approved
+    local implementation through diffing. Fetches PR comments, creates a plan,
+    and orchestrates the review/approval cycle.
+  - `diffing gh pr read`: Read and summarize GitHub pull requests through
+    diffing with token-efficient bounded inspect APIs instead of full patch dumps.
+  - Add `agent-diff-index` for sparse diff indexing and `pr-agent-format` for
+    structured PR data formatting.
+  - Expand MCP tools for `get_diff`, `diff_summary`, `diff_files`, `diff_hunks`,
+    `diff_slice`, and `diff_search`.
+  - Add new API routes for PR review operations.
+  - Update UI components (FileDiffCard, PrReviewActivity, PrReviewApp) to support
+    the new workflows.
+  - Add shell completions for the new subcommands.
+  - Add agent skills for `diffing-pr-read` and `diffing-pr-address`.
+  - Add comprehensive test coverage for all new modules and workflows.
+
 ## 0.10.1
 
 ### Patch Changes
