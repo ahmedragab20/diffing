@@ -422,9 +422,10 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 
   const instructions = `diffing is bound to ${repoRoot} for this connection. ` +
     'First call review_session_status. If no web session is running, call start_review_session; it is safe to retry and never replaces a user session. ' +
-    'For code review, call get_diff, create_comment as needed, then await_review for the human handoff. ' +
+    'For code review, prefer diff_summary then paged diff_files/diff_hunks/diff_slice over get_diff; create_comment as needed, then await_review for the human handoff. ' +
+    'For a GitHub PR session, call gh_overview and bounded diff tools; use gh_list_threads/reviews for discussion, and mutate GitHub only with explicit user authorization. ' +
     'For plan review, call submit_plan then await_plan_review. A changes-requested verdict means revise and resubmit the same planId; rejected means stop; approved means proceed. ' +
-    'Wait tools return released or timeout with a mode; timeout is not failure and the same wait tool may be called again. All networking remains local.'
+    'Wait tools return released or timeout with a mode; timeout is not failure and the same wait tool may be called again. MCP connects only to the loopback diffing server; explicitly authorized GitHub tools may make the server call GitHub.'
 
   const server = new McpServer(
     { name: 'diffing', version: MCP_VERSION },
@@ -453,21 +454,17 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     }
   }
 
-  function requireWebSession(): { lock: ServerLock; url: string; identity: string } {
+  type LiveSession = { lock: ServerLock; url: string; identity: string }
+
+  function requireAnySession(): LiveSession {
     const lock = liveLock()
     if (!lock) {
       throw new Error(
-        `No diffing web review session is running for ${repoRoot}. ` +
-        'Call start_review_session, then retry this tool.',
+        `No diffing review session is running for ${repoRoot}. ` +
+        'Start one with start_review_session, `diffing --web`, or `diffing "gh pr <ref>"`, then retry.',
       )
     }
     ensureReusableLock(lock)
-    const mode = lock.mode ?? 'web'
-    if (mode === 'gh-pr') {
-      throw new Error(
-        'The active diffing session is a GitHub PR review, not a local review.',
-      )
-    }
     const url = lockUrl(lock)
     if (!url) {
       throw new Error('The active diffing session does not expose a reachable loopback API.')
@@ -479,8 +476,30 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     }
   }
 
+  function requireWebSession(): LiveSession {
+    const session = requireAnySession()
+    const mode = session.lock.mode ?? 'web'
+    if (mode === 'gh-pr') {
+      throw new Error(
+        'The active diffing session is a GitHub PR review, not a local review. ' +
+        'Use gh_* tools and bounded diff_* inspect tools, or end the PR session for local review/plan tools.',
+      )
+    }
+    return session
+  }
+
+  function requireGhPrSession(): LiveSession {
+    const session = requireAnySession()
+    if ((session.lock.mode ?? 'web') !== 'gh-pr') {
+      throw new Error(
+        'This tool requires an active GitHub PR session (`diffing "gh pr <ref>"` or --gh-pr).',
+      )
+    }
+    return session
+  }
+
   function requestSessionJson<T>(
-    session: ReturnType<typeof requireWebSession>,
+    session: LiveSession,
     path: string,
     init: RequestInit = {},
   ): Promise<T> {
@@ -496,12 +515,9 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     return requestSessionJson<T>(requireWebSession(), path, init)
   }
 
-  function requireTuiSession(): ReturnType<typeof requireWebSession> {
-    const session = requireWebSession()
-    if (session.lock.mode !== 'tui') {
-      throw new Error('This bounded diff-inspection tool requires an active `diffing --tui` session.')
-    }
-    return session
+  /** Bounded inspect works for web, tui, and gh-pr sessions. */
+  function requireInspectSession(): LiveSession {
+    return requireAnySession()
   }
 
   async function seedReviewCursor(
@@ -555,10 +571,10 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
       nextAction: inaccessible
         ? 'This session is not loopback-only, so MCP will not connect to it. End it manually and call start_review_session.'
         : mode === 'tui'
-        ? 'The native TUI agent API is available; use diff_summary/diff_files/diff_hunks/diff_slice/diff_search or review tools.'
+        ? 'Use bounded diff_summary/diff_files/diff_hunks/diff_slice/diff_search, then local review tools.'
         : mode === 'gh-pr'
-          ? 'This is a GitHub PR session; use the GitHub review workflow or start a local session after it ends.'
-          : 'Call get_diff to inspect changes, or use a plan-review tool.',
+          ? 'Use gh_overview, then diff_summary→diff_files→diff_hunks/diff_slice/diff_search. For discussion use gh_list_threads (prefer unresolvedOnly). Do not fetch the full patch via get_diff.'
+          : 'Prefer diff_summary→diff_files→diff_slice over get_diff. Use plan-review tools when gating implementation.',
     }
   }
 
@@ -759,20 +775,24 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
   })
 
   server.registerTool('diff_summary', {
-    title: 'Summarize the native TUI diff',
-    description: 'Return bounded totals and change-kind counts from the TUI sparse index without transferring the patch.',
+    title: 'Summarize the active diff (bounded)',
+    description:
+      'Return bounded totals and change-kind counts without transferring the patch. ' +
+      'Works for web, TUI, and GitHub PR sessions. Prefer this over get_diff.',
     inputSchema: {},
     outputSchema: { result: z.unknown() },
     annotations: READ_ONLY,
   }, async () => {
-    const session = requireTuiSession()
+    const session = requireInspectSession()
     const result = await requestSessionJson<Record<string, unknown>>(session, '/api/diff/summary')
     return textResult(JSON.stringify(result), { result })
   })
 
   server.registerTool('diff_files', {
-    title: 'Page changed files from the native TUI',
-    description: 'Return a bounded page of changed-file metadata with an opaque numeric continuation cursor.',
+    title: 'Page changed files (bounded)',
+    description:
+      'Return a bounded page of changed-file metadata with an opaque numeric continuation cursor. ' +
+      'Works for web, TUI, and GitHub PR sessions.',
     inputSchema: {
       cursor: z.number().int().nonnegative().optional(),
       limit: z.number().int().positive().max(1000).optional(),
@@ -780,7 +800,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { result: z.unknown() },
     annotations: READ_ONLY,
   }, async ({ cursor = 0, limit = 100 }) => {
-    const session = requireTuiSession()
+    const session = requireInspectSession()
     const result = await requestSessionJson<Record<string, unknown>>(
       session,
       `/api/diff/files?cursor=${cursor}&limit=${limit}`,
@@ -789,8 +809,10 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
   })
 
   server.registerTool('diff_hunks', {
-    title: 'Page hunk metadata from the native TUI',
-    description: 'Return bounded hunk metadata for one file index. Pass generation from diff_summary to reject stale navigation.',
+    title: 'Page hunk metadata (bounded)',
+    description:
+      'Return bounded hunk metadata for one file index. Pass generation from diff_summary to reject stale navigation. ' +
+      'Works for web, TUI, and GitHub PR sessions.',
     inputSchema: {
       file: z.number().int().nonnegative(),
       generation: z.number().int().nonnegative().optional(),
@@ -800,7 +822,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { result: z.unknown() },
     annotations: READ_ONLY,
   }, async ({ file, generation, cursor = 0, limit = 100 }) => {
-    const session = requireTuiSession()
+    const session = requireInspectSession()
     const query = new URLSearchParams({ file: String(file), cursor: String(cursor), limit: String(limit) })
     if (generation !== undefined) query.set('generation', String(generation))
     const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/hunks?${query}`)
@@ -808,8 +830,10 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
   })
 
   server.registerTool('diff_slice', {
-    title: 'Read a bounded native TUI diff slice',
-    description: 'Read exact logical rows for one file with strict line and byte budgets; use nextRow to continue.',
+    title: 'Read a bounded diff slice',
+    description:
+      'Read exact logical rows for one file with strict line and byte budgets; use nextRow to continue. ' +
+      'Works for web, TUI, and GitHub PR sessions. Prefer this over get_diff.',
     inputSchema: {
       file: z.number().int().nonnegative(),
       start: z.number().int().nonnegative().optional(),
@@ -820,7 +844,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { result: z.unknown() },
     annotations: READ_ONLY,
   }, async ({ file, start = 0, generation, maxLines = 120, maxBytes = 256 * 1024 }) => {
-    const session = requireTuiSession()
+    const session = requireInspectSession()
     const query = new URLSearchParams({
       file: String(file), start: String(start), maxLines: String(maxLines), maxBytes: String(maxBytes),
     })
@@ -830,8 +854,10 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
   })
 
   server.registerTool('diff_search', {
-    title: 'Search the native TUI diff',
-    description: 'Search changed paths and content with bounded hits/bytes and generation-safe continuation coordinates.',
+    title: 'Search the active diff (bounded)',
+    description:
+      'Search changed paths and content with bounded hits/bytes and generation-safe continuation coordinates. ' +
+      'Works for web, TUI, and GitHub PR sessions.',
     inputSchema: {
       query: z.string().min(1),
       generation: z.number().int().nonnegative().optional(),
@@ -843,12 +869,202 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     outputSchema: { result: z.unknown() },
     annotations: READ_ONLY,
   }, async ({ query, generation, file = 0, row = 0, limit = 100, maxBytes = 256 * 1024 }) => {
-    const session = requireTuiSession()
+    const session = requireInspectSession()
     const params = new URLSearchParams({
       q: query, file: String(file), row: String(row), limit: String(limit), maxBytes: String(maxBytes),
     })
     if (generation !== undefined) params.set('generation', String(generation))
     const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/search?${params}`)
+    return textResult(JSON.stringify(result), { result })
+  })
+
+  // ── GitHub PR tools (mode: gh-pr) ──────────────────────────────────────────
+
+  server.registerTool('gh_overview', {
+    title: 'GitHub PR overview (slim)',
+    description:
+      'Return compact PR identity, SHAs, size stats, and thread/review/draft counts without the patch or full conversation bodies. ' +
+      'Requires an active gh-pr session.',
+    inputSchema: {},
+    outputSchema: { result: z.unknown() },
+    annotations: READ_ONLY,
+  }, async () => {
+    const session = requireGhPrSession()
+    const result = await requestSessionJson<Record<string, unknown>>(session, '/api/gh/overview')
+    return textResult(JSON.stringify(result), { result })
+  })
+
+  server.registerTool('gh_list_threads', {
+    title: 'List published PR review threads',
+    description:
+      'Page published GitHub review threads with filters. Prefer unresolvedOnly=true. ' +
+      'Bodies are truncated by default; set fullBody for complete text. format=xml for agent XML.',
+    inputSchema: {
+      unresolvedOnly: z.boolean().optional(),
+      path: z.string().optional(),
+      author: z.string().optional(),
+      cursor: z.number().int().nonnegative().optional(),
+      limit: z.number().int().positive().max(200).optional(),
+      bodyMaxChars: z.number().int().positive().max(50_000).optional(),
+      fullBody: z.boolean().optional(),
+      format: z.enum(['json', 'xml']).optional(),
+    },
+    outputSchema: { result: z.unknown() },
+    annotations: READ_ONLY,
+  }, async ({
+    unresolvedOnly,
+    path,
+    author,
+    cursor = 0,
+    limit = 50,
+    bodyMaxChars = 500,
+    fullBody,
+    format = 'json',
+  }) => {
+    const session = requireGhPrSession()
+    const params = new URLSearchParams({
+      cursor: String(cursor),
+      limit: String(limit),
+      bodyMaxChars: String(bodyMaxChars),
+      format,
+    })
+    if (unresolvedOnly) params.set('unresolvedOnly', 'true')
+    if (path) params.set('path', path)
+    if (author) params.set('author', author)
+    if (fullBody) params.set('fullBody', 'true')
+    if (format === 'xml') {
+      const res = await fetch(`${session.url}/api/gh/threads?${params}`)
+      const text = await res.text()
+      if (!res.ok) throw new Error(text || res.statusText)
+      return textResult(text, { result: { format: 'xml', xml: text } })
+    }
+    const result = await requestSessionJson<Record<string, unknown>>(session, `/api/gh/threads?${params}`)
+    return textResult(JSON.stringify(result), { result })
+  })
+
+  server.registerTool('gh_list_reviews', {
+    title: 'List published PR review events',
+    description:
+      'Page submitted GitHub review verdicts and overall comments. Bodies truncated by default.',
+    inputSchema: {
+      cursor: z.number().int().nonnegative().optional(),
+      limit: z.number().int().positive().max(100).optional(),
+      bodyMaxChars: z.number().int().positive().max(50_000).optional(),
+      fullBody: z.boolean().optional(),
+      state: z.string().optional(),
+      format: z.enum(['json', 'xml']).optional(),
+    },
+    outputSchema: { result: z.unknown() },
+    annotations: READ_ONLY,
+  }, async ({
+    cursor = 0,
+    limit = 50,
+    bodyMaxChars = 500,
+    fullBody,
+    state,
+    format = 'json',
+  }) => {
+    const session = requireGhPrSession()
+    const params = new URLSearchParams({
+      cursor: String(cursor),
+      limit: String(limit),
+      bodyMaxChars: String(bodyMaxChars),
+      format,
+    })
+    if (fullBody) params.set('fullBody', 'true')
+    if (state) params.set('state', state)
+    if (format === 'xml') {
+      const res = await fetch(`${session.url}/api/gh/reviews?${params}`)
+      const text = await res.text()
+      if (!res.ok) throw new Error(text || res.statusText)
+      return textResult(text, { result: { format: 'xml', xml: text } })
+    }
+    const result = await requestSessionJson<Record<string, unknown>>(session, `/api/gh/reviews?${params}`)
+    return textResult(JSON.stringify(result), { result })
+  })
+
+  server.registerTool('gh_list_draft_comments', {
+    title: 'List local PR draft comments',
+    description: 'Return in-progress local draft comments for the active PR session (not published on GitHub).',
+    inputSchema: {},
+    outputSchema: { comments: z.array(commentSchema) },
+    annotations: READ_ONLY,
+  }, async () => {
+    const session = requireGhPrSession()
+    const comments = await requestSessionJson<ReviewComment[]>(session, '/api/gh/pr-session/comments')
+    return textResult(formatComments(comments), { comments })
+  })
+
+  server.registerTool('gh_create_draft_comment', {
+    title: 'Create a local PR draft comment',
+    description:
+      'Create a local draft inline comment on the active PR session. Does not publish to GitHub. ' +
+      'Use gh_submit_review only when the user explicitly authorized publishing.',
+    inputSchema: {
+      filePath: z.string().min(1),
+      side: z.enum(['deletions', 'additions']),
+      lineNumber: z.number().int().nonnegative(),
+      startLineNumber: z.number().int().positive().optional(),
+      lineContent: z.string().optional(),
+      body: z.string().min(1),
+      severity: z.enum(['blocking', 'nit', 'question', 'praise', 'none']).optional(),
+    },
+    outputSchema: { comment: commentSchema },
+    annotations: MUTATING,
+  }, async ({ filePath, side, lineNumber, startLineNumber, lineContent, body, severity }) => {
+    const session = requireGhPrSession()
+    const comment = await requestSessionJson<ReviewComment>(session, '/api/gh/pr-session/comments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filePath,
+        side,
+        lineNumber,
+        startLineNumber,
+        lineContent: lineContent ?? '',
+        body,
+        severity: severity === 'none' ? undefined : severity,
+      }),
+    })
+    return textResult(`Created PR draft comment ${comment.id} on ${comment.filePath}:${comment.lineNumber}.`, {
+      comment,
+    })
+  })
+
+  server.registerTool('gh_refresh', {
+    title: 'Refresh GitHub PR session',
+    description:
+      'Re-fetch PR metadata, patch, and published conversations into the local session (force-push / new review sync).',
+    inputSchema: {},
+    outputSchema: { result: z.unknown() },
+    annotations: MUTATING,
+  }, async () => {
+    const session = requireGhPrSession()
+    const result = await requestSessionJson<Record<string, unknown>>(session, '/api/gh/pr/refresh', {
+      method: 'POST',
+    })
+    return textResult(JSON.stringify(result), { result })
+  })
+
+  server.registerTool('gh_submit_review', {
+    title: 'Submit PR review to GitHub',
+    description:
+      'Publish local draft comments and a decision to GitHub. ' +
+      'REQUIRES explicit user authorization — this mutates the remote pull request. Prefer dryRun first.',
+    inputSchema: {
+      decision: z.enum(['approve', 'comment', 'request-changes', 'draft']),
+      body: z.string().optional(),
+      dryRun: z.boolean().optional(),
+    },
+    outputSchema: { result: z.unknown() },
+    annotations: { ...MUTATING, openWorldHint: true, destructiveHint: false },
+  }, async ({ decision, body, dryRun }) => {
+    const session = requireGhPrSession()
+    const result = await requestSessionJson<Record<string, unknown>>(session, '/api/gh/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, body: body ?? '', dryRun: dryRun === true }),
+    })
     return textResult(JSON.stringify(result), { result })
   })
 
@@ -1419,7 +1635,7 @@ This MCP connection is immutably bound to \`${repoRoot}\`.
 
 ## Code review
 1. Call \`review_session_status\`; call \`start_review_session\` if needed.
-2. Call \`get_diff\` and inspect every changed file.
+2. Prefer \`diff_summary\` → paged \`diff_files\` → \`diff_hunks\` / bounded \`diff_slice\`; use \`get_diff\` only as an escape hatch.
 3. Use \`create_comment\` for actionable inline findings.
 4. Use \`await_review\` for a human handoff; a timeout is safe to retry.
 5. In \`comment-only\` mode, reply without editing files.
@@ -1430,7 +1646,12 @@ This MCP connection is immutably bound to \`${repoRoot}\`.
 3. On \`changes-requested\`, revise and resubmit with the same \`planId\`.
 4. On \`approved\`, proceed; on \`rejected\`, stop.
 
-All HTTP activity is loopback-only. MCP never terminates a user-owned session.` }],
+## GitHub PR
+1. In \`gh-pr\` mode call \`gh_overview\`, then the bounded diff tools.
+2. Fetch published discussion with \`gh_list_threads\` (prefer unresolved) and \`gh_list_reviews\`.
+3. Local drafts do not publish. Call \`gh_submit_review\` or mutate published threads only with explicit user authorization.
+
+MCP connects only to the loopback diffing server and never terminates a user-owned session. Explicitly authorized GitHub operations may make that server call GitHub.` }],
   }))
 
   server.registerPrompt('review_local_changes', {
@@ -1442,7 +1663,7 @@ All HTTP activity is loopback-only. MCP never terminates a user-owned session.` 
   }, async ({ focus }) => ({
     messages: [{ role: 'user', content: { type: 'text', text:
       `Use diffing to review the local changes in ${repoRoot}. ` +
-      'Check review_session_status, start_review_session if needed, inspect get_diff, and create only actionable inline comments. ' +
+      'Check review_session_status, start_review_session if needed, inspect with bounded diff_summary/diff_files/diff_hunks/diff_slice calls, and create only actionable inline comments. ' +
       `Review every changed file${focus ? ` with special attention to ${focus}` : ''}.`,
     } }],
   }))

@@ -379,10 +379,10 @@ Subcommands:
   progress --message … Live agent progress toast
   url                  Print the active review base URL
   plan <submit|await|list|show|versions|reply|resolve>
-  gh <status|pr-fetch|pr-list-comments|pr-review>
+  gh <status|overview|threads|reviews|pr-fetch|pr-list-comments|pr-review>
   mcp [--repo PATH]    Stdio MCP server for agents
   inspect <summary|files|hunks|slice|search>
-                       Bounded reads from a running TUI session
+                       Bounded reads from a running web, TUI, or PR session
   doctor               Environment self-check
   completion <bash|zsh|fish>
   update               Check for a newer npm release

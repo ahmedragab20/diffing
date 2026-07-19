@@ -26,8 +26,23 @@ import { executeDiffWithMeta } from './lib/diff-engine.js'
 import type { DiffOptions } from './lib/diff-options.js'
 import { DEFAULTS } from './lib/diff-options.js'
 import { FilePrSessionStore, InMemoryPrSessionStore } from './lib/pr-session.js'
-import type { PrSessionStore, PrDecision, PrExistingReview } from './lib/pr-session.js'
+import type { PrSessionStore, PrDecision, PrExistingReview, PrSession } from './lib/pr-session.js'
 import { buildPrOverview } from './lib/diff-overview.js'
+import {
+  AgentDiffIndexCache,
+  indexSummary,
+  indexFiles,
+  indexHunks,
+  indexSlice,
+  indexSearch,
+} from './lib/agent-diff-index.js'
+import {
+  formatPrReviewThreads,
+  formatPrReviews,
+  paginatePrThreads,
+  paginatePrReviews,
+  buildPrOverviewPayload,
+} from './lib/pr-agent-format.js'
 import {
   buildPrSession,
   refreshPrSession,
@@ -40,6 +55,7 @@ import {
   updatePrReviewComment,
   deletePrReviewComment,
   setPrReviewThreadResolved,
+  fetchPrFileContentViaGh,
 } from './lib/github.js'
 
 const MIME_TYPES: Record<string, string> = {
@@ -56,6 +72,22 @@ const MIME_TYPES: Record<string, string> = {
   '.webp': 'image/webp',
   '.bmp': 'image/bmp',
   '.avif': 'image/avif',
+}
+
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024
+
+function collectPrAvatarUrls(session: PrSession): Set<string> {
+  const urls = new Set<string>()
+  const add = (avatarUrl?: string) => {
+    if (avatarUrl) urls.add(avatarUrl)
+  }
+  add(session.author?.avatarUrl)
+  for (const review of session.existingReviews ?? []) add(review.author?.avatarUrl)
+  for (const comment of session.existingComments) {
+    add(comment.author?.avatarUrl)
+    for (const reply of comment.replies) add(reply.author?.avatarUrl)
+  }
+  return urls
 }
 
 function isCustomMode(opts: DiffOptions): boolean {
@@ -78,6 +110,7 @@ export function createApp(
   const store = commentStore ?? new FileCommentStore()
   const plans = planStore ?? new FilePlanStore()
   const prStore = prSessionStore ?? new FilePrSessionStore()
+  const agentDiffCache = new AgentDiffIndexCache()
   const uiStateStore = new FileUiStateStore()
   const viewedFiles = new Set<string>()
   /** Agent-reported progress events for the human UI (SSE `agent-progress`). */
@@ -304,13 +337,132 @@ export function createApp(
     })
   })
 
-  app.get('/api/file-content', (c) => {
+  // ── Bounded agent inspect (web + gh-pr; same contract as TUI Agent API) ──
+  async function resolveAgentPatch(): Promise<string> {
+    if (prMode) {
+      const prSession = await prStore.get()
+      return prSession?.diff ?? ''
+    }
+    const stagedQuery = undefined
+    const untrackedQuery = undefined
+    const staged = stagedQuery === undefined ? diffOpts.staged : false
+    const untracked = untrackedQuery === undefined ? diffOpts.includeUntracked : false
+    const optsForDiff = customMode
+      ? diffOpts
+      : { ...diffOpts, staged, includeUntracked: untracked }
+    const result = await executeDiffWithMeta(optsForDiff)
+    return result.patch ?? ''
+  }
+
+  function parseUInt(value: string | undefined, fallback: number): number {
+    if (value == null || value === '') return fallback
+    const n = Number(value)
+    return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : fallback
+  }
+
+  app.get('/api/diff/summary', async (c) => {
+    const patch = await resolveAgentPatch()
+    const index = agentDiffCache.getOrBuild(patch)
+    const summary = indexSummary(index)
+    if (!prMode) return c.json(summary)
+    const session = await prStore.get()
+    if (!session) return c.json(summary)
+    return c.json({
+      ...summary,
+      prMode: true,
+      owner: session.owner,
+      repo: session.repo,
+      pullNumber: session.pullNumber,
+      title: session.title,
+      url: session.url,
+      baseSha: session.baseSha,
+      headSha: session.headSha,
+    })
+  })
+
+  app.get('/api/diff/files', async (c) => {
+    const patch = await resolveAgentPatch()
+    const index = agentDiffCache.getOrBuild(patch)
+    const cursor = parseUInt(c.req.query('cursor'), 0)
+    const limit = parseUInt(c.req.query('limit'), 100)
+    return c.json(indexFiles(index, cursor, limit))
+  })
+
+  app.get('/api/diff/hunks', async (c) => {
+    const patch = await resolveAgentPatch()
+    const index = agentDiffCache.getOrBuild(patch)
+    const file = parseUInt(c.req.query('file'), 0)
+    const cursor = parseUInt(c.req.query('cursor'), 0)
+    const limit = parseUInt(c.req.query('limit'), 100)
+    const generationRaw = c.req.query('generation')
+    const result = indexHunks(
+      index,
+      file,
+      cursor,
+      limit,
+      generationRaw != null && generationRaw !== '' ? parseUInt(generationRaw, 0) : undefined,
+    )
+    if ('status' in result) return c.json({ error: result.error }, result.status as 404 | 409)
+    return c.json(result)
+  })
+
+  app.get('/api/diff/slice', async (c) => {
+    const patch = await resolveAgentPatch()
+    const index = agentDiffCache.getOrBuild(patch)
+    const file = parseUInt(c.req.query('file'), 0)
+    const start = parseUInt(c.req.query('start'), 0)
+    const maxLines = parseUInt(c.req.query('maxLines'), 120)
+    const maxBytes = parseUInt(c.req.query('maxBytes'), 256 * 1024)
+    const generationRaw = c.req.query('generation')
+    const result = indexSlice(
+      index,
+      file,
+      start,
+      maxLines,
+      maxBytes,
+      generationRaw != null && generationRaw !== '' ? parseUInt(generationRaw, 0) : undefined,
+    )
+    if ('status' in result) return c.json({ error: result.error }, result.status as 409)
+    return c.json(result)
+  })
+
+  app.get('/api/diff/search', async (c) => {
+    const patch = await resolveAgentPatch()
+    const index = agentDiffCache.getOrBuild(patch)
+    const q = c.req.query('q') ?? ''
+    const file = parseUInt(c.req.query('file'), 0)
+    const row = parseUInt(c.req.query('row'), 0)
+    const limit = parseUInt(c.req.query('limit'), 100)
+    const maxBytes = parseUInt(c.req.query('maxBytes'), 256 * 1024)
+    const generationRaw = c.req.query('generation')
+    const result = indexSearch(
+      index,
+      q,
+      file,
+      row,
+      limit,
+      maxBytes,
+      generationRaw != null && generationRaw !== '' ? parseUInt(generationRaw, 0) : undefined,
+    )
+    if ('status' in result) return c.json({ error: result.error }, result.status as 409)
+    return c.json(result)
+  })
+
+  const resolveFileVersion = async (path: string, version: 'old' | 'new') => {
+    if (!prMode) return getFileContent(path, version)
+    const session = await prStore.get()
+    if (!session) return null
+    const sha = version === 'old' ? session.baseSha : session.headSha
+    return fetchPrFileContentViaGh(resolvedFromSession(session), path, sha)
+  }
+
+  app.get('/api/file-content', async (c) => {
     const path = c.req.query('path')
     const version = c.req.query('version') as 'old' | 'new'
     if (!path || !version) {
       return c.json({ error: 'Missing path or version' }, 400)
     }
-    const content = getFileContent(path, version)
+    const content = await resolveFileVersion(path, version)
     if (!content) {
       return c.json({ error: 'File not found' }, 404)
     }
@@ -324,13 +476,13 @@ export function createApp(
   // Text-friendly file-content endpoint used by the hunk-expansion feature
   // (Phase B). Returns JSON { content, missing } where `missing` indicates the
   // version didn't exist (new file → old missing, deleted → new missing).
-  app.get('/api/file-text', (c) => {
+  app.get('/api/file-text', async (c) => {
     const path = c.req.query('path')
     const version = c.req.query('version') as 'old' | 'new'
     if (!path || !version) {
       return c.json({ error: 'Missing path or version' }, 400)
     }
-    const buffer = getFileContent(path, version)
+    const buffer = await resolveFileVersion(path, version)
     if (!buffer) {
       return c.json({ content: '', missing: true })
     }
@@ -876,6 +1028,106 @@ export function createApp(
     })
   })
 
+  /**
+   * Serve GitHub avatars from this origin. Privacy extensions commonly block
+   * embedded githubusercontent.com requests even though the same URL works as
+   * a top-level navigation. Only URLs already supplied by the active GitHub
+   * session are accepted, which keeps this endpoint from becoming an SSRF
+   * proxy.
+   */
+  app.get('/api/gh/avatar', async (c) => {
+    if (!prMode) return notInPrMode(c)
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const url = c.req.query('url')
+    if (!url || !collectPrAvatarUrls(session).has(url)) {
+      return c.json({ error: 'Avatar URL is not part of this PR session' }, 403)
+    }
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      return c.json({ error: 'Invalid avatar URL' }, 400)
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return c.json({ error: 'Invalid avatar URL protocol' }, 400)
+    }
+    try {
+      const response = await fetch(parsed, { redirect: 'error' })
+      if (!response.ok) return c.json({ error: `Avatar request failed with HTTP ${response.status}` }, 502)
+      const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() ?? ''
+      if (!contentType.startsWith('image/')) {
+        return c.json({ error: 'Avatar response was not an image' }, 502)
+      }
+      const declaredLength = Number(response.headers.get('content-length') ?? '0')
+      if (declaredLength > MAX_AVATAR_BYTES) return c.json({ error: 'Avatar is too large' }, 413)
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      if (bytes.byteLength > MAX_AVATAR_BYTES) return c.json({ error: 'Avatar is too large' }, 413)
+      return new Response(bytes, {
+        headers: {
+          'Content-Type': contentType,
+          'Cache-Control': 'private, max-age=3600',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      })
+    } catch (error: any) {
+      return c.json({ error: error?.message ?? 'Failed to load avatar' }, 502)
+    }
+  })
+
+  /** Slim PR metadata for agents — no threads, reviews, or patch. */
+  app.get('/api/gh/overview', async (c) => {
+    if (!prMode) return notInPrMode(c)
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    return c.json(buildPrOverviewPayload(session))
+  })
+
+  /**
+   * Paged published review threads. Prefer this over /api/gh/session for agents.
+   * Query: unresolvedOnly, path, author, cursor, limit, bodyMaxChars, fullBody, format=xml|json
+   */
+  app.get('/api/gh/threads', async (c) => {
+    if (!prMode) return notInPrMode(c)
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const page = paginatePrThreads(session, {
+      unresolvedOnly: c.req.query('unresolvedOnly') === 'true' || c.req.query('unresolved') === '1',
+      path: c.req.query('path') ?? undefined,
+      author: c.req.query('author') ?? undefined,
+      cursor: parseUInt(c.req.query('cursor'), 0),
+      limit: parseUInt(c.req.query('limit'), 50),
+      bodyMaxChars: parseUInt(c.req.query('bodyMaxChars'), 500),
+      fullBody: c.req.query('fullBody') === 'true' || c.req.query('fullBody') === '1',
+    })
+    const format = (c.req.query('format') ?? 'json').toLowerCase()
+    if (format === 'xml') {
+      c.header('Content-Type', 'application/xml; charset=utf-8')
+      return c.body(formatPrReviewThreads(session, page.threads, undefined, page))
+    }
+    return c.json(page)
+  })
+
+  /** Paged submitted review verdicts / overall comments. */
+  app.get('/api/gh/reviews', async (c) => {
+    if (!prMode) return notInPrMode(c)
+    const session = await prStore.get()
+    if (!session) return notInPrMode(c)
+    const page = paginatePrReviews(session, {
+      cursor: parseUInt(c.req.query('cursor'), 0),
+      limit: parseUInt(c.req.query('limit'), 50),
+      bodyMaxChars: parseUInt(c.req.query('bodyMaxChars'), 500),
+      fullBody: c.req.query('fullBody') === 'true' || c.req.query('fullBody') === '1',
+      state: c.req.query('state') ?? undefined,
+    })
+    const format = (c.req.query('format') ?? 'json').toLowerCase()
+    if (format === 'xml') {
+      c.header('Content-Type', 'application/xml; charset=utf-8')
+      return c.body(formatPrReviews(session, page.reviews, page))
+    }
+    return c.json(page)
+  })
+
   const syncExistingPrReviewData = async (session: NonNullable<Awaited<ReturnType<PrSessionStore['get']>>>) => {
     const resolved = resolvedFromSession(session)
     let existingReviews = await fetchExistingReviewsViaGh(resolved)
@@ -1082,6 +1334,17 @@ export function createApp(
     const body = await c.req.json()
     const session = await prStore.get()
     if (!session) return notInPrMode(c)
+    const severityRaw = body.severity as string | undefined
+    const severity =
+      severityRaw === 'blocking' ||
+      severityRaw === 'nit' ||
+      severityRaw === 'question' ||
+      severityRaw === 'praise' ||
+      severityRaw === 'none'
+        ? severityRaw === 'none'
+          ? undefined
+          : severityRaw
+        : undefined
     const comment: ReviewComment = {
       id: crypto.randomUUID(),
       filePath: body.filePath,
@@ -1093,6 +1356,7 @@ export function createApp(
       status: 'open',
       createdAt: Date.now(),
       replies: [],
+      ...(severity ? { severity } : {}),
     }
     const next = { ...session, comments: [...(session.comments ?? []), comment] }
     await prStore.set(next)
