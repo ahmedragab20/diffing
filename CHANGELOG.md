@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.10.1
+
+### Patch Changes
+
+- b905772: Fix GitHub Enterprise (GHES / custom-host) PR review sessions.
+
+  - Bare `--gh-pr N` now resolves against non-`github.com` remotes by parsing
+    SSH and HTTPS `origin` URLs for any host (with a `gh repo view` fallback).
+  - Accept enterprise PR URLs such as `https://ghe.example.com/o/r/pull/123`.
+  - Route `gh pr` / `gh api` / GraphQL through `-R HOST/OWNER/REPO` and
+    `--hostname` so review fetch, checks, replies, edits, and submit stay on
+    the correct host.
+  - Persist optional `host` on `PrSession` so refresh and later GitHub calls
+    keep working after the initial session build.
+
 ## 0.10.0
 
 ### Minor Changes
