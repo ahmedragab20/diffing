@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.10.3
+
+### Patch Changes
+
+- 12ef75e: Show PR head and base branch names on the GitHub PR review surface.
+
+  - Add optional `headRefName` / `baseRefName` to `PrSession`, the metadata
+    fetch, the `PrOverviewPayload`, and the server's `PrSessionResponse`;
+    sessions persisted before this change still work and simply omit the chip.
+  - Extend the `gh pr view --json` request to include `baseRefName` and
+    `headRefName` so the data flows through `buildPrSession` and the refresh
+    path.
+  - Render a `head → base` chip in the PR review toolbar and the summary
+    banner, with matching CSS that stays compact at narrow terminal widths.
+  - `diffing gh overview` / `gh status` now print the branch name alongside the
+    head/base SHA when the host CLI provides it.
+  - Cover the new branch display with component tests for the toolbar and
+    summary banner, including a fallback when branch names are missing.
 
 ## 0.10.2
 
