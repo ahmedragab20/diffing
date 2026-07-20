@@ -1,4 +1,4 @@
-import { ArrowLeft, Copy, ExternalLink, GitPullRequest, Menu, RefreshCw, Search } from 'lucide-react'
+import { ArrowLeft, Copy, ExternalLink, GitPullRequest, Menu, RefreshCw, Search, ArrowRight } from 'lucide-react'
 import type { ReviewComment } from '../../lib/types'
 import type { PrSession } from '../../lib/pr-session'
 import type { SubmitPrReviewResult } from '../hooks/usePrSession'
@@ -57,6 +57,17 @@ export function PrReviewToolbar({
             <span className="toolbar-branch-inline" title={`Pull request #${session.pullNumber}`}>
               <GitPullRequest size={11} /> #{session.pullNumber}
             </span>
+            {session.headRefName && session.baseRefName && (
+              <span
+                className="toolbar-branch-flow"
+                title={`Comparing ${session.headRefName} into ${session.baseRefName}`}
+                aria-label={`Source branch ${session.headRefName} into target branch ${session.baseRefName}`}
+              >
+                <code className="toolbar-branch-head">{session.headRefName}</code>
+                <ArrowRight size={11} aria-hidden="true" />
+                <code className="toolbar-branch-base">{session.baseRefName}</code>
+              </span>
+            )}
           </div>
         </div>
       </div>

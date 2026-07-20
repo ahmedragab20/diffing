@@ -20,6 +20,10 @@ export interface PrOverviewPayload {
   author: PrSession['author']
   baseSha: string
   headSha: string
+  /** Source branch (head). Omitted for legacy sessions built before this existed. */
+  baseRefName?: string
+  /** Target branch (base). Omitted for legacy sessions built before this existed. */
+  headRefName?: string
   additions: number
   deletions: number
   changedFiles: number
@@ -63,6 +67,8 @@ export function buildPrOverviewPayload(session: PrSession): PrOverviewPayload {
     author: session.author,
     baseSha: session.baseSha,
     headSha: session.headSha,
+    baseRefName: session.baseRefName,
+    headRefName: session.headRefName,
     additions: session.additions,
     deletions: session.deletions,
     changedFiles: session.changedFiles,

@@ -16,6 +16,8 @@ const session = {
   additions: 21,
   deletions: 8,
   headSha: 'abcdef123456',
+  headRefName: 'feature/widget',
+  baseRefName: 'main',
 } as any
 
 describe('PrReviewSummaryBanner', () => {
@@ -34,5 +36,24 @@ describe('PrReviewSummaryBanner', () => {
   it('omits an empty draft badge', () => {
     render(<PrReviewSummaryBanner session={session} draftCount={0} />)
     expect(screen.queryByText(/draft/)).not.toBeInTheDocument()
+  })
+
+  it('shows the head and base branch names in the banner', () => {
+    render(<PrReviewSummaryBanner session={session} draftCount={0} />)
+
+    expect(screen.getByText('feature/widget')).toBeInTheDocument()
+    expect(screen.getByText('main')).toBeInTheDocument()
+    expect(screen.getByTitle('Comparing feature/widget into main')).toBeInTheDocument()
+  })
+
+  it('omits the branch info when branch names are missing', () => {
+    const sessionWithoutBranches = { ...session }
+    delete sessionWithoutBranches.headRefName
+    delete sessionWithoutBranches.baseRefName
+    render(<PrReviewSummaryBanner session={sessionWithoutBranches} draftCount={0} />)
+
+    expect(screen.queryByText('feature/widget')).not.toBeInTheDocument()
+    expect(screen.queryByText('main')).not.toBeInTheDocument()
+    expect(screen.queryByTitle(/Comparing/)).not.toBeInTheDocument()
   })
 })

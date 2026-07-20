@@ -14,6 +14,8 @@ interface PrSessionResponse {
   pullNumber: number
   baseSha: string
   headSha: string
+  baseRefName?: string
+  headRefName?: string
   title: string
   url: string
   author: { login: string; avatarUrl?: string } | null

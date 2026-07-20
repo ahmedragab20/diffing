@@ -24,6 +24,13 @@ export function PrReviewSummaryBanner({ session, draftCount }: PrReviewSummaryBa
             Pull request #{session.pullNumber}
             {session.author?.login ? <> by <strong>@{session.author.login}</strong></> : null}
           </span>
+          {session.headRefName && session.baseRefName && (
+            <span className="pr-overview-branches" title={`Comparing ${session.headRefName} into ${session.baseRefName}`}>
+              <code className="pr-overview-branch-head">{session.headRefName}</code>
+              <span className="pr-overview-branch-arrow" aria-hidden="true">→</span>
+              <code className="pr-overview-branch-base">{session.baseRefName}</code>
+            </span>
+          )}
           <span>{session.changedFiles} file{session.changedFiles === 1 ? '' : 's'}</span>
           <span className="toolbar-chip-diff" aria-label={`${session.additions} additions and ${session.deletions} deletions`}>
             <span className="stat-additions">+{session.additions}</span>

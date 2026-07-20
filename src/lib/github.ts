@@ -157,6 +157,10 @@ export interface PrMetadata {
   author: PrAuthor | null
   baseSha: string
   headSha: string
+  /** PR head branch name (e.g. `feature/foo`). May be empty on old `gh`. */
+  baseRefName: string
+  /** PR base branch name (e.g. `main`). May be empty on old `gh`. */
+  headRefName: string
   additions: number
   deletions: number
   changedFiles: number
@@ -436,7 +440,7 @@ export async function fetchPrMetadataViaGh(resolved: ResolvedPr): Promise<PrMeta
         String(resolved.pullNumber),
         ...args,
         '--json',
-        'number,title,url,author,baseRefOid,headRefOid,additions,deletions,changedFiles,headRepositoryOwner,headRepository',
+        'number,title,url,author,baseRefOid,headRefOid,baseRefName,headRefName,additions,deletions,changedFiles,headRepositoryOwner,headRepository',
       ],
       { encoding: 'utf-8', maxBuffer: 20 * 1024 * 1024 },
     )
@@ -477,6 +481,8 @@ export async function fetchPrMetadataViaGh(resolved: ResolvedPr): Promise<PrMeta
     author,
     baseSha: metaJson.baseRefOid,
     headSha: metaJson.headRefOid,
+    baseRefName: typeof metaJson.baseRefName === 'string' ? metaJson.baseRefName : '',
+    headRefName: typeof metaJson.headRefName === 'string' ? metaJson.headRefName : '',
     additions: metaJson.additions,
     deletions: metaJson.deletions,
     changedFiles: metaJson.changedFiles,
@@ -1157,6 +1163,8 @@ export async function buildPrSession(ref: string): Promise<PrSession> {
     host: isGithubDotCom(host) ? undefined : host,
     baseSha: meta.baseSha,
     headSha: meta.headSha,
+    baseRefName: meta.baseRefName,
+    headRefName: meta.headRefName,
     title: meta.title,
     url: meta.url,
     author: meta.author,
@@ -1178,6 +1186,8 @@ export async function refreshPrSession(session: PrSession): Promise<PrSession> {
     ...session,
     baseSha: meta.baseSha,
     headSha: meta.headSha,
+    baseRefName: meta.baseRefName,
+    headRefName: meta.headRefName,
     title: meta.title,
     url: meta.url,
     author: meta.author,

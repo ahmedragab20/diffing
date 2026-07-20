@@ -90,6 +90,10 @@ export interface PrSession {
   headSha: string
   /** The PR's base SHA (often just `refs/heads/main`). */
   baseSha: string
+  /** The PR's head (source) branch name, e.g. `feature/foo`. Empty for legacy sessions. */
+  headRefName?: string
+  /** The PR's base (target) branch name, e.g. `main`. Empty for legacy sessions. */
+  baseRefName?: string
   title: string
   url: string
   author: PrAuthor | null

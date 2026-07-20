@@ -70,8 +70,8 @@ async function ghOverview(args: string[]): Promise<number> {
   console.log(`  url:        ${s.url}`)
   console.log(`  author:     ${s.author?.login ?? '(unknown)'}`)
   console.log(`  +${s.additions} -${s.deletions}  (${s.changedFiles} files)  patchBytes=${s.patchBytes}`)
-  console.log(`  head:       ${s.headSha.slice(0, 7)}`)
-  console.log(`  base:       ${s.baseSha.slice(0, 7)}`)
+  console.log(`  head:       ${s.headSha.slice(0, 7)}${s.headRefName ? ` (${s.headRefName})` : ''}`)
+  console.log(`  base:       ${s.baseSha.slice(0, 7)}${s.baseRefName ? ` (${s.baseRefName})` : ''}`)
   console.log(
     `  threads:    ${s.counts.publishedThreads} published (${s.counts.unresolvedThreads} unresolved, ${s.counts.outdatedThreads} outdated)`,
   )
@@ -113,8 +113,8 @@ async function ghStatus(): Promise<number> {
   console.log(`  url:        ${s.url}`)
   console.log(`  author:     ${s.author?.login ?? '(unknown)'}`)
   console.log(`  +${s.additions} -${s.deletions}  (${s.changedFiles} files)`)
-  console.log(`  head:       ${s.headSha.slice(0, 7)}`)
-  console.log(`  base:       ${s.baseSha.slice(0, 7)}`)
+  console.log(`  head:       ${s.headSha.slice(0, 7)}${s.headRefName ? ` (${s.headRefName})` : ''}`)
+  console.log(`  base:       ${s.baseSha.slice(0, 7)}${s.baseRefName ? ` (${s.baseRefName})` : ''}`)
   console.log(`  threads:    ${s.existingComments?.length ?? 0} published conversations`)
   console.log(`  reviews:    ${s.existingReviews?.length ?? 0} submitted review events`)
   console.log(`  new:        ${s.comments?.length ?? 0} comments in this session`)

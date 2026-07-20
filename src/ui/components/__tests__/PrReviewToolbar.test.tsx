@@ -23,6 +23,8 @@ const session = {
   additions: 21,
   deletions: 8,
   headSha: 'abcdef123456',
+  headRefName: 'feature/widget',
+  baseRefName: 'main',
   url: 'https://github.com/octo/project/pull/42',
 } as any
 
@@ -76,5 +78,49 @@ describe('PrReviewToolbar', () => {
     fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
     expect(navigate).toHaveBeenCalledWith('/')
     expect(refresh).toHaveBeenCalledOnce()
+  })
+
+  it('shows the head and base branch flow when both branch names are present', () => {
+    render(
+      <PrReviewToolbar
+        session={session}
+        comments={[]}
+        settingsProps={{} as any}
+        sidebarCollapsed={false}
+        onToggleSidebar={vi.fn()}
+        onOpenSearch={vi.fn()}
+        onRefresh={vi.fn()}
+        refreshing={false}
+        onEditComment={vi.fn()}
+        onDeleteComment={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('feature/widget')).toBeInTheDocument()
+    expect(screen.getByText('main')).toBeInTheDocument()
+    expect(screen.getByTitle('Comparing feature/widget into main')).toBeInTheDocument()
+  })
+
+  it('omits the branch flow when branch names are missing', () => {
+    const sessionWithoutBranches = { ...session }
+    delete sessionWithoutBranches.headRefName
+    delete sessionWithoutBranches.baseRefName
+    render(
+      <PrReviewToolbar
+        session={sessionWithoutBranches}
+        comments={[]}
+        settingsProps={{} as any}
+        sidebarCollapsed={false}
+        onToggleSidebar={vi.fn()}
+        onOpenSearch={vi.fn()}
+        onRefresh={vi.fn()}
+        refreshing={false}
+        onEditComment={vi.fn()}
+        onDeleteComment={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByText('feature/widget')).not.toBeInTheDocument()
+    expect(screen.queryByTitle(/Comparing/)).not.toBeInTheDocument()
   })
 })
