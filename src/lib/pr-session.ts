@@ -114,6 +114,17 @@ export interface PrSession {
   submittedReviewUrl?: string
   /** The auth source we used last (for diagnostics). */
   authSource?: 'gh' | 'token'
+  /**
+   * Ids of replies we optimistically appended in {@link PrSession.existingComments}
+   * via the reply endpoint that have not yet shown up in a fresh
+   * `fetchExistingCommentsViaGh`. `syncExistingPrReviewData` walks this list to
+   * preserve the optimistic copies across the GitHub propagation window so the
+   * UI never sees them flash out (which is what the user reported as "comments
+   * disappear after submitting a reply"). An id is removed the moment a fresh
+   * fetch includes it; ids whose GitHub counterpart never lands are also removed
+   * (a once-optimistic acknowledgement that the optimistic copy was wrong).
+   */
+  pendingOptimisticReplyIds?: number[]
 }
 
 export interface PrSessionStore {

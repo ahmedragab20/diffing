@@ -26,7 +26,7 @@ import { executeDiffWithMeta } from './lib/diff-engine.js'
 import type { DiffOptions } from './lib/diff-options.js'
 import { DEFAULTS } from './lib/diff-options.js'
 import { FilePrSessionStore, InMemoryPrSessionStore } from './lib/pr-session.js'
-import type { PrSessionStore, PrDecision, PrExistingReview, PrSession } from './lib/pr-session.js'
+import type { PrSessionStore, PrDecision, PrExistingReview, PrSession, PrExistingComment, PrExistingReply } from './lib/pr-session.js'
 import { buildPrOverview } from './lib/diff-overview.js'
 import {
   AgentDiffIndexCache,
@@ -1128,6 +1128,61 @@ export function createApp(
     return c.json(page)
   })
 
+  /**
+   * Merge the GitHub-fetched existing comments into the *current* session's
+   * optimistic state. The reply endpoint optimistically appends a new reply to
+   * a thread before GitHub has propagated it through the REST comments API
+   * (a noticeable window during the periodic 30s / window-focus sync). A naive
+   * overwrite would make that reply flash out of the UI until the next sync
+   * catches up — which is what users reported as "comments disappear after
+   * submitting a reply" (especially visible on file-level threads because
+   * those bubbles live in their own section and a missing one is striking).
+   *
+   * Strategy: take fresh-from-GitHub replies as authoritative for ids GitHub
+   * already knows about, then re-append any optimistic local replies that
+   * haven't yet appeared on GitHub (tracked via {@link PrSession.pendingOptimisticReplyIds}).
+   * Replies GitHub no longer returns AND that aren't optimistic are dropped
+   * (a real delete). Optimistic ids that do show up are confirmed and pruned
+   * from the pending list.
+   */
+  const mergeFreshWithLocalOptimistic = (
+    fresh: PrExistingComment[],
+    current: PrExistingComment[] | undefined,
+    pendingIds: number[],
+  ): { existingComments: PrExistingComment[]; remainingPending: number[] } => {
+    const pending = new Set(pendingIds)
+    const localById = new Map<number, PrExistingComment>()
+    for (const c of current ?? []) localById.set(c.id, c)
+    const remainingPending: number[] = []
+    const existingComments = fresh.map((freshTop) => {
+      const local = localById.get(freshTop.id)
+      if (!local) return freshTop
+      const freshReplyIds = new Set(freshTop.replies.map((r) => r.id))
+      // GitHub confirms replies that matched by id — drop them from the pending list.
+      for (const id of freshReplyIds) pending.delete(id)
+      const preserved: PrExistingReply[] = []
+      if (pending.size > 0) {
+        for (const r of local.replies) {
+          if (freshReplyIds.has(r.id)) continue
+          if (pending.has(r.id)) {
+            // Local optimistic copy — GitHub hasn't returned it yet. Keep it so
+            // the UI doesn't see the reply disappear between syncs.
+            preserved.push(r)
+            // Keep tracking it until a fresh fetch confirms it.
+            remainingPending.push(r.id)
+          }
+          // Otherwise this is a reply GitHub has dropped (real delete). Let it go.
+        }
+      }
+      if (preserved.length === 0) return freshTop
+      // Reply ordering: GitHub's listing is already chronological; preserve that
+      // and append optimistic replies (their createdAt is recent) at the end.
+      const replies = [...freshTop.replies, ...preserved]
+      return { ...freshTop, replies }
+    })
+    return { existingComments, remainingPending }
+  }
+
   const syncExistingPrReviewData = async (session: NonNullable<Awaited<ReturnType<PrSessionStore['get']>>>) => {
     const resolved = resolvedFromSession(session)
     let existingReviews = await fetchExistingReviewsViaGh(resolved)
@@ -1142,11 +1197,23 @@ export function createApp(
     ) {
       existingReviews = [optimisticReview, ...existingReviews]
     }
-    const existingComments = await fetchExistingCommentsViaGh(resolved, existingReviews)
-    const comments = session.submittedAt
-      ? (session.comments ?? []).filter((comment) => comment.createdAt > session.submittedAt!)
-      : session.comments
-    const next = { ...session, comments, existingComments, existingReviews }
+    const freshExistingComments = await fetchExistingCommentsViaGh(resolved, existingReviews)
+    // Re-read the session right before writing. Optimistic merges from the
+    // reply endpoint (or draft writes) that landed during the slow GitHub
+    // fetch above must not be silently overwritten. The draft `comments`
+    // filter and any optimistic reviews come from this current snapshot.
+    const current = (await prStore.get()) ?? session
+    const { existingComments, remainingPending } = mergeFreshWithLocalOptimistic(
+      freshExistingComments,
+      current.existingComments,
+      current.pendingOptimisticReplyIds ?? [],
+    )
+    const comments = current.submittedAt
+      ? (current.comments ?? []).filter((comment) => comment.createdAt > current.submittedAt!)
+      : current.comments
+    const next = { ...current, comments, existingComments, existingReviews }
+    if (remainingPending.length > 0) next.pendingOptimisticReplyIds = remainingPending
+    else delete next.pendingOptimisticReplyIds
     await prStore.set(next)
     return next
   }
@@ -1222,14 +1289,29 @@ export function createApp(
       // GitHub returns the created reply. Merge it into the cached thread
       // immediately instead of doing a second, slower metadata round-trip.
       // The client can now re-fetch the session and render the reply at once.
+      //
+      // The URL `:id` is normally the top-level comment id (the UI passes
+      // `comment.id` from the bubble). GitHub's REST `in_reply_to` semantics
+      // accept any id in the thread, so the same `:id` is forwarded verbatim.
+      // We additionally accept an id that points at any existing reply in the
+      // thread — the merge attaches to whichever thread owns that id, so the
+      // optimistic update lands even if callers ever use a reply id.
       const reply = result.reply
       if (reply) {
         const existingComments = session.existingComments.map((comment) =>
-          comment.id === id
+          comment.id === id || comment.replies.some((r) => r.id === id)
             ? { ...comment, replies: [...comment.replies, reply] }
             : comment,
         )
-        await prStore.set({ ...session, existingComments })
+        // Track the new reply id so the next `syncExistingPrReviewData`
+        // preserves it across the GitHub propagation window (otherwise the
+        // fresh GitHub fetch wouldn't yet include it and would clobber the
+        // optimistic copy — making the reply "disappear" in the UI).
+        const pendingOptimisticReplyIds = [
+          ...(session.pendingOptimisticReplyIds ?? []),
+          ...(typeof result.id === 'number' ? [result.id] : []),
+        ]
+        await prStore.set({ ...session, existingComments, pendingOptimisticReplyIds })
       }
       return c.json({ ok: true, id: result.id, reply })
     } catch (err: any) {
