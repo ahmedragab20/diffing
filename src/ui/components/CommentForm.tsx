@@ -427,7 +427,7 @@ export function CommentForm({
       </div>
 
       {activeTab === 'write' ? (
-        <div style={{ position: 'relative' }}>
+        <div>
           <div className="comment-form-suggest-row">
             {savedReplies.length > 0 && (
               <div className="comment-form-saved-replies">
@@ -486,31 +486,33 @@ export function CommentForm({
               </button>
             ) : null}
           </div>
-          <textarea
-            id="comment-write-panel"
-            ref={(el) => {
-              (textareaRef as React.MutableRefObject<HTMLTextAreaElement | null>).current = el
-              mention.setTextareaRef(el)
-            }}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            placeholder="Leave a review comment (supports Markdown and Pasting Clipboard Images)..."
-            rows={4}
-            aria-label="Comment body"
-            style={{ minHeight: '100px' }}
-          />
-          {mention.isOpen && (
-            <FileMentionDropdown
-              results={mention.results}
-              focusedIndex={mention.focusedIndex}
-              query={mention.query}
-              cursorTop={mention.cursorTop}
-              onSelect={mention.onSelect}
-              onHover={mention.setFocusedIndex}
+          <div style={{ position: 'relative' }}>
+            <textarea
+              id="comment-write-panel"
+              ref={(el) => {
+                (textareaRef as React.MutableRefObject<HTMLTextAreaElement | null>).current = el
+                mention.setTextareaRef(el)
+              }}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              placeholder="Leave a review comment (supports Markdown and Pasting Clipboard Images)..."
+              rows={4}
+              aria-label="Comment body"
+              style={{ minHeight: '100px' }}
             />
-          )}
+            {mention.isOpen && (
+              <FileMentionDropdown
+                results={mention.results}
+                focusedIndex={mention.focusedIndex}
+                query={mention.query}
+                cursorTop={mention.cursorTop}
+                onSelect={mention.onSelect}
+                onHover={mention.setFocusedIndex}
+              />
+            )}
+          </div>
         </div>
       ) : (
         <div
