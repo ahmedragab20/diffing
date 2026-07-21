@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.10.4
+
+### Patch Changes
+
+- Preserve optimistic replies across GitHub propagation window
+
+  The reply endpoint optimistically appends a new reply to a thread before GitHub
+  has propagated it through the REST API, but the periodic sync would overwrite
+  it — making replies appear to 'disappear' in the UI (especially visible on
+  file-level comments).
+
+  - Add `pendingOptimisticReplyIds` to `PrSession` to track optimistic local
+    replies not yet confirmed by GitHub.
+  - Introduce `mergeFreshWithLocalOptimistic()` in the server, called during
+    `syncExistingPrReviewData`, which re-reads the current session and merges
+    fresh GitHub comments with pending optimistic replies.
+  - Reply endpoint matches threads by lead id or any existing reply id, and
+    records new reply ids in `pendingOptimisticReplyIds`.
+  - New test suite covers file-level comment flows: post/edit/delete/resolve
+    replies, optimistic merge across sync, draft preservation, and
+    `fetchExistingCommentsViaGh` grouping/pagination.
+
 ## 0.10.3
 
 ### Patch Changes
