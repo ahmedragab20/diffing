@@ -15,7 +15,7 @@
 |---|---|---|
 | Package name / version / license | `diffing` / `0.2.1` / MIT | package.json |
 | Repo / bin | github.com/ahmedragab20/diffing / `diffing` → `./dist/cli.mjs` | package.json |
-| Default theme | `nord` | settings.ts, App.tsx fallback `settings.theme \|\| 'nord'` |
+| Default theme | `rose-pine` | settings.ts, App.tsx fallback `settings.theme \|\| 'rose-pine'` |
 | Default UI font | **Geist Mono** | global.css:51 `--font-sans` |
 | Default mono/code font | **JetBrains Mono** | global.css:54 `--font-mono` |
 | **Theme count** | **52** (exact, counted `{ id:` entries 14–91) | ThemeModal.tsx |
@@ -121,7 +121,7 @@ npx skills add ahmedragab20/diffing
 
 ### 1.6 Themes
 - Copy headline: **52 built-in themes** (not "42+") with instant switching, live preview, and dark/light variants.
-- Body: `Nord (the default), the full GitHub family, Dracula, One Dark, Synthwave '84, Tokyo Night, Catppuccin (Mocha · Frappé · Macchiato · Latte), Solarized, Monokai, Ayu, the Nightfox family (7 colorways), Rosé Pine (3), Material (5), Slack (2), Vitesse (3), Vesper, Poimandres, Night Owl, and more.`
+- Body: `Rosé Pine (the default), Nord, the full GitHub family, Dracula, One Dark, Synthwave '84, Tokyo Night, Catppuccin (Mocha · Frappé · Macchiato · Latte), Solarized, Monokai, Ayu, the Nightfox family (7 colorways), Rosé Pine (3), Material (5), Slack (2), Vitesse (3), Vesper, Poimandres, Night Owl, and more.`
 - Interaction line: `Press `g t` to open the theme picker — search, filter by dark/light, arrow-key navigate, Enter to apply, Esc to close.`
 
 ### 1.7 Search (Rust-powered, fff)
@@ -244,7 +244,7 @@ hero → left stack → right stack → footer).
 
 **B. Spec Profile — facts panel** *(static, scannable)*
 - A `key: value` ledger styled like a terminal-style info box. Rows: `package`, `version 0.2.1`,
-  `license MIT`, `bin diffing → ./dist/cli.mjs`, `default theme nord`, `ui font Geist Mono`,
+  `license MIT`, `bin diffing → ./dist/cli.mjs`, `default theme rose-pine`, `ui font Geist Mono`,
   `code font JetBrains Mono`, `themes 52`, `mcp tools 10`, `git flags 60+ / 12 categories`,
   `default host 127.0.0.1`, `quotes 31`.
 
@@ -356,11 +356,11 @@ Keep all 10 names exactly: `success, warning, error, light, medium, heavy, soft,
 
 ### 3.4 Theme CSS-variable blocks to embed (port VERBATIM from global.css)
 Embed these **5** `[data-theme="…"]` blocks exactly as written in `src/ui/styles/global.css`.
-Nord is the default (`<html data-theme="nord">`). The page should reference these tokens
+Rosé Pine is the default (`<html data-theme="rose-pine">`). The page should reference these tokens
 (`--bg-primary`, `--text-primary`, `--primary`, `--success`, `--danger`, `--warning`, `--accent`,
 `--border-color`, `--comment-bg`, `--comment-border`, etc.) for every surface.
 
-1. **`nord`** (default) — global.css:151–183. Key tokens:
+1. **`nord`** — global.css:175–207. Key tokens:
    `--bg-primary:#2e3440; --bg-secondary:#242933; --bg-tertiary:#3b4252; --text-primary:#eceff4;
    --text-secondary:#e5e9f0; --text-muted:#d8dee9; --border-color:#3b4252; --border-normal:#434c5e;
    --border-focus:#88c0d0; --primary:#88c0d0; --primary-hover:#8fbcbb; --accent:#b48ead;
@@ -377,9 +377,9 @@ Nord is the default (`<html data-theme="nord">`). The page should reference thes
    `--bg-primary:#282a36; --bg-secondary:#1e1f29; --bg-tertiary:#343746; --text-primary:#f8f8f2;
    --primary:#bd93f9; --accent:#ff79c6; --success:#50fa7b; --danger:#ff5555; --warning:#f1fa8c;
    --comment-bg:#343746; --comment-border:#bd93f9;` (+ remaining tokens verbatim).
-5. **`rose-pine`** — global.css:1411–1443.
+5. **`rose-pine`** (default) — global.css:1441–1473.
    `--bg-primary:#191724; --bg-secondary:#1f1d2e; --bg-tertiary:#26233a; --text-primary:#e0def4;
-   --primary:#c4a7e7; --accent:#ea9a97; --success:#31748f; --danger:#ebbcbc; --warning:#f6c177;
+   --primary:#c4a7e7; --accent:#ebbcba; --success:#9ccfd8; --danger:#eb6f92; --warning:#f6c177;
    --comment-bg:#1f1d2e; --comment-border:#c4a7e7;` (+ remaining tokens verbatim).
 
 > Each block also defines `--bg-secondary-rgb`, `--accent-subtle`, `--border-weak/normal/strong`,

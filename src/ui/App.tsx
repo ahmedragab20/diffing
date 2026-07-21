@@ -1058,7 +1058,7 @@ export function App() {
     );
 
     useEffect(() => {
-        const activeTheme = settings.theme || "nord";
+        const activeTheme = settings.theme || "rose-pine";
         const root = document.documentElement;
         // Suppress the global color/border/box-shadow transitions while the
         // theme attribute flips. Otherwise every card, button and row animates
@@ -1082,8 +1082,8 @@ export function App() {
     );
 
     const shikiConfig = useMemo(() => {
-        const activeTheme = settings.theme || "nord";
-        return SHIKI_THEME_MAP[activeTheme] || SHIKI_THEME_MAP.nord;
+        const activeTheme = settings.theme || "rose-pine";
+        return SHIKI_THEME_MAP[activeTheme] || SHIKI_THEME_MAP['rose-pine'];
     }, [settings.theme]);
 
     useEffect(() => {
@@ -1094,7 +1094,7 @@ export function App() {
                     dark:
                         shikiConfig.type === "dark"
                             ? shikiConfig.themeName
-                            : "nord",
+                            : "rose-pine",
                     light:
                         shikiConfig.type === "light"
                             ? shikiConfig.themeName
@@ -1109,7 +1109,7 @@ export function App() {
     // Pre-warm the Shiki highlighter on the main thread for snappier first paint
     useEffect(() => {
         const dark =
-            shikiConfig.type === "dark" ? shikiConfig.themeName : "nord";
+            shikiConfig.type === "dark" ? shikiConfig.themeName : "rose-pine";
         const light =
             shikiConfig.type === "light"
                 ? shikiConfig.themeName
@@ -1261,7 +1261,7 @@ export function App() {
                 diffOptions={diffOptions}
                 defaultTabSize={settings.defaultTabSize}
                 browser={settings.browser}
-                theme={settings.theme || "nord"}
+                theme={settings.theme || "rose-pine"}
                 editorIDE={settings.editorIDE}
                 customMode={customMode}
                 showMode={showMode}
@@ -1419,7 +1419,7 @@ export function App() {
                         <MergeConflictResolver
                             key={conflictPath}
                             filePath={conflictPath}
-                            theme={settings.theme || "nord"}
+                            theme={settings.theme || "rose-pine"}
                             fontSize={settings.fontSize}
                             monoFontFamily={monoFontFamily}
                             tabSize={
@@ -1437,7 +1437,7 @@ export function App() {
                         defaultTabSize={settings.defaultTabSize}
                         viewedFiles={viewedFiles}
                         binaryFiles={binaryFileMap}
-                        theme={settings.theme || "nord"}
+                        theme={settings.theme || "rose-pine"}
                         editorIDE={settings.editorIDE}
                         lineDiffType={settings.lineDiffType}
                         lineWrap={settings.lineWrap}
@@ -1468,7 +1468,7 @@ export function App() {
                 customMode={customMode}
                 staged={settings.staged}
                 onNavigateFile={handleFileClick}
-                theme={settings.theme || "nord"}
+                theme={settings.theme || "rose-pine"}
                 fontSize={settings.fontSize}
                 monoFontFamily={monoFontFamily}
                 defaultTabSize={settings.defaultTabSize}
@@ -1492,7 +1492,7 @@ export function App() {
             />
             <ThemeModal
                 open={themeModalOpen}
-                activeTheme={settings.theme || "nord"}
+                activeTheme={settings.theme || "rose-pine"}
                 onThemeChange={handleThemeChange}
                 onClose={() => setThemeModalOpen(false)}
             />

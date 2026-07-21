@@ -443,7 +443,7 @@ export function PlanReview({
     }
   }
 
-  const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP.nord
+  const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP['rose-pine']
   const unsafeCSS = useMemo(() => buildPlanCSS(defaultTabSize, fontSize, monoFontFamily), [defaultTabSize, fontSize, monoFontFamily])
 
   // Comments are filtered to those anchored to the version being viewed. A
@@ -1334,7 +1334,7 @@ export function PlanReview({
             })
           },
           theme: {
-            dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
+            dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
             light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
           },
           themeType: shikiConfig.type,

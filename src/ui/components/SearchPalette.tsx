@@ -852,7 +852,7 @@ function PreviewPane({
   inDiff: boolean
   onGoToDiff: () => void
 }) {
-  const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP.nord
+  const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP['rose-pine']
   const { data, isLoading, error } = useFilePreview(preview.path)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -915,7 +915,7 @@ function PreviewPane({
               disableLineNumbers: !showLineNumbers,
               lineHoverHighlight: lineHoverHighlight as any,
               theme: {
-                dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
+                dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
                 light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
               },
               themeType: shikiConfig.type,

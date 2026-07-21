@@ -88,7 +88,7 @@ const basePlan: Plan = {
 }
 
 const baseProps = {
-  theme: 'nord',
+  theme: 'rose-pine',
   fontSize: 13,
   monoFontFamily: 'monospace',
   defaultTabSize: 2,

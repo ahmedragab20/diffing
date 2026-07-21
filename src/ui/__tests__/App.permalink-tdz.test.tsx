@@ -75,7 +75,7 @@ vi.mock('../hooks/useSettings', () => ({
       untracked: true,
       diffStyle: 'unified',
       defaultTabSize: 4,
-      theme: 'nord',
+      theme: 'rose-pine',
       lineDiffType: 'word',
       lineWrap: false,
       diffIndicators: 'classic',

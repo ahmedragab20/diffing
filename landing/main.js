@@ -275,6 +275,14 @@
   // ════════════════════════════════════════════════════════════════════
   var THEMES = [
     {
+      id: "rose-pine",
+      name: "Rosé Pine",
+      bg: "#191724",
+      sec: "#1f1d2e",
+      acc: "#c4a7e7",
+      ext: "#ebbcba",
+    },
+    {
       id: "nord",
       name: "Nord",
       bg: "#2e3440",
@@ -306,22 +314,14 @@
       acc: "#bd93f9",
       ext: "#ff79c6",
     },
-    {
-      id: "rose-pine",
-      name: "Rosé Pine",
-      bg: "#191724",
-      sec: "#1f1d2e",
-      acc: "#c4a7e7",
-      ext: "#ea9a97",
-    },
   ];
-  var currentTheme = lsGet(LS.theme, "nord");
+  var currentTheme = lsGet(LS.theme, "rose-pine");
   if (
     !THEMES.some(function (t) {
       return t.id === currentTheme;
     })
   )
-    currentTheme = "nord";
+    currentTheme = "rose-pine";
 
   var vimThemeEl = document.getElementById("vim-theme");
 

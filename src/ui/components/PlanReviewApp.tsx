@@ -158,12 +158,12 @@ export function PlanReviewApp() {
   }, [routeId, plans, getPlan])
 
   const shikiConfig = useMemo(() => {
-    const activeTheme = settings.theme || 'nord'
-    return SHIKI_THEME_MAP[activeTheme] || SHIKI_THEME_MAP.nord
+    const activeTheme = settings.theme || 'rose-pine'
+    return SHIKI_THEME_MAP[activeTheme] || SHIKI_THEME_MAP['rose-pine']
   }, [settings.theme])
 
   useEffect(() => {
-    const activeTheme = settings.theme || 'nord'
+    const activeTheme = settings.theme || 'rose-pine'
     const root = document.documentElement
     root.classList.add('theme-switching')
     root.setAttribute('data-theme', activeTheme)
@@ -178,7 +178,7 @@ export function PlanReviewApp() {
     poolManager
       .setRenderOptions({
         theme: {
-          dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
+          dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
           light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
         },
       })
@@ -186,7 +186,7 @@ export function PlanReviewApp() {
   }, [poolManager, shikiConfig])
 
   useEffect(() => {
-    const dark = shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord'
+    const dark = shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine'
     const light = shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light'
     preloadHighlighter({ themes: Array.from(new Set([dark, light])), langs: [] }).catch(() => {})
   }, [shikiConfig])
@@ -787,7 +787,7 @@ export function PlanReviewApp() {
               <PlanReview
                 key={activePlan.id}
                 plan={activePlan}
-                theme={settings.theme || 'nord'}
+                theme={settings.theme || 'rose-pine'}
                 fontSize={settings.fontSize}
                 monoFontFamily={resolveMonoFont(settings.monoFont)}
                 defaultTabSize={settings.defaultTabSize}
@@ -812,7 +812,7 @@ export function PlanReviewApp() {
 
         <ThemeModal
           open={themeModalOpen}
-          activeTheme={settings.theme || 'nord'}
+          activeTheme={settings.theme || 'rose-pine'}
           onThemeChange={(theme) => updateSettings({ theme })}
           onClose={() => setThemeModalOpen(false)}
         />

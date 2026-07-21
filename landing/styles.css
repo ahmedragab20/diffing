@@ -14,7 +14,7 @@
         Consolas, monospace;
 }
 
-/* ── Theme: nord (default) — verbatim, global.css:151–183 ──────────────── */
+/* ── Theme: nord — verbatim, global.css:173–205 ────────────────────────── */
 [data-theme="nord"] {
     --bg-primary: #2e3440;
     --bg-secondary: #242933;
@@ -154,7 +154,7 @@
     --feedback-warning-text: #e0af68;
 }
 
-/* ── Theme: rose-pine — verbatim, global.css:1411–1443 ─────────────────── */
+/* ── Theme: rose-pine — official palette, global.css:1432–1474 ─────────── */
 [data-theme="rose-pine"] {
     --bg-primary: #191724;
     --bg-secondary: #1f1d2e;
@@ -166,24 +166,24 @@
     --border-color: #26233a;
     --border-focus: #c4a7e7;
     --primary: #c4a7e7;
-    --primary-hover: #ea9a97;
-    --accent: #ea9a97;
-    --success: #31748f;
-    --danger: #ebbcbc;
+    --primary-hover: #ebbcba;
+    --accent: #ebbcba;
+    --success: #9ccfd8;
+    --danger: #eb6f92;
     --warning: #f6c177;
     --comment-bg: #1f1d2e;
     --comment-border: #c4a7e7;
 
-    --accent-subtle: rgba(196, 167, 231, 0.15);
+    --accent-subtle: rgba(235, 188, 186, 0.15);
     --border-weak: #26233a;
     --border-normal: #403d52;
     --border-strong: #c4a7e7;
-    --feedback-success-bg: rgba(49, 116, 143, 0.15);
-    --feedback-success-border: #31748f;
-    --feedback-success-text: #31748f;
-    --feedback-danger-bg: rgba(235, 188, 188, 0.15);
-    --feedback-danger-border: #ebbcbc;
-    --feedback-danger-text: #ebbcbc;
+    --feedback-success-bg: rgba(156, 207, 216, 0.15);
+    --feedback-success-border: #9ccfd8;
+    --feedback-success-text: #9ccfd8;
+    --feedback-danger-bg: rgba(235, 111, 146, 0.15);
+    --feedback-danger-border: #eb6f92;
+    --feedback-danger-text: #eb6f92;
     --feedback-warning-bg: rgba(246, 193, 119, 0.15);
     --feedback-warning-border: #f6c177;
     --feedback-warning-text: #f6c177;

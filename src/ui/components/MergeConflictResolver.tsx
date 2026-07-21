@@ -40,7 +40,7 @@ export const MergeConflictResolver = memo(function MergeConflictResolver({
   tabSize,
   onSaved,
 }: MergeConflictResolverProps) {
-  const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP.nord
+  const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP['rose-pine']
   const [state, setState] = useState<FetchState>({
     loading: true,
     error: null,
@@ -190,7 +190,7 @@ export const MergeConflictResolver = memo(function MergeConflictResolver({
           enableGutterUtility: false,
           mergeConflictActionsType: 'custom',
           theme: {
-            dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
+            dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
             light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
           },
           themeType: shikiConfig.type,

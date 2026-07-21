@@ -266,13 +266,13 @@ export function PrReviewApp() {
   useEffect(() => {
     const root = document.documentElement
     root.classList.add('theme-switching')
-    root.setAttribute('data-theme', settings.theme || 'nord')
+    root.setAttribute('data-theme', settings.theme || 'rose-pine')
     root.setAttribute('data-density', settings.density || 'comfortable')
     const frame = requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('theme-switching')))
     return () => cancelAnimationFrame(frame)
   }, [settings.theme, settings.density])
 
-  const shikiConfig = useMemo(() => SHIKI_THEME_MAP[settings.theme || 'nord'] || SHIKI_THEME_MAP.nord, [settings.theme])
+  const shikiConfig = useMemo(() => SHIKI_THEME_MAP[settings.theme || 'rose-pine'] || SHIKI_THEME_MAP['rose-pine'], [settings.theme])
   const diffLanguages = useMemo(() => Array.from(new Set(
     files
       .flatMap((file) => [getFiletypeFromFileName(file.name), file.prevName ? getFiletypeFromFileName(file.prevName) : null])
@@ -282,13 +282,13 @@ export function PrReviewApp() {
     if (!poolManager) return
     poolManager.setRenderOptions({
       theme: {
-        dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
+        dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
         light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
       },
     }).catch(() => {})
   }, [poolManager, shikiConfig])
   useEffect(() => {
-    const dark = shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord'
+    const dark = shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine'
     const light = shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light'
     preloadHighlighter({ themes: Array.from(new Set([dark, light])), langs: diffLanguages }).catch(() => {})
   }, [shikiConfig, diffLanguages])
@@ -519,7 +519,7 @@ export function PrReviewApp() {
           customMode
           staged={false}
           onNavigateFile={handleFileClick}
-          theme={settings.theme || 'nord'}
+          theme={settings.theme || 'rose-pine'}
           fontSize={settings.fontSize}
           monoFontFamily={monoFontFamily}
           defaultTabSize={settings.defaultTabSize}
@@ -529,7 +529,7 @@ export function PrReviewApp() {
         />
         <VimStatusBar activeFile={activeFile} onShowHelp={() => setShortcutsHelpOpen(true)} visible={settings.showStatusBar} placeholder="No active PR file (J/K to jump)" />
         <ShortcutsHelpModal isOpen={shortcutsHelpOpen} onClose={() => setShortcutsHelpOpen(false)} mode="pr" />
-        <ThemeModal open={themeModalOpen} activeTheme={settings.theme || 'nord'} onThemeChange={(theme) => update({ theme })} onClose={() => setThemeModalOpen(false)} />
+        <ThemeModal open={themeModalOpen} activeTheme={settings.theme || 'rose-pine'} onThemeChange={(theme) => update({ theme })} onClose={() => setThemeModalOpen(false)} />
         <FontPickerModal open={uiFontModalOpen} title="Select UI Font" defaultLabel="Default (Geist Mono, from CDN)" activeFont={settings.uiFont} onFontChange={(uiFont) => update({ uiFont })} onClose={() => setUiFontModalOpen(false)} />
         <FontPickerModal open={monoFontModalOpen} title="Select Code Font" defaultLabel="Default (JetBrains Mono, from CDN)" activeFont={settings.monoFont} onFontChange={(monoFont) => update({ monoFont })} onClose={() => setMonoFontModalOpen(false)} />
         {submissionToast && <PrSubmittedToast result={submissionToast} onDismiss={() => setSubmissionToast(null)} />}
@@ -582,7 +582,7 @@ function PrDiffSurface({
               defaultTabSize={settings.defaultTabSize}
               viewedFiles={viewedFiles}
               binaryFiles={new Map()}
-              theme={settings.theme || 'nord'}
+              theme={settings.theme || 'rose-pine'}
               lineDiffType={settings.lineDiffType}
               lineWrap={settings.lineWrap}
               diffIndicators={settings.diffIndicators}

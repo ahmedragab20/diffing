@@ -12,7 +12,7 @@ export interface ThemeOption {
 
 export const THEMES: ThemeOption[] = [
   // 1. Nord
-  { id: 'nord', name: 'Nord (Main)', type: 'dark', colors: { bg: '#2e3440', secondary: '#242933', accent: '#88c0d0' } },
+  { id: 'nord', name: 'Nord', type: 'dark', colors: { bg: '#2e3440', secondary: '#242933', accent: '#88c0d0' } },
   
   // 2. GitHub themes
   { id: 'github-dark', name: 'GitHub Dark', type: 'dark', colors: { bg: '#0d1117', secondary: '#161b22', accent: '#58a6ff' } },
@@ -77,7 +77,7 @@ export const THEMES: ThemeOption[] = [
   { id: 'poimandres', name: 'Poimandres', type: 'dark', colors: { bg: '#1b1e28', secondary: '#171922', accent: '#50cad2' } },
   
   // 12. Rosé Pine Family
-  { id: 'rose-pine', name: 'Rosé Pine', type: 'dark', colors: { bg: '#191724', secondary: '#1f1d2e', accent: '#c4a7e7' } },
+  { id: 'rose-pine', name: 'Rosé Pine (Main)', type: 'dark', colors: { bg: '#191724', secondary: '#1f1d2e', accent: '#c4a7e7' } },
   { id: 'rose-pine-moon', name: 'Rosé Pine Moon', type: 'dark', colors: { bg: '#232136', secondary: '#2a283e', accent: '#c4a7e7' } },
   { id: 'rose-pine-dawn', name: 'Rosé Pine Dawn', type: 'light', colors: { bg: '#faf4ed', secondary: '#f2e9e1', accent: '#907aa9' } },
   

@@ -286,7 +286,7 @@ export const FileDiffCard = memo(function FileDiffCard({
     return () => io.disconnect()
   }, [collapsed, bodyMounted])
 
-  const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP.nord
+  const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP['rose-pine']
 
   // Stable across re-renders triggered by unrelated prop changes (e.g. toggling
   // split/unified) so the diff renderer isn't handed a brand-new CSS string
@@ -933,7 +933,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                   )
                 },
                 theme: {
-                  dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
+                  dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
                   light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
                 },
                 themeType: shikiConfig.type,
@@ -984,7 +984,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 )
               },
               theme: {
-                dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'nord',
+                dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
                 light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
               },
               themeType: shikiConfig.type,

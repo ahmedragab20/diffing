@@ -112,39 +112,41 @@ textarea,
     --transition-smooth: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     --transition-bounce: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
 
-    /* --- Default Theme: Nord (Official Specs Refined) --- */
-    --bg-primary: #2e3440;
-    --bg-secondary: #242933;
-    --bg-secondary-rgb: 36, 41, 51;
-    --bg-tertiary: #3b4252;
-    --text-primary: #eceff4;
-    --text-secondary: #e5e9f0;
-    --text-muted: #d8dee9;
-    --border-color: #3b4252;
-    --border-focus: #88c0d0;
-    --primary: #88c0d0;
-    --primary-hover: #8fbcbb;
-    --accent: #b48ead;
-    --success: #a3be8c;
-    --danger: #bf616a;
-    --warning: #ebcb8b;
-    --comment-bg: #3b4252;
-    --comment-border: #4c566a;
+    /* --- Default Theme: Rosé Pine (official palette) ---
+       Matches [data-theme="rose-pine"] so the very first paint (before React
+       applies data-theme) already shows the default theme — no Nord flash. */
+    --bg-primary: #191724;
+    --bg-secondary: #1f1d2e;
+    --bg-secondary-rgb: 31, 29, 46;
+    --bg-tertiary: #26233a;
+    --text-primary: #e0def4;
+    --text-secondary: #908caa;
+    --text-muted: #6e6a86;
+    --border-color: #26233a;
+    --border-focus: #c4a7e7;
+    --primary: #c4a7e7;
+    --primary-hover: #ebbcba;
+    --accent: #ebbcba;
+    --success: #9ccfd8;
+    --danger: #eb6f92;
+    --warning: #f6c177;
+    --comment-bg: #1f1d2e;
+    --comment-border: #c4a7e7;
 
-    /* Semantic Tokens Fallback (Nord mappings) */
-    --accent-subtle: rgba(136, 192, 208, 0.12);
-    --border-weak: #3b4252;
-    --border-normal: #434c5e;
-    --border-strong: #88c0d0;
-    --feedback-success-bg: rgba(163, 190, 140, 0.12);
-    --feedback-success-border: #a3be8c;
-    --feedback-success-text: #a3be8c;
-    --feedback-danger-bg: rgba(191, 97, 106, 0.12);
-    --feedback-danger-border: #bf616a;
-    --feedback-danger-text: #bf616a;
-    --feedback-warning-bg: rgba(235, 203, 139, 0.12);
-    --feedback-warning-border: #ebcb8b;
-    --feedback-warning-text: #ebcb8b;
+    /* Semantic Tokens Fallback (Rosé Pine mappings) */
+    --accent-subtle: rgba(235, 188, 186, 0.15);
+    --border-weak: #26233a;
+    --border-normal: #403d52;
+    --border-strong: #c4a7e7;
+    --feedback-success-bg: rgba(156, 207, 216, 0.15);
+    --feedback-success-border: #9ccfd8;
+    --feedback-success-text: #9ccfd8;
+    --feedback-danger-bg: rgba(235, 111, 146, 0.15);
+    --feedback-danger-border: #eb6f92;
+    --feedback-danger-text: #eb6f92;
+    --feedback-warning-bg: rgba(246, 193, 119, 0.15);
+    --feedback-warning-border: #f6c177;
+    --feedback-warning-text: #f6c177;
 }
 
 /* Skip link — keyboard-first a11y */
@@ -1429,7 +1431,13 @@ textarea,
     --feedback-warning-text: #ffe261;
 }
 
-/* Rosé Pine */
+/* Rosé Pine — official palette (rosepineetheme.com) tuned for diff review.
+   base #191724  surface #1f1d2e  overlay #26233a  muted #6e6a86
+   subtle #908caa  text #e0def4
+   love #eb6f92  gold #f6c177  rose #ebbcba  pine #31748f  foam #9ccfd8  iris #c4a7e7
+   Diff colours: additions → foam (mint), deletions → love (rose/red) so the
+   added/removed line tint inherits the Rosé Pine character instead of a flat
+   green/red. */
 [data-theme="rose-pine"] {
     --bg-primary: #191724;
     --bg-secondary: #1f1d2e;
@@ -1441,30 +1449,32 @@ textarea,
     --border-color: #26233a;
     --border-focus: #c4a7e7;
     --primary: #c4a7e7;
-    --primary-hover: #ea9a97;
-    --accent: #ea9a97;
-    --success: #31748f;
-    --danger: #ebbcbc;
+    --primary-hover: #ebbcba;
+    --accent: #ebbcba;
+    --success: #9ccfd8;
+    --danger: #eb6f92;
     --warning: #f6c177;
     --comment-bg: #1f1d2e;
     --comment-border: #c4a7e7;
 
-    --accent-subtle: rgba(196, 167, 231, 0.15);
+    --accent-subtle: rgba(235, 188, 186, 0.15);
     --border-weak: #26233a;
     --border-normal: #403d52;
     --border-strong: #c4a7e7;
-    --feedback-success-bg: rgba(49, 116, 143, 0.15);
-    --feedback-success-border: #31748f;
-    --feedback-success-text: #31748f;
-    --feedback-danger-bg: rgba(235, 188, 188, 0.15);
-    --feedback-danger-border: #ebbcbc;
-    --feedback-danger-text: #ebbcbc;
+    --feedback-success-bg: rgba(156, 207, 216, 0.15);
+    --feedback-success-border: #9ccfd8;
+    --feedback-success-text: #9ccfd8;
+    --feedback-danger-bg: rgba(235, 111, 146, 0.15);
+    --feedback-danger-border: #eb6f92;
+    --feedback-danger-text: #eb6f92;
     --feedback-warning-bg: rgba(246, 193, 119, 0.15);
     --feedback-warning-border: #f6c177;
     --feedback-warning-text: #f6c177;
 }
 
-/* Rosé Pine Moon */
+/* Rosé Pine Moon — official palette tuned for diff review.
+   base #232136  surface #2a283e  overlay #393552
+   love #eb6f92  gold #f6c177  rose #ea9a97  pine #3e8fb0  foam #9ccfd8  iris #c4a7e7 */
 [data-theme="rose-pine-moon"] {
     --bg-primary: #232136;
     --bg-secondary: #2a283e;
@@ -1478,57 +1488,61 @@ textarea,
     --primary: #c4a7e7;
     --primary-hover: #ea9a97;
     --accent: #ea9a97;
-    --success: #31748f;
-    --danger: #ebbcbc;
+    --success: #9ccfd8;
+    --danger: #eb6f92;
     --warning: #f6c177;
     --comment-bg: #2a283e;
     --comment-border: #c4a7e7;
 
-    --accent-subtle: rgba(196, 167, 231, 0.15);
+    --accent-subtle: rgba(234, 154, 151, 0.15);
     --border-weak: #393552;
     --border-normal: #4a4664;
     --border-strong: #c4a7e7;
-    --feedback-success-bg: rgba(49, 116, 143, 0.15);
-    --feedback-success-border: #31748f;
-    --feedback-success-text: #31748f;
-    --feedback-danger-bg: rgba(235, 188, 188, 0.15);
-    --feedback-danger-border: #ebbcbc;
-    --feedback-danger-text: #ebbcbc;
+    --feedback-success-bg: rgba(156, 207, 216, 0.15);
+    --feedback-success-border: #9ccfd8;
+    --feedback-success-text: #9ccfd8;
+    --feedback-danger-bg: rgba(235, 111, 146, 0.15);
+    --feedback-danger-border: #eb6f92;
+    --feedback-danger-text: #eb6f92;
     --feedback-warning-bg: rgba(246, 193, 119, 0.15);
     --feedback-warning-border: #f6c177;
     --feedback-warning-text: #f6c177;
 }
 
-/* Rosé Pine Dawn */
+/* Rosé Pine Dawn — official palette (rosepineetheme.com).
+   base #faf4ed  surface #fffaf3  overlay #f2e9de  muted #9893a5
+   subtle #797593  text #575279
+   love #b4637a  gold #ea9d34  rose #d7827e  pine #286983  foam #56949f  iris #907aa9
+   Diff: additions → pine (teal, stronger on light bg), deletions → love. */
 [data-theme="rose-pine-dawn"] {
     --bg-primary: #faf4ed;
-    --bg-secondary: #f2e9e1;
-    --bg-secondary-rgb: 242, 233, 225;
-    --bg-tertiary: #dfd5cb;
+    --bg-secondary: #fffaf3;
+    --bg-secondary-rgb: 255, 250, 243;
+    --bg-tertiary: #f2e9de;
     --text-primary: #575279;
     --text-secondary: #797593;
     --text-muted: #9893a5;
-    --border-color: #dfd5cb;
+    --border-color: #f2e9de;
     --border-focus: #907aa9;
     --primary: #907aa9;
     --primary-hover: #d7827e;
     --accent: #d7827e;
     --success: #286983;
-    --danger: #b75e5e;
+    --danger: #b4637a;
     --warning: #ea9d34;
     --comment-bg: #f4ece6;
     --comment-border: #907aa9;
 
-    --accent-subtle: rgba(144, 122, 169, 0.12);
-    --border-weak: #dfd5cb;
-    --border-normal: #d1c5b8;
+    --accent-subtle: rgba(215, 130, 126, 0.12);
+    --border-weak: #f2e9de;
+    --border-normal: #e6dfd9;
     --border-strong: #907aa9;
     --feedback-success-bg: rgba(40, 105, 131, 0.08);
     --feedback-success-border: #286983;
     --feedback-success-text: #286983;
-    --feedback-danger-bg: rgba(183, 94, 94, 0.08);
-    --feedback-danger-border: #b75e5e;
-    --feedback-danger-text: #a14040;
+    --feedback-danger-bg: rgba(180, 99, 122, 0.08);
+    --feedback-danger-border: #b4637a;
+    --feedback-danger-text: #b4637a;
     --feedback-warning-bg: rgba(234, 157, 52, 0.08);
     --feedback-warning-border: #ea9d34;
     --feedback-warning-text: #c07a1c;

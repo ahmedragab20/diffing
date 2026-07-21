@@ -34,7 +34,7 @@ function renderViewer(allowLocalActions?: boolean, existingCommentsMap?: Map<str
       defaultTabSize={4}
       viewedFiles={new Set()}
       binaryFiles={new Map()}
-      theme="nord"
+      theme="rose-pine"
       lineDiffType="word"
       lineWrap={false}
       diffIndicators="classic"

@@ -8,7 +8,7 @@ import { SHIKI_THEME_MAP } from '../utils'
  */
 function resolveMermaidTheme(): 'dark' | 'default' {
   if (typeof document === 'undefined') return 'dark'
-  const themeName = document.documentElement.getAttribute('data-theme') || 'nord'
+  const themeName = document.documentElement.getAttribute('data-theme') || 'rose-pine'
   const type = SHIKI_THEME_MAP[themeName]?.type ?? 'dark'
   return type === 'light' ? 'default' : 'dark'
 }

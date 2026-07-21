@@ -24,7 +24,7 @@ createRoot(document.getElementById('root')!).render(
         }}
         highlighterOptions={{
           theme: {
-            dark: 'nord',
+            dark: 'rose-pine',
             light: 'github-light',
           },
           // Vue's compound grammar is comparatively expensive to resolve. If

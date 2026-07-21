@@ -21,7 +21,7 @@ const DEFAULTS = {
   untracked: true,
   diffStyle: 'split' as const,
   defaultTabSize: 4,
-  theme: 'nord',
+  theme: 'rose-pine',
   editorIDE: 'default',
   lineDiffType: 'word',
   lineWrap: false,
