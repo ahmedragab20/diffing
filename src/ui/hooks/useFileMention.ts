@@ -43,31 +43,76 @@ export function useFileMention(
   setText: (text: string) => void,
 ): UseFileMentionResult {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [textareaEl, setTextareaEl] = useState<HTMLTextAreaElement | null>(null)
   const [mention, setMention] = useState<MentionState | null>(null)
   const [focusedIndex, setFocusedIndex] = useState(0)
   const [cursorTop, setCursorTop] = useState(0)
   const lastCursorRef = useRef(0)
+  // Mirror the latest text so caret/scroll listeners can recompute position
+  // against the current value without re-binding on every keystroke.
+  const textRef = useRef(text)
+  useEffect(() => {
+    textRef.current = text
+  }, [text])
 
   const setTextareaRef = useCallback((el: HTMLTextAreaElement | null) => {
     textareaRef.current = el
+    setTextareaEl(el)
   }, [])
 
-  useEffect(() => {
+  /**
+   * Resolve the active @-mention (if any) and the dropdown's `top` relative to
+   * the textarea's offset parent. The caret Y is mapped into the *visible*
+   * textarea viewport by subtracting `scrollTop`, so multi-line bodies that
+   * scroll keep the dropdown glued to the caret rather than drifting with the
+   * unscrolled content origin. `lineHeight` falls back to a font-size-based
+   * estimate when the computed value is non-numeric (e.g. "normal", which
+   * happens for hosts that inherit `font: inherit` with no explicit line-height).
+   */
+  const recompute = useCallback(() => {
     const ta = textareaRef.current
     if (!ta) return
     const cursor = ta.selectionStart
     lastCursorRef.current = cursor
-    const m = findMentionTrigger(text, cursor)
+    const current = textRef.current
+    const m = findMentionTrigger(current, cursor)
     setMention(m)
-    if (m) {
-      setFocusedIndex(0)
-      const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 20
-      const textBefore = text.slice(0, cursor)
-      const lineNumber = (textBefore.match(/\n/g) || []).length
-      const paddingTop = parseFloat(getComputedStyle(ta).paddingTop) || 0
-      setCursorTop(paddingTop + (lineNumber + 1) * lineHeight + 4)
+    if (!m) return
+    setFocusedIndex(0)
+    const cs = getComputedStyle(ta)
+    let lineHeight = parseFloat(cs.lineHeight)
+    if (!Number.isFinite(lineHeight)) {
+      const fontSize = parseFloat(cs.fontSize) || 14
+      lineHeight = fontSize * 1.5
     }
-  }, [text])
+    const textBefore = current.slice(0, cursor)
+    const lineNumber = (textBefore.match(/\n/g) || []).length
+    const paddingTop = parseFloat(cs.paddingTop) || 0
+    const caretBottom = paddingTop + (lineNumber + 1) * lineHeight - ta.scrollTop
+    setCursorTop(caretBottom + 4)
+  }, [])
+
+  // Typing changes the body → re-evaluate the mention and reposition the dropdown.
+  useEffect(() => {
+    recompute()
+  }, [text, recompute])
+
+  // Reposition when the caret moves or the textarea scrolls without a body
+  // change (mouse clicks, selection, scroll within a long draft). findMentionTrigger
+  // closes the mention if the caret leaves the @query; until then the dropdown
+  // keeps tracking the caret.
+  useEffect(() => {
+    if (!textareaEl) return
+    const handler = () => recompute()
+    textareaEl.addEventListener('scroll', handler)
+    textareaEl.addEventListener('select', handler)
+    textareaEl.addEventListener('click', handler)
+    return () => {
+      textareaEl.removeEventListener('scroll', handler)
+      textareaEl.removeEventListener('select', handler)
+      textareaEl.removeEventListener('click', handler)
+    }
+  }, [textareaEl, recompute])
 
   const query = mention?.query ?? ''
 
