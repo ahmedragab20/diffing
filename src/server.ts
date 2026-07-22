@@ -1520,12 +1520,26 @@ export function createApp(
     const dryRun = body.dryRun === true
 
     // Dry-run validates and returns the payload shape without POSTing to GitHub.
+    // Local attachment URLs are rewritten to placeholder raw URLs so the preview
+    // matches what a real submit would publish (without uploading blobs).
     if (dryRun) {
-      const { buildReviewPayload } = await import('./lib/github.js')
+      const { buildReviewPayload, resolvedFromSession } = await import('./lib/github.js')
+      const { rewriteLocalAttachmentsInBodies } = await import('./lib/github-attachments.js')
+      const resolved = resolvedFromSession(session)
+      const comments = session.comments ?? []
+      const bodies = [generalBody, ...comments.map((c) => c.body ?? '')]
+      const rewritten = await rewriteLocalAttachmentsInBodies(resolved, bodies, { dryRun: true })
+      if (rewritten.error) {
+        return c.json({ ok: false, dryRun: true, error: rewritten.error }, 400)
+      }
+      const [body, ...commentBodies] = rewritten.bodies
       const payload = buildReviewPayload({
         decision: decision as PrDecision,
-        body: generalBody,
-        comments: session.comments ?? [],
+        body: body ?? generalBody,
+        comments: comments.map((c, i) => ({
+          ...c,
+          body: commentBodies[i] ?? c.body,
+        })),
       })
       return c.json({
         ok: true,
@@ -1533,6 +1547,7 @@ export function createApp(
         authSource: session.authSource ?? 'none',
         failedComments: 0,
         payload,
+        attachmentRewrites: rewritten.urlMap,
       })
     }
 

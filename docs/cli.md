@@ -575,6 +575,9 @@ diffing gh pr-review --decision <approve|comment|request-changes|draft> [--body 
 - **Auth precedence**: `gh` CLI (using your existing `gh auth login`)
   → `$GH_TOKEN` / `$GITHUB_TOKEN` / `$GITHUB_API_TOKEN` env var
   → fail with a clear one-line error.
+- **Image attachments**: local `/api/attachments/…` markdown is rewritten to
+  repo-scoped `…/raw/<sha>/…` URLs via the Git Data API before POST. Needs
+  `contents: write`. See [§3. File Attachments & Media](#3-file-attachments--media).
 - **Payload mapping**:
   - Each in-progress `ReviewComment` becomes a `{ path, line, side, body }`
     entry. `path` is PR-relative; additions use `RIGHT` and deletions use
@@ -1367,9 +1370,36 @@ Uploads a pasted image file from the clipboard or file picker.
     "url": "/api/attachments/pasted_image_de4f55-bc11...png"
   }
   ```
+  Draft comments keep this **loopback** URL so the local UI can preview the
+  image. On GitHub publish (review submit, reply, or edit), diffing rewrites
+  these to repo-scoped raw blob URLs (see below).
 
 #### `GET /api/attachments/:filename`
 Serves an uploaded attachment file. Uploads are strictly isolated and stored inside `~/.diffing/<repo-name>-<hash>/attachments/`.
+
+#### GitHub publish rewrite (private / GHE safe)
+
+When posting review bodies to GitHub, any `![…](/api/attachments/…)` references
+are uploaded via the **Git Data API** onto an orphan ref
+`refs/diffing/attachments/pr-<N>` and rewritten to:
+
+```text
+https://<host>/<owner>/<repo>/raw/<commitSha>/<hash>.<ext>
+```
+
+- **Privacy**: URLs inherit the **repository** ACL (private repo → only users
+  with repo access see the image). Not release assets (those are always public).
+- **Auth**: same as review submit (`gh` → `$GITHUB_TOKEN`). Requires
+  **`contents: write`** on the repository.
+- **GHE**: uses the session host; never `raw.githubusercontent.com` (404 on
+  private repos).
+- **Failure**: publish aborts with a clear error rather than posting broken
+  loopback URLs.
+- **Email notifications**: auth-gated raw URLs may not render in email (GitHub
+  limitation); they do render in the GitHub UI for authorized viewers.
+- **Dry-run** (`POST /api/gh/submit` with `dryRun: true`): rewrites to
+  `…/raw/<pending>/…` placeholders and returns `attachmentRewrites` without
+  uploading.
 
 ---
 

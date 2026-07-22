@@ -704,7 +704,7 @@ export interface SubmitOutput {
   /** Number of inline comments that failed to land (anchors to deleted lines, etc.). */
   failedComments?: number
   /** Which auth path we used. */
-  authSource: 'gh' | 'token'
+  authSource: AuthSource
   /** First error message (if any), for the UI to show. */
   error?: string
 }
@@ -713,21 +713,58 @@ export interface SubmitOutput {
  * POST the review to GitHub. Prefers `gh api` (uses the user's existing
  * `gh auth`); falls back to a direct HTTP call with `$GITHUB_TOKEN` when
  * `gh` is unavailable.
+ *
+ * Local `/api/attachments/…` image URLs are rewritten to repo-scoped raw
+ * blob URLs before the payload is built (see `github-attachments.ts`).
  */
 export async function submitReview(input: SubmitInput): Promise<SubmitOutput> {
+  const prepared = await prepareSubmitInputWithAttachments(input)
+  if ('error' in prepared) {
+    return {
+      ok: false,
+      authSource: 'none',
+      error: prepared.error,
+    }
+  }
+  const ready = prepared.input
   const gh = await detectGhCli()
   if (gh.available && gh.authenticated) {
-    return submitViaGh(input)
+    return submitViaGh(ready)
   }
   const token = readGithubToken()
   if (token) {
-    return submitViaToken(input, token)
+    return submitViaToken(ready, token)
   }
   return {
     ok: false,
     authSource: 'none',
     error:
       'Cannot submit: no `gh` CLI on $PATH (or not authenticated) and no $GITHUB_TOKEN env var. Run `gh auth login` or set $GITHUB_TOKEN.',
+  }
+}
+
+/** Rewrite local attachment URLs in review body + comment bodies (one batch). */
+async function prepareSubmitInputWithAttachments(
+  input: SubmitInput,
+): Promise<{ input: SubmitInput } | { error: string }> {
+  const comments = input.comments ?? []
+  const bodies = [input.body ?? '', ...comments.map((c) => c.body ?? '')]
+  const { rewriteLocalAttachmentsInBodies } = await import('./github-attachments.js')
+  const result = await rewriteLocalAttachmentsInBodies(input.resolved, bodies)
+  if (result.error) return { error: result.error }
+  if (result.uploaded === 0 && Object.keys(result.urlMap).length === 0) {
+    return { input }
+  }
+  const [body, ...commentBodies] = result.bodies
+  return {
+    input: {
+      ...input,
+      body: body ?? '',
+      comments: comments.map((c, i) => ({
+        ...c,
+        body: commentBodies[i] ?? c.body,
+      })),
+    },
   }
 }
 
@@ -992,9 +1029,14 @@ export async function replyToPrComment(input: {
   }
   error?: string
 }> {
+  const { rewriteLocalAttachmentsInBodies } = await import('./github-attachments.js')
+  const rewritten = await rewriteLocalAttachmentsInBodies(input.resolved, [input.body])
+  if (rewritten.error) return { ok: false, error: rewritten.error }
+  const body = rewritten.bodies[0] ?? input.body
+
   const endpoint = `repos/${input.resolved.owner}/${input.resolved.repo}/pulls/${input.resolved.pullNumber}/comments`
   const payload = JSON.stringify({
-    body: input.body,
+    body,
     in_reply_to: input.inReplyTo,
   })
   try {
@@ -1032,7 +1074,7 @@ export async function replyToPrComment(input: {
         author: result.user?.login
           ? { login: result.user.login, avatarUrl: result.user.avatar_url }
           : null,
-        body: result.body ?? input.body,
+        body: result.body ?? body,
         createdAt: result.created_at ?? now,
         updatedAt: result.updated_at ?? result.created_at ?? now,
       },
@@ -1048,6 +1090,11 @@ export async function updatePrReviewComment(input: {
   commentId: number
   body: string
 }): Promise<{ ok: boolean; error?: string }> {
+  const { rewriteLocalAttachmentsInBodies } = await import('./github-attachments.js')
+  const rewritten = await rewriteLocalAttachmentsInBodies(input.resolved, [input.body])
+  if (rewritten.error) return { ok: false, error: rewritten.error }
+  const body = rewritten.bodies[0] ?? input.body
+
   const endpoint = `repos/${input.resolved.owner}/${input.resolved.repo}/pulls/comments/${input.commentId}`
   try {
     await execWithInput(
@@ -1063,7 +1110,7 @@ export async function updatePrReviewComment(input: {
         '--input',
         '-',
       ],
-      JSON.stringify({ body: input.body }),
+      JSON.stringify({ body }),
     )
     return { ok: true }
   } catch (error: any) {
