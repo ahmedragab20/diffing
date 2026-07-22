@@ -1,4 +1,4 @@
-import { isValidElement, useState, useCallback, type ReactNode } from 'react'
+import { isValidElement, useState, useCallback, useMemo, type ReactNode } from 'react'
 import ReactMarkdown, { defaultUrlTransform, type Components, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -197,9 +197,14 @@ export interface MarkdownProps {
  * Plan-viewer extras: per-code-block Copy, heading ids + `#` anchors for TOC.
  */
 export function Markdown({ content, className }: MarkdownProps) {
-  // Fresh collision map per render so heading ids stay stable for a given body.
-  const headingIds = new Map<string, number>()
-  const components = makeComponents(headingIds)
+  // Stable component identities across parent re-renders (e.g. plan selection
+  // popup). Recreate only when `content` changes so heading-id collisions stay
+  // correct for that body. Without this, react-markdown remounts custom nodes
+  // like MermaidDiagram and diagrams flicker empty → re-rendered SVG.
+  const components = useMemo(() => {
+    const headingIds = new Map<string, number>()
+    return makeComponents(headingIds)
+  }, [content])
 
   return (
     <div className={className}>

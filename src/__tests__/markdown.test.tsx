@@ -1,6 +1,8 @@
-import { render, waitFor } from '@testing-library/react'
-import { describe, it, expect, vi } from 'vitest'
+import { render, waitFor, act } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { useState } from 'react'
 import { Markdown } from '../ui/components/Markdown'
+import mermaid from 'mermaid'
 
 // The real mermaid library is heavy and needs a real layout engine; mock it so
 // the lazy-import path is exercised without loading it.
@@ -14,6 +16,10 @@ vi.mock('mermaid', () => ({
 }))
 
 describe('Markdown', () => {
+  beforeEach(() => {
+    vi.mocked(mermaid.render).mockClear()
+  })
+
   it('renders GFM tables', () => {
     const { container } = render(<Markdown content={'| a | b |\n| - | - |\n| 1 | 2 |'} />)
     expect(container.querySelector('table')).not.toBeNull()
@@ -54,6 +60,40 @@ describe('Markdown', () => {
     await waitFor(() => {
       expect(container.querySelector('.mermaid')?.innerHTML).toContain('mock-mermaid')
     })
+  })
+
+  it('does not remount mermaid when a parent re-renders with the same content', async () => {
+    const chart = '```mermaid\ngraph TD; A-->B;\n```'
+
+    function Parent() {
+      const [, setTick] = useState(0)
+      return (
+        <div>
+          <button type="button" onClick={() => setTick((n) => n + 1)}>
+            tick
+          </button>
+          <Markdown content={chart} />
+        </div>
+      )
+    }
+
+    const { container, getByRole } = render(<Parent />)
+    await waitFor(() => {
+      expect(container.querySelector('.mermaid')?.innerHTML).toContain('mock-mermaid')
+    })
+    const diagram = container.querySelector('.mermaid')
+    expect(diagram).not.toBeNull()
+    const callsAfterFirstPaint = vi.mocked(mermaid.render).mock.calls.length
+
+    await act(async () => {
+      getByRole('button', { name: 'tick' }).click()
+    })
+
+    // Same DOM node, no extra mermaid.render — parent state (e.g. selection
+    // popup) must not flash the diagram empty.
+    expect(container.querySelector('.mermaid')).toBe(diagram)
+    expect(vi.mocked(mermaid.render).mock.calls.length).toBe(callsAfterFirstPaint)
+    expect(container.querySelector('.mermaid')?.innerHTML).toContain('mock-mermaid')
   })
 
   it('neutralizes javascript: URLs', () => {
