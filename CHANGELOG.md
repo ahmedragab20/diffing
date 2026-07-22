@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.10.5
+
+### Patch Changes
+
+- 7baaf80: Clarify async vs sync handoff for plan and code review waits.
+
+  After submit, park by default (share URL, end turn). Await tools still support
+  short sync waits; timeout returns disposition=park and tells agents not to
+  silent-loop.
+
+- ef6d433: Prompt when starting `diffing` while another review already owns the repo.
+
+  In an interactive TTY, offer Open existing session, Replace it, or Cancel.
+  Scripts can skip the prompt with `--reuse-session` or `--replace-session`.
+  MCP still never replaces a user-owned session.
+
 ## 0.10.4
 
 ### Patch Changes
