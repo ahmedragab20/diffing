@@ -20,6 +20,15 @@ describe('parseDiffOptions --gh-pr', () => {
   })
 })
 
+describe('parseDiffOptions session conflict flags', () => {
+  it('parses --reuse-session and --replace-session', () => {
+    expect(parseDiffOptions(['--reuse-session']).reuseSession).toBe(true)
+    expect(parseDiffOptions(['--replace-session']).replaceSession).toBe(true)
+    expect(parseDiffOptions([]).reuseSession).toBe(false)
+    expect(parseDiffOptions([]).replaceSession).toBe(false)
+  })
+})
+
 describe('parseDiffOptions isolation', () => {
   it('returns fresh revision and pathspec arrays on sequential calls', () => {
     const first = parseDiffOptions(['HEAD~2', '--', 'src/'])

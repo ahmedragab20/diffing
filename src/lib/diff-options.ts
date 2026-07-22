@@ -130,6 +130,18 @@ export interface DiffOptions {
   /** Skip auto browser-open (web mode) */
   noOpen: boolean
 
+  /**
+   * When another review already owns this repo, reuse it (print/open URL)
+   * instead of prompting or failing. Web mode only.
+   */
+  reuseSession: boolean
+
+  /**
+   * When another review already owns this repo, stop it and start a new one
+   * instead of prompting or failing. Web mode only.
+   */
+  replaceSession: boolean
+
   /** Print help and exit */
   help: boolean
 
@@ -202,6 +214,8 @@ export const DEFAULTS: DiffOptions = {
   outputMode: 'auto',
   host: '127.0.0.1',
   noOpen: false,
+  reuseSession: false,
+  replaceSession: false,
   help: false,
   version: false,
   includeUnstaged: true,
@@ -318,6 +332,8 @@ export const DIFFING_OPTIONS = {
   port: { type: 'string' as const },
   host: { type: 'string' as const },
   'no-open': { type: 'boolean' as const, default: false },
+  'reuse-session': { type: 'boolean' as const, default: false },
+  'replace-session': { type: 'boolean' as const, default: false },
   web: { type: 'boolean' as const, default: false },
   terminal: { type: 'boolean' as const, default: false },
   tui: { type: 'boolean' as const, default: false },
@@ -354,6 +370,8 @@ Diffing Server Options:
   --host <host>        Host address to bind to (default: 127.0.0.1). Pass
                        0.0.0.0 to expose the server to the local network.
   --no-open            Don't open the browser automatically
+  --reuse-session      If a review is already running, open it instead of prompting
+  --replace-session    If a review is already running, stop it and start a new one
   --gh-pr <ref>        Open a GitHub PR review session (number, owner/repo#N, or URL)
                        Same as: diffing "gh pr <ref>"
 
@@ -629,6 +647,8 @@ export function parseDiffOptions(rawArgs: string[]): DiffOptions {
   if (values.port) opts.port = parseInt(values.port as string, 10)
   if (values.host) opts.host = values.host as string
   if (values['no-open']) opts.noOpen = true
+  if (values['reuse-session']) opts.reuseSession = true
+  if (values['replace-session']) opts.replaceSession = true
   if (values['gh-pr']) opts.ghPr = String(values['gh-pr'])
 
   // ── Staging / merge ───────────────────────────────

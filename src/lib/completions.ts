@@ -39,6 +39,8 @@ const GLOBAL_FLAGS = [
   '--terminal',
   '--tui',
   '--no-open',
+  '--reuse-session',
+  '--replace-session',
   '--port',
   '--host',
   '--staged',

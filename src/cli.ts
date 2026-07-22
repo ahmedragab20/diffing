@@ -16,9 +16,16 @@ import {
   readServerLock,
   removeServerLockIfOwned,
   writeServerLock,
+  type ServerStartupLease,
 } from './lib/server-lock.js'
 import { getRepoRoot } from './lib/git.js'
 import { playStartupDisplay } from './lib/startup-display.js'
+import {
+  conflictFailMessage,
+  openExistingSession,
+  resolveSessionConflictAction,
+  stopLockOwner,
+} from './lib/session-conflict.js'
 import type { DiffOptions } from './lib/diff-options.js'
 
 const args = process.argv.slice(2)
@@ -240,7 +247,7 @@ try {
   repoRoot = process.cwd()
 }
 const sessionOwnerId = randomUUID()
-const startupLease = acquireServerStartupLease(repoRoot, sessionOwnerId)
+let startupLease: ServerStartupLease | null = acquireServerStartupLease(repoRoot, sessionOwnerId)
 if (!startupLease) {
   console.error('Another diffing process is starting a review for this repository. Retry in a moment.')
   process.exit(3)
@@ -248,10 +255,61 @@ if (!startupLease) {
 
 const existingLock = readServerLock(repoRoot)
 if (existingLock && isLockAlive(existingLock, repoRoot)) {
+  // Release while prompting — the user may take a while, and holding the
+  // startup lease would block other legitimate startups.
   startupLease.release()
-  const existingUrl = existingLock.port > 0 ? `http://${existingLock.host}:${existingLock.port}` : 'a TUI session'
-  console.error(`A diffing review is already running for this repository at ${existingUrl}. End it before starting another scope.`)
-  process.exit(3)
+  startupLease = null
+
+  if (opts.reuseSession && opts.replaceSession) {
+    console.error('Cannot combine --reuse-session and --replace-session.')
+    process.exit(5)
+  }
+
+  let action: 'open' | 'replace' | 'cancel'
+  try {
+    action = await resolveSessionConflictAction({
+      lock: existingLock,
+      reuseSession: opts.reuseSession,
+      replaceSession: opts.replaceSession,
+      canPrompt: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error(detail)
+    process.exit(5)
+  }
+
+  if (action === 'cancel') {
+    console.error(conflictFailMessage(existingLock))
+    process.exit(3)
+  }
+
+  if (action === 'open') {
+    const live = readServerLock(repoRoot)
+    const target = live && isLockAlive(live, repoRoot) ? live : existingLock
+    await openExistingSession(target, { noOpen: opts.noOpen })
+    process.exit(0)
+  }
+
+  // Replace: re-acquire the lease, stop the owner, then continue startup.
+  startupLease = acquireServerStartupLease(repoRoot, sessionOwnerId)
+  if (!startupLease) {
+    console.error('Another diffing process is starting a review for this repository. Retry in a moment.')
+    process.exit(3)
+  }
+
+  const afterLease = readServerLock(repoRoot)
+  if (afterLease && isLockAlive(afterLease, repoRoot)) {
+    try {
+      console.error(`Stopping existing diffing session (pid ${afterLease.pid})…`)
+      await stopLockOwner(afterLease)
+    } catch (error) {
+      startupLease.release()
+      const detail = error instanceof Error ? error.message : String(error)
+      console.error(detail)
+      process.exit(1)
+    }
+  }
 }
 
 let actualPort: number
@@ -279,12 +337,13 @@ try {
     ownerId: sessionOwnerId,
   })
 } catch (error) {
-  startupLease.release()
+  startupLease?.release()
   const detail = error instanceof Error ? error.message : String(error)
   console.error(`Failed to start diffing review safely: ${detail}`)
   process.exit(1)
 }
-startupLease.release()
+startupLease?.release()
+startupLease = null
 
 const localUrl = `http://${host}:${actualPort}`
 

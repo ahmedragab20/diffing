@@ -73,6 +73,8 @@ export function diffScopeKey(options: DiffOptions): string {
     port: _port,
     host: _host,
     noOpen: _noOpen,
+    reuseSession: _reuseSession,
+    replaceSession: _replaceSession,
     help: _help,
     version: _version,
     outputMode: _outputMode,
