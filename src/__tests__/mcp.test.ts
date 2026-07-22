@@ -552,6 +552,36 @@ describe('diffing MCP', () => {
     }
   })
 
+  it('parks on plan await timeout instead of urging a silent retry loop', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.endsWith('/api/plan-review/status')) return Response.json({ round: 0 })
+      if (url.includes('/api/plan-review/await')) {
+        return Response.json({ status: 'timeout', round: 0 })
+      }
+      return Response.json({ error: 'not found' }, { status: 404 })
+    }))
+    const lock: ServerLock = {
+      port: 43135, host: '127.0.0.1', pid: process.pid, repoRoot,
+      startedAt: 1, version: MCP_VERSION, mode: 'web',
+    }
+    const session = await connect({ repoRoot, readLock: () => lock, lockIsAlive: () => true })
+    try {
+      const result = await session.client.callTool({
+        name: 'await_plan_review', arguments: { timeoutSeconds: 0.001 },
+      })
+      expect(result.structuredContent).toMatchObject({
+        status: 'timeout',
+        disposition: 'park',
+        round: 0,
+      })
+      expect(String((result.structuredContent as { nextAction?: string }).nextAction))
+        .toMatch(/Do not retry in a silent loop/i)
+    } finally {
+      await session.close()
+    }
+  })
+
   it('keeps the review cursor across a timeout so a between-calls handoff is not missed', async () => {
     let released = false
     let statusCalls = 0
@@ -583,7 +613,12 @@ describe('diffing MCP', () => {
       const timeout = await session.client.callTool({
         name: 'await_review', arguments: { timeoutSeconds: 0.001 },
       })
-      expect(timeout.structuredContent).toMatchObject({ status: 'timeout', round: 0 })
+      expect(timeout.structuredContent).toMatchObject({
+        status: 'timeout',
+        disposition: 'park',
+        round: 0,
+      })
+      expect(String((timeout.structuredContent as { nextAction?: string }).nextAction)).toMatch(/Park/i)
       released = true
       const handoff = await session.client.callTool({
         name: 'await_review', arguments: { timeoutSeconds: 0.02 },
@@ -714,6 +749,11 @@ describe('diffing MCP', () => {
         name: 'submit_plan', arguments: { body: '# Plan' },
       })
       expect(submitted.isError, JSON.stringify(submitted.content)).not.toBe(true)
+      expect(submitted.structuredContent).toMatchObject({
+        status: 'submitted',
+        planId: 'plan-1',
+        nextAction: expect.stringMatching(/async handoff/i),
+      })
       const verdict = await session.client.callTool({
         name: 'await_plan_review', arguments: { timeoutSeconds: 0.1 },
       })

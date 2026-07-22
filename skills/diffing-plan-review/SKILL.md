@@ -13,15 +13,17 @@ Prefer MCP when available:
 
 1. `review_session_status`, then `start_review_session` only for `mode: none`. Reuse `mode: web`. Plan tools do not run against the native TUI or GitHub PR API, and MCP will not replace those user-owned sessions; ask the human to end the incompatible session before retrying.
 2. `submit_plan` with complete markdown body, title, and model/source when known.
-3. `await_plan_review`. Timeout is normal; retry while the user still wants you to wait.
+3. **Async handoff (default):** share the plan URL from `submit_plan`, tell the human to review, and **end your turn**. Call `await_plan_review` only when they are reviewing now or explicitly asked you to wait.
+4. On `await_plan_review` timeout (`disposition=park`): park again — do **not** silent-loop. At most one extra await if they asked you to keep waiting. When they say a verdict is ready, call `await_plan_review` once (or `get_plan` / `list_plans`).
 
 CLI fallback:
 
 ```bash
 diffing --web --no-open
 diffing plan submit [<plan.md>|-] [--title T] [--source S] [--model M] [--id ID] [--save-source]
-diffing plan submit [<plan.md>|-] --wait [--timeout N]
-diffing plan await [--timeout N]
+# default: prints URL and parks — do not add --wait unless sync
+diffing plan submit [<plan.md>|-] --wait [--timeout N]   # sync only
+diffing plan await [--timeout N]                         # sync / resume
 # or: cat PLAN.md | diffing plan submit --model "..."
 ```
 
@@ -49,7 +51,7 @@ MCP intentionally exposes reply and resolve for plan comments, but not edit/dele
 | `changes-requested` | Do **not** implement. Reply to open threads, revise plan, resolve addressed threads, `submit` same `planId`, `await` again. |
 | `rejected` | Stop. Do not implement or extend the rejected approach. |
 | `comment-only` | Do **not** edit files or implement. Only answer questions / discuss. |
-| `pending` | Keep waiting or report no decision yet. |
+| `pending` | Park (async) or sync-await once if asked; do not silent-loop on timeout. |
 
 MCP: `reply_to_plan_comment`, `resolve_plan_comment`, `get_plan`, `get_plan_versions`, `get_plan_version`.
 

@@ -117,7 +117,9 @@ UI supports multi-line selection, range adjust, collapsible threads, and severit
 
 ## Behavioral contract
 
-- Timeouts from await tools are **expected**; retry while waiting is still requested.
+- **Async handoff is the default** after submitting a plan or opening a review for later: share the URL, end the turn, resume when the human says ready.
+- **Sync `await_*`** only when the human is reviewing now or asked you to wait.
+- Timeouts from await tools are **expected park signals** (`disposition=park`); do not silent-loop. At most one extra await if they asked you to keep waiting.
 - Only act on **open** comments.
 - Apply and resolve clear change requests; reply without resolving questions or ambiguous requests.
 - Honor **severity** when present: prioritize **blocking**, leave **question** open after answer, treat **nit** as optional, skip code changes for **praise**.

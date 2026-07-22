@@ -4,6 +4,12 @@ import { join } from 'node:path'
 import { readServerLock, isLockAlive } from './lib/server-lock.js'
 import { getProjectStorageDir } from './lib/git.js'
 import { formatComments } from './lib/comment-format.js'
+import {
+  CLI_AWAIT_PLAN_TIMEOUT_HINT,
+  CLI_AWAIT_REVIEW_TIMEOUT_HINT,
+  CLI_PLAN_SUBMIT_PARK_HINT,
+  DEFAULT_AWAIT_TIMEOUT_SECONDS,
+} from './lib/handoff.js'
 import { formatPlanReview } from './lib/plan-format.js'
 import type { ReviewComment } from './lib/types.js'
 import type { Plan } from './lib/plan-types.js'
@@ -67,7 +73,7 @@ async function awaitReview(args: string[]): Promise<number> {
     },
     allowPositionals: false,
   })
-  const totalBudgetMs = (values.timeout ? Number(values.timeout) : 570) * 1000
+  const totalBudgetMs = (values.timeout ? Number(values.timeout) : DEFAULT_AWAIT_TIMEOUT_SECONDS) * 1000
   const base = baseUrl()
 
   // Register identity so the human UI can show multi-agent waiting chips.
@@ -136,7 +142,7 @@ async function awaitReview(args: string[]): Promise<number> {
   }
 
   console.error('DIFFING_AWAIT_TIMEOUT')
-  console.error('No review sent within the timeout. Run `diffing await-review` again to keep waiting.')
+  console.error(CLI_AWAIT_REVIEW_TIMEOUT_HINT)
   await unregister()
   return EXIT_AWAIT_TIMEOUT
 }
@@ -378,7 +384,7 @@ async function pollPlanDecision(base: string, totalBudgetMs: number, seedSince?:
   }
 
   console.error('DIFFING_PLAN_AWAIT_TIMEOUT')
-  console.error('No plan decision within the timeout. Run `diffing plan await` again to keep waiting.')
+  console.error(CLI_AWAIT_PLAN_TIMEOUT_HINT)
   return EXIT_AWAIT_TIMEOUT
 }
 
@@ -454,6 +460,9 @@ async function planSubmit(args: string[]): Promise<number> {
   if (plan.sourcePath) {
     console.error(`Source path: ${plan.sourcePath}`)
   }
+  if (!values.wait) {
+    console.error(CLI_PLAN_SUBMIT_PARK_HINT)
+  }
 
   // Optional extra mirror next to the input file (--saveSource). Server always
   // writes ~/.diffing/.../plan-sources/<id>.md as sourcePath.
@@ -473,7 +482,7 @@ async function planSubmit(args: string[]): Promise<number> {
     process.stdout.write(plan.id + '\n')
     return EXIT_OK
   }
-  const totalBudgetMs = (values.timeout ? Number(values.timeout) : 570) * 1000
+  const totalBudgetMs = (values.timeout ? Number(values.timeout) : DEFAULT_AWAIT_TIMEOUT_SECONDS) * 1000
   return pollPlanDecision(base, totalBudgetMs, sinceRound)
 }
 
@@ -483,7 +492,7 @@ async function planAwait(args: string[]): Promise<number> {
     options: { timeout: { type: 'string', short: 't' } },
     allowPositionals: false,
   })
-  const totalBudgetMs = (values.timeout ? Number(values.timeout) : 570) * 1000
+  const totalBudgetMs = (values.timeout ? Number(values.timeout) : DEFAULT_AWAIT_TIMEOUT_SECONDS) * 1000
   return pollPlanDecision(baseUrl(), totalBudgetMs)
 }
 

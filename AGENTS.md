@@ -12,8 +12,8 @@ portable fallback:
 diffing                    # Start review server for current repo (all changes)
 diffing url                # Get server base URL (port-agnostic discovery)
 diffing plan submit PLAN.md --model "<model>"  # Submit plan for review
-diffing plan await         # Block until human reviews plan
-diffing await-review       # Block until human sends code review comments
+diffing plan await         # Sync wait for verdict (prefer park after submit)
+diffing await-review       # Sync wait for Send to agent (prefer park when later)
 diffing comments --open              # Dump open review comments as XML
 diffing comments --format md         # Markdown export
 diffing reply <id> --body "..." --model "<model>"  # Reply to comment
@@ -54,14 +54,16 @@ vendor-specific tool API is required.
 ```
 1. Write plan → ~/.diffing/<repo>/plan-sources/PLAN.md
 2. diffing plan submit PLAN.md --model "<model>"
-3. diffing plan await              # blocks until human decides
-4. Read <plan-review> XML:
+3. Share the plan URL; park (default). Only `plan await` / `--wait` if the human is reviewing now.
+4. When they say ready (or after a sync await), read <plan-review> XML:
    - decision="approved"      → implement
    - decision="changes-requested" → revise plan, resubmit with --id, goto 3
    - decision="rejected"      → stop, rethink
 5. diffing plan reply <id> --body "..." --model "<model>"  # answer questions
 6. diffing plan resolve <id>     # mark addressed
 ```
+
+Await timeout is a park signal — do not silent-loop. Resume with one `plan await` or `plan show` when the human is ready.
 
 ### Code Review (review → handoff → apply → resolve)
 
@@ -72,7 +74,7 @@ vendor-specific tool API is required.
    - Change request → edit file → diffing reply --body "Done." --model "..." → diffing resolve
    - Question → diffing reply --body "Answer..." --model "..." (leave open)
    - Ambiguous → diffing reply --body "Clarify..." --model "..." (leave open)
-4. diffing await-review             # block for next round (optional)
+4. Prefer async for the next round (park until human says ready); `await-review` only for sync waits
 ```
 
 ### Start → Finish Review (human-driven)
@@ -82,7 +84,8 @@ vendor-specific tool API is required.
 diffing                      # launches server + UI
 
 # Agent finishes:
-diffing await-review         # blocks until "Send to agent"
+# Sync:  diffing await-review
+# Async: share URL, park; when human says ready → await-review once or comments --open
 # process comments as in Code Review above
 ```
 

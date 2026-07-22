@@ -13,13 +13,13 @@ Call `review_session_status` first when MCP is available. `web` and `tui` suppor
 
 In TUI mode, limit native operations to await, list/create/edit/delete comment, reply, and resolve/unresolve. TUI does not expose progress/history, bulk resolve, suggestion application, or reply edit/delete endpoints; use scoped working-tree edits and ordinary reply/resolve instead.
 
-Prefer **`await_review`** for a local session. Otherwise run:
+Prefer **`await_review`** for a **sync** local wait (human reviewing now / asked you to wait). Otherwise share the UI URL and **park**; when they say the review is ready, call `await_review` once (replays a prior Send-to-agent) or run:
 
 ```bash
 diffing await-review [--timeout <sec>] [--model <name>] [--label <text>] [--agent-id <stable-id>]
 ```
 
-A timeout (MCP `status: timeout`; CLI exit `2`) is normal: call it again while the user still wants you to wait. CLI identity flags let the UI distinguish multiple waiting agents; reuse the same `--agent-id` for that agent. If blocking tools are unavailable, use `list_comments` or:
+A timeout (MCP `status: timeout` + `disposition: park`; CLI exit `2`) means **park** — end the turn. Call await again only if the human asked you to keep waiting (at most once more unless they repeat that ask). Do not silent-loop. CLI identity flags let the UI distinguish multiple waiting agents; reuse the same `--agent-id` for that agent. If blocking tools are unavailable, use `list_comments` or:
 
 ```bash
 diffing comments --open
@@ -77,6 +77,6 @@ After edits, run focused verification proportionate to the change. If verificati
 
 ## Continue the realtime loop
 
-Summarize applied changes and unanswered questions. If the user continues the review, await the next round (`await_review` / `await-review`). Never treat an unchanged timeout as completion.
+Summarize applied changes and unanswered questions. If the user continues the review, prefer async park until they say ready; use sync `await_review` / `await-review` only when they want you to block. Never treat an unchanged timeout as completion, and never silent-loop on timeout.
 
 Optional: `get_review_history` for multi-round web-session context. History is in memory only, is empty after a server restart, and is not provided by the native TUI API.

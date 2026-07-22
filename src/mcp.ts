@@ -8,6 +8,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { formatComments } from './lib/comment-format.js'
 import { buildGitDiffArgs, parseDiffOptions } from './lib/diff-options.js'
+import {
+  AWAIT_PLAN_TIMEOUT_NEXT_ACTION,
+  AWAIT_REVIEW_TIMEOUT_NEXT_ACTION,
+  AWAIT_TOOL_DESCRIPTION_SUFFIX,
+  DEFAULT_AWAIT_TIMEOUT_SECONDS,
+  PLAN_SUBMIT_NEXT_ACTION,
+} from './lib/handoff.js'
 import { formatPlanReview } from './lib/plan-format.js'
 import {
   diffScopeKey,
@@ -422,10 +429,12 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 
   const instructions = `diffing is bound to ${repoRoot} for this connection. ` +
     'First call review_session_status. If no web session is running, call start_review_session; it is safe to retry and never replaces a user session. ' +
-    'For code review, prefer diff_summary then paged diff_files/diff_hunks/diff_slice over get_diff; create_comment as needed, then await_review for the human handoff. ' +
+    'For code review, prefer diff_summary then paged diff_files/diff_hunks/diff_slice over get_diff; create_comment as needed. ' +
+    'Handoff: default is async — share the UI URL and end your turn; use await_review only when the human is reviewing now or asked you to wait. ' +
     'For a GitHub PR session, call gh_overview and bounded diff tools; use gh_list_threads/reviews for discussion, and mutate GitHub only with explicit user authorization. ' +
-    'For plan review, call submit_plan then await_plan_review. A changes-requested verdict means revise and resubmit the same planId; rejected means stop; approved means proceed. ' +
-    'Wait tools return released or timeout with a mode; timeout is not failure and the same wait tool may be called again. MCP connects only to the loopback diffing server; explicitly authorized GitHub tools may make the server call GitHub.'
+    'For plan review, call submit_plan, share the plan URL, and park unless asked to wait; then await_plan_review when sync waiting. ' +
+    'A changes-requested verdict means revise and resubmit the same planId; rejected means stop; approved means proceed. ' +
+    'Wait tools return released or timeout with disposition/nextAction; timeout means park (do not silent-loop). MCP connects only to the loopback diffing server; explicitly authorized GitHub tools may make the server call GitHub.'
 
   const server = new McpServer(
     { name: 'diffing', version: MCP_VERSION },
@@ -1108,12 +1117,17 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 
   server.registerTool('await_review', {
     title: 'Wait for code review handoff',
-    description: 'Wait for the human to send a code-review round. Returns status=released or status=timeout and always includes mode. Timeout is expected and safe to retry; progress notifications are sent between long polls.',
+    description:
+      'Sync wait for the human to click Send to agent. Prefer async handoff (share the UI URL and end the turn) unless they are reviewing now or asked you to wait. ' +
+      'Returns status=released or status=timeout; timeout includes disposition=park. ' +
+      AWAIT_TOOL_DESCRIPTION_SUFFIX,
     inputSchema: {
-      timeoutSeconds: z.number().positive().max(3600).optional().describe('Total wait budget in seconds; defaults to 570.'),
+      timeoutSeconds: z.number().positive().max(3600).optional()
+        .describe(`Total wait budget in seconds; defaults to ${DEFAULT_AWAIT_TIMEOUT_SECONDS}.`),
     },
     outputSchema: {
       status: z.enum(['released', 'timeout']),
+      disposition: z.enum(['park']).optional(),
       mode: z.enum(['standard', 'comment-only']),
       round: z.number(),
       openCount: z.number().optional(),
@@ -1124,7 +1138,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     annotations: AWAIT,
   }, async ({ timeoutSeconds }, extra) => {
     const session = requireWebSession()
-    const budgetMs = (timeoutSeconds ?? 570) * 1000
+    const budgetMs = (timeoutSeconds ?? DEFAULT_AWAIT_TIMEOUT_SECONDS) * 1000
     const progressToken = extra?._meta?.progressToken
     let sinceRound = await seedReviewCursor(session, extra?.signal)
     const deadline = Date.now() + budgetMs
@@ -1142,7 +1156,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
         sinceRound = payload.round
         reviewCursor = { identity: session.identity, round: sinceRound }
         const structured = {
-          status: 'released',
+          status: 'released' as const,
           mode: payload.mode ?? 'standard',
           round: payload.round,
           openCount: payload.openCount,
@@ -1170,8 +1184,11 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
       }
     }
     const structured = {
-      status: 'timeout', mode: 'standard', round: sinceRound,
-      nextAction: 'No review was sent within the wait budget. Call await_review again to keep waiting.',
+      status: 'timeout' as const,
+      disposition: 'park' as const,
+      mode: 'standard' as const,
+      round: sinceRound,
+      nextAction: AWAIT_REVIEW_TIMEOUT_NEXT_ACTION,
     }
     return textResult(structured.nextAction, structured)
   })
@@ -1403,7 +1420,10 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 
   server.registerTool('submit_plan', {
     title: 'Submit or resubmit a plan',
-    description: 'Submit Markdown for human plan review. To revise after changes-requested, pass the same planId so a new version is created.',
+    description:
+      'Submit Markdown for human plan review. Default handoff is async: return the URL and park. ' +
+      'Call await_plan_review only when the human is reviewing now or asked you to wait. ' +
+      'To revise after changes-requested, pass the same planId so a new version is created.',
     inputSchema: {
       title: z.string().optional().describe('Human-readable plan title.'),
       body: z.string().min(1).describe('Complete Markdown plan body.'),
@@ -1412,7 +1432,11 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
       planId: z.string().optional().describe('Existing plan id when resubmitting a revised version.'),
     },
     outputSchema: {
-      status: z.literal('submitted'), planId: z.string(), version: z.number(), url: z.string(),
+      status: z.literal('submitted'),
+      planId: z.string(),
+      version: z.number(),
+      url: z.string(),
+      nextAction: z.string(),
     },
     annotations: MUTATING,
   }, async ({ title, body, source, model, planId }) => {
@@ -1428,19 +1452,30 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     })
     const url = `${base}/plan/${plan.id}`
     return textResult(
-      `Submitted plan ${plan.id} (v${plan.version}) at ${url}. Call await_plan_review.`,
-      { status: 'submitted', planId: plan.id, version: plan.version, url },
+      `Submitted plan ${plan.id} (v${plan.version}) at ${url}. ${PLAN_SUBMIT_NEXT_ACTION}`,
+      {
+        status: 'submitted',
+        planId: plan.id,
+        version: plan.version,
+        url,
+        nextAction: PLAN_SUBMIT_NEXT_ACTION,
+      },
     )
   })
 
   server.registerTool('await_plan_review', {
     title: 'Wait for plan review verdict',
-    description: 'Wait for a plan verdict. Returns status=released or status=timeout and always includes mode. Timeout is expected and safe to retry; progress notifications are sent between long polls.',
+    description:
+      'Sync wait for a plan verdict (Submit review). Prefer async handoff after submit_plan unless the human is reviewing now or asked you to wait. ' +
+      'Returns status=released or status=timeout; timeout includes disposition=park. ' +
+      AWAIT_TOOL_DESCRIPTION_SUFFIX,
     inputSchema: {
-      timeoutSeconds: z.number().positive().max(3600).optional().describe('Total wait budget in seconds; defaults to 570.'),
+      timeoutSeconds: z.number().positive().max(3600).optional()
+        .describe(`Total wait budget in seconds; defaults to ${DEFAULT_AWAIT_TIMEOUT_SECONDS}.`),
     },
     outputSchema: {
       status: z.enum(['released', 'timeout']),
+      disposition: z.enum(['park']).optional(),
       mode: z.enum(['standard', 'comment-only']),
       round: z.number(),
       planId: z.string().optional(),
@@ -1453,7 +1488,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     annotations: AWAIT,
   }, async ({ timeoutSeconds }, extra) => {
     const session = requireWebSession()
-    const budgetMs = (timeoutSeconds ?? 570) * 1000
+    const budgetMs = (timeoutSeconds ?? DEFAULT_AWAIT_TIMEOUT_SECONDS) * 1000
     const progressToken = extra?._meta?.progressToken
     let sinceRound = await seedPlanCursor(session, extra?.signal)
     const deadline = Date.now() + budgetMs
@@ -1478,10 +1513,15 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
               ? 'Revise the plan and call submit_plan with the same planId.'
               : 'Stop; the plan was rejected.'
         const structured = {
-          status: 'released', mode: payload.mode ?? 'standard', round: payload.round,
-          planId: payload.planId, decision: payload.decision,
+          status: 'released' as const,
+          mode: payload.mode ?? 'standard',
+          round: payload.round,
+          planId: payload.planId,
+          decision: payload.decision,
           ...(payload.decisionComment ? { decisionComment: payload.decisionComment } : {}),
-          openCommentCount: payload.openCommentCount, plan: payload.plan, nextAction,
+          openCommentCount: payload.openCommentCount,
+          plan: payload.plan,
+          nextAction,
         }
         return textResult(payload.reviewXml, structured)
       }
@@ -1501,8 +1541,11 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
       }
     }
     const structured = {
-      status: 'timeout', mode: 'standard', round: sinceRound,
-      nextAction: 'No plan verdict arrived within the wait budget. Call await_plan_review again to keep waiting.',
+      status: 'timeout' as const,
+      disposition: 'park' as const,
+      mode: 'standard' as const,
+      round: sinceRound,
+      nextAction: AWAIT_PLAN_TIMEOUT_NEXT_ACTION,
     }
     return textResult(structured.nextAction, structured)
   })
@@ -1633,18 +1676,24 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 
 This MCP connection is immutably bound to \`${repoRoot}\`.
 
+## Handoff (sync vs async)
+- **Async (default):** share the UI/plan URL and end the turn. Resume when the human says the review or verdict is ready.
+- **Sync:** call \`await_review\` / \`await_plan_review\` only when the human is reviewing now or asked you to wait.
+- \`status=timeout\` + \`disposition=park\` means the wait budget elapsed — park; do not silent-loop. At most one extra await if they asked you to keep waiting.
+
 ## Code review
 1. Call \`review_session_status\`; call \`start_review_session\` if needed.
 2. Prefer \`diff_summary\` → paged \`diff_files\` → \`diff_hunks\` / bounded \`diff_slice\`; use \`get_diff\` only as an escape hatch.
 3. Use \`create_comment\` for actionable inline findings.
-4. Use \`await_review\` for a human handoff; a timeout is safe to retry.
+4. Prefer async handoff; use \`await_review\` for sync waits. On resume, one \`await_review\` (or \`list_comments\`) replays a prior Send-to-agent.
 5. In \`comment-only\` mode, reply without editing files.
 
 ## Plan review
 1. Start or reuse a review session.
-2. Call \`submit_plan\`, then \`await_plan_review\`.
-3. On \`changes-requested\`, revise and resubmit with the same \`planId\`.
-4. On \`approved\`, proceed; on \`rejected\`, stop.
+2. Call \`submit_plan\`, share the URL, and park unless asked to wait.
+3. On resume or sync wait, call \`await_plan_review\` (or \`get_plan\` / \`list_plans\`).
+4. On \`changes-requested\`, revise and resubmit with the same \`planId\`.
+5. On \`approved\`, proceed; on \`rejected\`, stop.
 
 ## GitHub PR
 1. In \`gh-pr\` mode call \`gh_overview\`, then the bounded diff tools.
@@ -1676,8 +1725,10 @@ MCP connects only to the loopback diffing server and never terminates a user-own
     },
   }, async ({ plan }) => ({
     messages: [{ role: 'user', content: { type: 'text', text:
-      `Use diffing for plan review in ${repoRoot}. Start or reuse a review session, submit this plan, and await the verdict. ` +
-      'On changes-requested revise and resubmit the same planId; on rejected stop; on approved proceed.\n\n' + plan,
+      `Use diffing for plan review in ${repoRoot}. Start or reuse a review session, submit this plan, share the plan URL, and park (async handoff) unless the human asked you to wait. ` +
+      'When they are ready or asked you to block, call await_plan_review. ' +
+      'On changes-requested revise and resubmit the same planId; on rejected stop; on approved proceed. ' +
+      'Timeout means park — do not silent-loop.\n\n' + plan,
     } }],
   }))
 

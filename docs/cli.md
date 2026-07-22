@@ -81,8 +81,20 @@ diffing [options] [<revision>...] [-- <path>...]
 - `--port <port>`: The port to bind the server to. If omitted, it automatically requests a random available port.
 - `--host <host>`: Host address to bind the server to (default: `127.0.0.1`). Pass `0.0.0.0` to expose the review dashboard to your local network.
 - `--no-open`: Prevents the CLI from automatically launching your browser when the server starts.
+- `--reuse-session`: If a review is already running for this repository, open that session (print URL / launch browser) and exit instead of failing or prompting.
+- `--replace-session`: If a review is already running for this repository, stop it and start a new review with the current arguments instead of failing or prompting.
 - `--gh-pr <ref>`: Open a GitHub PR review session instead of a working-tree diff. The `<ref>` accepts the same forms as `gh pr <ref>` (bare number, `owner/repo#N`, or full GitHub URL). Equivalent to the quoted form `diffing "gh pr <ref>"`. See [§4c. GitHub PR Review Subcommands](#4c-github-pr-review-subcommands) for the full flow.
 - `--tui`: Open the opt-in native-Rust terminal UI instead of the web server when a compatible `diffing-tui` executable has been built or installed. The same review flow (diff render, file tree, comments, agent handoff) runs in your terminal — no browser. Strictly opt-in; without `--tui`, `diffing` behaves byte-identically to previous releases. The v0.10.0 npm package does not bundle the native executable. See [§4d. TUI Subcommands (Native Terminal UI)](#4d-tui-subcommands-native-terminal-ui) for installation, fallback, and the full flow.
+
+#### Existing session conflict (web mode)
+
+Only one review session may own a repository at a time (via `server.json`). When you start `diffing` in web mode and a live session already exists:
+
+- **Interactive TTY**: the CLI prompts you to **open** the existing session, **replace** it (stop the old process, start a new one), or **cancel**.
+- **Non-interactive** (pipes/CI/scripts): the CLI exits with code 3 and the legacy “already running” message, unless you pass `--reuse-session` or `--replace-session`.
+- **MCP `start_review_session`**: never stops or replaces a user-owned session; it only reuses a compatible web session or reports a conflict.
+
+`--reuse-session` and `--replace-session` are mutually exclusive.
 
 #### Git-Compatible Flags Supported
 - **Revisions / Range**: `--staged`, `--cached`, `--merge`
@@ -116,7 +128,9 @@ A specialized suite of subcommands is integrated into the `diffing` binary to co
 | `doctor` / `completion` / `update` | DX |
 
 ### `await-review`
-Blocks the calling process until the user clicks **"Send to agent"** in the browser toolbar, then streams the review comments as XML to `stdout`.
+**Sync** wait: blocks until the user clicks **"Send to agent"**, then streams review comments as XML to `stdout`.
+
+Prefer **async handoff** when the human may take a while: share `diffing url` / the UI link, end the agent turn, and resume later with one `await-review` (or `diffing comments --open`) when they say the review is ready. Use this blocking command when they are reviewing now or explicitly asked you to wait.
 
 ```bash
 diffing await-review [options]
@@ -127,9 +141,10 @@ diffing await-review [options]
 - **Behavior**:
   - Connects to the local server and establishes a long-polling request.
   - If a review is released, it prints the XML structured comments to `stdout` and prints the internal round number to `stderr` (`DIFFING_REVIEW_ROUND=N`).
+  - On timeout, stderr prints `DIFFING_AWAIT_TIMEOUT` and a park hint — do **not** silent-loop; re-run only if the human asked you to keep waiting.
 - **Exit Codes**:
   - `0`: Success. Comments were successfully received and output.
-  - `2`: Timeout. The timeout period elapsed without the user releasing the review.
+  - `2`: Timeout. Wait budget elapsed without a release (expected park signal).
   - `3`: No Server. No active diffing server was found for this repository.
   - `5`: Usage. Invalid arguments.
 
@@ -308,9 +323,10 @@ diffing update
 ## 4b. Plan-Review Subcommands
 
 `diffing plan <action>` drives the **plan-review** handoff — the plan-side twin
-of the comment review. An agent submits a markdown plan, blocks until the human
-approves / rejects / requests changes, and acts on the verdict. All actions are
-port-agnostic (resolved from the lockfile).
+of the comment review. An agent submits a markdown plan, the human decides in
+the UI, and the agent acts on the verdict. Default agent posture is **async**:
+submit, share the URL, park. Use `--wait` / `plan await` only for short sync
+waits. All actions are port-agnostic (resolved from the lockfile).
 
 ### `plan submit`
 Submit (or resubmit) a markdown plan for review.
@@ -326,6 +342,7 @@ cat PLAN.md | diffing plan submit                 # body via stdin (omit <file> 
   resets the verdict to `pending`, and re-opens it for review.
 - `--wait` — after submitting, block until the verdict arrives (combines
   `submit` + `await`); `--timeout` sets the total wait budget in seconds.
+  Omit `--wait` for the default async handoff (URL on stderr + park hint).
 - `--save-source`, `-S` — after submission, save a copy of the submitted
   markdown body to `~/.diffing/<repo>/plan-sources/<id>.md`. This preserves the
   source file for later reference without polluting the consumer project's
@@ -334,14 +351,16 @@ cat PLAN.md | diffing plan submit                 # body via stdin (omit <file> 
   stderr; source path on stderr when `--save-source` is used.
 
 ### `plan await`
-Block until the human decides, then print the `<plan-review>` XML.
+**Sync** wait until the human decides, then print the `<plan-review>` XML.
 
 ```bash
 diffing plan await [--timeout N]
 ```
 
+- Prefer async after `plan submit` (no `--wait`): park until the human says a
+  verdict is ready, then run `plan await` once (or `plan show` / `plan list`).
 - **Exit codes**: `0` on a decision (XML on stdout); `2` (`DIFFING_PLAN_AWAIT_TIMEOUT`)
-  if no decision arrives within the budget — call again to keep waiting.
+  if the wait budget elapses — park; re-run only if the human asked you to keep waiting.
 - stderr carries `DIFFING_PLAN_DECISION=<verdict>` and `DIFFING_PLAN_ROUND=<n>`.
 
 ### `plan list`
@@ -970,8 +989,16 @@ replaces an incompatible user-owned session, and binds MCP-owned sessions to
 baseline working-tree mode accepts only staged/cached selection.
 
 The await tools return `status: "released" | "timeout"` in structured content.
-Timeout is an expected retry state. Released results include `mode`; when the
-mode is `comment-only`, the agent must reply without editing files.
+Timeout includes `disposition: "park"` and a `nextAction` that tells the agent
+to end the turn (async resume) rather than silent-loop. Released results include
+`mode`; when the mode is `comment-only`, the agent must reply without editing files.
+
+**Handoff modes**
+
+| Mode | When | Agent action |
+|------|------|----------------|
+| Async (default) | Human may take minutes–hours | Share URL / plan link; end turn. Resume with one await or `list_comments` / `get_plan` when they say ready. |
+| Sync | Human reviewing now, or asked you to wait | One `await_*` with default ~570s budget. On timeout: park (at most one extra await if they asked to keep waiting). |
 
 CLI mirrors for the expanded tool surface:
 
@@ -990,7 +1017,7 @@ CLI mirrors for the expanded tool surface:
 
 - `review_local_changes` guides an agent through status/start, full diff
   inspection, and actionable inline comments.
-- `submit_plan_for_review` guides the versioned submit/await/verdict loop.
+- `submit_plan_for_review` guides submit → async park (or sync await) → verdict.
 - `diffing://agent-guide` is a static, client-readable workflow reference.
 
 These are supplemental. Essential behavior remains in initialization
@@ -1002,7 +1029,25 @@ GitHub PR automation is available through the `gh_*` MCP tools and the matching 
 
 ## 6. The Agent-User Handoff Protocol
 
-The synchronization loop relies on an **"agent waits, human releases"** pipeline. It operates as an asynchronous barrier between the AI agent and the human developer.
+The synchronization loop relies on an **"agent waits, human releases"** pipeline
+for **sync** waits, plus a default **async park/resume** path so agents do not
+burn tokens holding a conversation open for an hour.
+
+### Async handoff (default)
+
+```text
+ Agent                         Local Web Server                    Human UI
+   │                                  │                               │
+   │── submit_plan / open review ────>│                               │
+   │<── URL + nextAction=park ────────│                               │
+   │── end turn (no await loop) ──────│                               │
+   │                                  │ <── review / Submit review ───│
+   │<── human: "ready" / resume ──────│                               │
+   │── await once (or list/get) ─────>│                               │
+   │<── released payload / replay ────│                               │
+```
+
+### Sync handoff (human at the keyboard)
 
 ```text
  Agent                                          Local Web Server                               Human UI
@@ -1019,6 +1064,9 @@ The synchronization loop relies on an **"agent waits, human releases"** pipeline
    │── [5] Performs edits & fixes ────────────────────>│                                          │
    │── [6] Calls 'reply' / 'resolve' ─────────────────>│ ── [7] Live SSE update ────────────────> │
 ```
+
+Timeout on a sync wait is a **park** signal (`disposition=park`), not an order to
+retry forever. Re-await only when the human asked you to keep waiting.
 
 ### The Long-Polling Synchronization Mechanism
 Synchronizing an offline/local agent process with a browser-based UI is achieved via a dedicated long-polling server controller, backed by a monotonic sequence:
