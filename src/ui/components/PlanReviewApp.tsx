@@ -16,7 +16,8 @@ import { useApplyFonts } from '../hooks/useApplyFonts'
 import { usePlans } from '../hooks/usePlans'
 import { useRoutePath, navigate } from '../router'
 import { SHIKI_THEME_MAP } from '../utils'
-import { HapticsProvider, playSound, fireFeedback } from '../hooks/useHaptics'
+import { HapticsProvider } from '../hooks/useHaptics'
+import { usePlanReviewKeymaps } from '../hooks/usePlanReviewKeymaps'
 import { getUiStateItem, setUiStateItem } from "../utils/uiState"
 import { PlanReview, type PlanViewMode } from './PlanReview'
 import { PLAN_UI, readBoolUi } from '../lib/planUiState'
@@ -316,154 +317,33 @@ export function PlanReviewApp() {
     navigate(`/plan/${nextPlan.id}`)
   }, [plans, activePlan])
 
-  useEffect(() => {
-    let keyBuffer = ''
-    let bufferTimeout: NodeJS.Timeout
-    let lastNavSound = 0
-
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      const active = document.activeElement
-      if (active) {
-        const tag = active.tagName.toLowerCase()
-        if (
-          tag === 'input' ||
-          tag === 'textarea' ||
-          active.hasAttribute('contenteditable')
-        ) {
-          return
-        }
-      }
-
-      clearTimeout(bufferTimeout)
-      const key = e.key
-
-      if (e.ctrlKey) {
-        if (key === 'd') {
-          e.preventDefault()
-          window.scrollBy({ top: window.innerHeight / 2, behavior: 'auto' })
-          fireFeedback('selection', 'navigate')
-          keyBuffer = ''
-        } else if (key === 'u') {
-          e.preventDefault()
-          window.scrollBy({ top: -window.innerHeight / 2, behavior: 'auto' })
-          fireFeedback('selection', 'navigate')
-          keyBuffer = ''
-        }
-        return
-      }
-
-      if (key.length > 1 && key !== 'Escape' && key !== 'Enter') return
-
-      keyBuffer += key
-      bufferTimeout = setTimeout(() => {
-        keyBuffer = ''
-      }, 800)
-
-      if (keyBuffer === 'j') {
-        e.preventDefault()
-        window.scrollBy({ top: 100, behavior: 'auto' })
-        const now = Date.now()
-        if (now - lastNavSound > 80) { playSound('navigate'); lastNavSound = now; }
-        keyBuffer = ''
-      } else if (keyBuffer === 'k') {
-        e.preventDefault()
-        window.scrollBy({ top: -100, behavior: 'auto' })
-        const now = Date.now()
-        if (now - lastNavSound > 80) { playSound('navigate'); lastNavSound = now; }
-        keyBuffer = ''
-      } else if (keyBuffer === 'gg') {
-        e.preventDefault()
-        window.scrollTo({ top: 0, behavior: 'auto' })
-        fireFeedback('selection', 'navigate')
-        keyBuffer = ''
-      } else if (keyBuffer === 'G') {
-        e.preventDefault()
-        window.scrollTo({
-          top: document.documentElement.scrollHeight,
-          behavior: 'auto',
-        })
-        fireFeedback('selection', 'navigate')
-        keyBuffer = ''
-      } else if (keyBuffer === 'J') {
-        e.preventDefault()
-        navigatePlan('next')
-        fireFeedback('selection', 'navigate')
-        keyBuffer = ''
-      } else if (keyBuffer === 'K') {
-        e.preventDefault()
-        navigatePlan('prev')
-        fireFeedback('selection', 'navigate')
-        keyBuffer = ''
-      } else if (keyBuffer === 'm') {
-        e.preventDefault()
-        toggleViewMode()
-        fireFeedback('selection', 'toggle')
-        keyBuffer = ''
-      } else if (keyBuffer === 'z') {
-        e.preventDefault()
-        toggleZenMode()
-        fireFeedback('selection', 'toggle')
-        keyBuffer = ''
-      } else if (keyBuffer === 'c') {
-        e.preventDefault()
-        toggleCommentsRail()
-        fireFeedback('selection', 'toggle')
-        keyBuffer = ''
-      } else if (keyBuffer === 'o') {
-        e.preventDefault()
-        toggleOutline()
-        fireFeedback('selection', 'toggle')
-        keyBuffer = ''
-      } else if (keyBuffer === 't') {
-        e.preventDefault()
-        cycleTabSize()
-        fireFeedback('selection', 'toggle')
-        keyBuffer = ''
-      } else if (keyBuffer === 'b') {
-        e.preventDefault()
-        toggleSidebar()
-        fireFeedback('selection', 'toggle')
-        keyBuffer = ''
-      } else if (keyBuffer === 'w') {
-        e.preventDefault()
-        toggleLineWrap()
-        fireFeedback('selection', 'toggle')
-        keyBuffer = ''
-      } else if (keyBuffer === 'n') {
-        e.preventDefault()
-        toggleLineNumbers()
-        fireFeedback('selection', 'toggle')
-        keyBuffer = ''
-      } else if (keyBuffer === 'gt') {
-        e.preventDefault()
-        setThemeModalOpen(true)
-        fireFeedback('medium', 'open')
-        keyBuffer = ''
-      } else if (keyBuffer === '?') {
-        e.preventDefault()
-        setShortcutsHelpOpen(true)
-        fireFeedback('medium', 'open')
-        keyBuffer = ''
-      } else if (keyBuffer.length >= 2) {
-        keyBuffer = ''
-      }
-    }
-
-    window.addEventListener('keydown', handleGlobalKeyDown)
-    return () => {
-      window.removeEventListener('keydown', handleGlobalKeyDown)
-    }
-  }, [
-    toggleSidebar,
-    toggleLineWrap,
-    toggleLineNumbers,
-    toggleViewMode,
-    toggleZenMode,
-    toggleCommentsRail,
-    toggleOutline,
-    cycleTabSize,
-    navigatePlan,
-  ])
+  const planKeymapActions = useMemo(
+    () => ({
+      onNavigatePlan: navigatePlan,
+      onToggleViewMode: toggleViewMode,
+      onToggleZenMode: toggleZenMode,
+      onToggleCommentsRail: toggleCommentsRail,
+      onToggleOutline: toggleOutline,
+      onCycleTabSize: cycleTabSize,
+      onToggleSidebar: toggleSidebar,
+      onToggleLineWrap: toggleLineWrap,
+      onToggleLineNumbers: toggleLineNumbers,
+      onOpenTheme: () => setThemeModalOpen(true),
+      onOpenShortcuts: () => setShortcutsHelpOpen(true),
+    }),
+    [
+      navigatePlan,
+      toggleViewMode,
+      toggleZenMode,
+      toggleCommentsRail,
+      toggleOutline,
+      cycleTabSize,
+      toggleSidebar,
+      toggleLineWrap,
+      toggleLineNumbers,
+    ],
+  )
+  usePlanReviewKeymaps(planKeymapActions)
 
   const openCommentCount = useMemo(() => {
     if (!activePlan) return 0
