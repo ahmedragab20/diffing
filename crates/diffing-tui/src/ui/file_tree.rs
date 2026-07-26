@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use diffing_core::diff::FileDiff;
+use diffing_core::diff::{FileDiff, LineKind};
 
 #[derive(Debug, Clone)]
 pub struct FileNode {
@@ -22,6 +22,8 @@ pub struct FileNode {
     pub viewed: bool,
     pub comment_count: u32,
     pub change_marker: char,
+    pub additions: u32,
+    pub deletions: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,60 +44,21 @@ pub struct FileTree {
 impl FileTree {
     pub fn build(files: &[FileDiff]) -> Self {
         let mut nodes: Vec<FileNode> = Vec::new();
-        // Group files by directory, preserving the order in which files
-        // appear in the diff. This matches `git diff` output ordering.
-        let mut dir_order: Vec<PathBuf> = Vec::new();
-        let mut dir_files: Vec<Vec<usize>> = Vec::new();
-        let mut dir_positions: HashMap<PathBuf, usize> = HashMap::new();
-        for (i, f) in files.iter().enumerate() {
-            let path = f.display_path().to_path_buf();
-            let parent = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-            if let Some(pos) = dir_positions.get(&parent).copied() {
-                dir_files[pos].push(i);
-            } else {
-                dir_positions.insert(parent.clone(), dir_order.len());
-                dir_order.push(parent);
-                dir_files.push(vec![i]);
+        let mut directories: HashMap<PathBuf, usize> = HashMap::new();
+        for (file_index, file) in files.iter().enumerate() {
+            let mut parent = file.display_path().parent();
+            while let Some(directory) = parent {
+                if directory.as_os_str().is_empty() {
+                    break;
+                }
+                directories
+                    .entry(directory.to_path_buf())
+                    .and_modify(|first_seen| *first_seen = (*first_seen).min(file_index))
+                    .or_insert(file_index);
+                parent = directory.parent();
             }
         }
-
-        for (dir, file_idxs) in dir_order.iter().zip(dir_files.iter()) {
-            if !dir.as_os_str().is_empty() {
-                nodes.push(FileNode {
-                    name: display_dir_name(dir),
-                    path: dir.clone(),
-                    depth: dir.components().count().saturating_sub(1),
-                    kind: FileNodeKind::Dir,
-                    file_diff_idx: None,
-                    expanded: true,
-                    viewed: false,
-                    comment_count: 0,
-                    change_marker: ' ',
-                });
-            }
-            for &i in file_idxs {
-                let f = &files[i];
-                let path = f.display_path();
-                let name = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                let depth = path.components().count().saturating_sub(1);
-                let change_marker = change_marker_for(f);
-                nodes.push(FileNode {
-                    name,
-                    path: path.to_path_buf(),
-                    depth,
-                    kind: FileNodeKind::File,
-                    file_diff_idx: Some(i),
-                    expanded: false,
-                    viewed: false,
-                    comment_count: 0,
-                    change_marker,
-                });
-            }
-        }
+        flatten_directory(Path::new(""), 0, files, &directories, &mut nodes);
 
         let cursor = nodes
             .iter()
@@ -270,13 +233,118 @@ impl FileTree {
     }
 }
 
-fn display_dir_name(dir: &Path) -> String {
-    let s = dir.to_string_lossy();
-    if s.is_empty() {
-        ".".to_string()
-    } else {
-        s.trim_end_matches('/').to_string()
+#[derive(Debug)]
+enum TreeEntry {
+    Directory(PathBuf),
+    File(usize),
+}
+
+fn flatten_directory(
+    parent: &Path,
+    depth: usize,
+    files: &[FileDiff],
+    directories: &HashMap<PathBuf, usize>,
+    nodes: &mut Vec<FileNode>,
+) {
+    let mut entries: Vec<(usize, u8, TreeEntry)> = directories
+        .iter()
+        .filter(|(path, _)| path.parent() == Some(parent))
+        .map(|(path, first_seen)| (*first_seen, 0, TreeEntry::Directory(path.clone())))
+        .chain(
+            files
+                .iter()
+                .enumerate()
+                .filter(|(_, file)| file.display_path().parent() == Some(parent))
+                .map(|(index, _)| (index, 1, TreeEntry::File(index))),
+        )
+        .collect();
+    entries.sort_by_key(|(first_seen, kind, _)| (*first_seen, *kind));
+
+    for (_, _, entry) in entries {
+        match entry {
+            TreeEntry::File(index) => {
+                let file = &files[index];
+                let path = file.display_path();
+                let (additions, deletions) = file.hunks.iter().flat_map(|hunk| &hunk.lines).fold(
+                    (0, 0),
+                    |(additions, deletions), line| match line.kind {
+                        LineKind::Add => (additions + 1, deletions),
+                        LineKind::Del => (additions, deletions + 1),
+                        LineKind::Context => (additions, deletions),
+                    },
+                );
+                nodes.push(FileNode {
+                    name: path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    path: path.to_path_buf(),
+                    depth,
+                    kind: FileNodeKind::File,
+                    file_diff_idx: Some(index),
+                    expanded: false,
+                    viewed: false,
+                    comment_count: 0,
+                    change_marker: change_marker_for(file),
+                    additions,
+                    deletions,
+                });
+            }
+            TreeEntry::Directory(directory) => {
+                let (path, name) = compact_directory(directory, files, directories);
+                nodes.push(FileNode {
+                    name,
+                    path: path.clone(),
+                    depth,
+                    kind: FileNodeKind::Dir,
+                    file_diff_idx: None,
+                    expanded: true,
+                    viewed: false,
+                    comment_count: 0,
+                    change_marker: ' ',
+                    additions: 0,
+                    deletions: 0,
+                });
+                flatten_directory(&path, depth + 1, files, directories, nodes);
+            }
+        }
     }
+}
+
+fn compact_directory(
+    mut directory: PathBuf,
+    files: &[FileDiff],
+    directories: &HashMap<PathBuf, usize>,
+) -> (PathBuf, String) {
+    let mut name = directory
+        .file_name()
+        .and_then(|part| part.to_str())
+        .unwrap_or("")
+        .to_string();
+    loop {
+        let has_direct_files = files
+            .iter()
+            .any(|file| file.display_path().parent() == Some(directory.as_path()));
+        let children: Vec<&PathBuf> = directories
+            .keys()
+            .filter(|path| path.parent() == Some(directory.as_path()))
+            .collect();
+        if has_direct_files || children.len() != 1 {
+            break;
+        }
+        let child = children[0];
+        let child_name = child
+            .file_name()
+            .and_then(|part| part.to_str())
+            .unwrap_or("");
+        if !name.is_empty() && !child_name.is_empty() {
+            name.push('/');
+        }
+        name.push_str(child_name);
+        directory = child.clone();
+    }
+    (directory, name)
 }
 
 fn change_marker_for(f: &FileDiff) -> char {
@@ -322,6 +390,32 @@ mod tests {
         assert_eq!(tree.nodes[2].file_diff_idx, Some(1));
         assert_eq!(tree.nodes[3].kind, FileNodeKind::File);
         assert_eq!(tree.nodes[3].file_diff_idx, Some(2));
+    }
+
+    #[test]
+    fn nested_directories_are_hierarchical_and_single_child_chains_are_compact() {
+        let files = vec![
+            fd("crates/diffing/Cargo.toml", ChangeKind::Modified),
+            fd("crates/diffing/src/app.rs", ChangeKind::Modified),
+            fd("crates/diffing/src/ui/tree.rs", ChangeKind::Added),
+        ];
+        let tree = FileTree::build(&files);
+        let labels: Vec<_> = tree
+            .nodes
+            .iter()
+            .map(|node| (node.depth, node.kind, node.name.as_str()))
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                (0, FileNodeKind::Dir, "crates/diffing"),
+                (1, FileNodeKind::File, "Cargo.toml"),
+                (1, FileNodeKind::Dir, "src"),
+                (2, FileNodeKind::File, "app.rs"),
+                (2, FileNodeKind::Dir, "ui"),
+                (3, FileNodeKind::File, "tree.rs"),
+            ]
+        );
     }
 
     #[test]

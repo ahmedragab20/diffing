@@ -1,15 +1,16 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Widget};
 
 use crate::lsp::IntelligenceMode;
 use crate::persistence::FileDisplay;
 use crate::themes::Palette;
-use crate::ui::gridline::{fill, overlay_block, GridlineTokens};
+use crate::ui::gridline::{
+    dim_buffer, fill, hint_line, overlay_block, GridlineTokens, GLYPHS, METRICS,
+};
 
-pub const SETTINGS_ROWS: usize = 8;
+pub const SETTINGS_ROWS: usize = 11;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SettingsState {
@@ -23,6 +24,9 @@ pub struct SettingsValues {
     pub wrap: bool,
     pub tab_size: u8,
     pub line_numbers: bool,
+    pub mouse_enabled: bool,
+    pub sidebar_visible: bool,
+    pub sidebar_width: u16,
     pub comments_visible: bool,
     pub intelligence_mode: IntelligenceMode,
     pub theme_name: &'static str,
@@ -35,8 +39,8 @@ impl SettingsState {
 }
 
 fn settings_geometry(area: Rect) -> (Rect, Rect) {
-    let width = area.width.saturating_sub(4).min(70);
-    let height = area.height.saturating_sub(2).min(20);
+    let width = area.width.saturating_sub(METRICS.modal_margin_x).min(70);
+    let height = area.height.saturating_sub(METRICS.modal_margin_y).min(26);
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -54,10 +58,20 @@ fn settings_geometry(area: Rect) -> (Rect, Rect) {
 
 pub fn settings_row_at(area: Rect, column: u16, row: u16) -> Option<usize> {
     let (_, inner) = settings_geometry(area);
+    let stride = settings_row_stride(inner);
     (0..SETTINGS_ROWS).find(|index| {
-        let y = inner.y + 1 + *index as u16 * 2;
+        let y = inner.y + 1 + *index as u16 * stride;
         row == y && column >= inner.x && column < inner.x.saturating_add(inner.width)
     })
+}
+
+fn settings_row_stride(inner: Rect) -> u16 {
+    let spacious_height = SETTINGS_ROWS as u16 * 2 + 2;
+    if inner.height >= spacious_height {
+        2
+    } else {
+        1
+    }
 }
 
 pub fn render_settings(
@@ -68,13 +82,15 @@ pub fn render_settings(
     buf: &mut Buffer,
 ) {
     let tokens = GridlineTokens::from(palette);
-    fill(area, tokens.canvas, buf);
+    dim_buffer(area, buf);
     let (popup, _) = settings_geometry(area);
     Clear.render(popup, buf);
-    let block = overlay_block(" Settings · local diffs ", palette);
+    let block = overlay_block(" Settings ", palette);
     let inner = block.inner(popup);
     block.render(popup, buf);
 
+    let sidebar_width = format!("{} cols", values.sidebar_width);
+    let stride = settings_row_stride(inner);
     let rows = [
         ("File display", values.file_display.label()),
         (
@@ -99,6 +115,23 @@ pub fn render_settings(
             },
         ),
         (
+            "Mouse input",
+            if values.mouse_enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            },
+        ),
+        (
+            "File sidebar",
+            if values.sidebar_visible {
+                "Shown"
+            } else {
+                "Hidden"
+            },
+        ),
+        ("Sidebar width", sidebar_width.as_str()),
+        (
             "Review drawer",
             if values.comments_visible {
                 "Shown"
@@ -111,19 +144,19 @@ pub fn render_settings(
     ];
 
     for (index, (label, value)) in rows.into_iter().enumerate() {
-        let y = inner.y + 1 + index as u16 * 2;
+        let y = inner.y + 1 + index as u16 * stride;
         if y >= inner.y + inner.height.saturating_sub(1) {
             break;
         }
         let selected = state.cursor == index;
         let background = if selected {
-            tokens.selection
+            tokens.selected
         } else {
             tokens.raised
         };
         let row = Rect::new(inner.x, y, inner.width, 1);
         fill(row, background, buf);
-        let marker = if selected { "▌" } else { " " };
+        let marker = if selected { GLYPHS.focus_rail } else { " " };
         let value_width = value.chars().count() as u16;
         buf.set_string(
             row.x,
@@ -155,14 +188,11 @@ pub fn render_settings(
         );
     }
 
-    Paragraph::new(Line::from(vec![
-        Span::styled("↑↓", Style::default().fg(tokens.focus)),
-        Span::styled(" select  ", Style::default().fg(tokens.muted)),
-        Span::styled("←→/Enter", Style::default().fg(tokens.focus)),
-        Span::styled(" change  ", Style::default().fg(tokens.muted)),
-        Span::styled("Esc", Style::default().fg(tokens.focus)),
-        Span::styled(" close", Style::default().fg(tokens.muted)),
-    ]))
+    Paragraph::new(hint_line(
+        "↑↓ select · ←→/Enter change · Esc close",
+        tokens.raised,
+        palette,
+    ))
     .render(
         Rect::new(
             inner.x + 1,
@@ -193,6 +223,82 @@ mod tests {
         let (_, inner) = settings_geometry(area);
         assert_eq!(settings_row_at(area, inner.x + 3, inner.y + 1), Some(0));
         assert_eq!(settings_row_at(area, inner.x + 3, inner.y + 3), Some(1));
+        assert_eq!(settings_row_at(area, inner.x + 3, inner.y + 21), Some(10));
         assert_eq!(settings_row_at(area, inner.x - 1, inner.y + 1), None);
+    }
+
+    #[test]
+    fn compact_settings_keep_every_row_reachable() {
+        let area = Rect::new(0, 0, 80, 20);
+        let (_, inner) = settings_geometry(area);
+        assert_eq!(settings_row_stride(inner), 1);
+        assert_eq!(settings_row_at(area, inner.x + 3, inner.y + 11), Some(10));
+    }
+
+    #[test]
+    fn settings_dim_instead_of_erasing_the_background() {
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+        buffer[(1, 1)]
+            .set_symbol("X")
+            .set_style(Style::default().fg(ratatui::style::Color::Red));
+
+        render_settings(
+            &SettingsState::default(),
+            SettingsValues {
+                file_display: FileDisplay::Continuous,
+                split: false,
+                wrap: false,
+                tab_size: 4,
+                line_numbers: true,
+                mouse_enabled: true,
+                sidebar_visible: true,
+                sidebar_width: 34,
+                comments_visible: true,
+                intelligence_mode: IntelligenceMode::Auto,
+                theme_name: "Rose Pine",
+            },
+            area,
+            &Palette::default(),
+            &mut buffer,
+        );
+
+        assert_eq!(buffer[(1, 1)].symbol(), "X");
+        assert!(buffer[(1, 1)].style().add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn selected_setting_uses_the_shared_focus_rail_and_surface() {
+        let area = Rect::new(0, 0, 100, 30);
+        let palette = Palette::default();
+        let tokens = GridlineTokens::from(&palette);
+        let mut buffer = Buffer::empty(area);
+        render_settings(
+            &SettingsState { cursor: 0 },
+            SettingsValues {
+                file_display: FileDisplay::Continuous,
+                split: false,
+                wrap: true,
+                tab_size: 4,
+                line_numbers: true,
+                mouse_enabled: true,
+                sidebar_visible: true,
+                sidebar_width: 34,
+                comments_visible: true,
+                intelligence_mode: IntelligenceMode::Auto,
+                theme_name: "GitHub Dark",
+            },
+            area,
+            &palette,
+            &mut buffer,
+        );
+        let (_, inner) = settings_geometry(area);
+        let row_y = inner.y + 1;
+        assert_eq!(buffer[(inner.x, row_y)].symbol(), GLYPHS.focus_rail);
+        assert_eq!(buffer[(inner.x, row_y)].style().bg, Some(tokens.selected));
+        assert!(buffer[(inner.x + 2, row_y)]
+            .style()
+            .add_modifier
+            .contains(Modifier::BOLD));
     }
 }

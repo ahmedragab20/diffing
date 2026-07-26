@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, RwLock};
@@ -16,26 +16,37 @@ use diffing_core::index::{
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
 
 use crate::agent_api::AgentApi;
+use crate::diff::highlight::highlight_line;
+use crate::diff_context::DiffContext;
+use crate::editorconfig::EditorConfigCache;
 use crate::handoff::{CommentsWatcher, RepoWatcher};
-use crate::keys::{help_text, Action, Command, Keymap};
+use crate::keys::{help_text, viewer_help_text, Action, Command, Keymap};
 use crate::lsp::{
-    utf16_column, DefinitionTarget, LanguageResponse, LspManager, RequestKind, RequestToken,
-    ServerState,
+    character_column_from_utf16, utf16_column, DefinitionTarget, IntelligenceMode,
+    LanguageResponse, LspManager, RequestKind, RequestToken, ServerState,
 };
 use crate::persistence::FileDisplay;
+use crate::search::{
+    SearchClient, SearchHit, SearchHitKind, SearchPreview, SearchResponse, SearchScope,
+};
 use crate::themes::{Palette, ThemeName};
 use crate::ui::agent_activity_toast::{render_toast, Toast};
 use crate::ui::comment_form::{render_form, CommentFormState};
 use crate::ui::comment_tracker::{render_tracker, TrackerState};
-use crate::ui::file_diff_card::render_card;
+use crate::ui::file_diff_card::{render_card, DiffRenderCache};
 use crate::ui::file_tree::FileTree;
-use crate::ui::file_tree_render::render_file_tree;
-use crate::ui::gridline::{horizontal_rule, overlay_block};
+use crate::ui::file_tree_render::{
+    content_area as file_tree_content_area, render_file_tree, FileTreeRenderOptions,
+};
+use crate::ui::gridline::{
+    dim_buffer, hint_line, horizontal_rule, overlay_block, shortcut_help, shortcut_help_columns,
+    vertical_rule, GridlineTokens, GLYPHS, METRICS,
+};
 use crate::ui::send_review_popover::{
     build_send_payload, render_send_popover, send_review_regions, SendField, SendReviewState,
 };
@@ -50,12 +61,24 @@ pub enum Focus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Experience {
+    Review,
+    Viewer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorTarget {
+    pub path: PathBuf,
+    pub line: u32,
+    pub column: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
     CommentForm,
     SendReview,
     Search,
-    FileFilter,
     Command,
     Help,
     ThemePicker,
@@ -100,6 +123,13 @@ enum ToolbarAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PointerVisualTarget {
+    Toolbar(ToolbarAction),
+    DiffRow(u16),
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DragState {
     Sidebar,
     Comments,
@@ -118,6 +148,29 @@ struct UiRegions {
     sidebar_divider: Option<Rect>,
     comment_divider: Option<Rect>,
     theme_rows: Vec<(Rect, ThemeName)>,
+}
+
+impl UiRegions {
+    fn pointer_visual_target(&self, position: Option<(u16, u16)>) -> PointerVisualTarget {
+        let Some((column, row)) = position else {
+            return PointerVisualTarget::None;
+        };
+        if let Some(action) = self
+            .toolbar
+            .iter()
+            .find(|(area, _)| contains(*area, column, row))
+            .map(|(_, action)| *action)
+        {
+            return PointerVisualTarget::Toolbar(action);
+        }
+        if self
+            .diff_inner
+            .is_some_and(|area| contains(area, column, row))
+        {
+            return PointerVisualTarget::DiffRow(row);
+        }
+        PointerVisualTarget::None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,6 +234,28 @@ fn inline_comment_target(
     })
 }
 
+fn blocked_in_viewer(action: Action) -> bool {
+    matches!(
+        action,
+        Action::OpenSendReview
+            | Action::AddComment
+            | Action::AddFileComment
+            | Action::ToggleVisualSelection
+            | Action::EditComment
+            | Action::ReplyComment
+            | Action::ResolveComment
+            | Action::ResolveAllComments
+            | Action::DeleteComment
+            | Action::NextComment
+            | Action::PrevComment
+            | Action::OpenCommentThread
+            | Action::CycleCommentStatus
+            | Action::CycleCommentSeverity
+            | Action::ToggleViewed
+            | Action::CycleFileFilter
+    )
+}
+
 pub struct App {
     #[allow(dead_code)]
     pub repo_root: PathBuf,
@@ -189,11 +264,16 @@ pub struct App {
     index_tx: Sender<IndexEvent>,
     index_rx: Receiver<IndexEvent>,
     git_diff_args: Vec<String>,
+    default_context_lines: u32,
+    context_lines: u32,
     indexing: bool,
     reindex_pending: bool,
-    pub agent_api: AgentApi,
+    refresh_anchor: Option<RefreshAnchor>,
+    pub agent_api: Option<AgentApi>,
     pub files: Vec<diffing_core::diff::FileDiff>,
     pub file_tree: FileTree,
+    pub experience: Experience,
+    pub diff_context: DiffContext,
     viewed_paths: HashSet<PathBuf>,
     pub focus: Focus,
     pub mode: Mode,
@@ -201,7 +281,9 @@ pub struct App {
     pub split: bool,
     pub file_display: FileDisplay,
     pub tab_size: u8,
+    editorconfig: EditorConfigCache,
     pub line_numbers: bool,
+    pub mouse_enabled: bool,
     pub theme: ThemeName,
     pub palette: Palette,
     pub scroll: usize,
@@ -209,6 +291,8 @@ pub struct App {
     pub continuous_scroll: u64,
     pub continuous_cursor: u64,
     pub viewport_height: usize,
+    render_metadata: DiffRenderMetadata,
+    diff_render_cache: DiffRenderCache,
     pub horizontal_offset: usize,
     code_column: Option<usize>,
     lsp: LspManager,
@@ -221,6 +305,7 @@ pub struct App {
     hover_scroll: u16,
     visual_anchor: Option<(usize, u64)>,
     pending_comment_target: Option<PendingCommentTarget>,
+    pending_editor: Option<EditorTarget>,
     pub sidebar_width: u16,
     pub comment_height: u16,
     pub sidebar_visible: bool,
@@ -234,15 +319,34 @@ pub struct App {
     settings_state: SettingsState,
     pub keymap: Keymap,
     pub modal_input: String,
-    pub search_hits: Vec<diffing_core::index::SearchHit>,
     pub search_cursor: usize,
+    search_client: Option<SearchClient>,
+    search_scope: SearchScope,
+    search_changed_only: bool,
+    search_regex: bool,
+    repo_search_hits: Vec<SearchHit>,
+    repo_search_total: usize,
+    repo_search_indexing: bool,
+    repo_search_loading: bool,
+    repo_search_error: Option<String>,
+    repo_search_query: String,
+    search_request_id: u64,
+    search_request_tx: Option<Sender<SearchRequest>>,
+    search_result_rx: Receiver<SearchEvent>,
+    search_preview: Option<SearchPreview>,
+    search_preview_loading: bool,
+    search_preview_error: Option<String>,
+    search_preview_scroll: usize,
+    preview_request_id: u64,
+    preview_request_tx: Option<Sender<PreviewRequest>>,
+    preview_result_rx: Receiver<PreviewEvent>,
     pub file_tree_scroll: usize,
-    file_filter_query: String,
     file_filter_mode: FileFilterMode,
     pub status_message: Option<String>,
     pending_delete_id: Option<String>,
     pub quit: bool,
     pub comments: Vec<ReviewComment>,
+    comments_revision: u64,
     pub comment_store: FileCommentStore,
     pub tracker: TrackerState,
     pub comment_form: Option<CommentFormState>,
@@ -260,6 +364,183 @@ pub struct App {
 enum IndexEvent {
     Snapshot(DiffIndex),
     Failed(String),
+}
+
+struct SearchRequest {
+    id: u64,
+    query: String,
+    scope: SearchScope,
+    regex: bool,
+    changed_paths: Option<Vec<String>>,
+}
+
+struct SearchEvent {
+    id: u64,
+    response: Result<SearchResponse, String>,
+}
+
+struct PreviewRequest {
+    id: u64,
+    path: String,
+}
+
+struct PreviewEvent {
+    id: u64,
+    response: Result<SearchPreview, String>,
+}
+
+#[derive(Debug, Clone)]
+struct RefreshAnchor {
+    path: PathBuf,
+    kind: IndexedLineKind,
+    line: u32,
+    viewport_offset: u64,
+}
+
+const CHANGE_MAP_CACHE_ENTRIES: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChangeMapMarker {
+    Added,
+    Removed,
+    Modified,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChangeMapKey {
+    file_index: Option<usize>,
+    height: u16,
+}
+
+struct CachedChangeMap {
+    key: ChangeMapKey,
+    markers: Arc<[Option<ChangeMapMarker>]>,
+}
+
+#[derive(Default)]
+struct DiffRenderMetadata {
+    /// Inclusive file starts followed by one terminal total-row sentinel.
+    file_offsets: Vec<u64>,
+    change_maps: VecDeque<CachedChangeMap>,
+}
+
+impl DiffRenderMetadata {
+    fn new(index: &DiffIndex) -> Self {
+        let mut metadata = Self::default();
+        metadata.rebuild(index);
+        metadata
+    }
+
+    fn rebuild(&mut self, index: &DiffIndex) {
+        self.file_offsets.clear();
+        self.file_offsets
+            .reserve(index.files.len().saturating_add(1));
+        self.file_offsets.push(0);
+        for file in &index.files {
+            let next = self
+                .file_offsets
+                .last()
+                .copied()
+                .unwrap_or(0u64)
+                .saturating_add(file.row_count);
+            self.file_offsets.push(next);
+        }
+        self.change_maps.clear();
+    }
+
+    fn total_rows(&self) -> u64 {
+        self.file_offsets.last().copied().unwrap_or(0)
+    }
+
+    fn file_offset(&self, file_index: usize) -> u64 {
+        self.file_offsets
+            .get(file_index)
+            .copied()
+            .unwrap_or_else(|| self.total_rows())
+    }
+
+    fn position(&self, global_row: u64) -> Option<(usize, u64)> {
+        let total = self.total_rows();
+        if total == 0 || self.file_offsets.len() < 2 {
+            return None;
+        }
+        let row = global_row.min(total.saturating_sub(1));
+        let file_index = self
+            .file_offsets
+            .partition_point(|offset| *offset <= row)
+            .saturating_sub(1)
+            .min(self.file_offsets.len().saturating_sub(2));
+        Some((
+            file_index,
+            row.saturating_sub(self.file_offsets[file_index]),
+        ))
+    }
+
+    fn change_map(
+        &mut self,
+        index: &DiffIndex,
+        file_index: Option<usize>,
+        height: u16,
+    ) -> Arc<[Option<ChangeMapMarker>]> {
+        let key = ChangeMapKey { file_index, height };
+        if let Some(position) = self.change_maps.iter().position(|cached| cached.key == key) {
+            let cached = self
+                .change_maps
+                .remove(position)
+                .expect("position came from the same cache");
+            let markers = cached.markers.clone();
+            self.change_maps.push_back(cached);
+            return markers;
+        }
+
+        let total_rows = file_index
+            .and_then(|selected| index.files.get(selected))
+            .map(|file| file.row_count)
+            .unwrap_or_else(|| self.total_rows());
+        let mut markers = vec![None; height as usize];
+        if height > 0 && total_rows > 0 {
+            for (current_index, file) in index.files.iter().enumerate() {
+                if file_index.is_some_and(|selected| selected != current_index) {
+                    continue;
+                }
+                let base = if file_index.is_some() {
+                    0
+                } else {
+                    self.file_offset(current_index)
+                };
+                for hunk in &file.hunks {
+                    let logical = base.saturating_add(hunk.row_start);
+                    let bucket = (logical.saturating_mul(height.saturating_sub(1) as u64)
+                        / total_rows) as usize;
+                    let bucket = bucket.min(markers.len().saturating_sub(1));
+                    markers[bucket] = Some(if hunk.new_lines > hunk.old_lines {
+                        ChangeMapMarker::Added
+                    } else if hunk.old_lines > hunk.new_lines {
+                        ChangeMapMarker::Removed
+                    } else {
+                        ChangeMapMarker::Modified
+                    });
+                }
+            }
+        }
+        let markers: Arc<[Option<ChangeMapMarker>]> = markers.into();
+        self.change_maps.push_back(CachedChangeMap {
+            key,
+            markers: markers.clone(),
+        });
+        while self.change_maps.len() > CHANGE_MAP_CACHE_ENTRIES {
+            self.change_maps.pop_front();
+        }
+        markers
+    }
+}
+
+fn diff_first_search_hits(hits: Vec<SearchHit>, changed_paths: &HashSet<String>) -> Vec<SearchHit> {
+    let (mut in_diff, outside_diff): (Vec<_>, Vec<_>) = hits
+        .into_iter()
+        .partition(|hit| changed_paths.contains(&hit.path));
+    in_diff.extend(outside_diff);
+    in_diff
 }
 
 fn spawn_index_worker(
@@ -281,25 +562,109 @@ fn spawn_index_worker(
     Ok(())
 }
 
+fn spawn_search_worker(
+    client: SearchClient,
+    request_rx: Receiver<SearchRequest>,
+    result_tx: Sender<SearchEvent>,
+) -> Result<()> {
+    thread::Builder::new()
+        .name("diffing-fff-search".to_string())
+        .spawn(move || {
+            while let Ok(mut request) = request_rx.recv() {
+                // Coalesce a burst of keystrokes so the native engine only
+                // evaluates the newest query.
+                thread::sleep(Duration::from_millis(55));
+                while let Ok(newer) = request_rx.try_recv() {
+                    request = newer;
+                }
+                let response = client
+                    .search(
+                        &request.query,
+                        request.scope,
+                        request.regex,
+                        request.changed_paths.as_deref(),
+                    )
+                    .map_err(|error| error.to_string());
+                let _ = result_tx.send(SearchEvent {
+                    id: request.id,
+                    response,
+                });
+            }
+        })?;
+    Ok(())
+}
+
+fn spawn_preview_worker(
+    client: SearchClient,
+    request_rx: Receiver<PreviewRequest>,
+    result_tx: Sender<PreviewEvent>,
+) -> Result<()> {
+    thread::Builder::new()
+        .name("diffing-fff-preview".to_string())
+        .spawn(move || {
+            while let Ok(mut request) = request_rx.recv() {
+                while let Ok(newer) = request_rx.try_recv() {
+                    request = newer;
+                }
+                let response = client
+                    .preview(&request.path)
+                    .map_err(|error| error.to_string());
+                let _ = result_tx.send(PreviewEvent {
+                    id: request.id,
+                    response,
+                });
+            }
+        })?;
+    Ok(())
+}
+
 impl App {
-    pub fn new(repo_root: PathBuf, git_diff_args: Vec<String>) -> Result<Self> {
+    pub fn new(
+        repo_root: PathBuf,
+        git_diff_args: Vec<String>,
+        experience: Experience,
+        diff_context: DiffContext,
+        search_client: Option<SearchClient>,
+    ) -> Result<Self> {
         let empty_spool = diffing_core::project_storage_dir(repo_root.to_str().unwrap_or("."))
             .join("diff-index")
             .join("pending.patch");
         let index = Arc::new(DiffIndex::empty(now_ms(), empty_spool, false));
+        let render_metadata = DiffRenderMetadata::new(&index);
         let shared_index = Arc::new(RwLock::new(index.clone()));
         let (index_tx, index_rx) = mpsc::channel();
+        let default_context_lines = context_lines_from_args(&git_diff_args).unwrap_or(3);
         spawn_index_worker(repo_root.clone(), git_diff_args.clone(), index_tx.clone())?;
-        let agent_api = AgentApi::start(
-            repo_root.to_string_lossy().into_owned(),
-            shared_index.clone(),
-        )?;
+        let agent_api = (experience == Experience::Review)
+            .then(|| {
+                AgentApi::start(
+                    repo_root.to_string_lossy().into_owned(),
+                    shared_index.clone(),
+                )
+            })
+            .transpose()?;
         let files = Vec::new();
         let file_tree = FileTree::build(&files);
         let repo_str = repo_root.to_str().unwrap_or(".");
         let persisted = crate::persistence::load(repo_str);
+        let (search_request_tx, search_request_rx) = mpsc::channel();
+        let (search_result_tx, search_result_rx) = mpsc::channel();
+        let (preview_request_tx, preview_request_rx) = mpsc::channel();
+        let (preview_result_tx, preview_result_rx) = mpsc::channel();
+        let has_search_client = search_client.is_some();
+        if let Some(client) = search_client.clone() {
+            spawn_search_worker(client.clone(), search_request_rx, search_result_tx)?;
+            spawn_preview_worker(client, preview_request_rx, preview_result_tx)?;
+        }
         let theme = persisted.theme;
-        let lsp = LspManager::new(repo_root.clone(), persisted.intelligence_mode);
+        let lsp = LspManager::new(
+            repo_root.clone(),
+            if experience == Experience::Viewer {
+                IntelligenceMode::Off
+            } else {
+                persisted.intelligence_mode
+            },
+        );
         let store = FileCommentStore::new(repo_str);
         let comments = store.load().unwrap_or_default();
         let last_comment_count = comments.len();
@@ -318,26 +683,39 @@ impl App {
             index_tx,
             index_rx,
             git_diff_args,
+            default_context_lines,
+            context_lines: default_context_lines,
             indexing: true,
             reindex_pending: false,
+            refresh_anchor: None,
             agent_api,
             files,
             file_tree,
+            experience,
+            diff_context,
             viewed_paths: persisted.viewed_files,
             focus: Focus::Diff,
             mode: Mode::Normal,
             wrap: persisted.wrap,
             split: persisted.split,
-            file_display: persisted.file_display,
+            file_display: if experience == Experience::Viewer {
+                FileDisplay::Continuous
+            } else {
+                persisted.file_display
+            },
             tab_size: persisted.tab_size,
+            editorconfig: EditorConfigCache::default(),
             line_numbers: persisted.line_numbers,
+            mouse_enabled: persisted.mouse_enabled,
             theme,
-            palette: Palette::for_theme(theme),
+            palette: Palette::for_terminal(theme),
             scroll: 0,
             cursor_row: 0,
             continuous_scroll: 0,
             continuous_cursor: 0,
             viewport_height: 1,
+            render_metadata,
+            diff_render_cache: DiffRenderCache::default(),
             horizontal_offset: 0,
             code_column: None,
             lsp,
@@ -350,10 +728,11 @@ impl App {
             hover_scroll: 0,
             visual_anchor: None,
             pending_comment_target: None,
+            pending_editor: None,
             sidebar_width: persisted.sidebar_width,
             comment_height: persisted.comment_height,
             sidebar_visible: persisted.sidebar_visible,
-            comments_visible: persisted.comments_visible,
+            comments_visible: experience == Experience::Review && persisted.comments_visible,
             regions: UiRegions::default(),
             drag: None,
             mouse_position: None,
@@ -363,16 +742,35 @@ impl App {
             settings_state: SettingsState::default(),
             keymap: Keymap::default(),
             modal_input: String::new(),
-            search_hits: Vec::new(),
             search_cursor: 0,
+            search_client,
+            search_scope: SearchScope::All,
+            search_changed_only: false,
+            search_regex: false,
+            repo_search_hits: Vec::new(),
+            repo_search_total: 0,
+            repo_search_indexing: false,
+            repo_search_loading: false,
+            repo_search_error: None,
+            repo_search_query: String::new(),
+            search_request_id: 0,
+            search_request_tx: has_search_client.then_some(search_request_tx),
+            search_result_rx,
+            search_preview: None,
+            search_preview_loading: false,
+            search_preview_error: None,
+            search_preview_scroll: 0,
+            preview_request_id: 0,
+            preview_request_tx: has_search_client.then_some(preview_request_tx),
+            preview_result_rx,
             file_tree_scroll: 0,
-            file_filter_query: String::new(),
             file_filter_mode: FileFilterMode::All,
             status_message: None,
             pending_delete_id: None,
             quit: false,
             tracker: TrackerState::new(),
             comments,
+            comments_revision: 1,
             comment_store: store,
             comment_form: None,
             send_review: None,
@@ -401,6 +799,7 @@ impl App {
                 IndexEvent::Failed(error) => {
                     self.status_message = Some(format!("diff index failed: {error}"));
                     self.indexing = false;
+                    self.refresh_anchor = None;
                 }
             }
         }
@@ -413,6 +812,7 @@ impl App {
             .and_then(|index| self.files.get(index))
             .map(|file| file.display_path().to_path_buf());
         self.files = metadata_files(&snapshot);
+        self.editorconfig.clear();
         self.visual_anchor = None;
         self.file_tree = FileTree::build(&self.files);
         for index in 0..self.files.len() {
@@ -434,6 +834,7 @@ impl App {
         }
         self.apply_file_filter();
         let complete = snapshot.complete;
+        self.render_metadata.rebuild(&snapshot);
         self.index = Arc::new(snapshot);
         self.lsp_active_path = None;
         if let Ok(mut shared) = self.shared_index.write() {
@@ -441,11 +842,15 @@ impl App {
         }
         self.clamp_cursor();
         if complete {
+            self.restore_refresh_anchor();
             self.indexing = false;
             if self.reindex_pending {
                 self.reindex_pending = false;
                 self.start_reindex();
             }
+        }
+        if self.mode == Mode::Search {
+            self.queue_repo_search();
         }
         true
     }
@@ -462,6 +867,7 @@ impl App {
                     )));
                 }
                 self.comments = comments;
+                self.comments_revision = self.comments_revision.wrapping_add(1);
                 self.last_comment_count = self.comments.len();
                 self.apply_file_filter();
             }
@@ -484,7 +890,75 @@ impl App {
 
     pub fn poll_background(&mut self) -> bool {
         let repo_dirty = self.tick_repo_watcher();
-        self.tick_index() | self.tick_watcher() | self.tick_lsp() | repo_dirty
+        let review_dirty = if self.experience == Experience::Review {
+            self.tick_watcher()
+        } else {
+            false
+        };
+        self.tick_index()
+            | self.tick_search()
+            | self.tick_search_preview()
+            | self.tick_lsp()
+            | review_dirty
+            | repo_dirty
+    }
+
+    fn tick_search(&mut self) -> bool {
+        let mut dirty = false;
+        while let Ok(event) = self.search_result_rx.try_recv() {
+            if event.id != self.search_request_id {
+                continue;
+            }
+            self.repo_search_loading = false;
+            match event.response {
+                Ok(response) => {
+                    let changed_paths: HashSet<String> = self
+                        .index
+                        .files
+                        .iter()
+                        .map(|file| file.display_path().to_string_lossy().into_owned())
+                        .collect();
+                    self.repo_search_hits = diff_first_search_hits(response.hits, &changed_paths);
+                    self.repo_search_total = response.total;
+                    self.repo_search_indexing = response.indexing;
+                    self.repo_search_error = response.error;
+                    self.search_cursor = self
+                        .search_cursor
+                        .min(self.repo_search_hits.len().saturating_sub(1));
+                    self.queue_search_preview();
+                }
+                Err(error) => {
+                    self.repo_search_hits.clear();
+                    self.repo_search_total = 0;
+                    self.repo_search_error = Some(error);
+                    self.clear_search_preview();
+                }
+            }
+            dirty = true;
+        }
+        dirty
+    }
+
+    fn tick_search_preview(&mut self) -> bool {
+        let mut dirty = false;
+        while let Ok(event) = self.preview_result_rx.try_recv() {
+            if event.id != self.preview_request_id {
+                continue;
+            }
+            self.search_preview_loading = false;
+            match event.response {
+                Ok(preview) => {
+                    self.search_preview = Some(preview);
+                    self.search_preview_error = None;
+                }
+                Err(error) => {
+                    self.search_preview = None;
+                    self.search_preview_error = Some(error);
+                }
+            }
+            dirty = true;
+        }
+        dirty
     }
 
     fn tick_lsp(&mut self) -> bool {
@@ -575,7 +1049,9 @@ impl App {
             }
             Ok(ServerState::Unavailable) => {
                 let server = LspManager::expected_server(&path).unwrap_or("language server");
-                self.status_message = Some(format!("{server} is not installed or not on PATH"));
+                self.status_message = Some(format!(
+                    "{server} was not found in node_modules/.bin or PATH"
+                ));
             }
             Ok(ServerState::Error) | Err(_) => {
                 self.status_message = Some("language server could not start".to_string());
@@ -688,7 +1164,18 @@ impl App {
         self.file_tree.jump_to_file(file_index);
         self.focus = Focus::Diff;
         self.cursor_row = row;
-        self.code_column = Some(target.character as usize);
+        self.code_column = self
+            .index
+            .viewport(file_index, row, 1, 64 * 1024)
+            .ok()
+            .and_then(|page| page.rows.into_iter().next())
+            .and_then(|view_row| match view_row {
+                ViewRow::Line { content, .. } => {
+                    Some(character_column_from_utf16(&content, target.character))
+                }
+                _ => None,
+            })
+            .or(Some(target.character as usize));
         if self.file_display == FileDisplay::Continuous {
             self.continuous_cursor = self.continuous_offset_for_file(file_index) + row;
             self.continuous_scroll = self
@@ -722,19 +1209,113 @@ impl App {
     }
 
     fn start_reindex(&mut self) {
-        match spawn_index_worker(
-            self.repo_root.clone(),
-            self.git_diff_args.clone(),
-            self.index_tx.clone(),
-        ) {
+        if self.refresh_anchor.is_none() {
+            self.refresh_anchor = self.capture_refresh_anchor();
+        }
+        let git_diff_args = with_context_lines(&self.git_diff_args, self.context_lines);
+        match spawn_index_worker(self.repo_root.clone(), git_diff_args, self.index_tx.clone()) {
             Ok(()) => {
                 self.indexing = true;
                 self.status_message = Some("refreshing diff index…".to_string());
             }
             Err(error) => {
                 self.status_message = Some(format!("could not refresh diff: {error}"));
+                self.refresh_anchor = None;
             }
         }
+    }
+
+    fn capture_refresh_anchor(&self) -> Option<RefreshAnchor> {
+        let file_index = self.file_tree.selected_file_idx()?;
+        let path = self.files.get(file_index)?.display_path().to_path_buf();
+        let ViewRow::Line {
+            kind,
+            old_lineno,
+            new_lineno,
+            ..
+        } = self.current_view_row()?
+        else {
+            return None;
+        };
+        let line = match kind {
+            IndexedLineKind::Del => old_lineno,
+            _ => new_lineno.or(old_lineno),
+        }?;
+        let viewport_offset = if self.file_display == FileDisplay::Continuous {
+            self.continuous_cursor
+                .saturating_sub(self.continuous_scroll)
+        } else {
+            self.cursor_row.saturating_sub(self.scroll as u64)
+        };
+        Some(RefreshAnchor {
+            path,
+            kind,
+            line,
+            viewport_offset,
+        })
+    }
+
+    fn restore_refresh_anchor(&mut self) {
+        let Some(anchor) = self.refresh_anchor.take() else {
+            return;
+        };
+        let Some(file_index) = self
+            .files
+            .iter()
+            .position(|file| file.display_path() == anchor.path)
+        else {
+            return;
+        };
+        let Some(row) = self
+            .index
+            .find_line_row(file_index, anchor.kind, anchor.line)
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        self.file_tree.jump_to_file(file_index);
+        self.cursor_row = row;
+        if self.file_display == FileDisplay::Continuous {
+            self.continuous_cursor = self.continuous_offset_for_file(file_index) + row;
+            self.continuous_scroll = self
+                .continuous_cursor
+                .saturating_sub(anchor.viewport_offset);
+        } else {
+            self.scroll = row.saturating_sub(anchor.viewport_offset) as usize;
+        }
+    }
+
+    fn change_context(&mut self, expand: bool) {
+        let next = if expand {
+            match self.context_lines {
+                0..=3 => 10,
+                4..=10 => 25,
+                11..=25 => 100,
+                26..=100 => 500,
+                current => current.saturating_mul(2).min(10_000),
+            }
+        } else {
+            match self.context_lines {
+                0..=10 => self.default_context_lines,
+                11..=25 => 10,
+                26..=100 => 25,
+                101..=500 => 100,
+                _ => 500,
+            }
+            .max(self.default_context_lines)
+        };
+        if next == self.context_lines {
+            self.status_message = Some(format!("context: {} lines", self.context_lines));
+            return;
+        }
+        self.context_lines = next;
+        if self.indexing {
+            self.reindex_pending = true;
+        } else {
+            self.start_reindex();
+        }
+        self.status_message = Some(format!("loading {} lines of context…", next));
     }
 
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -743,7 +1324,6 @@ impl App {
             Mode::CommentForm => self.handle_form_key(key),
             Mode::SendReview => self.handle_send_review_key(key),
             Mode::Search => self.handle_search_key(key),
-            Mode::FileFilter => self.handle_file_filter_key(key),
             Mode::Command => self.handle_command_key(key),
             Mode::ThemePicker => self.handle_theme_picker_key(key),
             Mode::Settings => self.handle_settings_key(key),
@@ -758,6 +1338,17 @@ impl App {
                     self.status_message = Some("line selection cancelled".to_string());
                     return;
                 }
+                if self.experience == Experience::Viewer
+                    && self.focus == Focus::FileTree
+                    && key.code == crossterm::event::KeyCode::Enter
+                {
+                    if self.file_tree.selected_file_idx().is_some() {
+                        self.focus = Focus::Diff;
+                    } else {
+                        self.file_tree.toggle_selected();
+                    }
+                    return;
+                }
                 if let Some(command) = self.keymap.feed(&key) {
                     self.dispatch_command(command);
                 }
@@ -765,9 +1356,27 @@ impl App {
         }
     }
 
-    pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+    /// Apply a mouse event and report whether it can change visible output.
+    /// Pointer motion is common and may be emitted at a much higher rate than
+    /// terminal frames; only crossing a hoverable row or toolbar target needs
+    /// a redraw.
+    pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
+        let previous_target = self.regions.pointer_visual_target(self.mouse_position);
+        let moved = matches!(mouse.kind, MouseEventKind::Moved);
+        if !self.mouse_enabled {
+            self.mouse_position = None;
+            self.drag = None;
+            return previous_target != PointerVisualTarget::None;
+        }
         self.mouse_position = Some((mouse.column, mouse.row));
+
+        if moved {
+            return previous_target
+                != self
+                    .regions
+                    .pointer_visual_target(Some((mouse.column, mouse.row)));
+        }
 
         if self.mode == Mode::ThemePicker {
             match mouse.kind {
@@ -791,7 +1400,7 @@ impl App {
                         .copied()
                     {
                         self.theme = theme;
-                        self.palette = Palette::for_theme(theme);
+                        self.palette = Palette::for_terminal(theme);
                         self.persist_settings();
                         self.status_message = Some(format!("theme: {}", theme.display_name()));
                         self.mode = if self.theme_return_to_settings {
@@ -804,7 +1413,7 @@ impl App {
                 }
                 _ => {}
             }
-            return;
+            return true;
         }
 
         if self.mode == Mode::Settings {
@@ -815,13 +1424,13 @@ impl App {
                     if let Some(root) = self.regions.root {
                         if let Some(index) = settings_row_at(root, mouse.column, mouse.row) {
                             self.settings_state.cursor = index;
-                            self.activate_setting();
+                            self.activate_setting(1);
                         }
                     }
                 }
                 _ => {}
             }
-            return;
+            return true;
         }
 
         if self.mode == Mode::Hover {
@@ -836,55 +1445,49 @@ impl App {
                 }
                 _ => {}
             }
-            return;
+            return true;
         }
 
         if self.mode == Mode::Help {
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
                 self.mode = Mode::Normal;
             }
-            return;
+            return true;
         }
 
         if self.mode == Mode::SendReview {
             if self.send_review.is_none() {
                 self.mode = Mode::Normal;
-                return;
+                return true;
             }
             let Some(root) = self.regions.root else {
-                return;
+                return true;
             };
             let regions = send_review_regions(root);
-            match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(decision) = regions
-                        .verdict_rows
-                        .iter()
-                        .find(|(area, _)| contains(*area, mouse.column, mouse.row))
-                        .map(|(_, decision)| *decision)
-                    {
-                        if let Some(state) = self.send_review.as_mut() {
-                            state.verdict = decision;
-                            state.focused = SendField::Verdict;
-                        }
-                    } else if contains(regions.general, mouse.column, mouse.row) {
-                        if let Some(state) = self.send_review.as_mut() {
-                            state.focused = SendField::General;
-                        }
+            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                if let Some(decision) = regions
+                    .verdict_rows
+                    .iter()
+                    .find(|(area, _)| contains(*area, mouse.column, mouse.row))
+                    .map(|(_, decision)| *decision)
+                {
+                    if let Some(state) = self.send_review.as_mut() {
+                        state.verdict = decision;
+                        state.focused = SendField::Verdict;
+                    }
+                } else if contains(regions.general, mouse.column, mouse.row) {
+                    if let Some(state) = self.send_review.as_mut() {
+                        state.focused = SendField::General;
                     }
                 }
-                _ => {}
             }
-            return;
+            return true;
         }
 
         // Text-entry modals own the pointer; do not let clicks leak through to
         // the diff underneath them.
-        if matches!(
-            self.mode,
-            Mode::CommentForm | Mode::Search | Mode::FileFilter | Mode::Command
-        ) {
-            return;
+        if matches!(self.mode, Mode::CommentForm | Mode::Search | Mode::Command) {
+            return true;
         }
 
         match mouse.kind {
@@ -896,7 +1499,7 @@ impl App {
                     .unwrap_or(false)
                 {
                     self.drag = Some(DragState::Sidebar);
-                    return;
+                    return true;
                 }
                 if self
                     .regions
@@ -905,7 +1508,7 @@ impl App {
                     .unwrap_or(false)
                 {
                     self.drag = Some(DragState::Comments);
-                    return;
+                    return true;
                 }
                 if let Some(action) = self
                     .regions
@@ -915,7 +1518,7 @@ impl App {
                     .map(|(_, action)| *action)
                 {
                     self.activate_toolbar(action);
-                    return;
+                    return true;
                 }
                 if let Some(node) = self
                     .regions
@@ -943,7 +1546,7 @@ impl App {
                         }
                         self.horizontal_offset = 0;
                     }
-                    return;
+                    return true;
                 }
                 if let Some((inner, _)) = self
                     .regions
@@ -963,7 +1566,7 @@ impl App {
                             .saturating_add(mouse.row.saturating_sub(inner.y) as u64)
                             .min(self.current_file_rows().saturating_sub(1));
                     }
-                    return;
+                    return true;
                 }
                 if let Some(comment) = self
                     .regions
@@ -986,10 +1589,7 @@ impl App {
                 Some(DragState::Comments) => {
                     if let Some(panel) = self.regions.comment_panel {
                         let bottom = panel.y.saturating_add(panel.height);
-                        self.comment_height = bottom
-                            .saturating_sub(mouse.row)
-                            .saturating_sub(1)
-                            .clamp(4, 20);
+                        self.comment_height = bottom.saturating_sub(mouse.row).clamp(4, 20);
                     }
                 }
                 None => {}
@@ -1055,6 +1655,7 @@ impl App {
             }
             _ => {}
         }
+        true
     }
 
     fn activate_toolbar(&mut self, action: ToolbarAction) {
@@ -1064,6 +1665,14 @@ impl App {
     }
 
     fn dispatch_command(&mut self, command: Command) {
+        if self.experience == Experience::Viewer && command.action == Action::EditComment {
+            self.queue_editor_for_current_line();
+            return;
+        }
+        if self.experience == Experience::Viewer && blocked_in_viewer(command.action) {
+            self.status_message = Some("viewer mode is read-only".to_string());
+            return;
+        }
         if command.action != Action::DeleteComment {
             self.pending_delete_id = None;
         }
@@ -1077,10 +1686,24 @@ impl App {
             Action::OpenSearch => {
                 self.mode = Mode::Search;
                 self.modal_input.clear();
+                self.search_scope = SearchScope::All;
+                self.search_changed_only =
+                    self.experience == Experience::Viewer || self.search_request_tx.is_none();
+                self.search_regex = false;
+                self.search_cursor = 0;
+                self.clear_search_preview();
+                self.queue_repo_search();
             }
             Action::OpenFileFilter => {
-                self.mode = Mode::FileFilter;
-                self.modal_input = self.file_filter_query.clone();
+                self.mode = Mode::Search;
+                self.modal_input.clear();
+                self.search_scope = SearchScope::Files;
+                self.search_changed_only =
+                    self.experience == Experience::Viewer || self.search_request_tx.is_none();
+                self.search_regex = false;
+                self.search_cursor = 0;
+                self.clear_search_preview();
+                self.queue_repo_search();
             }
             Action::CycleFileFilter => {
                 self.file_filter_mode = self.file_filter_mode.next();
@@ -1091,6 +1714,7 @@ impl App {
                 self.mode = Mode::Command;
                 self.modal_input.clear();
             }
+            Action::ToggleSidebar => self.toggle_sidebar(),
             Action::OpenSettings => self.open_settings(),
             Action::LanguageHover => self.request_language(RequestKind::Hover),
             Action::LanguageDefinition => self.request_language(RequestKind::Definition),
@@ -1125,6 +1749,8 @@ impl App {
                         as usize;
                 }
             }
+            Action::ExpandContext => self.change_context(true),
+            Action::CollapseContext => self.change_context(false),
             Action::ScrollLeft if self.focus == Focus::FileTree => {
                 self.file_tree.collapse_selected();
             }
@@ -1163,6 +1789,24 @@ impl App {
         }
     }
 
+    fn queue_editor_for_current_line(&mut self) {
+        let Some(file) = self.current_file() else {
+            self.status_message = Some("no file selected".to_string());
+            return;
+        };
+        let path = self.repo_root.join(file.display_path());
+        self.pending_editor = Some(EditorTarget {
+            path,
+            line: self.current_line().max(1),
+            column: self.effective_code_column().saturating_add(1),
+        });
+        self.status_message = Some("opening editor…".to_string());
+    }
+
+    pub fn take_editor_target(&mut self) -> Option<EditorTarget> {
+        self.pending_editor.take()
+    }
+
     fn cycle_focus(&mut self, delta: isize) {
         let mut order = vec![Focus::Diff];
         if self.sidebar_visible {
@@ -1179,20 +1823,331 @@ impl App {
         self.focus = order[next];
     }
 
+    fn toggle_sidebar(&mut self) {
+        self.sidebar_visible = !self.sidebar_visible;
+        if !self.sidebar_visible && self.focus == Focus::FileTree {
+            self.focus = Focus::Diff;
+        }
+        self.persist_layout();
+        self.status_message = Some(format!(
+            "file sidebar: {}",
+            if self.sidebar_visible {
+                "shown"
+            } else {
+                "hidden"
+            }
+        ));
+    }
+
     fn handle_search_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let preview_scroll = key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT);
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
                 self.modal_input.clear();
+                self.clear_search_preview();
             }
-            KeyCode::Enter => self.execute_search(),
+            KeyCode::Enter => self.activate_repo_search_hit(),
+            KeyCode::Tab => {
+                self.search_scope = self.search_scope.next(1);
+                if self.search_scope != SearchScope::Text {
+                    self.search_regex = false;
+                }
+                self.search_cursor = 0;
+                self.queue_repo_search();
+            }
+            KeyCode::BackTab => {
+                self.search_scope = self.search_scope.next(-1);
+                if self.search_scope != SearchScope::Text {
+                    self.search_regex = false;
+                }
+                self.search_cursor = 0;
+                self.queue_repo_search();
+            }
+            KeyCode::Down if preview_scroll => {
+                self.search_preview_scroll = self.search_preview_scroll.saturating_add(4);
+            }
+            KeyCode::Up if preview_scroll => {
+                self.search_preview_scroll = self.search_preview_scroll.saturating_sub(4);
+            }
+            KeyCode::PageDown => {
+                self.search_preview_scroll = self.search_preview_scroll.saturating_add(10)
+            }
+            KeyCode::PageUp => {
+                self.search_preview_scroll = self.search_preview_scroll.saturating_sub(10)
+            }
+            KeyCode::Down => self.move_search_cursor(1),
+            KeyCode::Up => self.move_search_cursor(-1),
+            KeyCode::Char('n' | 'j') if control => self.move_search_cursor(1),
+            KeyCode::Char('p' | 'k') if control => self.move_search_cursor(-1),
+            KeyCode::Char('d') if control => self.move_search_cursor(8),
+            KeyCode::Char('u') if control => self.move_search_cursor(-8),
+            KeyCode::Char('g') if control => {
+                self.search_changed_only = !self.search_changed_only;
+                self.search_cursor = 0;
+                self.queue_repo_search();
+            }
+            KeyCode::Char('r') if control && self.search_scope == SearchScope::Text => {
+                self.search_regex = !self.search_regex;
+                self.search_cursor = 0;
+                self.queue_repo_search();
+            }
             KeyCode::Backspace => {
                 self.modal_input.pop();
+                self.search_cursor = 0;
+                self.queue_repo_search();
             }
-            KeyCode::Char(character) => self.modal_input.push(character),
+            KeyCode::Char(character) if !control && !key.modifiers.contains(KeyModifiers::ALT) => {
+                self.modal_input.push(character);
+                self.search_cursor = 0;
+                self.queue_repo_search();
+            }
             _ => {}
         }
+    }
+
+    fn queue_repo_search(&mut self) {
+        let Some(tx) = self.search_request_tx.clone() else {
+            self.refresh_changed_search_fallback();
+            return;
+        };
+        self.search_request_id = self.search_request_id.saturating_add(1);
+        self.repo_search_loading = true;
+        self.repo_search_error = None;
+        self.repo_search_query = self.modal_input.trim().to_string();
+        self.repo_search_hits.clear();
+        self.repo_search_total = 0;
+        self.clear_search_preview();
+        let request = SearchRequest {
+            id: self.search_request_id,
+            query: self.repo_search_query.clone(),
+            scope: self.search_scope,
+            regex: self.search_scope == SearchScope::Text && self.search_regex,
+            changed_paths: self.search_changed_only.then(|| {
+                self.index
+                    .files
+                    .iter()
+                    .map(|file| file.display_path().to_string_lossy().into_owned())
+                    .collect()
+            }),
+        };
+        if tx.send(request).is_err() {
+            self.repo_search_loading = false;
+            self.repo_search_error = Some("fff search worker stopped".to_string());
+        }
+    }
+
+    fn refresh_changed_search_fallback(&mut self) {
+        self.search_changed_only = true;
+        self.repo_search_query = self.modal_input.trim().to_string();
+        self.repo_search_hits.clear();
+        self.repo_search_total = 0;
+        self.repo_search_loading = false;
+        self.repo_search_indexing = self.indexing;
+        self.repo_search_error = None;
+        self.clear_search_preview();
+
+        if self.repo_search_query.is_empty() {
+            return;
+        }
+        if self.search_scope == SearchScope::Symbols {
+            self.repo_search_error =
+                Some("Symbol search requires the diffing Node launcher".to_string());
+            return;
+        }
+
+        match self
+            .index
+            .search_literal(&self.repo_search_query, 0, 0, 512, 2 * 1024 * 1024)
+        {
+            Ok(page) => {
+                let truncated = page.truncated;
+                self.repo_search_hits = page
+                    .hits
+                    .into_iter()
+                    .filter(|hit| match self.search_scope {
+                        SearchScope::Files => hit.old_lineno.is_none() && hit.new_lineno.is_none(),
+                        SearchScope::Text => hit.old_lineno.is_some() || hit.new_lineno.is_some(),
+                        SearchScope::All => true,
+                        SearchScope::Symbols => false,
+                    })
+                    .map(|hit| {
+                        let line = hit.new_lineno.or(hit.old_lineno);
+                        let kind = if line.is_some() {
+                            SearchHitKind::Text
+                        } else {
+                            SearchHitKind::File
+                        };
+                        let title = if line.is_some() {
+                            hit.preview.trim().to_string()
+                        } else {
+                            std::path::Path::new(&hit.path)
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or(&hit.path)
+                                .to_string()
+                        };
+                        let detail = if let Some(line) = line {
+                            format!("{}:{line}", hit.path)
+                        } else {
+                            std::path::Path::new(&hit.path)
+                                .parent()
+                                .map(|parent| {
+                                    let value = parent.to_string_lossy();
+                                    if value.is_empty() {
+                                        "./".to_string()
+                                    } else {
+                                        format!("{value}/")
+                                    }
+                                })
+                                .unwrap_or_else(|| "./".to_string())
+                        };
+                        let git_status = self
+                            .index
+                            .files
+                            .get(hit.file_index)
+                            .map(|file| match file.kind {
+                                IndexedChangeKind::Modified => "modified",
+                                IndexedChangeKind::Added => "added",
+                                IndexedChangeKind::Deleted => "deleted",
+                                IndexedChangeKind::Renamed => "renamed",
+                                IndexedChangeKind::Untracked => "untracked",
+                                IndexedChangeKind::Binary => "binary",
+                            })
+                            .unwrap_or("")
+                            .to_string();
+                        SearchHit {
+                            kind,
+                            path: hit.path,
+                            line,
+                            title,
+                            detail,
+                            git_status,
+                        }
+                    })
+                    .collect();
+                self.repo_search_total = self.repo_search_hits.len() + usize::from(truncated);
+                self.search_cursor = self
+                    .search_cursor
+                    .min(self.repo_search_hits.len().saturating_sub(1));
+            }
+            Err(error) => {
+                self.repo_search_error = Some(format!("search failed: {error}"));
+            }
+        }
+    }
+
+    fn move_search_cursor(&mut self, delta: isize) {
+        if self.repo_search_hits.is_empty() {
+            return;
+        }
+        self.search_cursor = (self.search_cursor as isize + delta)
+            .rem_euclid(self.repo_search_hits.len() as isize) as usize;
+        self.queue_search_preview();
+    }
+
+    fn clear_search_preview(&mut self) {
+        self.preview_request_id = self.preview_request_id.saturating_add(1);
+        self.search_preview = None;
+        self.search_preview_loading = false;
+        self.search_preview_error = None;
+        self.search_preview_scroll = 0;
+    }
+
+    fn queue_search_preview(&mut self) {
+        let Some(hit) = self.repo_search_hits.get(self.search_cursor) else {
+            self.clear_search_preview();
+            return;
+        };
+        let Some(tx) = self.preview_request_tx.as_ref() else {
+            return;
+        };
+        self.preview_request_id = self.preview_request_id.saturating_add(1);
+        self.search_preview_loading = true;
+        self.search_preview_error = None;
+        self.search_preview_scroll = hit
+            .line
+            .map(|line| line.saturating_sub(4) as usize)
+            .unwrap_or(0);
+        let request = PreviewRequest {
+            id: self.preview_request_id,
+            path: hit.path.clone(),
+        };
+        if tx.send(request).is_err() {
+            self.search_preview_loading = false;
+            self.search_preview_error = Some("preview worker stopped".to_string());
+        }
+    }
+
+    fn activate_repo_search_hit(&mut self) {
+        if self.repo_search_hits.is_empty() {
+            if self.modal_input.trim().is_empty() {
+                self.mode = Mode::Normal;
+            } else {
+                self.status_message = Some(format!("no matches for {:?}", self.modal_input.trim()));
+            }
+            return;
+        }
+        let Some(hit) = self.repo_search_hits.get(self.search_cursor).cloned() else {
+            return;
+        };
+        if let Some(client) = self.search_client.clone() {
+            let query = self.repo_search_query.clone();
+            let path = hit.path.clone();
+            let _ = thread::Builder::new()
+                .name("diffing-fff-track".to_string())
+                .spawn(move || client.track(&query, &path));
+        }
+        let Some(file_index) = self
+            .index
+            .files
+            .iter()
+            .position(|file| file.display_path() == std::path::Path::new(&hit.path))
+        else {
+            self.status_message = Some(format!(
+                "Previewing {} · Ctrl-G limits results to this diff",
+                hit.path
+            ));
+            return;
+        };
+        let row = if hit.kind == SearchHitKind::File {
+            0
+        } else {
+            let row = hit.line.and_then(|line| {
+                self.index
+                    .find_line_row(file_index, IndexedLineKind::Add, line)
+                    .ok()
+                    .flatten()
+            });
+            let Some(row) = row else {
+                self.status_message = Some(format!(
+                    "Previewing {} · match is outside changed lines",
+                    hit.path
+                ));
+                return;
+            };
+            row
+        };
+        self.file_tree.jump_to_file(file_index);
+        self.cursor_row = row;
+        self.continuous_cursor = self.continuous_offset_for_file(file_index) + row;
+        self.continuous_scroll = self
+            .continuous_cursor
+            .saturating_sub((self.viewport_height / 2) as u64);
+        self.scroll = row.saturating_sub((self.viewport_height / 2) as u64) as usize;
+        self.focus = Focus::Diff;
+        self.mode = Mode::Normal;
+        self.clear_search_preview();
+        self.status_message = Some(match (hit.kind, hit.line) {
+            (SearchHitKind::File, _) => format!("→ {}", hit.path),
+            (_, Some(line)) => format!("→ {}:{line}", hit.path),
+            _ => format!("→ {}", hit.path),
+        });
+        self.modal_input.clear();
     }
 
     fn handle_hover_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -1221,124 +2176,39 @@ impl App {
         }
     }
 
-    fn handle_file_filter_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-        match key.code {
-            KeyCode::Esc => {
-                self.mode = Mode::Normal;
-                self.modal_input.clear();
-            }
-            KeyCode::Enter => {
-                self.file_filter_query = self.modal_input.trim().to_string();
-                self.apply_file_filter();
-                self.mode = Mode::Normal;
-                self.status_message = Some(format!(
-                    "files: {}{}",
-                    self.file_filter_mode.label(),
-                    if self.file_filter_query.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" · {}", self.file_filter_query)
-                    }
-                ));
-            }
-            KeyCode::Backspace => {
-                self.modal_input.pop();
-                self.file_filter_query = self.modal_input.clone();
-                self.apply_file_filter();
-            }
-            KeyCode::Char(character) => {
-                self.modal_input.push(character);
-                self.file_filter_query = self.modal_input.clone();
-                self.apply_file_filter();
-            }
-            _ => {}
-        }
-    }
-
     fn apply_file_filter(&mut self) {
         for index in 0..self.files.len() {
             let path = self.files[index].display_path();
-            let count = self
-                .comments
-                .iter()
-                .filter(|comment| std::path::Path::new(&comment.file_path) == path)
-                .count() as u32;
+            let count = if self.experience == Experience::Review {
+                self.comments
+                    .iter()
+                    .filter(|comment| std::path::Path::new(&comment.file_path) == path)
+                    .count() as u32
+            } else {
+                0
+            };
             self.file_tree.set_comment_count(index, count);
-            self.file_tree
-                .set_viewed(index, self.viewed_paths.contains(path));
+            self.file_tree.set_viewed(
+                index,
+                self.experience == Experience::Review && self.viewed_paths.contains(path),
+            );
         }
         self.file_tree.apply_filter(
-            &self.file_filter_query,
+            "",
             self.file_filter_mode == FileFilterMode::Unviewed,
             self.file_filter_mode == FileFilterMode::Comments,
         );
         self.file_tree_scroll = 0;
     }
 
-    fn execute_search(&mut self) {
-        let query = self.modal_input.trim();
-        if query.is_empty() {
-            self.mode = Mode::Normal;
-            return;
-        }
-        match self.index.search_literal(query, 0, 0, 512, 2 * 1024 * 1024) {
-            Ok(page) => {
-                self.search_hits = page.hits;
-                self.search_cursor = 0;
-                self.mode = Mode::Normal;
-                if self.search_hits.is_empty() {
-                    self.status_message = Some(format!("no matches for {query:?}"));
-                } else {
-                    self.jump_to_search_hit();
-                    self.status_message = Some(format!(
-                        "{} match{}{}",
-                        self.search_hits.len(),
-                        if self.search_hits.len() == 1 {
-                            ""
-                        } else {
-                            "es"
-                        },
-                        if page.truncated {
-                            " (more available)"
-                        } else {
-                            ""
-                        }
-                    ));
-                }
-            }
-            Err(error) => {
-                self.mode = Mode::Normal;
-                self.status_message = Some(format!("search failed: {error}"));
-            }
-        }
-    }
-
     fn jump_search(&mut self, delta: isize) {
-        if self.search_hits.is_empty() {
+        if self.repo_search_hits.is_empty() {
             self.status_message = Some("no active search results".to_string());
             return;
         }
         self.search_cursor = (self.search_cursor as isize + delta)
-            .rem_euclid(self.search_hits.len() as isize) as usize;
-        self.jump_to_search_hit();
-    }
-
-    fn jump_to_search_hit(&mut self) {
-        let Some(hit) = self.search_hits.get(self.search_cursor) else {
-            return;
-        };
-        self.file_tree.jump_to_file(hit.file_index);
-        self.cursor_row = hit.row;
-        if self.file_display == FileDisplay::Continuous {
-            self.continuous_cursor = self.continuous_offset_for_file(hit.file_index) + hit.row;
-            self.continuous_scroll = self
-                .continuous_cursor
-                .saturating_sub((self.viewport_height / 2) as u64);
-        } else {
-            self.scroll = hit.row.saturating_sub((self.viewport_height / 2) as u64) as usize;
-        }
-        self.focus = Focus::Diff;
+            .rem_euclid(self.repo_search_hits.len() as isize) as usize;
+        self.activate_repo_search_hit();
     }
 
     fn handle_command_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -1366,6 +2236,7 @@ impl App {
                 self.wrap = !self.wrap;
                 self.persist_settings();
             }
+            "mouse" => self.set_mouse_enabled(!self.mouse_enabled),
             "theme" => self.open_theme_picker(),
             "settings" | "set" => self.open_settings(),
             "files" | "display" => self.open_settings(),
@@ -1487,7 +2358,11 @@ impl App {
             return;
         }
         // 2. Release every CLI/MCP waiter through the embedded loopback API.
-        self.review_round = self.agent_api.release_review(xml.clone());
+        self.review_round = self
+            .agent_api
+            .as_ref()
+            .map(|api| api.release_review(xml.clone()))
+            .unwrap_or(self.review_round);
         // 3. Best-effort clipboard copy.
         let _ = copy_to_clipboard(&xml);
         // 4. Surface a toast and status message.
@@ -1765,14 +2640,13 @@ impl App {
             KeyCode::Esc | KeyCode::Char(',') => self.mode = Mode::Normal,
             KeyCode::Up | KeyCode::Char('k') => self.settings_state.move_cursor(-1),
             KeyCode::Down | KeyCode::Char('j') => self.settings_state.move_cursor(1),
-            KeyCode::Left | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
-                self.activate_setting()
-            }
+            KeyCode::Left => self.activate_setting(-1),
+            KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => self.activate_setting(1),
             _ => {}
         }
     }
 
-    fn activate_setting(&mut self) {
+    fn activate_setting(&mut self, direction: isize) {
         match self.settings_state.cursor {
             0 => self.toggle_file_display(),
             1 => {
@@ -1796,13 +2670,30 @@ impl App {
                 self.persist_settings();
             }
             5 => {
+                self.set_mouse_enabled(!self.mouse_enabled);
+            }
+            6 => {
+                self.toggle_sidebar();
+            }
+            7 => {
+                self.sidebar_width = if direction < 0 {
+                    self.sidebar_width.saturating_sub(2)
+                } else {
+                    self.sidebar_width.saturating_add(2)
+                }
+                .clamp(22, 72);
+                self.persist_layout();
+                self.status_message =
+                    Some(format!("sidebar width: {} columns", self.sidebar_width));
+            }
+            8 => {
                 self.comments_visible = !self.comments_visible;
                 if !self.comments_visible && self.focus == Focus::Tracker {
                     self.focus = Focus::Diff;
                 }
                 self.persist_layout();
             }
-            6 => {
+            9 => {
                 let mode = self.lsp.mode().toggle();
                 self.lsp.set_mode(mode);
                 self.lsp_active_path = None;
@@ -1816,9 +2707,20 @@ impl App {
                 self.persist_settings();
                 self.status_message = Some(format!("language intelligence: {}", mode.label()));
             }
-            7 => self.open_theme_picker(),
+            10 => self.open_theme_picker(),
             _ => {}
         }
+    }
+
+    fn set_mouse_enabled(&mut self, enabled: bool) {
+        self.mouse_enabled = enabled;
+        self.mouse_position = None;
+        self.drag = None;
+        self.persist_settings();
+        self.status_message = Some(format!(
+            "mouse input: {}",
+            if enabled { "enabled" } else { "disabled" }
+        ));
     }
 
     fn toggle_file_display(&mut self) {
@@ -1864,7 +2766,7 @@ impl App {
         }
         self.theme_cursor = self.theme_cursor.min(themes.len() - 1);
         self.theme = themes[self.theme_cursor];
-        self.palette = Palette::for_theme(self.theme);
+        self.palette = Palette::for_terminal(self.theme);
     }
 
     fn handle_theme_picker_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -1872,7 +2774,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.theme = self.theme_original;
-                self.palette = Palette::for_theme(self.theme);
+                self.palette = Palette::for_terminal(self.theme);
                 self.mode = if self.theme_return_to_settings {
                     Mode::Settings
                 } else {
@@ -1945,6 +2847,7 @@ impl App {
             self.split,
             self.tab_size,
             self.line_numbers,
+            self.mouse_enabled,
             self.lsp.mode(),
         );
     }
@@ -2025,31 +2928,15 @@ impl App {
     }
 
     fn continuous_total_rows(&self) -> u64 {
-        self.index.files.iter().map(|file| file.row_count).sum()
+        self.render_metadata.total_rows()
     }
 
     fn continuous_offset_for_file(&self, file_index: usize) -> u64 {
-        self.index
-            .files
-            .iter()
-            .take(file_index)
-            .map(|file| file.row_count)
-            .sum()
+        self.render_metadata.file_offset(file_index)
     }
 
-    fn continuous_position(&self, mut global_row: u64) -> Option<(usize, u64)> {
-        for (index, file) in self.index.files.iter().enumerate() {
-            if global_row < file.row_count {
-                return Some((index, global_row));
-            }
-            global_row = global_row.saturating_sub(file.row_count);
-        }
-        self.index.files.len().checked_sub(1).and_then(|index| {
-            self.index
-                .files
-                .get(index)
-                .map(|file| (index, file.row_count.saturating_sub(1)))
-        })
+    fn continuous_position(&self, global_row: u64) -> Option<(usize, u64)> {
+        self.render_metadata.position(global_row)
     }
 
     fn sync_continuous_active(&mut self) {
@@ -2446,10 +3333,9 @@ impl App {
             return None;
         }
         let line = new_lineno?.checked_sub(1)?;
-        let diagnostic = self
-            .lsp
-            .diagnostics_for(file.display_path())
-            .into_iter()
+        let diagnostics = self.lsp.diagnostics_for(file.display_path());
+        let diagnostic = diagnostics
+            .iter()
             .filter(|diagnostic| diagnostic.line == line)
             .min_by_key(|diagnostic| diagnostic.severity)?;
         Some(format!(
@@ -2464,21 +3350,31 @@ impl App {
         ))
     }
 
+    fn annotation_revision(&self) -> u64 {
+        if self.experience == Experience::Viewer {
+            0
+        } else {
+            self.comments_revision.rotate_left(17) ^ self.lsp.diagnostics_revision()
+        }
+    }
+
     fn current_file(&self) -> Option<&diffing_core::diff::FileDiff> {
         let idx = self.file_tree.selected_file_idx()?;
         self.files.get(idx)
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        self.poll_background();
         self.toasts.retain(|t| !t.is_expired());
         self.regions = UiRegions::default();
         self.regions.root = Some(area);
         fill_area(area, self.palette.bg, buf);
-        if area.width < 42 || area.height < 8 {
-            Paragraph::new("diffing needs at least 42×8 cells")
-                .style(Style::default().fg(self.palette.fg).bg(self.palette.bg))
-                .render(area, buf);
+        if area.width < METRICS.content_min_width || area.height < 8 {
+            Paragraph::new(format!(
+                "diffing needs at least {}×8 cells",
+                METRICS.content_min_width
+            ))
+            .style(Style::default().fg(self.palette.fg).bg(self.palette.bg))
+            .render(area, buf);
             return;
         }
 
@@ -2486,22 +3382,36 @@ impl App {
             self.focus = Focus::Diff;
         }
 
-        let header = Rect::new(area.x, area.y, area.width, 2);
-        let status = Rect::new(area.x, area.y + area.height - 1, area.width, 1);
-        let comments_requested = self.comments_visible && !self.comments.is_empty();
+        let header_height = METRICS.header_height;
+        let header = Rect::new(area.x, area.y, area.width, header_height);
+        let status = Rect::new(
+            area.x,
+            area.y + area.height - METRICS.status_height,
+            area.width,
+            METRICS.status_height,
+        );
+        let comments_requested = self.experience == Experience::Review
+            && self.comments_visible
+            && !self.comments.is_empty();
         let (mut show_sidebar, mut show_comments) = panel_visibility(
             area.width,
             area.height,
             self.sidebar_visible,
             comments_requested,
         );
+        if self.experience == Experience::Viewer {
+            show_sidebar = self.sidebar_visible && area.width >= 84;
+            show_comments = false;
+        }
         let compact_workspace = area.width < 88;
         let show_diff = !compact_workspace || self.focus == Focus::Diff;
         if compact_workspace {
             show_sidebar = self.sidebar_visible && self.focus == Focus::FileTree;
             show_comments = self.comments_visible && self.focus == Focus::Tracker;
         }
-        self.render_header(header, buf);
+        if header.height > 0 {
+            self.render_header(header, buf);
+        }
 
         let comments_right = show_comments && area.width >= 132;
         let comments_workspace = compact_workspace && show_comments;
@@ -2511,26 +3421,29 @@ impl App {
         } else {
             0
         };
-        let tracker_divider_height =
-            u16::from(show_comments && !comments_right && !comments_workspace);
         let body_height = area
             .height
-            .saturating_sub(2 + 1 + tracker_height + tracker_divider_height);
-        let body = Rect::new(area.x, area.y + 2, area.width, body_height);
+            .saturating_sub(header_height + METRICS.status_height + tracker_height);
+        let body = Rect::new(area.x, area.y + header_height, area.width, body_height);
         let sidebar_width = if show_sidebar && compact_workspace {
             body.width
         } else if show_sidebar {
-            self.sidebar_width.clamp(22, area.width.saturating_sub(42))
+            self.sidebar_width.clamp(
+                METRICS.sidebar_min_width,
+                area.width.saturating_sub(METRICS.content_min_width),
+            )
         } else {
             0
         };
         let sidebar_divider_width = u16::from(show_sidebar && !compact_workspace);
         let review_width = if comments_right {
-            38.min(body.width.saturating_sub(sidebar_width + 44))
+            METRICS.review_width.min(
+                body.width
+                    .saturating_sub(sidebar_width + METRICS.content_min_width + 2),
+            )
         } else {
             0
         };
-        let review_divider_width = u16::from(comments_right);
         let file_area = show_sidebar.then(|| Rect::new(body.x, body.y, sidebar_width, body.height));
         let divider = show_sidebar.then(|| {
             Rect::new(
@@ -2544,27 +3457,32 @@ impl App {
             body.x + sidebar_width + sidebar_divider_width,
             body.y,
             if show_diff {
-                body.width.saturating_sub(
-                    sidebar_width + sidebar_divider_width + review_width + review_divider_width,
-                )
+                body.width
+                    .saturating_sub(sidebar_width + sidebar_divider_width + review_width)
             } else {
                 0
             },
             body.height,
         );
         if let Some(file_area) = file_area {
-            self.sync_file_tree_scroll_for(file_area.height.saturating_sub(2) as usize);
+            let minimal_tree = self.experience == Experience::Viewer;
+            self.sync_file_tree_scroll_for(
+                file_tree_content_area(file_area, minimal_tree).height as usize,
+            );
             render_file_tree(
                 &self.file_tree,
                 file_area,
-                matches!(self.focus, Focus::FileTree),
-                self.file_tree_scroll,
+                FileTreeRenderOptions {
+                    focused: matches!(self.focus, Focus::FileTree),
+                    scroll: self.file_tree_scroll,
+                    minimal: minimal_tree,
+                    file_count: self.files.len(),
+                },
                 &self.palette,
-                &self.files,
                 buf,
             );
             self.regions.file_tree = Some(file_area);
-            let inner = inset(file_area, 1);
+            let inner = file_tree_content_area(file_area, minimal_tree);
             self.regions.file_rows = (0..inner.height as usize)
                 .filter_map(|offset| {
                     let node = self.file_tree_scroll + offset;
@@ -2576,18 +3494,32 @@ impl App {
                 .collect();
         }
         if let Some(divider) = divider {
-            fill_area(divider, self.palette.bg, buf);
+            vertical_rule(divider, &self.palette, self.palette.bg, buf);
             self.regions.sidebar_divider = Some(divider);
         }
         if show_diff && diff_area.width > 0 {
-            let diff_header = Rect::new(diff_area.x, diff_area.y, diff_area.width, 1);
+            let diff_header_height = if self.experience == Experience::Review
+                || self.file_display != FileDisplay::Continuous
+            {
+                2
+            } else {
+                0
+            };
+            let diff_header = Rect::new(
+                diff_area.x,
+                diff_area.y,
+                diff_area.width,
+                diff_header_height,
+            );
             let diff_content = Rect::new(
                 diff_area.x,
-                diff_area.y + 1,
+                diff_area.y + diff_header_height,
                 diff_area.width,
-                diff_area.height.saturating_sub(1),
+                diff_area.height.saturating_sub(diff_header_height),
             );
-            self.render_active_file_header(diff_header, buf);
+            if diff_header.height > 0 {
+                self.render_active_file_header(diff_header, buf);
+            }
             self.regions.diff = Some(diff_content);
             self.regions.diff_inner = Some(diff_content);
             self.render_diff(diff_content, buf);
@@ -2597,20 +3529,17 @@ impl App {
             let tracker_area = if comments_workspace {
                 body
             } else if comments_right {
-                let divider = Rect::new(
+                Rect::new(
                     diff_area.x + diff_area.width,
                     body.y,
-                    review_divider_width,
+                    review_width,
                     body.height,
-                );
-                fill_area(divider, self.palette.border, buf);
-                Rect::new(divider.x + divider.width, body.y, review_width, body.height)
+                )
             } else {
                 let divider_y = body.y + body.height;
                 let divider = Rect::new(area.x, divider_y, area.width, 1);
-                fill_area(divider, self.palette.bg, buf);
                 self.regions.comment_divider = Some(divider);
-                Rect::new(area.x, divider_y + 1, area.width, tracker_height)
+                Rect::new(area.x, divider_y, area.width, tracker_height)
             };
             let outdated_comments: HashSet<String> = self
                 .tracker
@@ -2626,6 +3555,7 @@ impl App {
                 &self.comments,
                 &outdated_comments,
                 &mut self.tracker,
+                matches!(self.focus, Focus::Tracker),
                 tracker_area,
                 &self.palette,
                 buf,
@@ -2649,7 +3579,9 @@ impl App {
         }
 
         // Agent status indicator in the status line.
-        let mode_str = if self.mode == Mode::Normal && self.visual_anchor.is_some() {
+        let mode_str = if self.experience == Experience::Viewer && self.mode == Mode::Normal {
+            ""
+        } else if self.mode == Mode::Normal && self.visual_anchor.is_some() {
             "VISUAL"
         } else {
             match self.mode {
@@ -2657,7 +3589,6 @@ impl App {
                 Mode::CommentForm => "EDIT",
                 Mode::SendReview => "SEND",
                 Mode::Search => "SEARCH",
-                Mode::FileFilter => "FILTER",
                 Mode::Command => "COMMAND",
                 Mode::Help => "HELP",
                 Mode::ThemePicker => "THEME",
@@ -2665,7 +3596,11 @@ impl App {
                 Mode::Hover => "HOVER",
             }
         };
-        self.agent_status = if self.agent_api.waiter_count() > 0 {
+        self.agent_status = if self
+            .agent_api
+            .as_ref()
+            .is_some_and(|api| api.waiter_count() > 0)
+        {
             AgentStatus::Waiting
         } else {
             AgentStatus::Idle
@@ -2676,13 +3611,20 @@ impl App {
             Mode::ThemePicker => "type to filter · ↑↓ preview · Enter apply · Esc restore",
             Mode::CommentForm => "Ctrl-S save · Esc cancel",
             Mode::SendReview => "Tab field · ←→ verdict · Ctrl-S send · Esc cancel",
-            Mode::Search => "type query · Enter search · Esc cancel",
-            Mode::FileFilter => "type filename · Enter apply · Esc close",
+            Mode::Search => {
+                "type to search · Tab scope · ^G changed · ↑↓ select · ⇧↑↓ preview · Enter jump"
+            }
             Mode::Settings => "↑↓ select · ←→ change · Esc close",
             Mode::Hover => "j/k or wheel scroll · Esc close",
             _ => match self.focus {
+                Focus::FileTree if self.experience == Experience::Viewer => {
+                    "jk select · Enter open · h/l collapse · Tab diff · / search"
+                }
                 Focus::FileTree => "click/jk select · h/l collapse · v viewed · Tab diff",
                 Focus::Tracker => "jk select · s status · p severity · o open · x resolve",
+                Focus::Diff if self.experience == Experience::Viewer => {
+                    "jk move · J/K files · ]h/[h hunks · / search · ? help"
+                }
                 Focus::Diff => "wheel/jk move · c comment · / search · , settings · ? help",
             },
         };
@@ -2706,7 +3648,7 @@ impl App {
                 current_file: Some(&format!(
                     "Ln {}{}{}",
                     self.cursor_row + 1,
-                    if self.comments.is_empty() {
+                    if self.experience == Experience::Viewer || self.comments.is_empty() {
                         String::new()
                     } else {
                         format!(" · {} comments", self.comments.len())
@@ -2734,13 +3676,7 @@ impl App {
         }
         match self.mode {
             Mode::Help => self.render_help(area, buf),
-            Mode::Search => self.render_prompt(area, '/', "search changed paths and lines", buf),
-            Mode::FileFilter => self.render_prompt(
-                area,
-                'f',
-                &format!("filter files · {}", self.file_filter_mode.label()),
-                buf,
-            ),
+            Mode::Search => self.render_search_palette(area, buf),
             Mode::Command => self.render_prompt(area, ':', "command", buf),
             Mode::ThemePicker => self.render_theme_picker(area, buf),
             Mode::Settings => render_settings(
@@ -2751,6 +3687,9 @@ impl App {
                     wrap: self.wrap,
                     tab_size: self.tab_size,
                     line_numbers: self.line_numbers,
+                    mouse_enabled: self.mouse_enabled,
+                    sidebar_visible: self.sidebar_visible,
+                    sidebar_width: self.sidebar_width,
                     comments_visible: self.comments_visible,
                     intelligence_mode: self.lsp.mode(),
                     theme_name: self.theme.display_name(),
@@ -2811,6 +3750,7 @@ impl App {
         let Some(file) = self.index.files.get(idx) else {
             return;
         };
+        let file_row_count = file.row_count;
         self.viewport_height = area.height.max(1) as usize;
         let total = file.row_count as usize;
         if self.scroll + self.viewport_height > total {
@@ -2821,8 +3761,18 @@ impl App {
                 .then_some(self.scroll as u64 + row.saturating_sub(area.y) as u64)
         });
         let diagnostics = self.lsp.diagnostics_for(file.display_path());
+        let tab_size =
+            self.editorconfig
+                .tab_size_for(&self.repo_root, file.display_path(), self.tab_size);
+        let comments: &[ReviewComment] = if self.experience == Experience::Viewer {
+            &[]
+        } else {
+            &self.comments
+        };
+        let annotation_revision = self.annotation_revision();
         render_card(
             &self.index,
+            &mut self.diff_render_cache,
             idx,
             area,
             self.scroll as u64,
@@ -2835,27 +3785,29 @@ impl App {
             self.wrap,
             self.split,
             self.line_numbers,
-            self.tab_size,
+            tab_size,
             self.theme,
-            &self.comments,
+            comments,
             &diagnostics,
+            annotation_revision,
             &self.palette,
             buf,
         );
-        self.render_change_map(area, Some(idx), self.scroll as u64, file.row_count, buf);
+        self.render_change_map(area, Some(idx), self.scroll as u64, file_row_count, buf);
     }
 
     fn render_active_file_header(&self, area: Rect, buf: &mut Buffer) {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        fill_area(area, self.palette.panel, buf);
+        let tokens = GridlineTokens::from(&self.palette);
+        fill_area(area, tokens.surface, buf);
         let Some(index) = self.file_tree.selected_file_idx() else {
             buf.set_string(
-                area.x + 1,
+                area.x + 2,
                 area.y,
                 "Local changes",
-                Style::default().fg(self.palette.dim).bg(self.palette.panel),
+                Style::default().fg(tokens.muted).bg(tokens.surface),
             );
             return;
         };
@@ -2879,44 +3831,84 @@ impl App {
         let diagnostics = self.lsp.diagnostic_count(file.display_path());
         let language_state = self.lsp.state_for_path(file.display_path());
         let viewed = self.viewed_paths.contains(file.display_path());
-        let left = format!(" ▌ {marker}  {path}");
+        let marker_color = match file.kind {
+            IndexedChangeKind::Added | IndexedChangeKind::Untracked => tokens.positive,
+            IndexedChangeKind::Deleted => tokens.negative,
+            IndexedChangeKind::Binary => tokens.warning,
+            IndexedChangeKind::Modified | IndexedChangeKind::Renamed => tokens.accent,
+        };
         buf.set_string(
-            area.x,
+            area.x + 2,
             area.y,
-            ellipsize(&left, area.width.saturating_sub(2) as usize),
+            marker,
             Style::default()
-                .fg(self.palette.fg)
-                .bg(self.palette.panel)
+                .fg(marker_color)
+                .bg(tokens.surface)
                 .add_modifier(Modifier::BOLD),
         );
-        let mut metadata = vec![
-            format!("+{} -{}", file.additions, file.deletions),
-            format!("{} hunks", file.hunks.len()),
-        ];
+        buf.set_string(
+            area.x + 5,
+            area.y,
+            ellipsize(&path, area.width.saturating_sub(7) as usize),
+            Style::default()
+                .fg(tokens.text)
+                .bg(tokens.surface)
+                .add_modifier(Modifier::BOLD),
+        );
+        if area.height < 2 {
+            return;
+        }
+        let mut x = render_change_counts(
+            area.x + 5,
+            area.y + 1,
+            file.additions,
+            file.deletions,
+            tokens.surface,
+            &self.palette,
+            buf,
+        );
+        let end = area.x.saturating_add(area.width).saturating_sub(2);
+        let mut metadata = vec![(
+            format!("  {} hunks", file.hunks.len()),
+            Style::default().fg(tokens.muted).bg(tokens.surface),
+        )];
+        if self.experience == Experience::Viewer {
+            render_metadata_segments(&mut x, end, area.y + 1, metadata, buf);
+            return;
+        }
         if comments > 0 {
-            metadata.push(format!("{comments} comments"));
+            metadata.push((
+                format!("  {comments} comments"),
+                Style::default().fg(tokens.info).bg(tokens.surface),
+            ));
         }
         if diagnostics > 0 {
-            metadata.push(format!("{diagnostics} diagnostics"));
+            metadata.push((
+                format!("  {diagnostics} diagnostics"),
+                Style::default().fg(tokens.warning).bg(tokens.surface),
+            ));
         }
         if matches!(language_state, ServerState::Starting | ServerState::Error) {
-            metadata.push(format!("lsp {}", language_state.label()));
+            metadata.push((
+                format!("  lsp {}", language_state.label()),
+                Style::default().fg(tokens.warning).bg(tokens.surface),
+            ));
         }
-        metadata.push(if viewed {
-            "✓ viewed".to_string()
-        } else {
-            "unviewed".to_string()
-        });
-        let metadata = metadata.join(" · ");
-        let metadata_width = metadata.chars().count() as u16;
-        if metadata_width + 4 < area.width {
-            buf.set_string(
-                area.x + area.width - metadata_width - 1,
-                area.y,
-                metadata,
-                Style::default().fg(self.palette.dim).bg(self.palette.panel),
-            );
-        }
+        metadata.push((
+            if viewed {
+                "  ✓ viewed".to_string()
+            } else {
+                "  unviewed".to_string()
+            },
+            Style::default()
+                .fg(if viewed {
+                    tokens.positive
+                } else {
+                    tokens.muted
+                })
+                .bg(tokens.surface),
+        ));
+        render_metadata_segments(&mut x, end, area.y + 1, metadata, buf);
     }
 
     fn render_continuous_diff(&mut self, area: Rect, buf: &mut Buffer) {
@@ -2960,8 +3952,18 @@ impl App {
                     .then_some(local_start + row.saturating_sub(segment.y) as u64)
             });
             let diagnostics = self.lsp.diagnostics_for(file.display_path());
+            let tab_size =
+                self.editorconfig
+                    .tab_size_for(&self.repo_root, file.display_path(), self.tab_size);
+            let comments: &[ReviewComment] = if self.experience == Experience::Viewer {
+                &[]
+            } else {
+                &self.comments
+            };
+            let annotation_revision = self.annotation_revision();
             render_card(
                 &self.index,
+                &mut self.diff_render_cache,
                 file_index,
                 segment,
                 local_start,
@@ -2975,10 +3977,11 @@ impl App {
                 self.wrap,
                 self.split,
                 self.line_numbers,
-                self.tab_size,
+                tab_size,
                 self.theme,
-                &self.comments,
+                comments,
                 &diagnostics,
+                annotation_revision,
                 &self.palette,
                 buf,
             );
@@ -2989,7 +3992,7 @@ impl App {
     }
 
     fn render_change_map(
-        &self,
+        &mut self,
         area: Rect,
         single_file: Option<usize>,
         scroll: u64,
@@ -2999,40 +4002,32 @@ impl App {
         if area.width < 8 || area.height < 3 || total_rows == 0 {
             return;
         }
+        let tokens = GridlineTokens::from(&self.palette);
         let x = area.x + area.width - 1;
         for y in area.y..area.y + area.height {
             buf[(x, y)]
                 .set_symbol("│")
-                .set_style(Style::default().fg(self.palette.border).bg(self.palette.bg));
+                .set_style(Style::default().fg(tokens.rule_subtle).bg(tokens.canvas));
         }
-        let mut base = 0u64;
-        for (file_index, file) in self.index.files.iter().enumerate() {
-            if single_file.is_some_and(|selected| selected != file_index) {
-                continue;
-            }
-            for hunk in &file.hunks {
-                let logical = if single_file.is_some() {
-                    hunk.row_start
-                } else {
-                    base + hunk.row_start
+        if self.experience == Experience::Review {
+            let markers = self
+                .render_metadata
+                .change_map(&self.index, single_file, area.height);
+            for (offset, marker) in markers.iter().enumerate() {
+                let Some(marker) = marker else {
+                    continue;
                 };
-                let y = area.y
-                    + ((logical.saturating_mul(area.height.saturating_sub(1) as u64)
-                        / total_rows.max(1)) as u16)
-                        .min(area.height.saturating_sub(1));
-                let color = if hunk.new_lines > hunk.old_lines {
-                    self.palette.added
-                } else if hunk.old_lines > hunk.new_lines {
-                    self.palette.removed
-                } else {
-                    self.palette.accent
+                let color = match marker {
+                    ChangeMapMarker::Added => tokens.positive,
+                    ChangeMapMarker::Removed => tokens.negative,
+                    ChangeMapMarker::Modified => tokens.accent,
                 };
-                buf[(x, y)]
-                    .set_symbol("▪")
-                    .set_style(Style::default().fg(color).bg(self.palette.bg));
-            }
-            if single_file.is_none() {
-                base = base.saturating_add(file.row_count);
+                let y = area.y.saturating_add(offset as u16);
+                if y < area.y.saturating_add(area.height) {
+                    buf[(x, y)]
+                        .set_symbol("▪")
+                        .set_style(Style::default().fg(color).bg(tokens.canvas));
+                }
             }
         }
         let viewport_start = ((scroll.saturating_mul(area.height as u64) / total_rows) as u16)
@@ -3043,11 +4038,9 @@ impl App {
         .max(1) as u16;
         for offset in 0..viewport_rows.min(area.height) {
             let y = area.y + (viewport_start + offset).min(area.height.saturating_sub(1));
-            buf[(x, y)].set_symbol("█").set_style(
-                Style::default()
-                    .fg(self.palette.fg)
-                    .bg(self.palette.selection_bg),
-            );
+            buf[(x, y)]
+                .set_symbol("┃")
+                .set_style(Style::default().fg(tokens.muted).bg(tokens.canvas));
         }
     }
 
@@ -3061,57 +4054,115 @@ impl App {
     }
 
     fn render_header(&mut self, area: Rect, buf: &mut Buffer) {
-        fill_area(area, self.palette.panel, buf);
+        let tokens = GridlineTokens::from(&self.palette);
+        fill_area(area, self.palette.bg, buf);
         let repo = self
             .repo_root
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("repository");
         let title = if repo == "diffing" {
-            "◆ diffing".to_string()
+            "diffing".to_string()
         } else {
-            format!("◆ diffing · {repo}")
+            format!("diffing · {repo}")
         };
         buf.set_string(
-            area.x + 1,
+            area.x + 2,
             area.y,
-            &title,
+            "diffing",
             Style::default()
-                .fg(self.palette.accent)
-                .bg(self.palette.panel)
+                .fg(tokens.accent)
+                .bg(tokens.canvas)
                 .add_modifier(Modifier::BOLD),
         );
-        let agent = if self.agent_api.waiter_count() > 0 {
-            "  · ● agent"
+        if repo != "diffing" {
+            buf.set_string(
+                area.x + 9,
+                area.y,
+                "·",
+                Style::default().fg(tokens.rule).bg(tokens.canvas),
+            );
+            buf.set_string(
+                area.x + 11,
+                area.y,
+                repo,
+                Style::default().fg(tokens.text).bg(tokens.canvas),
+            );
+        }
+        let agent = if self.experience == Experience::Review
+            && self
+                .agent_api
+                .as_ref()
+                .is_some_and(|api| api.waiter_count() > 0)
+        {
+            "  agent"
         } else {
             ""
         };
-        let summary = format!(
-            "{} files  +{} -{}{}{}",
-            self.files.len(),
-            self.index.additions,
-            self.index.deletions,
+        let file_count = format!("{} files", self.files.len());
+        let additions = format!("+{}", self.index.additions);
+        let deletions = format!("-{}", self.index.deletions);
+        let indexing = if self.indexing { "  indexing" } else { "" };
+        let summary_width: u16 = [
+            file_count.as_str(),
+            "  ",
+            additions.as_str(),
+            "  ",
+            deletions.as_str(),
             agent,
-            if self.indexing { "  ◌" } else { "" },
-        );
-        let summary_width = summary.chars().count() as u16;
+            indexing,
+        ]
+        .iter()
+        .map(|part| part.chars().count() as u16)
+        .sum();
         let summary_x = area
             .x
             .saturating_add(area.width.saturating_sub(summary_width + 1));
         if summary_width + 14 < area.width {
+            let mut x = summary_x;
             buf.set_string(
-                summary_x,
+                x,
                 area.y,
-                summary,
-                Style::default().fg(self.palette.dim).bg(self.palette.panel),
+                &file_count,
+                Style::default()
+                    .fg(tokens.text_subtle)
+                    .bg(tokens.canvas)
+                    .add_modifier(Modifier::BOLD),
             );
+            x += file_count.chars().count() as u16 + 2;
+            x = render_change_counts(
+                x,
+                area.y,
+                self.index.additions,
+                self.index.deletions,
+                self.palette.bg,
+                &self.palette,
+                buf,
+            );
+            if !agent.is_empty() {
+                buf.set_string(
+                    x,
+                    area.y,
+                    agent,
+                    Style::default().fg(tokens.info).bg(tokens.canvas),
+                );
+                x += agent.chars().count() as u16;
+            }
+            if !indexing.is_empty() {
+                buf.set_string(
+                    x,
+                    area.y,
+                    indexing,
+                    Style::default().fg(tokens.warning).bg(tokens.canvas),
+                );
+            }
         }
-        let action_x = area.x + title.chars().count() as u16 + 3;
-        if action_x + 15 < summary_x {
+        let action_x = area.x + title.chars().count() as u16 + 5;
+        if self.experience == Experience::Review && action_x + 15 < summary_x {
             let rect = render_chip(
                 action_x,
                 area.y,
-                "S  Send review",
+                "S send review",
                 true,
                 self.mouse_position,
                 &self.palette,
@@ -3119,17 +4170,51 @@ impl App {
             );
             self.regions.toolbar.push((rect, ToolbarAction::SendReview));
         }
+        if area.height >= 2 {
+            let detail = self
+                .diff_context
+                .detail
+                .as_deref()
+                .map(|detail| format!(" · {detail}"))
+                .unwrap_or_default();
+            let context = format!("{}{}", self.diff_context.headline, detail);
+            let context = ellipsize(&context, area.width.saturating_sub(6) as usize);
+            buf.set_string(
+                area.x + 2,
+                area.y + 1,
+                self.diff_context.marker(),
+                Style::default()
+                    .fg(tokens.accent)
+                    .bg(tokens.canvas)
+                    .add_modifier(Modifier::BOLD),
+            );
+            buf.set_string(
+                area.x + 4,
+                area.y + 1,
+                context,
+                Style::default().fg(tokens.text_subtle).bg(tokens.canvas),
+            );
+        }
         horizontal_rule(
-            Rect::new(area.x, area.y + 1, area.width, 1),
+            Rect::new(
+                area.x,
+                area.y + area.height.saturating_sub(1),
+                area.width,
+                1,
+            ),
             &self.palette,
             buf,
         );
     }
 
     fn render_theme_picker(&mut self, area: Rect, buf: &mut Buffer) {
-        dim_area(area, self.palette.bg, self.palette.dim, buf);
-        let width = area.width.saturating_sub(4).min(72);
-        let height = area.height.saturating_sub(4).clamp(8, 24);
+        let tokens = GridlineTokens::from(&self.palette);
+        dim_buffer(area, buf);
+        let width = area.width.saturating_sub(METRICS.modal_margin_x).min(72);
+        let height = area
+            .height
+            .saturating_sub(METRICS.modal_margin_y)
+            .clamp(8, 24);
         let popup = Rect::new(
             area.x + area.width.saturating_sub(width) / 2,
             area.y + area.height.saturating_sub(height) / 2,
@@ -3137,29 +4222,19 @@ impl App {
             height,
         );
         Clear.render(popup, buf);
-        let block = overlay_block(
-            Span::styled(
-                format!(" Theme · {} available ", ThemeName::all().len()),
-                Style::default()
-                    .fg(self.palette.fg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            &self.palette,
-        );
+        let block = overlay_block(" Themes ", &self.palette);
         let inner = block.inner(popup);
         block.render(popup, buf);
         buf.set_string(
             inner.x + 1,
             inner.y,
-            format!("⌕ {}", self.modal_input),
-            Style::default()
-                .fg(self.palette.fg)
-                .bg(self.palette.elevated),
+            format!("/ {}", self.modal_input),
+            Style::default().fg(tokens.text).bg(tokens.element),
         );
         let themes = self.filtered_themes();
         self.theme_cursor = self.theme_cursor.min(themes.len().saturating_sub(1));
-        let body_y = inner.y + 2;
-        let body_height = inner.height.saturating_sub(3) as usize;
+        let body_y = inner.y + 1 + METRICS.section_gap;
+        let body_height = inner.height.saturating_sub(2 + METRICS.section_gap) as usize;
         let scroll = self
             .theme_cursor
             .saturating_sub(body_height.saturating_sub(1));
@@ -3171,23 +4246,23 @@ impl App {
             fill_area(
                 row,
                 if selected {
-                    self.palette.selection_bg
+                    tokens.selected
                 } else {
-                    self.palette.elevated
+                    tokens.raised
                 },
                 buf,
             );
-            let swatch = Palette::for_theme(*theme);
+            let swatch = Palette::for_terminal(*theme);
             buf.set_string(
                 row.x + 1,
                 row.y,
-                if selected { "›" } else { " " },
-                Style::default().fg(self.palette.accent),
+                if selected { GLYPHS.cursor } else { " " },
+                Style::default().fg(tokens.focus),
             );
             let row_bg = if selected {
-                self.palette.selection_bg
+                tokens.selected
             } else {
-                self.palette.elevated
+                tokens.raised
             };
             for (offset, color) in [(3, swatch.bg), (5, swatch.accent), (7, swatch.added)] {
                 buf.set_string(
@@ -3201,7 +4276,7 @@ impl App {
                 row.x + 10,
                 row.y,
                 theme.display_name(),
-                Style::default().fg(self.palette.fg).bg(row_bg),
+                Style::default().fg(tokens.text).bg(row_bg),
             );
             let kind = if theme.is_light() { "LIGHT" } else { "DARK" };
             let kind_x = row.x + row.width.saturating_sub(kind.len() as u16 + 2);
@@ -3209,28 +4284,37 @@ impl App {
                 kind_x,
                 row.y,
                 kind,
-                Style::default().fg(self.palette.dim).bg(if selected {
-                    self.palette.selection_bg
+                Style::default().fg(tokens.muted).bg(if selected {
+                    tokens.selected
                 } else {
-                    self.palette.elevated
+                    tokens.raised
                 }),
             );
             self.regions.theme_rows.push((row, *theme));
         }
-        buf.set_string(
-            inner.x + 1,
-            inner.y + inner.height.saturating_sub(1),
-            "type to filter  ·  ↑↓ preview  ·  Enter apply  ·  Esc restore",
-            Style::default()
-                .fg(self.palette.dim)
-                .bg(self.palette.elevated),
+        let footer = hint_line(
+            "↑↓ preview · Enter apply · Esc restore",
+            tokens.raised,
+            &self.palette,
+        );
+        Paragraph::new(footer).render(
+            Rect::new(
+                inner.x + 1,
+                inner.y + inner.height.saturating_sub(1),
+                inner.width.saturating_sub(2),
+                1,
+            ),
+            buf,
         );
     }
 
     fn render_help(&self, area: Rect, buf: &mut Buffer) {
-        dim_area(area, self.palette.bg, self.palette.dim, buf);
-        let width = area.width.saturating_sub(4).min(72);
-        let height = area.height.saturating_sub(2).min(28);
+        dim_buffer(area, buf);
+        let width = area
+            .width
+            .saturating_sub(METRICS.modal_margin_x)
+            .min(if area.width >= 78 { 112 } else { 72 });
+        let height = area.height.saturating_sub(METRICS.modal_margin_y).min(32);
         let popup = Rect::new(
             area.x + area.width.saturating_sub(width) / 2,
             area.y + area.height.saturating_sub(height) / 2,
@@ -3238,26 +4322,473 @@ impl App {
             height,
         );
         Clear.render(popup, buf);
-        Paragraph::new(help_text())
+        let help = if self.experience == Experience::Viewer {
+            viewer_help_text()
+        } else {
+            help_text()
+        };
+        let inner_width = popup.width.saturating_sub(2) as usize;
+        let help = if inner_width >= 72 {
+            shortcut_help_columns(help, inner_width.saturating_sub(2) / 2, &self.palette)
+        } else {
+            shortcut_help(help, &self.palette)
+        };
+        Paragraph::new(help)
             .style(
                 Style::default()
                     .fg(self.palette.fg)
                     .bg(self.palette.elevated),
             )
-            .block(overlay_block(
-                " keyboard help · any key closes ",
-                &self.palette,
-            ))
+            .block(overlay_block(" Help ", &self.palette))
             .render(popup, buf);
+    }
+
+    fn render_search_palette(&self, area: Rect, buf: &mut Buffer) {
+        let tokens = GridlineTokens::from(&self.palette);
+        dim_buffer(area, buf);
+        let width = area.width.saturating_sub(METRICS.modal_margin_x).min(132);
+        let height = area
+            .height
+            .saturating_sub(METRICS.modal_margin_y)
+            .clamp(10, 26);
+        let popup = Rect::new(
+            area.x + area.width.saturating_sub(width) / 2,
+            area.y + area.height.saturating_sub(height) / 2,
+            width,
+            height,
+        );
+        Clear.render(popup, buf);
+        fill_area(popup, self.palette.elevated, buf);
+        let title = if self.repo_search_loading {
+            " Search · loading "
+        } else if self.repo_search_indexing {
+            " Search · indexing "
+        } else {
+            " Search "
+        };
+        let block = overlay_block(
+            Span::styled(
+                title,
+                Style::default()
+                    .fg(self.palette.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            &self.palette,
+        );
+        let inner = block.inner(popup);
+        block.render(popup, buf);
+
+        let scopes = [
+            SearchScope::All,
+            SearchScope::Files,
+            SearchScope::Text,
+            SearchScope::Symbols,
+        ];
+        let mut x = inner.x + 1;
+        for scope in scopes {
+            let active = scope == self.search_scope;
+            let label = format!(" {} ", scope.label());
+            if x + label.len() as u16 >= inner.x + inner.width {
+                break;
+            }
+            buf.set_string(
+                x,
+                inner.y,
+                &label,
+                Style::default()
+                    .fg(if active { tokens.text } else { tokens.muted })
+                    .bg(if active {
+                        tokens.selected
+                    } else {
+                        tokens.raised
+                    })
+                    .add_modifier(if active {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            );
+            x += label.len() as u16 + 1;
+        }
+        let changed_label = if self.search_changed_only {
+            " ✓ Changed "
+        } else {
+            " Changed "
+        };
+        let regex_label = if self.search_scope == SearchScope::Text {
+            if self.search_regex {
+                " .*✓ "
+            } else {
+                " .* "
+            }
+        } else {
+            ""
+        };
+        let controls_width = changed_label.chars().count() as u16 + regex_label.len() as u16;
+        if controls_width + 1 < inner.width {
+            let controls_x = inner.x + inner.width - controls_width - 1;
+            if !regex_label.is_empty() {
+                buf.set_string(
+                    controls_x,
+                    inner.y,
+                    regex_label,
+                    Style::default()
+                        .fg(if self.search_regex {
+                            tokens.accent
+                        } else {
+                            tokens.muted
+                        })
+                        .bg(tokens.element),
+                );
+            }
+            buf.set_string(
+                controls_x + regex_label.len() as u16,
+                inner.y,
+                changed_label,
+                Style::default()
+                    .fg(if self.search_changed_only {
+                        tokens.accent
+                    } else {
+                        tokens.muted
+                    })
+                    .bg(tokens.element),
+            );
+        }
+
+        let input_y = inner.y + 1 + METRICS.section_gap;
+        fill_area(
+            Rect::new(inner.x, input_y, inner.width, 1),
+            tokens.element,
+            buf,
+        );
+        buf.set_string(
+            inner.x + 1,
+            input_y,
+            format!("/ {}_", self.modal_input),
+            Style::default().fg(tokens.text).bg(tokens.element),
+        );
+
+        let result_y = input_y + 1 + METRICS.section_gap;
+        let result_height = inner
+            .y
+            .saturating_add(inner.height)
+            .saturating_sub(result_y + 2) as usize;
+        let body = Rect::new(
+            inner.x,
+            result_y,
+            inner.width,
+            result_height.min(u16::MAX as usize) as u16,
+        );
+        if inner.width >= 88 {
+            let list_width = inner.width.saturating_mul(43) / 100;
+            let list = Rect::new(body.x, body.y, list_width, body.height);
+            let divider_x = list.x + list.width;
+            for y in body.y..body.y.saturating_add(body.height) {
+                buf[(divider_x, y)].set_symbol("│").set_style(
+                    Style::default()
+                        .fg(self.palette.border)
+                        .bg(self.palette.elevated),
+                );
+            }
+            let preview = Rect::new(
+                divider_x.saturating_add(1),
+                body.y,
+                body.width.saturating_sub(list.width + 1),
+                body.height,
+            );
+            self.render_search_results(list, buf);
+            self.render_search_preview(preview, buf);
+        } else {
+            self.render_search_results(body, buf);
+        }
+
+        let shown = self.repo_search_hits.len();
+        let count = if self.repo_search_total > shown {
+            format!("{shown} of {}", self.repo_search_total)
+        } else {
+            format!("{shown}")
+        };
+        let footer = format!(
+            "{count} result{} · Tab scope · ^G Changed · ↑↓ move · Enter jump · ⇧↑↓ preview · Esc close",
+            if self.repo_search_total == 1 { "" } else { "s" }
+        );
+        buf.set_string(
+            inner.x + 1,
+            inner.y + inner.height.saturating_sub(1),
+            ellipsize(&footer, inner.width.saturating_sub(2) as usize),
+            Style::default()
+                .fg(self.palette.dim)
+                .bg(self.palette.elevated),
+        );
+    }
+
+    fn render_search_results(&self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        if let Some(error) = self.repo_search_error.as_deref() {
+            buf.set_string(
+                area.x + 1,
+                area.y,
+                ellipsize(error, area.width.saturating_sub(2) as usize),
+                Style::default()
+                    .fg(self.palette.comment)
+                    .bg(self.palette.elevated),
+            );
+        } else if self.repo_search_hits.is_empty() && !self.repo_search_loading {
+            buf.set_string(
+                area.x + 1,
+                area.y,
+                if self.modal_input.is_empty() {
+                    "Start typing to search the repository"
+                } else {
+                    "No matches"
+                },
+                Style::default()
+                    .fg(self.palette.dim)
+                    .bg(self.palette.elevated),
+            );
+        } else {
+            let scroll = self
+                .search_cursor
+                .saturating_sub(area.height.saturating_sub(1) as usize);
+            for (visible, hit) in self
+                .repo_search_hits
+                .iter()
+                .skip(scroll)
+                .take(area.height as usize)
+                .enumerate()
+            {
+                let index = scroll + visible;
+                let row = Rect::new(area.x, area.y + visible as u16, area.width, 1);
+                let selected = index == self.search_cursor;
+                let background = if selected {
+                    self.palette.selection_bg
+                } else {
+                    self.palette.elevated
+                };
+                fill_area(row, background, buf);
+                let (icon, color) = match hit.kind {
+                    SearchHitKind::File => ("F", self.palette.accent),
+                    SearchHitKind::Text => ("T", self.palette.added),
+                    SearchHitKind::Symbol => ("S", self.palette.comment),
+                };
+                buf.set_string(
+                    row.x + 1,
+                    row.y,
+                    if selected { "›" } else { " " },
+                    Style::default().fg(self.palette.accent).bg(background),
+                );
+                buf.set_string(
+                    row.x + 3,
+                    row.y,
+                    icon,
+                    Style::default()
+                        .fg(color)
+                        .bg(background)
+                        .add_modifier(Modifier::BOLD),
+                );
+                let title_width = row.width.saturating_mul(2) / 3;
+                buf.set_string(
+                    row.x + 5,
+                    row.y,
+                    ellipsize(&hit.title, title_width.saturating_sub(6) as usize),
+                    Style::default().fg(self.palette.fg).bg(background),
+                );
+                let detail_x = row.x + title_width;
+                let in_diff = self
+                    .index
+                    .files
+                    .iter()
+                    .any(|file| file.display_path() == std::path::Path::new(&hit.path));
+                let badge = if in_diff {
+                    "DIFF"
+                } else {
+                    match hit.git_status.as_str() {
+                        "modified" => "M",
+                        "untracked" => "U",
+                        "staged_new" | "added" => "A",
+                        "deleted" => "D",
+                        "renamed" => "R",
+                        _ => "",
+                    }
+                };
+                let badge_width = badge.len() as u16;
+                let detail_end = row
+                    .x
+                    .saturating_add(row.width)
+                    .saturating_sub(badge_width + 1);
+                if detail_x < detail_end {
+                    buf.set_string(
+                        detail_x,
+                        row.y,
+                        ellipsize(
+                            &hit.detail,
+                            detail_end.saturating_sub(detail_x + 1) as usize,
+                        ),
+                        Style::default().fg(self.palette.dim).bg(background),
+                    );
+                }
+                if !badge.is_empty() {
+                    buf.set_string(
+                        detail_end,
+                        row.y,
+                        badge,
+                        Style::default()
+                            .fg(if in_diff {
+                                self.palette.accent
+                            } else {
+                                self.palette.warning
+                            })
+                            .bg(background)
+                            .add_modifier(Modifier::BOLD),
+                    );
+                }
+            }
+        }
+    }
+
+    fn render_search_preview(&self, area: Rect, buf: &mut Buffer) {
+        if area.width < 8 || area.height == 0 {
+            return;
+        }
+        fill_area(area, self.palette.panel, buf);
+        let selected = self.repo_search_hits.get(self.search_cursor);
+        let path = self
+            .search_preview
+            .as_ref()
+            .map(|preview| preview.path.as_str())
+            .or_else(|| selected.map(|hit| hit.path.as_str()))
+            .unwrap_or("Preview");
+        buf.set_string(
+            area.x + 1,
+            area.y,
+            ellipsize(path, area.width.saturating_sub(2) as usize),
+            Style::default()
+                .fg(self.palette.accent)
+                .bg(self.palette.panel)
+                .add_modifier(Modifier::BOLD),
+        );
+        let content_y = area.y.saturating_add(2);
+        let content_height = area.height.saturating_sub(3);
+        if self.search_preview_loading {
+            buf.set_string(
+                area.x + 1,
+                content_y,
+                "Loading preview…",
+                Style::default().fg(self.palette.dim).bg(self.palette.panel),
+            );
+            return;
+        }
+        if let Some(error) = self.search_preview_error.as_deref() {
+            buf.set_string(
+                area.x + 1,
+                content_y,
+                ellipsize(error, area.width.saturating_sub(2) as usize),
+                Style::default()
+                    .fg(self.palette.comment)
+                    .bg(self.palette.panel),
+            );
+            return;
+        }
+        let Some(preview) = self.search_preview.as_ref() else {
+            buf.set_string(
+                area.x + 1,
+                content_y,
+                "Select a result to preview",
+                Style::default().fg(self.palette.dim).bg(self.palette.panel),
+            );
+            return;
+        };
+        if preview.binary || preview.missing {
+            let message = if preview.binary {
+                "Binary file — no preview"
+            } else {
+                "File not present in the working tree"
+            };
+            buf.set_string(
+                area.x + 1,
+                content_y,
+                message,
+                Style::default().fg(self.palette.dim).bg(self.palette.panel),
+            );
+            return;
+        }
+
+        let target_line = selected.and_then(|hit| hit.line);
+        for (visible, (line_index, line)) in preview
+            .content
+            .lines()
+            .enumerate()
+            .skip(self.search_preview_scroll)
+            .take(content_height as usize)
+            .enumerate()
+        {
+            let y = content_y + visible as u16;
+            let line_number = line_index + 1;
+            let highlighted = target_line == Some(line_number as u32);
+            let background = if highlighted {
+                self.palette.selection_bg
+            } else {
+                self.palette.panel
+            };
+            fill_area(Rect::new(area.x, y, area.width, 1), background, buf);
+            let gutter_width = 7u16.min(area.width);
+            buf.set_string(
+                area.x,
+                y,
+                format!("{line_number:>5} "),
+                Style::default().fg(self.palette.gutter).bg(background),
+            );
+            let mut x = area.x.saturating_add(gutter_width);
+            let end = area.x.saturating_add(area.width);
+            for span in highlight_line(
+                &preview.path,
+                line.trim_end_matches('\r'),
+                self.theme,
+                &self.palette,
+                background,
+            )
+            .iter()
+            {
+                if x >= end {
+                    break;
+                }
+                let remaining = end.saturating_sub(x) as usize;
+                let text: String = span.text.chars().take(remaining).collect();
+                let used = text.chars().count() as u16;
+                if used > 0 {
+                    buf.set_string(x, y, text, span.style.bg(background));
+                    x = x.saturating_add(used);
+                }
+            }
+        }
+        if preview.truncated && area.height > 1 {
+            let label = " preview truncated ";
+            let width = label.len() as u16;
+            if width + 1 < area.width {
+                buf.set_string(
+                    area.x + area.width - width - 1,
+                    area.y + area.height - 1,
+                    label,
+                    Style::default()
+                        .fg(self.palette.warning)
+                        .bg(self.palette.panel),
+                );
+            }
+        }
     }
 
     fn render_hover(&self, area: Rect, buf: &mut Buffer) {
         let Some(content) = self.hover_content.as_deref() else {
             return;
         };
-        dim_area(area, self.palette.bg, self.palette.dim, buf);
-        let width = area.width.saturating_sub(4).min(84);
-        let height = area.height.saturating_sub(4).clamp(6, 24);
+        dim_buffer(area, buf);
+        let width = area.width.saturating_sub(METRICS.modal_margin_x).min(84);
+        let height = area
+            .height
+            .saturating_sub(METRICS.modal_margin_y)
+            .clamp(6, 24);
         let popup = Rect::new(
             area.x + area.width.saturating_sub(width) / 2,
             area.y + area.height.saturating_sub(height) / 2,
@@ -3273,16 +4804,13 @@ impl App {
             )
             .wrap(Wrap { trim: false })
             .scroll((self.hover_scroll, 0))
-            .block(overlay_block(
-                " language hover · j/k scroll · Esc close ",
-                &self.palette,
-            ))
+            .block(overlay_block(" Hover ", &self.palette))
             .render(popup, buf);
     }
 
     fn render_prompt(&self, area: Rect, prefix: char, title: &str, buf: &mut Buffer) {
-        dim_area(area, self.palette.bg, self.palette.dim, buf);
-        let width = area.width.saturating_sub(4).min(90);
+        dim_buffer(area, buf);
+        let width = area.width.saturating_sub(METRICS.modal_margin_x).min(90);
         let popup = Rect::new(
             area.x + area.width.saturating_sub(width) / 2,
             area.y + area.height.saturating_sub(3),
@@ -3296,10 +4824,7 @@ impl App {
                     .fg(self.palette.fg)
                     .bg(self.palette.elevated),
             )
-            .block(overlay_block(
-                format!(" {title} · Enter confirm · Esc cancel "),
-                &self.palette,
-            ))
+            .block(overlay_block(format!(" {title} "), &self.palette))
             .render(popup, buf);
     }
 }
@@ -3321,9 +4846,12 @@ fn contains(area: Rect, column: u16, row: u16) -> bool {
 }
 
 fn sidebar_width_for_pointer(root: Rect, column: u16) -> u16 {
-    column
-        .saturating_sub(root.x)
-        .clamp(22, root.width.saturating_sub(42).clamp(22, 72))
+    column.saturating_sub(root.x).clamp(
+        METRICS.sidebar_min_width,
+        root.width
+            .saturating_sub(METRICS.content_min_width)
+            .clamp(METRICS.sidebar_min_width, 72),
+    )
 }
 
 fn panel_visibility(
@@ -3347,21 +4875,63 @@ fn ellipsize(value: &str, max_chars: usize) -> String {
     shortened
 }
 
+fn render_change_counts(
+    mut x: u16,
+    y: u16,
+    additions: u64,
+    deletions: u64,
+    background: Color,
+    palette: &Palette,
+    buf: &mut Buffer,
+) -> u16 {
+    let tokens = GridlineTokens::from(palette);
+    let added = format!("+{additions}");
+    buf.set_string(
+        x,
+        y,
+        &added,
+        Style::default()
+            .fg(tokens.positive)
+            .bg(background)
+            .add_modifier(Modifier::BOLD),
+    );
+    x = x.saturating_add(added.chars().count() as u16 + 2);
+    let removed = format!("-{deletions}");
+    buf.set_string(
+        x,
+        y,
+        &removed,
+        Style::default()
+            .fg(tokens.negative)
+            .bg(background)
+            .add_modifier(Modifier::BOLD),
+    );
+    x.saturating_add(removed.chars().count() as u16)
+}
+
+fn render_metadata_segments(
+    x: &mut u16,
+    end: u16,
+    y: u16,
+    segments: Vec<(String, Style)>,
+    buf: &mut Buffer,
+) {
+    for (text, style) in segments {
+        let width = text.chars().count() as u16;
+        if (*x).saturating_add(width) > end {
+            break;
+        }
+        buf.set_string(*x, y, text, style);
+        *x = (*x).saturating_add(width);
+    }
+}
+
 fn fill_area(area: Rect, color: ratatui::style::Color, buf: &mut Buffer) {
     for y in area.y..area.y.saturating_add(area.height) {
         for x in area.x..area.x.saturating_add(area.width) {
             buf[(x, y)]
                 .set_symbol(" ")
                 .set_style(Style::default().bg(color));
-        }
-    }
-}
-
-fn dim_area(area: Rect, bg: ratatui::style::Color, fg: ratatui::style::Color, buf: &mut Buffer) {
-    for y in area.y..area.y.saturating_add(area.height) {
-        for x in area.x..area.x.saturating_add(area.width) {
-            let cell = &mut buf[(x, y)];
-            cell.set_style(Style::default().fg(fg).bg(bg).add_modifier(Modifier::DIM));
         }
     }
 }
@@ -3375,34 +4945,54 @@ fn render_chip(
     palette: &Palette,
     buf: &mut Buffer,
 ) -> Rect {
+    let tokens = GridlineTokens::from(palette);
     let width = label.chars().count() as u16 + 2;
     let area = Rect::new(x, y, width, 1);
     let hovered = pointer
         .map(|(column, row)| contains(area, column, row))
         .unwrap_or(false);
-    let background = if active || hovered {
-        palette.selection_bg
+    let background = if hovered {
+        tokens.selected
+    } else if active {
+        tokens.surface
     } else {
-        palette.elevated
+        tokens.canvas
     };
     fill_area(area, background, buf);
-    buf.set_string(
-        x + 1,
-        y,
-        label,
-        Style::default()
-            .fg(if active || hovered {
-                palette.fg
-            } else {
-                palette.dim
-            })
-            .bg(background)
-            .add_modifier(if active {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            }),
-    );
+    if let Some((key, description)) = label.split_once(' ') {
+        buf.set_string(
+            x + 1,
+            y,
+            key,
+            Style::default()
+                .fg(if active || hovered {
+                    tokens.accent
+                } else {
+                    tokens.muted
+                })
+                .bg(background)
+                .add_modifier(Modifier::BOLD),
+        );
+        buf.set_string(
+            x + 1 + key.chars().count() as u16,
+            y,
+            format!(" {description}"),
+            Style::default()
+                .fg(if active || hovered {
+                    tokens.text
+                } else {
+                    tokens.muted
+                })
+                .bg(background),
+        );
+    } else {
+        buf.set_string(
+            x + 1,
+            y,
+            label,
+            Style::default().fg(tokens.text).bg(background),
+        );
+    }
     area
 }
 
@@ -3555,9 +5145,75 @@ pub(crate) fn clipboard_candidates() -> &'static [ClipboardCandidate] {
 #[allow(dead_code)]
 fn _quiet_duration(_: Duration) {}
 
+fn context_lines_from_args(args: &[String]) -> Option<u32> {
+    let mut index = 0;
+    let mut context = None;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = arg.strip_prefix("--unified=") {
+            context = value.parse().ok();
+        } else if arg == "--unified" || arg == "-U" {
+            if let Some(value) = args.get(index + 1) {
+                context = value.parse().ok();
+                index += 1;
+            }
+        } else if let Some(value) = arg.strip_prefix("-U") {
+            if !value.is_empty() {
+                context = value.parse().ok();
+            }
+        }
+        index += 1;
+    }
+    context
+}
+
+fn with_context_lines(args: &[String], context: u32) -> Vec<String> {
+    let mut output = Vec::with_capacity(args.len() + 1);
+    let mut index = 0;
+    let mut inserted = false;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--" && !inserted {
+            output.push(format!("--unified={context}"));
+            inserted = true;
+        }
+        if arg == "--unified" || arg == "-U" {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with("--unified=")
+            || (arg.starts_with("-U") && arg.len() > 2 && arg[2..].parse::<u32>().is_ok())
+        {
+            index += 1;
+            continue;
+        }
+        output.push(arg.clone());
+        index += 1;
+    }
+    if !inserted {
+        output.push(format!("--unified={context}"));
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_arguments_are_replaced_without_moving_pathspecs() {
+        let args = vec![
+            "--no-color".to_string(),
+            "-U3".to_string(),
+            "--".to_string(),
+            "src/lib.rs".to_string(),
+        ];
+        assert_eq!(context_lines_from_args(&args), Some(3));
+        assert_eq!(
+            with_context_lines(&args, 25),
+            vec!["--no-color", "--unified=25", "--", "src/lib.rs"]
+        );
+    }
 
     fn diff_line(kind: IndexedLineKind, old: Option<u32>, new: Option<u32>, text: &str) -> ViewRow {
         ViewRow::Line {
@@ -3646,12 +5302,96 @@ mod tests {
         assert!(contains(area, 8, 9));
         assert!(!contains(area, 9, 9));
         assert!(!contains(area, 8, 10));
+
+        let regions = UiRegions {
+            toolbar: vec![(Rect::new(2, 1, 12, 1), ToolbarAction::SendReview)],
+            diff_inner: Some(Rect::new(20, 4, 80, 20)),
+            ..UiRegions::default()
+        };
+        assert_eq!(
+            regions.pointer_visual_target(Some((3, 1))),
+            PointerVisualTarget::Toolbar(ToolbarAction::SendReview)
+        );
+        assert_eq!(
+            regions.pointer_visual_target(Some((40, 9))),
+            PointerVisualTarget::DiffRow(9)
+        );
+        assert_eq!(
+            regions.pointer_visual_target(Some((19, 9))),
+            PointerVisualTarget::None
+        );
+    }
+
+    #[test]
+    fn render_metadata_maps_global_rows_with_prefix_offsets() {
+        let metadata = DiffRenderMetadata {
+            file_offsets: vec![0, 3, 3, 8],
+            change_maps: VecDeque::new(),
+        };
+        assert_eq!(metadata.total_rows(), 8);
+        assert_eq!(metadata.file_offset(0), 0);
+        assert_eq!(metadata.file_offset(2), 3);
+        assert_eq!(metadata.position(0), Some((0, 0)));
+        assert_eq!(metadata.position(2), Some((0, 2)));
+        assert_eq!(metadata.position(3), Some((2, 0)));
+        assert_eq!(metadata.position(99), Some((2, 4)));
+    }
+
+    #[test]
+    fn viewer_keeps_settings_and_commands_available() {
+        assert!(!blocked_in_viewer(Action::OpenSettings));
+        assert!(!blocked_in_viewer(Action::OpenCommand));
+        assert!(!blocked_in_viewer(Action::LanguageHover));
+        assert!(!blocked_in_viewer(Action::LanguageDefinition));
+        assert!(blocked_in_viewer(Action::AddComment));
     }
 
     #[test]
     fn toolbar_labels_are_bounded_without_splitting_characters() {
         assert_eq!(ellipsize("GitHub Dark", 16), "GitHub Dark");
         assert_eq!(ellipsize("A very long theme", 8), "A very …");
+    }
+
+    #[test]
+    fn change_counts_use_semantic_colors_and_generous_spacing() {
+        let area = Rect::new(0, 0, 40, 1);
+        let mut buffer = Buffer::empty(area);
+        let palette = Palette::default();
+        let end = render_change_counts(0, 0, 3290, 456, palette.bg, &palette, &mut buffer);
+
+        assert_eq!(end, 11);
+        assert_eq!(buffer[(0, 0)].symbol(), "+");
+        assert_eq!(buffer[(0, 0)].style().fg, Some(palette.added));
+        assert_eq!(buffer[(7, 0)].symbol(), "-");
+        assert_eq!(buffer[(7, 0)].style().fg, Some(palette.removed));
+    }
+
+    #[test]
+    fn search_results_keep_fff_order_with_changed_files_first() {
+        let hit = |path: &str| SearchHit {
+            kind: SearchHitKind::File,
+            path: path.to_string(),
+            line: None,
+            title: path.to_string(),
+            detail: String::new(),
+            git_status: String::new(),
+        };
+        let changed = HashSet::from(["src/changed.rs".to_string()]);
+        let ranked = diff_first_search_hits(
+            vec![
+                hit("src/outside-a.rs"),
+                hit("src/changed.rs"),
+                hit("src/outside-b.rs"),
+            ],
+            &changed,
+        );
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|hit| hit.path.as_str())
+                .collect::<Vec<_>>(),
+            ["src/changed.rs", "src/outside-a.rs", "src/outside-b.rs"]
+        );
     }
 
     // Sanity-check that the platform-conditional candidate list never ships

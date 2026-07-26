@@ -3,7 +3,9 @@
 //! inside the comment tracker (each row).
 
 #[allow(unused_imports)]
-use diffing_core::comments::{CommentReply, CommentSide, CommentStatus, ReviewComment};
+use diffing_core::comments::{
+    CommentReply, CommentSeverity, CommentSide, CommentStatus, ReviewComment,
+};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -11,12 +13,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, ListItem, Paragraph, Widget, Wrap};
 
 use crate::themes::Palette;
+use crate::ui::gridline::{selection_marker, GridlineTokens, Tone, GLYPHS};
 
 #[allow(dead_code)]
 pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf: &mut Buffer) {
+    let tokens = GridlineTokens::from(palette);
     let status_color = match comment.status {
-        CommentStatus::Open => palette.accent,
-        CommentStatus::Resolved => palette.dim,
+        CommentStatus::Open => tokens.tone(comment_tone(comment)),
+        CommentStatus::Resolved => tokens.muted,
     };
     let status_label = match comment.status {
         CommentStatus::Open => "open",
@@ -30,11 +34,13 @@ pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
-        .style(Style::default().bg(palette.elevated))
+        .style(Style::default().bg(tokens.raised))
         .border_style(Style::default().fg(status_color))
         .title(Span::styled(
             title,
-            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(tokens.text)
+                .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
     block.render(area, buf);
@@ -45,7 +51,7 @@ pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf
         .map(|body_line| {
             Line::from(Span::styled(
                 body_line.to_string(),
-                Style::default().fg(palette.fg),
+                Style::default().fg(tokens.text),
             ))
         })
         .collect();
@@ -62,12 +68,12 @@ pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf
             .unwrap_or_default();
         lines.push(Line::from(Span::styled(
             format!("{prefix}{model}"),
-            Style::default().fg(palette.dim),
+            Style::default().fg(tokens.muted),
         )));
         for rl in reply.body.split('\n') {
             lines.push(Line::from(Span::styled(
                 format!("  {rl}"),
-                Style::default().fg(palette.fg),
+                Style::default().fg(tokens.text),
             )));
         }
     }
@@ -81,13 +87,14 @@ pub fn render_tracker_row(
     outdated: bool,
     palette: &Palette,
 ) -> ListItem<'static> {
+    let tokens = GridlineTokens::from(palette);
     let marker = match comment.status {
-        CommentStatus::Open => '●',
-        CommentStatus::Resolved => '○',
+        CommentStatus::Open => GLYPHS.bullet,
+        CommentStatus::Resolved => GLYPHS.resolved,
     };
     let marker_color = match comment.status {
-        CommentStatus::Open => palette.accent,
-        CommentStatus::Resolved => palette.dim,
+        CommentStatus::Open => tokens.tone(comment_tone(comment)),
+        CommentStatus::Resolved => tokens.muted,
     };
     let file = shorten_path(&comment.file_path);
     let line = comment_location_label(comment, &file);
@@ -115,33 +122,31 @@ pub fn render_tracker_row(
         Span::styled(format!("{marker} "), Style::default().fg(marker_color)),
         Span::styled(
             format!("{:<24}", truncate(&line, 24)),
-            Style::default().fg(palette.comment),
+            Style::default().fg(tokens.info),
         ),
         Span::styled(
             if outdated { " ! outdated" } else { "" },
             Style::default()
-                .fg(palette.removed)
+                .fg(tokens.negative)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!(" {body}"), Style::default().fg(palette.fg)),
-        Span::styled(body_suffix, Style::default().fg(palette.dim)),
-        Span::styled(reply_suffix, Style::default().fg(palette.dim)),
+        Span::styled(format!(" {body}"), Style::default().fg(tokens.text)),
+        Span::styled(body_suffix, Style::default().fg(tokens.muted)),
+        Span::styled(reply_suffix, Style::default().fg(tokens.muted)),
     ];
-    if is_cursor {
-        // Highlight the entire row by prefixing with a bold cursor marker.
-        spans.insert(
-            0,
-            Span::styled(
-                "▶ ".to_string(),
-                Style::default()
-                    .fg(palette.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        );
-    } else {
-        spans.insert(0, Span::styled("  ".to_string(), Style::default()));
-    }
+    spans.insert(0, Span::raw(" "));
+    spans.insert(0, selection_marker(is_cursor, true, palette));
     ListItem::new(Line::from(spans))
+}
+
+fn comment_tone(comment: &ReviewComment) -> Tone {
+    match comment.severity {
+        Some(CommentSeverity::Blocking) => Tone::Negative,
+        Some(CommentSeverity::Question) => Tone::Info,
+        Some(CommentSeverity::Nit) => Tone::Warning,
+        Some(CommentSeverity::Praise) => Tone::Positive,
+        Some(CommentSeverity::None) | None => Tone::Accent,
+    }
 }
 
 fn comment_location_label(comment: &ReviewComment, path: &str) -> String {

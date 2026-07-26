@@ -24,9 +24,12 @@ pub enum Action {
     NextSearch,
     PrevSearch,
     CenterCursor,
+    ExpandContext,
+    CollapseContext,
     FocusFileTree,
     FocusDiff,
     FocusTracker,
+    ToggleSidebar,
     ToggleWrap,
     ToggleLayout,
     OpenHelp,
@@ -106,6 +109,7 @@ impl Keymap {
                 (']', KeyCode::Char('c')) => Some(Action::NextComment),
                 ('[', KeyCode::Char('c')) => Some(Action::PrevComment),
                 ('z', KeyCode::Char('z')) => Some(Action::CenterCursor),
+                (' ', KeyCode::Char('e')) => Some(Action::ToggleSidebar),
                 _ => None,
             };
             if let Some(action) = action {
@@ -114,7 +118,7 @@ impl Keymap {
             self.count = 0;
         }
         match key.code {
-            KeyCode::Char(prefix @ ('g' | ']' | '[' | 'z')) if key.modifiers.is_empty() => {
+            KeyCode::Char(prefix @ ('g' | ']' | '[' | 'z' | ' ')) if key.modifiers.is_empty() => {
                 self.pending = Some(prefix);
                 None
             }
@@ -132,7 +136,11 @@ impl Keymap {
             self.count.to_string()
         };
         if let Some(prefix) = self.pending {
-            display.push(prefix);
+            if prefix == ' ' {
+                display.push_str("Space");
+            } else {
+                display.push(prefix);
+            }
         }
         display
     }
@@ -143,6 +151,7 @@ impl Keymap {
             Some(']') => Some("]h: next hunk · ]c: next comment"),
             Some('[') => Some("[h: previous hunk · [c: previous comment"),
             Some('z') => Some("zz: center cursor"),
+            Some(' ') => Some("Space e: toggle file sidebar"),
             _ => None,
         }
     }
@@ -181,7 +190,11 @@ pub fn classify(key: &KeyEvent) -> Action {
         KeyCode::Char('K') if !ctrl => Action::PrevFile,
         KeyCode::Tab if !ctrl => Action::FocusFileTree,
         KeyCode::BackTab if !ctrl => Action::FocusDiff,
+        KeyCode::Char('b') if !ctrl => Action::ToggleSidebar,
         KeyCode::Char('w') if !ctrl => Action::ToggleWrap,
+        KeyCode::Enter if !ctrl => Action::ExpandContext,
+        KeyCode::Char('+' | '=') if !ctrl => Action::ExpandContext,
+        KeyCode::Char('-') if !ctrl => Action::CollapseContext,
         KeyCode::Char('?') if !ctrl => Action::OpenHelp,
         KeyCode::Char('/') if !ctrl => Action::OpenSearch,
         KeyCode::Char('f') if !ctrl => Action::OpenFileFilter,
@@ -225,7 +238,11 @@ pub fn classify(key: &KeyEvent) -> Action {
 }
 
 pub fn help_text() -> &'static str {
-    "NAVIGATION\n  j/k, ↑/↓       row down/up\n  {count}j/k     repeat motion\n  gg / G         first/last row\n  Ctrl-d/u       half page down/up\n  J / K          next/previous file\n  ]h / [h        next/previous hunk\n  ]c / [c        next/previous comment\n  h / l          horizontal scroll\n  Alt-h/l        symbol column left/right\n  zz             center cursor\n\nLANGUAGE\n  gh             hover at symbol\n  gd             go to definition\n  Local servers  diagnostics in the gutter\n\nREVIEW\n  c / C          line / file comment\n  V              start/cancel line selection\n  e / r          edit/reply\n  x / X          resolve thread / all\n  d d            delete thread\n  s / p          filter status/severity\n  v              toggle viewed\n  m              split/unified layout\n  S              send review\n\nTOOLS\n  /              search changed content\n  n / N          next/previous search hit\n  f              filter file paths\n  a              all/unviewed/commented files\n  :              command line\n  ,              settings (file display + language)\n  t / w          theme / wrap\n  Tab / Shift-Tab focus panes\n  ?              this help\n  q              quit\n  Esc            cancel current mode"
+    "NAVIGATION\n  j/k, ↑/↓       row down/up\n  {count}j/k     repeat motion\n  gg / G         first/last row\n  Ctrl-d/u       half page down/up\n  J / K          next/previous file\n  ]h / [h        next/previous hunk\n  ]c / [c        next/previous comment\n  Enter/+ / -    expand/collapse context\n  h / l          horizontal scroll\n  Alt-h/l        symbol column left/right\n  zz             center cursor\n\nSEARCH · POWERED BY FFF\n  / / f          all-scope / file search\n  Tab/Shift-Tab  cycle search scope\n  Ctrl-g/r       changed-only / regex in Text\n  ↑/↓, Ctrl-n/p  select · Enter jump\n  n / N          next/previous search result\n\nREVIEW\n  c / C          line / file comment\n  V              start/cancel line selection\n  e / r          edit/reply\n  x / X          resolve thread / all\n  d d            delete thread\n  s / p          filter status/severity\n  v              toggle viewed\n  m              split/unified layout\n  S              send review\n\nTOOLS\n  a              all/unviewed/commented files\n  :              command line\n  ,              settings (layout + language)\n  Space e / b    toggle file sidebar\n  t / w          theme / wrap\n  Tab / Shift-Tab focus panes\n  ?              this help\n  q              quit\n  Esc            cancel current mode"
+}
+
+pub fn viewer_help_text() -> &'static str {
+    "DIFF NAVIGATION\n  j/k, ↑/↓       line down/up\n  {count}j/k     repeat motion\n  gg / G         first/last change\n  Ctrl-d/u       half page down/up\n  J / K          next/previous file\n  ]h / [h        next/previous hunk\n  Enter/+ / -    expand/collapse context\n  h / l          horizontal scroll\n  zz             center cursor\n\nSEARCH · POWERED BY FFF\n  / / f          diff-local / file search\n  Tab/Shift-Tab  cycle search scope\n  Ctrl-g         opt into whole repository\n  Ctrl-r         regex in Text scope\n  ↑/↓, Ctrl-n/p  wrap through results\n  Ctrl-d/u       move eight results\n  Shift-↑/↓      scroll file preview\n  Enter          jump when present in diff\n  n / N          next/previous search result\n\nVIEW\n  e              open line in $EDITOR\n  gh / gd        hover / go to definition\n  Alt-h/l        symbol column left/right\n  m              split/unified diff\n  Space e / b    toggle file sidebar\n  w              toggle line wrap\n  t              choose theme\n  ,              settings\n  Tab            files/diff focus\n  ?              this help\n  q              quit"
 }
 
 #[cfg(test)]
@@ -319,6 +336,31 @@ mod tests {
         assert_eq!(
             classify(&key(KeyCode::BackTab, KeyModifiers::NONE)),
             Action::FocusDiff
+        );
+    }
+
+    #[test]
+    fn b_toggles_the_file_sidebar() {
+        assert_eq!(
+            classify(&key(KeyCode::Char('b'), KeyModifiers::NONE)),
+            Action::ToggleSidebar
+        );
+    }
+
+    #[test]
+    fn space_e_toggles_the_file_sidebar() {
+        let mut keymap = Keymap::default();
+        assert!(keymap
+            .feed(&key(KeyCode::Char(' '), KeyModifiers::NONE))
+            .is_none());
+        assert_eq!(keymap.pending_display(), "Space");
+        assert_eq!(keymap.pending_hint(), Some("Space e: toggle file sidebar"));
+        assert_eq!(
+            keymap.feed(&key(KeyCode::Char('e'), KeyModifiers::NONE)),
+            Some(Command {
+                action: Action::ToggleSidebar,
+                count: 1,
+            })
         );
     }
 

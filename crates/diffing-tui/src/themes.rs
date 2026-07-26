@@ -11,7 +11,7 @@ use ratatui::style::Color;
 
 const WEB_THEME_CSS: &str = include_str!("../../../src/ui/styles/global.css");
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ThemeName(u16);
 
 #[derive(Debug, Clone)]
@@ -69,19 +69,28 @@ pub struct Palette {
     pub bg: Color,
     pub panel: Color,
     pub elevated: Color,
+    pub element: Color,
     pub fg: Color,
+    pub code_fg: Color,
     pub dim: Color,
     pub accent: Color,
     pub added: Color,
     pub removed: Color,
+    pub warning: Color,
     pub added_bg: Color,
     pub removed_bg: Color,
     pub gutter: Color,
     pub selection_bg: Color,
+    pub border_subtle: Color,
     pub border: Color,
     pub border_focused: Color,
     pub comment: Color,
-    pub status_bar_bg: Color,
+    pub syntax_keyword: Color,
+    pub syntax_string: Color,
+    pub syntax_type: Color,
+    pub syntax_constant: Color,
+    pub syntax_function: Color,
+    pub syntax_comment: Color,
 }
 
 impl Default for Palette {
@@ -97,12 +106,73 @@ impl Palette {
             .map(|theme| theme.palette)
             .unwrap_or_else(|| THEMES[0].palette)
     }
+
+    pub fn for_terminal(name: ThemeName) -> Self {
+        let palette = Self::for_theme(name);
+        if std::env::var_os("NO_COLOR").is_some()
+            || std::env::var("TERM").is_ok_and(|term| term == "dumb")
+        {
+            return palette.map_colors(|_| Color::Reset);
+        }
+        let truecolor = std::env::var("COLORTERM").is_ok_and(|value| {
+            let value = value.to_ascii_lowercase();
+            value.contains("truecolor") || value.contains("24bit")
+        }) || std::env::var("TERM").is_ok_and(|value| {
+            let value = value.to_ascii_lowercase();
+            value.contains("direct") || value.contains("truecolor")
+        });
+        if truecolor {
+            palette
+        } else {
+            palette.map_colors(ansi256)
+        }
+    }
+
+    fn map_colors(self, map: impl Fn(Color) -> Color) -> Self {
+        Self {
+            bg: map(self.bg),
+            panel: map(self.panel),
+            elevated: map(self.elevated),
+            element: map(self.element),
+            fg: map(self.fg),
+            code_fg: map(self.code_fg),
+            dim: map(self.dim),
+            accent: map(self.accent),
+            added: map(self.added),
+            removed: map(self.removed),
+            warning: map(self.warning),
+            added_bg: map(self.added_bg),
+            removed_bg: map(self.removed_bg),
+            gutter: map(self.gutter),
+            selection_bg: map(self.selection_bg),
+            border_subtle: map(self.border_subtle),
+            border: map(self.border),
+            border_focused: map(self.border_focused),
+            comment: map(self.comment),
+            syntax_keyword: map(self.syntax_keyword),
+            syntax_string: map(self.syntax_string),
+            syntax_type: map(self.syntax_type),
+            syntax_constant: map(self.syntax_constant),
+            syntax_function: map(self.syntax_function),
+            syntax_comment: map(self.syntax_comment),
+        }
+    }
+}
+
+fn ansi256(color: Color) -> Color {
+    let Color::Rgb(red, green, blue) = color else {
+        return color;
+    };
+    let component = |value: u8| ((value as u16 * 5 + 127) / 255) as u8;
+    Color::Indexed(16 + 36 * component(red) + 6 * component(green) + component(blue))
 }
 
 fn parse_theme_catalog() -> Vec<ThemeDefinition> {
     let mut themes = Vec::new();
     let mut seen = HashSet::new();
-    let marker = "[data-theme=\"";
+    // Match selectors, not prose such as the :root comment that mentions
+    // `[data-theme="rose-pine"]` before the real selector appears.
+    let marker = "\n[data-theme=\"";
     let mut remainder = WEB_THEME_CSS;
     while let Some(start) = remainder.find(marker) {
         remainder = &remainder[start + marker.len()..];
@@ -132,14 +202,29 @@ fn parse_theme_catalog() -> Vec<ThemeDefinition> {
 
 fn parse_theme(id: &str, block: &str) -> Option<ThemeDefinition> {
     let bg = css_color(block, "bg-primary")?;
-    let panel = css_color(block, "bg-secondary").unwrap_or(bg);
-    let elevated = css_color(block, "bg-tertiary").unwrap_or_else(|| blend(panel, bg, 0.5));
-    let surfaces = [bg, panel];
-    let fg = ensure_contrast(css_color(block, "text-primary")?, &surfaces, 4.5);
-    let dim = ensure_contrast(
-        css_color(block, "text-muted").unwrap_or_else(|| blend(fg, bg, 0.55)),
+    let raw_fg = css_color(block, "text-primary")?;
+    let light = relative_luminance(bg) > relative_luminance(raw_fg);
+    // Web surfaces have physical spacing and shadows between them. In a
+    // terminal those same raw colors become hard rectangular bands, so pull
+    // them back toward the canvas and let rules carry the hierarchy.
+    let raw_panel = css_color(block, "bg-secondary").unwrap_or(bg);
+    let raw_elevated = css_color(block, "bg-tertiary").unwrap_or_else(|| blend(raw_panel, bg, 0.5));
+    let panel = blend(raw_panel, bg, if light { 0.68 } else { 0.52 });
+    let elevated = blend(raw_elevated, bg, if light { 0.72 } else { 0.62 });
+    let element = blend(raw_elevated, bg, if light { 0.86 } else { 0.82 });
+    let surfaces = [bg, panel, elevated, element];
+    let fg = ensure_contrast(raw_fg, &surfaces, 4.5);
+    let raw_code_fg = css_color(block, "text-secondary").unwrap_or(fg);
+    let code_fg = ensure_contrast(
+        blend(fg, raw_code_fg, if light { 0.25 } else { 0.38 }),
         &surfaces,
         4.5,
+    );
+    let raw_dim = css_color(block, "text-muted").unwrap_or_else(|| blend(fg, bg, 0.55));
+    let dim = ensure_contrast(
+        blend(raw_dim, bg, if light { 0.86 } else { 0.72 }),
+        &surfaces,
+        3.0,
     );
     let accent = css_color(block, "border-focus")
         .or_else(|| css_color(block, "primary"))
@@ -150,11 +235,38 @@ fn parse_theme(id: &str, block: &str) -> Option<ThemeDefinition> {
     let removed = css_color(block, "feedback-danger-text")
         .or_else(|| css_color(block, "danger"))
         .unwrap_or(Color::Rgb(248, 81, 73));
-    let border = css_color(block, "border-color")
+    let warning = css_color(block, "feedback-warning-text")
+        .or_else(|| css_color(block, "warning"))
+        .unwrap_or(accent);
+    let raw_border = css_color(block, "border-color")
         .or_else(|| css_color(block, "border-normal"))
         .unwrap_or(elevated);
+    let border_subtle = blend(raw_border, bg, if light { 0.42 } else { 0.38 });
+    let border = blend(raw_border, bg, if light { 0.72 } else { 0.66 });
     let comment = css_color(block, "comment-border").unwrap_or(accent);
-    let light = relative_luminance(bg) > relative_luminance(fg);
+    let syntax_keyword = css_color(block, "primary-hover")
+        .or_else(|| css_color(block, "primary"))
+        .unwrap_or(accent);
+    let syntax_function = css_color(block, "accent").unwrap_or(accent);
+    let syntax_constant = css_color(block, "warning").unwrap_or(warning);
+    let added_bg = ensure_surface_contrast(
+        blend(added, bg, if light { 0.075 } else { 0.10 }),
+        bg,
+        &[fg, code_fg],
+        4.5,
+    );
+    let removed_bg = ensure_surface_contrast(
+        blend(removed, bg, if light { 0.07 } else { 0.10 }),
+        bg,
+        &[fg, code_fg],
+        4.5,
+    );
+    let selection_bg = ensure_surface_contrast(
+        blend(accent, bg, if light { 0.075 } else { 0.10 }),
+        bg,
+        &[fg, code_fg],
+        4.5,
+    );
     Some(ThemeDefinition {
         id: id.to_string(),
         name: display_name(id),
@@ -163,19 +275,28 @@ fn parse_theme(id: &str, block: &str) -> Option<ThemeDefinition> {
             bg,
             panel,
             elevated,
+            element,
             fg,
+            code_fg,
             dim,
             accent,
             added,
             removed,
-            added_bg: blend(added, bg, if light { 0.10 } else { 0.13 }),
-            removed_bg: blend(removed, bg, if light { 0.09 } else { 0.13 }),
+            warning,
+            added_bg,
+            removed_bg,
             gutter: dim,
-            selection_bg: blend(accent, bg, if light { 0.13 } else { 0.18 }),
+            selection_bg,
+            border_subtle,
             border,
             border_focused: accent,
             comment,
-            status_bar_bg: panel,
+            syntax_keyword,
+            syntax_string: added,
+            syntax_type: warning,
+            syntax_constant,
+            syntax_function,
+            syntax_comment: dim,
         },
     })
 }
@@ -276,6 +397,27 @@ fn ensure_contrast(foreground: Color, backgrounds: &[Color], minimum: f32) -> Co
         .unwrap_or(target)
 }
 
+fn ensure_surface_contrast(
+    surface: Color,
+    canvas: Color,
+    foregrounds: &[Color],
+    minimum: f32,
+) -> Color {
+    let passes = |candidate| {
+        foregrounds
+            .iter()
+            .all(|foreground| contrast_ratio(*foreground, candidate) >= minimum)
+    };
+    if passes(surface) {
+        return surface;
+    }
+    (0..20)
+        .rev()
+        .map(|step| blend(surface, canvas, step as f32 / 20.0))
+        .find(|candidate| passes(*candidate))
+        .unwrap_or(canvas)
+}
+
 fn display_name(id: &str) -> String {
     id.split('-')
         .map(|part| {
@@ -292,6 +434,13 @@ fn display_name(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rgb_colors_have_a_256_color_fallback() {
+        assert_eq!(ansi256(Color::Rgb(255, 0, 0)), Color::Indexed(196));
+        assert_eq!(ansi256(Color::Rgb(0, 255, 0)), Color::Indexed(46));
+        assert_eq!(ansi256(Color::Blue), Color::Blue);
+    }
 
     #[test]
     fn catalog_contains_every_unique_web_theme() {
@@ -327,8 +476,20 @@ mod tests {
                 theme.label()
             );
             assert!(
-                contrast_ratio(palette.dim, palette.bg) >= 4.5
-                    && contrast_ratio(palette.dim, palette.panel) >= 4.5,
+                contrast_ratio(palette.fg, palette.elevated) >= 4.5
+                    && contrast_ratio(palette.fg, palette.element) >= 4.5,
+                "low raised/element text contrast for {}",
+                theme.label()
+            );
+            assert!(
+                contrast_ratio(palette.code_fg, palette.bg) >= 4.5
+                    && contrast_ratio(palette.code_fg, palette.panel) >= 4.5,
+                "low code contrast for {}",
+                theme.label()
+            );
+            assert!(
+                contrast_ratio(palette.dim, palette.bg) >= 3.0
+                    && contrast_ratio(palette.dim, palette.panel) >= 3.0,
                 "low muted text contrast for {}",
                 theme.label()
             );
@@ -338,6 +499,50 @@ mod tests {
                 "bad panel for {}",
                 theme.label()
             );
+        }
+    }
+
+    #[test]
+    fn semantic_backgrounds_remain_tonal_across_the_catalog() {
+        for theme in ThemeName::all() {
+            let palette = Palette::for_theme(*theme);
+            let distance = |left: Color, right: Color| {
+                let (lr, lg, lb) = rgb(left);
+                let (rr, rg, rb) = rgb(right);
+                (lr.abs_diff(rr) as u16) + (lg.abs_diff(rg) as u16) + (lb.abs_diff(rb) as u16)
+            };
+            assert!(
+                distance(palette.added_bg, palette.bg) < distance(palette.added, palette.bg),
+                "addition fill is too loud for {}",
+                theme.label()
+            );
+            assert!(
+                distance(palette.removed_bg, palette.bg) < distance(palette.removed, palette.bg),
+                "deletion fill is too loud for {}",
+                theme.label()
+            );
+            assert!(
+                distance(palette.selection_bg, palette.bg) < distance(palette.accent, palette.bg),
+                "selection fill is too loud for {}",
+                theme.label()
+            );
+            assert!(
+                distance(palette.border_subtle, palette.bg) <= distance(palette.border, palette.bg),
+                "subtle rule is stronger than the default rule for {}",
+                theme.label()
+            );
+            assert!(
+                contrast_ratio(palette.fg, palette.selection_bg) >= 4.5,
+                "selected text is not readable for {}",
+                theme.label()
+            );
+            for surface in [palette.selection_bg, palette.added_bg, palette.removed_bg] {
+                assert!(
+                    contrast_ratio(palette.code_fg, surface) >= 4.5,
+                    "code text is not readable on a semantic surface for {}",
+                    theme.label()
+                );
+            }
         }
     }
 

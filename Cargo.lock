@@ -360,6 +360,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tui-textarea",
+ "two-face",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]
@@ -1446,6 +1448,17 @@ dependencies = [
  "crossterm",
  "ratatui",
  "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "two-face"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "384eda438ddf62e2c6f39a174452d952d9d9df5a8ad5ade22198609f8dcaf852"
+dependencies = [
+ "once_cell",
+ "serde",
+ "syntect",
 ]
 
 [[package]]

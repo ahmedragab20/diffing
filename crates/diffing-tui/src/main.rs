@@ -16,19 +16,8 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use diffing_tui::{app, diff_context, search, server_lock, tui};
 use tracing_subscriber::EnvFilter;
-
-mod agent_api;
-mod app;
-mod diff;
-mod handoff;
-mod keys;
-mod lsp;
-mod persistence;
-mod server_lock;
-mod themes;
-mod tui;
-mod ui;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -42,6 +31,10 @@ struct Args {
     /// the value the Node CLI computed via `git rev-parse --show-toplevel`.
     #[arg(long, env = "DIFFING_REPO")]
     repo: String,
+
+    /// Open the focused read-only diff browser instead of the review surface.
+    #[arg(long)]
+    view_only: bool,
 
     /// All other arguments are forwarded verbatim to `git diff` (e.g.
     /// `--staged`, `-- <pathspec>`, `--diff-algorithm=patience`).
@@ -69,45 +62,69 @@ fn real_main() -> Result<()> {
         .context("--repo path is not valid UTF-8")?
         .to_string();
 
-    if let Some(existing) = server_lock::read_server_lock(&repo_root_str) {
-        if server_lock::is_lock_alive(&existing) && existing.pid != std::process::id() {
-            anyhow::bail!(
-                "another diffing {} session is already running for this repo (pid {})",
-                existing.mode.as_deref().unwrap_or("web"),
-                existing.pid
-            );
+    if !args.view_only {
+        if let Some(existing) = server_lock::read_server_lock(&repo_root_str) {
+            if server_lock::is_lock_alive(&existing) && existing.pid != std::process::id() {
+                anyhow::bail!(
+                    "another diffing {} session is already running for this repo (pid {})",
+                    existing.mode.as_deref().unwrap_or("web"),
+                    existing.pid
+                );
+            }
+            server_lock::remove_server_lock(&repo_root_str)?;
         }
-        server_lock::remove_server_lock(&repo_root_str)?;
     }
 
     // Indexing happens on a worker and publishes usable partial generations,
     // so even a million-line diff does not delay terminal startup.
-    let mut app = app::App::new(PathBuf::from(&repo_root_str), args.git_diff_args)
-        .with_context(|| format!("initialising diffing-tui for {}", repo_root_str))?;
-
-    let lock = server_lock::ServerLock {
-        port: app.agent_api.port,
-        host: "127.0.0.1".to_string(),
-        pid: std::process::id(),
-        repo_root: repo_root_str.clone(),
-        started_at: now_ms(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        mode: Some("tui".to_string()),
-        capability: Some(app.agent_api.capability.clone()),
+    let experience = if args.view_only {
+        app::Experience::Viewer
+    } else {
+        app::Experience::Review
     };
-    let lock_path = server_lock::write_server_lock(&repo_root_str, &lock)
-        .with_context(|| format!("writing server.json for {}", repo_root_str))?;
-    tracing::info!(path = %lock_path.display(), port = lock.port, "wrote server.json (mode=tui)");
+    let diff_context = diff_context::DiffContext::from_env_or_args(&args.git_diff_args);
+    let mut app = app::App::new(
+        PathBuf::from(&repo_root_str),
+        args.git_diff_args,
+        experience,
+        diff_context,
+        search::SearchClient::from_env(),
+    )
+    .with_context(|| format!("initialising diffing-tui for {}", repo_root_str))?;
+
+    let lock = (!args.view_only).then(|| {
+        let agent_api = app
+            .agent_api
+            .as_ref()
+            .expect("review experience starts the agent API");
+        server_lock::ServerLock {
+            port: agent_api.port,
+            host: "127.0.0.1".to_string(),
+            pid: std::process::id(),
+            repo_root: repo_root_str.clone(),
+            started_at: now_ms(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            mode: Some("tui".to_string()),
+            capability: Some(agent_api.capability.clone()),
+        }
+    });
+    if let Some(lock) = &lock {
+        let lock_path = server_lock::write_server_lock(&repo_root_str, lock)
+            .with_context(|| format!("writing server.json for {}", repo_root_str))?;
+        tracing::info!(path = %lock_path.display(), port = lock.port, "wrote server.json (mode=tui)");
+    }
 
     let tui_result = tui::run(&repo_root_str, &mut app);
 
     if let Err(ref e) = tui_result {
         tracing::warn!(error = %e, "TUI loop exited with error");
     }
-    if let Err(e) = server_lock::remove_server_lock_if_owned(&repo_root_str, &lock) {
-        tracing::warn!(error = %e, "failed to remove server.json on exit");
-    } else {
-        tracing::info!("removed server.json");
+    if let Some(lock) = &lock {
+        if let Err(e) = server_lock::remove_server_lock_if_owned(&repo_root_str, lock) {
+            tracing::warn!(error = %e, "failed to remove server.json on exit");
+        } else {
+            tracing::info!("removed server.json");
+        }
     }
 
     tui_result

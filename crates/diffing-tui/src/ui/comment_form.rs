@@ -14,7 +14,9 @@ use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
 use tui_textarea::TextArea;
 
 use crate::themes::Palette;
-use crate::ui::gridline::{dim_buffer, overlay_block};
+use crate::ui::gridline::{
+    dim_buffer, hint_line, overlay_block, GridlineTokens, Tone, GLYPHS, METRICS,
+};
 use diffing_core::comments::CommentSeverity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,17 +105,20 @@ fn textarea_lines(body: &str) -> Vec<String> {
 
 pub fn render_form(form: &mut CommentFormState, area: Rect, palette: &Palette, buf: &mut Buffer) {
     let popup = centered_rect(
-        area.width.saturating_sub(4).min(72),
+        area.width.saturating_sub(METRICS.modal_margin_x).min(72),
         area.height.min(14),
         area,
     );
+    let tokens = GridlineTokens::from(palette);
     dim_buffer(area, buf);
     Clear.render(popup, buf);
 
     let block = overlay_block(
         Span::styled(
             format!(" {} ", form.target_label),
-            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(tokens.text)
+                .add_modifier(Modifier::BOLD),
         ),
         palette,
     );
@@ -130,12 +135,12 @@ pub fn render_form(form: &mut CommentFormState, area: Rect, palette: &Palette, b
 
     // Style the textarea border-less inside the modal.
     form.textarea
-        .set_style(Style::default().fg(palette.fg).bg(palette.elevated));
+        .set_style(Style::default().fg(tokens.text).bg(tokens.element));
     form.textarea
         .set_cursor_line_style(Style::default().add_modifier(Modifier::UNDERLINED));
     form.textarea.set_cursor_style(
         Style::default()
-            .fg(palette.fg)
+            .fg(tokens.text)
             .add_modifier(Modifier::REVERSED),
     );
     let ta_widget = &form.textarea;
@@ -143,24 +148,35 @@ pub fn render_form(form: &mut CommentFormState, area: Rect, palette: &Palette, b
 
     // Footer.
     let hint = match form.kind {
-        FormKind::New => "Ctrl-T severity  |  Ctrl-S save  |  Esc cancel",
-        FormKind::Reply => "Ctrl-S send reply  |  Esc cancel",
-        FormKind::Edit => "Ctrl-S save  |  Esc cancel",
+        FormKind::New => "Ctrl-T severity · Ctrl-S save · Esc cancel",
+        FormKind::Reply => "Ctrl-S send reply · Esc cancel",
+        FormKind::Edit => "Ctrl-S save · Esc cancel",
     };
-    Paragraph::new(Line::from(Span::styled(
-        if form.kind == FormKind::New {
-            format!(
-                "Severity: {}  |  {hint}",
-                form.severity.map(CommentSeverity::as_str).unwrap_or("none")
-            )
-        } else {
-            hint.to_string()
-        },
-        Style::default().fg(palette.dim),
-    )))
-    .alignment(Alignment::Right)
-    .wrap(Wrap { trim: false })
-    .render(footer, buf);
+    let mut footer_line = Line::default();
+    if form.kind == FormKind::New {
+        let severity = form.severity.unwrap_or(CommentSeverity::None);
+        let tone = match severity {
+            CommentSeverity::Blocking => Tone::Negative,
+            CommentSeverity::Question => Tone::Info,
+            CommentSeverity::Nit => Tone::Warning,
+            CommentSeverity::Praise => Tone::Positive,
+            CommentSeverity::None => Tone::Neutral,
+        };
+        footer_line.spans.extend([
+            Span::styled(
+                format!("{} {}", GLYPHS.bullet, severity.as_str()),
+                Style::default().fg(tokens.tone(tone)).bg(tokens.raised),
+            ),
+            Span::styled("  ·  ", Style::default().fg(tokens.rule).bg(tokens.raised)),
+        ]);
+    }
+    footer_line
+        .spans
+        .extend(hint_line(hint, tokens.raised, palette).spans);
+    Paragraph::new(footer_line)
+        .alignment(Alignment::Right)
+        .wrap(Wrap { trim: false })
+        .render(footer, buf);
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

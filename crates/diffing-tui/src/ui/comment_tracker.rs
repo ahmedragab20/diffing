@@ -7,13 +7,12 @@ use diffing_core::comments::{CommentSeverity, CommentStatus, ReviewComment};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::Span;
 use ratatui::widgets::{List, StatefulWidget, Widget};
 use std::collections::HashSet;
 
 use crate::themes::Palette;
 use crate::ui::comment_thread::render_tracker_row;
-use crate::ui::gridline::square_block;
+use crate::ui::gridline::{focus_rail, square_block, GridlineTokens};
 
 pub struct TrackerState {
     pub cursor: usize,
@@ -157,20 +156,18 @@ pub fn render_tracker(
     comments: &[ReviewComment],
     outdated_comments: &HashSet<String>,
     state: &mut TrackerState,
+    focused: bool,
     area: Rect,
     palette: &Palette,
     buf: &mut Buffer,
 ) {
+    let tokens = GridlineTokens::from(palette);
     let title = format!(
         " comments · {} · {} ",
         state.status_filter.label(),
         state.severity_filter.label()
     );
-    let block = square_block(
-        Span::styled(title, Style::default().fg(palette.fg)),
-        palette,
-        false,
-    );
+    let block = square_block(title, palette, focused);
     let inner = block.inner(area);
     block.render(area, buf);
 
@@ -189,7 +186,7 @@ pub fn render_tracker(
             )
         })
         .collect();
-    let list = List::new(items).highlight_style(Style::default().bg(palette.selection_bg));
+    let list = List::new(items).highlight_style(Style::default().bg(tokens.selected));
     let mut ls = ratatui::widgets::ListState::default();
     let visible_cursor = visible.iter().position(|index| *index == state.cursor);
     if let Some(cursor) = visible_cursor.and_then(|cursor| cursor.checked_sub(state.scroll)) {
@@ -198,6 +195,7 @@ pub fn render_tracker(
         }
     }
     StatefulWidget::render(&list, inner, buf, &mut ls);
+    focus_rail(area, focused, palette, buf);
 }
 
 #[cfg(test)]
@@ -262,7 +260,15 @@ mod tests {
         let area = Rect::new(0, 0, 80, 5);
         let mut buf = Buffer::empty(area);
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
-        render_tracker(&[], &HashSet::new(), &mut s, area, &palette, &mut buf);
+        render_tracker(
+            &[],
+            &HashSet::new(),
+            &mut s,
+            false,
+            area,
+            &palette,
+            &mut buf,
+        );
     }
 
     #[test]
@@ -275,6 +281,22 @@ mod tests {
         let area = Rect::new(0, 0, 80, 5);
         let mut buf = Buffer::empty(area);
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
-        render_tracker(&comments, &HashSet::new(), &mut s, area, &palette, &mut buf);
+        render_tracker(
+            &comments,
+            &HashSet::new(),
+            &mut s,
+            true,
+            area,
+            &palette,
+            &mut buf,
+        );
+        assert_eq!(
+            buf[(area.x, area.y + 1)].symbol(),
+            crate::ui::gridline::GLYPHS.focus_rail
+        );
+        assert_eq!(
+            buf[(area.x, area.y + 1)].style().fg,
+            Some(palette.border_focused)
+        );
     }
 }

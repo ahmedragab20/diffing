@@ -241,6 +241,39 @@ impl DiffIndex {
         limit: usize,
         max_bytes: usize,
     ) -> Result<Viewport, IndexError> {
+        self.viewport_impl(file_index, start_row, limit, max_bytes, None)
+    }
+
+    /// Decode a viewport for terminal rendering while retaining at most
+    /// `max_line_bytes` from any individual diff line. The reader still
+    /// consumes the complete source line, so row offsets and line numbers stay
+    /// exact, but a malicious or generated multi-megabyte line cannot force a
+    /// multi-megabyte per-frame allocation.
+    pub fn viewport_for_render(
+        &self,
+        file_index: usize,
+        start_row: u64,
+        limit: usize,
+        max_bytes: usize,
+        max_line_bytes: usize,
+    ) -> Result<Viewport, IndexError> {
+        self.viewport_impl(
+            file_index,
+            start_row,
+            limit,
+            max_bytes,
+            Some(max_line_bytes.max(1)),
+        )
+    }
+
+    fn viewport_impl(
+        &self,
+        file_index: usize,
+        start_row: u64,
+        limit: usize,
+        max_bytes: usize,
+        max_line_bytes: Option<usize>,
+    ) -> Result<Viewport, IndexError> {
         let Some(file) = self.files.get(file_index) else {
             return Ok(Viewport {
                 generation: self.generation,
@@ -274,7 +307,11 @@ impl DiffIndex {
         }
 
         let mut spool: Option<BufReader<File>> = None;
-        for (hunk_index, hunk) in file.hunks.iter().enumerate() {
+        // Hunk row ranges are ordered and non-overlapping. Jump directly to
+        // the first range that can intersect this viewport instead of walking
+        // every preceding hunk on each scroll frame.
+        let first_hunk = first_intersecting_hunk(&file.hunks, cursor);
+        for (hunk_index, hunk) in file.hunks.iter().enumerate().skip(first_hunk) {
             if cursor >= end {
                 break;
             }
@@ -309,7 +346,14 @@ impl DiffIndex {
                 spool = Some(BufReader::new(File::open(&self.spool_path)?));
             }
             let reader = spool.as_mut().expect("spool initialized");
-            let decoded = decode_hunk_rows(reader, hunk, hunk_index, body_start, body_end)?;
+            let decoded = decode_hunk_rows(
+                reader,
+                hunk,
+                hunk_index,
+                body_start,
+                body_end,
+                max_line_bytes,
+            )?;
             for row in decoded {
                 let cost = view_row_cost(&row);
                 if estimated_bytes.saturating_add(cost) > max_bytes && !rows.is_empty() {
@@ -515,6 +559,15 @@ impl DiffIndex {
     }
 }
 
+fn first_intersecting_hunk(hunks: &[IndexedHunk], row: u64) -> usize {
+    hunks.partition_point(|hunk| {
+        hunk.row_start
+            .saturating_add(1)
+            .saturating_add(hunk.line_count)
+            <= row
+    })
+}
+
 fn view_row_cost(row: &ViewRow) -> usize {
     match row {
         ViewRow::FileHeader { path, .. } => path.len() + 32,
@@ -530,6 +583,7 @@ fn decode_hunk_rows(
     hunk_index: usize,
     start: u64,
     end: u64,
+    max_line_bytes: Option<usize>,
 ) -> Result<Vec<ViewRow>, IndexError> {
     let checkpoint = hunk
         .checkpoints
@@ -551,8 +605,12 @@ fn decode_hunk_rows(
     let mut raw = Vec::new();
     let mut out = Vec::with_capacity((end - start) as usize);
     while logical_row < end && offset < hunk.body_end {
-        raw.clear();
-        let read = reader.read_until(b'\n', &mut raw)?;
+        let retained_bytes = if logical_row < start {
+            max_line_bytes.map(|_| 1)
+        } else {
+            max_line_bytes
+        };
+        let read = read_line_bounded(reader, &mut raw, retained_bytes)?;
         if read == 0 {
             break;
         }
@@ -565,6 +623,35 @@ fn decode_hunk_rows(
         logical_row += 1;
     }
     Ok(out)
+}
+
+/// Consume one complete line while retaining only its useful prefix. This is
+/// equivalent to `read_until(b'\n', ...)` when `max_bytes` is `None`, but it
+/// avoids growing the destination to the full length of pathological lines.
+fn read_line_bounded(
+    reader: &mut BufReader<File>,
+    output: &mut Vec<u8>,
+    max_bytes: Option<usize>,
+) -> io::Result<usize> {
+    output.clear();
+    let mut total = 0usize;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(total);
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |position| position + 1);
+        let retained = max_bytes
+            .map(|limit| limit.saturating_sub(output.len()).min(consumed))
+            .unwrap_or(consumed);
+        output.extend_from_slice(&available[..retained]);
+        reader.consume(consumed);
+        total = total.saturating_add(consumed);
+        if newline.is_some() {
+            return Ok(total);
+        }
+    }
 }
 
 fn decode_body_line(
@@ -629,9 +716,11 @@ where
     let final_path = cache_dir.join(format!("{generation}.patch"));
 
     let mut cmd = Command::new("git");
-    cmd.arg("diff").arg("--no-ext-diff");
+    // The index consumes a machine-stable unified patch. Never allow a user
+    // color configuration to inject ANSI bytes into structural headers.
+    cmd.arg("diff").arg("--no-color").arg("--no-ext-diff");
     for arg in args {
-        if arg != "--no-ext-diff" {
+        if arg != "--no-color" && arg != "--no-ext-diff" {
             cmd.arg(arg);
         }
     }
@@ -1259,6 +1348,26 @@ mod tests {
     }
 
     #[test]
+    fn viewport_finds_a_late_hunk_without_starting_from_the_first() {
+        let mut patch = b"diff --git a/a b/a\n--- a/a\n+++ b/a\n".to_vec();
+        for line in 1..=1_000 {
+            patch
+                .extend_from_slice(format!("@@ -{line},1 +{line},1 @@\n line-{line}\n").as_bytes());
+        }
+        let (_dir, index) = indexed(&patch);
+        let hunks = &index.files[0].hunks;
+        let target = 900;
+        let row = hunks[target].row_start;
+
+        assert_eq!(first_intersecting_hunk(hunks, row), target);
+        let page = index.viewport(0, row, 2, 4_096).unwrap();
+        assert!(
+            matches!(page.rows[0], ViewRow::HunkHeader { hunk_index, .. } if hunk_index == target)
+        );
+        assert!(matches!(&page.rows[1], ViewRow::Line { content, .. } if content == "line-901"));
+    }
+
+    #[test]
     fn viewport_honors_byte_budget() {
         let patch =
             b"diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,3 +1,3 @@\n first\n second\n third\n";
@@ -1267,6 +1376,33 @@ mod tests {
         assert!(page.truncated);
         assert!(page.rows.len() < 3);
         assert!(page.next_row.is_some());
+    }
+
+    #[test]
+    fn render_viewport_caps_pathological_lines_without_losing_rows() {
+        let mut patch = b"diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,2 +1,2 @@\n+".to_vec();
+        patch.extend(std::iter::repeat(b'x').take(128 * 1024));
+        patch.extend_from_slice(b"\n+tail\n");
+        let (_dir, index) = indexed(&patch);
+
+        let bounded = index
+            .viewport_for_render(0, 2, 2, 256 * 1024, 1_024)
+            .unwrap();
+        assert_eq!(bounded.rows.len(), 2);
+        assert!(matches!(
+            &bounded.rows[0],
+            ViewRow::Line { content, .. } if content.len() <= 1_024
+        ));
+        assert!(matches!(
+            &bounded.rows[1],
+            ViewRow::Line { content, .. } if content == "tail"
+        ));
+
+        let exact = index.viewport(0, 2, 1, 256 * 1024).unwrap();
+        assert!(matches!(
+            &exact.rows[0],
+            ViewRow::Line { content, .. } if content.len() == 128 * 1024
+        ));
     }
 
     #[test]

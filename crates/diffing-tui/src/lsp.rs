@@ -72,6 +72,8 @@ pub struct LspDiagnostic {
     pub source: Option<String>,
 }
 
+type DiagnosticStore = Arc<Mutex<HashMap<PathBuf, Arc<[LspDiagnostic]>>>>;
+
 impl LspDiagnostic {
     pub fn marker(&self) -> char {
         match self.severity {
@@ -134,18 +136,19 @@ struct LspSession {
 impl LspSession {
     fn spawn(
         spec: ServerSpec,
+        command: &Path,
         repo_root: &Path,
-        diagnostics: Arc<Mutex<HashMap<PathBuf, Vec<LspDiagnostic>>>>,
+        diagnostics: DiagnosticStore,
         diagnostics_revision: Arc<AtomicU64>,
     ) -> Result<Self> {
-        let mut child = Command::new(spec.command)
+        let mut child = Command::new(command)
             .args(spec.args)
             .current_dir(repo_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .with_context(|| format!("starting {}", spec.command))?;
+            .with_context(|| format!("starting {}", command.display()))?;
         let stdin = child.stdin.take().context("language server has no stdin")?;
         let stdout = child
             .stdout
@@ -300,7 +303,13 @@ impl LspSession {
 
 impl Drop for LspSession {
     fn drop(&mut self) {
-        let _ = self.notify("exit", json!({}));
+        if let Ok(id) = self.request("shutdown", Value::Null) {
+            let deadline = Instant::now() + Duration::from_millis(100);
+            while Instant::now() < deadline && self.take_raw_response(id).is_none() {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let _ = self.notify("exit", Value::Null);
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -311,7 +320,7 @@ pub struct LspManager {
     mode: IntelligenceMode,
     sessions: HashMap<String, LspSession>,
     unavailable: HashMap<String, String>,
-    diagnostics: Arc<Mutex<HashMap<PathBuf, Vec<LspDiagnostic>>>>,
+    diagnostics: DiagnosticStore,
     diagnostics_revision: Arc<AtomicU64>,
 }
 
@@ -381,13 +390,14 @@ impl LspManager {
             return Ok(ServerState::Unavailable);
         };
         if !self.sessions.contains_key(spec.key) {
-            if !command_exists(spec.command) {
+            let Some(command) = resolve_command(spec.command, &self.repo_root) else {
                 self.unavailable
                     .insert(spec.key.to_string(), format!("{} not found", spec.command));
                 return Ok(ServerState::Unavailable);
-            }
+            };
             match LspSession::spawn(
                 spec.clone(),
+                &command,
                 &self.repo_root,
                 self.diagnostics.clone(),
                 self.diagnostics_revision.clone(),
@@ -508,13 +518,13 @@ impl LspManager {
         }
     }
 
-    pub fn diagnostics_for(&self, relative_path: &Path) -> Vec<LspDiagnostic> {
+    pub fn diagnostics_for(&self, relative_path: &Path) -> Arc<[LspDiagnostic]> {
         let absolute = self.repo_root.join(relative_path);
         self.diagnostics
             .lock()
             .ok()
             .and_then(|diagnostics| diagnostics.get(&absolute).cloned())
-            .unwrap_or_default()
+            .unwrap_or_else(|| Arc::from([]))
     }
 
     pub fn diagnostic_count(&self, relative_path: &Path) -> usize {
@@ -577,29 +587,52 @@ fn language_id(path: &Path) -> Option<&'static str> {
     }
 }
 
-fn command_exists(command: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|directory| {
-        let candidate = directory.join(command);
-        if candidate.is_file() {
-            return true;
-        }
-        if !cfg!(windows) {
-            return false;
-        }
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
-            .split(';')
-            .any(|extension| directory.join(format!("{command}{extension}")).is_file())
+fn resolve_command(command: &str, repo_root: &Path) -> Option<PathBuf> {
+    let local_bin = repo_root.join("node_modules").join(".bin");
+    executable_in(&local_bin, command).or_else(|| {
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+            .find_map(|directory| executable_in(&directory, command))
     })
+}
+
+fn executable_in(directory: &Path, command: &str) -> Option<PathBuf> {
+    let direct = directory.join(command);
+    if is_executable_file(&direct) {
+        return Some(direct);
+    }
+    if !cfg!(windows) {
+        return None;
+    }
+    std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+        .split(';')
+        .map(|extension| directory.join(format!("{command}{extension}")))
+        .find(|candidate| is_executable_file(candidate))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn record_diagnostics(
     message: &Value,
     repo_root: &Path,
-    store: &Arc<Mutex<HashMap<PathBuf, Vec<LspDiagnostic>>>>,
+    store: &DiagnosticStore,
     revision: &Arc<AtomicU64>,
 ) {
     let Some(params) = message.get("params") else {
@@ -621,7 +654,8 @@ fn record_diagnostics(
         .flatten()
         .take(MAX_DIAGNOSTICS_PER_FILE)
         .filter_map(parse_diagnostic)
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     if let Ok(mut values) = store.lock() {
         values.insert(path, diagnostics);
         revision.fetch_add(1, Ordering::Relaxed);
@@ -815,6 +849,20 @@ pub fn utf16_column(text: &str, character_column: usize) -> u32 {
         .sum::<usize>() as u32
 }
 
+pub fn character_column_from_utf16(text: &str, utf16_column: u32) -> usize {
+    let mut consumed = 0u32;
+    let mut characters = 0usize;
+    for character in text.chars() {
+        let width = character.len_utf16() as u32;
+        if consumed.saturating_add(width) > utf16_column {
+            break;
+        }
+        consumed = consumed.saturating_add(width);
+        characters += 1;
+    }
+    characters
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -842,6 +890,10 @@ mod tests {
         assert_eq!(utf16_column("a😀b", 0), 0);
         assert_eq!(utf16_column("a😀b", 2), 3);
         assert_eq!(utf16_column("a😀b", 3), 4);
+        assert_eq!(character_column_from_utf16("a😀b", 0), 0);
+        assert_eq!(character_column_from_utf16("a😀b", 1), 1);
+        assert_eq!(character_column_from_utf16("a😀b", 3), 2);
+        assert_eq!(character_column_from_utf16("a😀b", 4), 3);
     }
 
     #[test]
@@ -881,5 +933,23 @@ mod tests {
         }));
         assert_eq!(targets[0].path, path);
         assert_eq!(targets[0].line, 4);
+    }
+
+    #[test]
+    fn local_node_language_server_is_preferred() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("node_modules/.bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let executable = bin.join("typescript-language-server");
+        std::fs::write(&executable, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(
+            resolve_command("typescript-language-server", root.path()),
+            Some(executable)
+        );
     }
 }

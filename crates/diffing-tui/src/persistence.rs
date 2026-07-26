@@ -40,6 +40,7 @@ pub struct PersistedTuiState {
     pub file_display: FileDisplay,
     pub tab_size: u8,
     pub line_numbers: bool,
+    pub mouse_enabled: bool,
     pub intelligence_mode: IntelligenceMode,
     pub sidebar_width: u16,
     pub comment_height: u16,
@@ -81,6 +82,7 @@ pub fn load(repo_root: &str) -> PersistedTuiState {
         .get("showLineNumbers")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let mouse_enabled = load_mouse_enabled(&settings);
     let intelligence_mode = settings
         .get("tuiLanguageIntelligence")
         .and_then(Value::as_str)
@@ -123,12 +125,20 @@ pub fn load(repo_root: &str) -> PersistedTuiState {
         file_display,
         tab_size,
         line_numbers,
+        mouse_enabled,
         intelligence_mode,
         sidebar_width,
         comment_height,
         sidebar_visible,
         comments_visible,
     }
+}
+
+fn load_mouse_enabled(settings: &Map<String, Value>) -> bool {
+    settings
+        .get("tuiMouseEnabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 pub fn save_layout(
@@ -173,6 +183,7 @@ pub fn save_settings(
     split: bool,
     tab_size: u8,
     line_numbers: bool,
+    mouse_enabled: bool,
     intelligence_mode: IntelligenceMode,
 ) {
     let path = settings_path();
@@ -185,6 +196,7 @@ pub fn save_settings(
     );
     root.insert("defaultTabSize".to_string(), json!(tab_size));
     root.insert("showLineNumbers".to_string(), json!(line_numbers));
+    root.insert("tuiMouseEnabled".to_string(), json!(mouse_enabled));
     root.insert(
         "tuiLanguageIntelligence".to_string(),
         json!(match intelligence_mode {
@@ -229,5 +241,13 @@ mod tests {
         assert_eq!(FileDisplay::Single.label(), "Single file");
         assert_eq!(FileDisplay::Single.toggle(), FileDisplay::Continuous);
         assert_eq!(FileDisplay::Continuous.toggle(), FileDisplay::Single);
+    }
+
+    #[test]
+    fn mouse_input_defaults_on_and_respects_an_explicit_disable() {
+        let mut settings = Map::new();
+        assert!(load_mouse_enabled(&settings));
+        settings.insert("tuiMouseEnabled".to_string(), Value::Bool(false));
+        assert!(!load_mouse_enabled(&settings));
     }
 }

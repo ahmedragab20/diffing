@@ -29,10 +29,14 @@ pub fn project_storage_dir(repo_root: &str) -> PathBuf {
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("repo");
-    let home: PathBuf = directories::UserDirs::new()
-        .map(|u| u.home_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".diffing").join(format!("{}-{}", basename, hash))
+    let storage_root = std::env::var_os("DIFFING_STORAGE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            directories::UserDirs::new()
+                .map(|u| u.home_dir().join(".diffing"))
+                .unwrap_or_else(|| PathBuf::from(".diffing"))
+        });
+    storage_root.join(format!("{}-{}", basename, hash))
 }
 
 fn sha256_first_8_hex(input: &str) -> String {

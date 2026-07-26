@@ -9,10 +9,9 @@ use std::time::{Duration, Instant};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 
 use crate::themes::Palette;
+use crate::ui::gridline::{fill, GridlineTokens, Tone, GLYPHS};
 
 #[derive(Debug, Clone)]
 pub struct Toast {
@@ -58,21 +57,44 @@ impl Toast {
 }
 
 pub fn render_toast(toast: &Toast, area: Rect, palette: &Palette, buf: &mut Buffer) {
-    let border_color = match toast.accent {
-        ToastAccent::Info => palette.accent,
-        ToastAccent::Success => palette.added,
-        ToastAccent::Warn => palette.removed,
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let tokens = GridlineTokens::from(palette);
+    let tone = match toast.accent {
+        ToastAccent::Info => Tone::Info,
+        ToastAccent::Success => Tone::Positive,
+        ToastAccent::Warn => Tone::Warning,
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-    Paragraph::new(Line::from(Span::styled(
-        format!(" {} ", toast.message),
-        Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
-    )))
-    .wrap(Wrap { trim: false })
-    .render(area, buf);
-    block.render(area, buf);
+    let accent = tokens.tone(tone);
+    fill(area, tokens.raised, buf);
+    buf[(area.x, area.y)]
+        .set_symbol(GLYPHS.focus_rail)
+        .set_style(Style::default().fg(accent).bg(tokens.raised));
+    if area.width > 2 {
+        buf.set_string(
+            area.x + 2,
+            area.y,
+            GLYPHS.bullet,
+            Style::default().fg(accent).bg(tokens.raised),
+        );
+    }
+    if area.width > 4 {
+        let message: String = toast
+            .message
+            .chars()
+            .take(area.width.saturating_sub(5) as usize)
+            .collect();
+        buf.set_string(
+            area.x + 4,
+            area.y,
+            message,
+            Style::default()
+                .fg(tokens.text)
+                .bg(tokens.raised)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -90,5 +112,17 @@ mod tests {
     fn warn_toast_uses_warn_accent() {
         let t = Toast::warn("careful");
         assert_eq!(t.accent, ToastAccent::Warn);
+    }
+
+    #[test]
+    fn compact_toast_keeps_content_on_a_single_row() {
+        let area = Rect::new(0, 0, 24, 1);
+        let palette = Palette::default();
+        let mut buffer = Buffer::empty(area);
+        render_toast(&Toast::success("review sent"), area, &palette, &mut buffer);
+        assert_eq!(buffer[(0, 0)].symbol(), GLYPHS.focus_rail);
+        assert_eq!(buffer[(2, 0)].symbol(), GLYPHS.bullet);
+        assert_eq!(buffer[(4, 0)].symbol(), "r");
+        assert_eq!(buffer[(0, 0)].style().fg, Some(palette.added));
     }
 }

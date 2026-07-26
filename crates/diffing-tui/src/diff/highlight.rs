@@ -1,7 +1,8 @@
 //! Theme-aware, bounded syntax highlighting for terminal diff viewports.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::Arc;
 
 use once_cell::sync::Lazy;
 use ratatui::style::{Color, Modifier, Style};
@@ -11,75 +12,99 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 
 use crate::themes::{Palette, ThemeName};
 
-static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newlines);
+static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(two_face::syntax::extra_newlines);
 static THEME_SET: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
-static CACHE: Lazy<Mutex<HighlightCache>> = Lazy::new(|| Mutex::new(HighlightCache::default()));
+thread_local! {
+    static CACHE: RefCell<HighlightCache> = RefCell::new(HighlightCache::default());
+}
 const MAX_CACHE_ENTRIES: usize = 4_096;
 const MAX_CACHE_BYTES: usize = 8 * 1024 * 1024;
 
-type CacheKey = (String, String, String, u32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct HighlightContext {
+    theme: ThemeName,
+    background: u32,
+    palette: u64,
+}
+
+type HighlightedLine = Arc<[StyledSpan]>;
+type ContentHighlights = HashMap<String, HighlightedLine>;
+type LanguageHighlights = HashMap<String, ContentHighlights>;
 
 #[derive(Default)]
 struct HighlightCache {
-    entries: HashMap<CacheKey, Vec<StyledSpan>>,
-    order: VecDeque<CacheKey>,
+    entries: HashMap<HighlightContext, LanguageHighlights>,
+    order: VecDeque<(HighlightContext, String, String)>,
     bytes: usize,
 }
 
 impl HighlightCache {
-    fn key(path: &str, content: &str, theme: ThemeName, background: Color) -> CacheKey {
-        (
-            path.to_string(),
-            content.to_string(),
-            theme.label().to_string(),
-            color_key(background),
-        )
-    }
-
     fn get(
         &self,
-        path: &str,
+        context: HighlightContext,
+        language: &str,
         content: &str,
-        theme: ThemeName,
-        background: Color,
-    ) -> Option<Vec<StyledSpan>> {
+    ) -> Option<HighlightedLine> {
         self.entries
-            .get(&Self::key(path, content, theme, background))
+            .get(&context)?
+            .get(language)?
+            .get(content)
             .cloned()
     }
 
     fn insert(
         &mut self,
-        path: &str,
+        context: HighlightContext,
+        language: &str,
         content: &str,
-        theme: ThemeName,
-        background: Color,
-        spans: Vec<StyledSpan>,
+        spans: HighlightedLine,
     ) {
-        let key = Self::key(path, content, theme, background);
-        if self.entries.contains_key(&key) {
+        if self
+            .entries
+            .get(&context)
+            .and_then(|languages| languages.get(language))
+            .is_some_and(|contents| contents.contains_key(content))
+        {
             return;
         }
-        let bytes = key.0.len()
-            + key.1.len()
-            + key.2.len()
+        let bytes = language.len()
+            + content.len()
             + spans.iter().map(|span| span.text.len() + 32).sum::<usize>();
         self.bytes = self.bytes.saturating_add(bytes);
-        self.order.push_back(key.clone());
-        self.entries.insert(key, spans);
-        while self.entries.len() > MAX_CACHE_ENTRIES || self.bytes > MAX_CACHE_BYTES {
-            let Some(oldest) = self.order.pop_front() else {
+        self.order
+            .push_back((context, language.to_string(), content.to_string()));
+        self.entries
+            .entry(context)
+            .or_default()
+            .entry(language.to_string())
+            .or_default()
+            .insert(content.to_string(), spans);
+        while self.order.len() > MAX_CACHE_ENTRIES || self.bytes > MAX_CACHE_BYTES {
+            let Some((old_context, old_language, old_content)) = self.order.pop_front() else {
                 break;
             };
-            if let Some(removed) = self.entries.remove(&oldest) {
-                let removed_bytes = oldest.0.len()
-                    + oldest.1.len()
-                    + oldest.2.len()
-                    + removed
-                        .iter()
-                        .map(|span| span.text.len() + 32)
-                        .sum::<usize>();
-                self.bytes = self.bytes.saturating_sub(removed_bytes);
+            let mut remove_context = false;
+            if let Some(languages) = self.entries.get_mut(&old_context) {
+                let mut remove_language = false;
+                if let Some(contents) = languages.get_mut(old_language.as_str()) {
+                    if let Some(removed) = contents.remove(old_content.as_str()) {
+                        let removed_bytes = old_language.len()
+                            + old_content.len()
+                            + removed
+                                .iter()
+                                .map(|span| span.text.len() + 32)
+                                .sum::<usize>();
+                        self.bytes = self.bytes.saturating_sub(removed_bytes);
+                    }
+                    remove_language = contents.is_empty();
+                }
+                if remove_language {
+                    languages.remove(old_language.as_str());
+                }
+                remove_context = languages.is_empty();
+            }
+            if remove_context {
+                self.entries.remove(&old_context);
             }
         }
     }
@@ -97,7 +122,8 @@ pub fn syntax_for_path(path: &str) -> &SyntaxReference {
         .and_then(|value| value.to_str())
         .unwrap_or("");
     SYNTAX_SET
-        .find_syntax_by_name(language_for_extension(ext))
+        .find_syntax_by_extension(ext)
+        .or_else(|| SYNTAX_SET.find_syntax_by_name(language_for_extension(ext)))
         .unwrap_or_else(|| SYNTAX_SET.find_syntax_by_name("Plain Text").unwrap())
 }
 
@@ -138,68 +164,67 @@ pub fn highlight_line(
     theme: ThemeName,
     palette: &Palette,
     background: Color,
-) -> Vec<StyledSpan> {
-    if let Ok(cache) = CACHE.lock() {
-        if let Some(spans) = cache.get(path, content, theme, background) {
-            return spans;
-        }
+) -> Arc<[StyledSpan]> {
+    let syntax = syntax_for_path(path);
+    let context = HighlightContext {
+        theme,
+        background: color_key(background),
+        palette: palette_key(palette),
+    };
+    if let Some(spans) =
+        CACHE.with(|cache| cache.borrow().get(context, syntax.name.as_str(), content))
+    {
+        return spans;
     }
-    let spans = highlight_uncached(path, content, theme, palette, background);
-    if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(path, content, theme, background, spans.clone());
-    }
+    let spans: Arc<[StyledSpan]> = highlight_uncached(syntax, content, palette, background).into();
+    CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(context, syntax.name.as_str(), content, spans.clone());
+    });
     spans
 }
 
 fn highlight_uncached(
-    path: &str,
+    syntax: &SyntaxReference,
     content: &str,
-    theme_name: ThemeName,
     palette: &Palette,
     background: Color,
 ) -> Vec<StyledSpan> {
-    let syntax = syntax_for_path(path);
-    let mut highlighter = HighlightLines::new(syntax, syntax_theme(theme_name));
+    let mut highlighter = HighlightLines::new(syntax, syntax_theme());
     let synthetic = format!("{}\n", content.trim_end_matches('\n'));
     match highlighter.highlight_line(&synthetic, &SYNTAX_SET) {
         Ok(ranges) => ranges
             .into_iter()
             .map(|(style, text)| StyledSpan {
                 text: text.trim_end_matches('\n').to_string(),
-                style: syntect_style_to_ratatui(style, palette.fg, background),
+                style: syntect_style_to_ratatui(style, palette, background),
             })
             .filter(|span| !span.text.is_empty())
             .collect(),
         Err(_) => vec![StyledSpan {
             text: content.to_string(),
-            style: Style::default().fg(palette.fg),
+            style: Style::default().fg(palette.code_fg),
         }],
     }
 }
 
-fn syntax_theme(theme: ThemeName) -> &'static Theme {
-    let preferred = if theme.is_light() {
-        "InspiredGitHub"
-    } else {
-        "base16-ocean.dark"
-    };
+fn syntax_theme() -> &'static Theme {
     THEME_SET
         .themes
-        .get(preferred)
+        .get("base16-ocean.dark")
         .or_else(|| THEME_SET.themes.values().next())
         .expect("syntect default theme set is empty")
 }
 
 fn syntect_style_to_ratatui(
     style: syntect::highlighting::Style,
-    fallback: Color,
+    palette: &Palette,
     background: Color,
 ) -> Style {
-    let foreground = ensure_contrast(
-        Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b),
-        fallback,
-        background,
-    );
+    let source = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+    let (target, role) = map_source_color(source, palette);
+    let foreground = ensure_contrast(target, palette.code_fg, background, role.minimum_contrast());
     let mut output = Style::default().fg(foreground);
     if style
         .font_style
@@ -219,16 +244,85 @@ fn syntect_style_to_ratatui(
     {
         output = output.add_modifier(Modifier::UNDERLINED);
     }
+    if role == SyntaxRole::Comment {
+        output = output.add_modifier(Modifier::ITALIC);
+    }
     output
 }
 
-fn ensure_contrast(color: Color, fallback: Color, background: Color) -> Color {
-    if contrast_ratio(color, background) >= 4.5 {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyntaxRole {
+    Text,
+    Comment,
+    Keyword,
+    String,
+    Type,
+    Constant,
+    Function,
+}
+
+impl SyntaxRole {
+    fn minimum_contrast(self) -> f32 {
+        match self {
+            Self::Text => 4.5,
+            _ => 3.0,
+        }
+    }
+}
+
+fn map_source_color(source: Color, palette: &Palette) -> (Color, SyntaxRole) {
+    // Syntect ships a compact Base16 theme whose role colors are stable.
+    // Treat it as a syntax classifier, then project those roles onto the
+    // selected diffing theme instead of leaking Ocean/GitHub colors into all
+    // 52 terminal themes.
+    const ANCHORS: [((u8, u8, u8), SyntaxRole); 16] = [
+        ((43, 48, 59), SyntaxRole::Text),
+        ((52, 61, 70), SyntaxRole::Text),
+        ((79, 91, 102), SyntaxRole::Comment),
+        ((101, 115, 126), SyntaxRole::Comment),
+        ((167, 173, 186), SyntaxRole::Text),
+        ((192, 197, 206), SyntaxRole::Text),
+        ((223, 225, 232), SyntaxRole::Text),
+        ((239, 241, 245), SyntaxRole::Text),
+        ((191, 97, 106), SyntaxRole::Constant),
+        ((208, 135, 112), SyntaxRole::Constant),
+        ((235, 203, 139), SyntaxRole::Type),
+        ((163, 190, 140), SyntaxRole::String),
+        ((150, 181, 180), SyntaxRole::Function),
+        ((143, 161, 179), SyntaxRole::Function),
+        ((180, 142, 173), SyntaxRole::Keyword),
+        ((171, 121, 103), SyntaxRole::Constant),
+    ];
+    let source = rgb(source);
+    let role = ANCHORS
+        .iter()
+        .min_by_key(|((r, g, b), _)| {
+            let dr = source.0 as i32 - *r as i32;
+            let dg = source.1 as i32 - *g as i32;
+            let db = source.2 as i32 - *b as i32;
+            dr * dr + dg * dg + db * db
+        })
+        .map(|(_, role)| *role)
+        .unwrap_or(SyntaxRole::Text);
+    let color = match role {
+        SyntaxRole::Text => palette.code_fg,
+        SyntaxRole::Comment => palette.syntax_comment,
+        SyntaxRole::Keyword => palette.syntax_keyword,
+        SyntaxRole::String => palette.syntax_string,
+        SyntaxRole::Type => palette.syntax_type,
+        SyntaxRole::Constant => palette.syntax_constant,
+        SyntaxRole::Function => palette.syntax_function,
+    };
+    (color, role)
+}
+
+fn ensure_contrast(color: Color, fallback: Color, background: Color, minimum: f32) -> Color {
+    if contrast_ratio(color, background) >= minimum {
         return color;
     }
     (1..=20)
         .map(|step| blend(fallback, color, step as f32 / 20.0))
-        .find(|candidate| contrast_ratio(*candidate, background) >= 4.5)
+        .find(|candidate| contrast_ratio(*candidate, background) >= minimum)
         .unwrap_or(fallback)
 }
 
@@ -266,6 +360,22 @@ fn color_key(color: Color) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | b as u32
 }
 
+fn palette_key(palette: &Palette) -> u64 {
+    [
+        palette.code_fg,
+        palette.syntax_keyword,
+        palette.syntax_string,
+        palette.syntax_type,
+        palette.syntax_constant,
+        palette.syntax_function,
+        palette.syntax_comment,
+    ]
+    .into_iter()
+    .fold(0xcbf2_9ce4_8422_2325u64, |hash, color| {
+        (hash ^ color_key(color) as u64).wrapping_mul(0x100_0000_01b3)
+    })
+}
+
 fn rgb(color: Color) -> (u8, u8, u8) {
     match color {
         Color::Rgb(r, g, b) => (r, g, b),
@@ -280,6 +390,40 @@ mod tests {
     #[test]
     fn known_extension_resolves() {
         assert_eq!(syntax_for_path("foo.rs").name, "Rust");
+    }
+
+    #[test]
+    fn web_language_extensions_do_not_fall_back_to_plain_text() {
+        for path in ["foo.ts", "foo.tsx", "foo.js", "foo.jsx"] {
+            assert_ne!(
+                syntax_for_path(path).name,
+                "Plain Text",
+                "{path} resolved as plain text"
+            );
+        }
+    }
+
+    #[test]
+    fn typescript_highlighting_emits_semantic_token_colors() {
+        let theme = ThemeName::from_label("rose-pine").unwrap();
+        let palette = Palette::for_theme(theme);
+        let spans = highlight_line(
+            "src/cli.ts",
+            "const result = await import('./module.js');",
+            theme,
+            &palette,
+            palette.bg,
+        );
+        let colors: std::collections::HashSet<_> =
+            spans.iter().filter_map(|span| span.style.fg).collect();
+        assert!(
+            colors.contains(&palette.syntax_keyword),
+            "TypeScript keywords were not classified: {spans:?}"
+        );
+        assert!(
+            colors.contains(&palette.syntax_string),
+            "TypeScript strings were not classified: {spans:?}"
+        );
     }
 
     #[test]
@@ -319,5 +463,31 @@ mod tests {
             light_palette.bg,
         );
         assert_ne!(dark_spans[0].style.fg, light_spans[0].style.fg);
+    }
+
+    #[test]
+    fn comments_use_the_selected_theme_and_remain_italic() {
+        let rose_pine = ThemeName::from_label("rose-pine").unwrap();
+        let tokyo_night = ThemeName::from_label("tokyo-night").unwrap();
+        let rose_palette = Palette::for_theme(rose_pine);
+        let tokyo_palette = Palette::for_theme(tokyo_night);
+        let rose = highlight_line(
+            "foo.rs",
+            "// quiet comment",
+            rose_pine,
+            &rose_palette,
+            rose_palette.bg,
+        );
+        let tokyo = highlight_line(
+            "foo.rs",
+            "// quiet comment",
+            tokyo_night,
+            &tokyo_palette,
+            tokyo_palette.bg,
+        );
+        assert_eq!(rose[0].style.fg, Some(rose_palette.syntax_comment));
+        assert_eq!(tokyo[0].style.fg, Some(tokyo_palette.syntax_comment));
+        assert_ne!(rose[0].style.fg, tokyo[0].style.fg);
+        assert!(rose[0].style.add_modifier.contains(Modifier::ITALIC));
     }
 }

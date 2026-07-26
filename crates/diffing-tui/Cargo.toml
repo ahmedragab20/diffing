@@ -4,7 +4,7 @@ version.workspace     = true
 edition.workspace     = true
 rust-version.workspace = true
 license.workspace     = true
-description      = "Terminal User Interface for diffing — opt-in via `diffing --tui`."
+description      = "Native review TUI and focused diff viewer for diffing."
 publish          = false
 
 [[bin]]
@@ -29,10 +29,16 @@ thiserror         = { workspace = true }
 tracing           = { workspace = true }
 tracing-subscriber = { workspace = true }
 syntect           = { workspace = true }
+two-face          = { workspace = true }
 notify            = { workspace = true }
 notify-debouncer-full = { workspace = true }
 once_cell         = { workspace = true }
 tui-textarea      = "0.7"
+unicode-width     = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bench]]
+name = "render_diff"
+harness = false

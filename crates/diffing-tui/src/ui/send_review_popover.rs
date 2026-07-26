@@ -15,7 +15,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 use tui_textarea::TextArea;
 
 use diffing_core::comments::{CommentStatus, ReviewComment};
@@ -24,7 +24,9 @@ use diffing_core::diff::FileDiff;
 use crate::handoff::format::format_comments;
 use crate::handoff::review::ReviewDecision;
 use crate::themes::Palette;
-use crate::ui::gridline::{dim_buffer, overlay_block};
+use crate::ui::gridline::{
+    dim_buffer, field_block, fill, hint_line, overlay_block, GridlineTokens, Tone, GLYPHS, METRICS,
+};
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     Rect::new(
@@ -50,8 +52,8 @@ pub struct SendReviewRegions {
 pub fn send_review_regions(area: Rect) -> SendReviewRegions {
     let compact = area.width < 100 || area.height < 18;
     let popup = centered_rect(
-        area.width.saturating_sub(4).min(78),
-        area.height.saturating_sub(2).min(20),
+        area.width.saturating_sub(METRICS.modal_margin_x).min(78),
+        area.height.saturating_sub(METRICS.modal_margin_y).min(20),
         area,
     );
     let inner = Block::default().borders(Borders::ALL).inner(popup);
@@ -143,6 +145,7 @@ pub fn render_send_popover(
     files: &[FileDiff],
     buf: &mut Buffer,
 ) {
+    let tokens = GridlineTokens::from(palette);
     let regions = send_review_regions(area);
     let popup = regions.popup;
     dim_buffer(area, buf);
@@ -151,77 +154,92 @@ pub fn render_send_popover(
     let block = overlay_block(
         Span::styled(
             " Send review ",
-            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(tokens.text)
+                .add_modifier(Modifier::BOLD),
         ),
         palette,
     );
     block.render(popup, buf);
 
     // Verdict radios
-    let verdict_lines: Vec<Line> = ReviewDecision::ALL
-        .iter()
-        .map(|d| {
-            let is_selected = *d == state.verdict;
-            let marker = if is_selected { "●" } else { "○" };
-            let color = if is_selected {
-                palette.accent
-            } else {
-                palette.dim
-            };
-            let style = if is_selected {
-                Style::default().fg(color).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(color)
-            };
-            Line::from(Span::styled(format!("  {marker} {}", d.label()), style))
-        })
-        .collect();
-    let verdict_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(if state.focused == SendField::Verdict {
-            palette.accent
-        } else {
-            palette.border
-        }))
-        .title(Span::styled(
-            if regions.compact {
-                " verdict · click or ←→ "
-            } else {
-                " verdict (Tab to switch, ←→ to change) "
-            },
-            Style::default().fg(palette.fg),
-        ));
+    let verdict_block = field_block(" Verdict ", palette, state.focused == SendField::Verdict);
     let verdict_inner = verdict_block.inner(regions.verdict_panel);
     verdict_block.render(regions.verdict_panel, buf);
-    Paragraph::new(verdict_lines)
-        .alignment(Alignment::Left)
-        .render(verdict_inner, buf);
+    for (index, decision) in ReviewDecision::ALL.iter().enumerate() {
+        if index >= verdict_inner.height as usize {
+            break;
+        }
+        let selected = *decision == state.verdict;
+        let background = if selected {
+            tokens.selected
+        } else {
+            tokens.raised
+        };
+        let tone = match decision {
+            ReviewDecision::Approved => Tone::Positive,
+            ReviewDecision::ChangesRequested => Tone::Warning,
+            ReviewDecision::Rejected => Tone::Negative,
+        };
+        let row = Rect::new(
+            verdict_inner.x,
+            verdict_inner.y + index as u16,
+            verdict_inner.width,
+            1,
+        );
+        fill(row, background, buf);
+        buf.set_string(
+            row.x + 1,
+            row.y,
+            if selected {
+                GLYPHS.bullet
+            } else {
+                GLYPHS.resolved
+            },
+            Style::default()
+                .fg(if selected {
+                    tokens.tone(tone)
+                } else {
+                    tokens.muted
+                })
+                .bg(background),
+        );
+        buf.set_string(
+            row.x + 3,
+            row.y,
+            decision.label(),
+            Style::default()
+                .fg(if selected {
+                    tokens.text
+                } else {
+                    tokens.text_subtle
+                })
+                .bg(background)
+                .add_modifier(if selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        );
+    }
 
     // General comment textarea
     state
         .general
-        .set_style(Style::default().fg(palette.fg).bg(palette.elevated));
+        .set_style(Style::default().fg(tokens.text).bg(tokens.element));
     state
         .general
         .set_cursor_line_style(Style::default().add_modifier(Modifier::UNDERLINED));
     state.general.set_cursor_style(
         Style::default()
-            .fg(palette.fg)
+            .fg(tokens.text)
             .add_modifier(Modifier::REVERSED),
     );
-    let general_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(if state.focused == SendField::General {
-            palette.accent
-        } else {
-            palette.border
-        }))
-        .title(Span::styled(
-            " general comment ",
-            Style::default().fg(palette.fg),
-        ));
+    let general_block = field_block(
+        " General comment ",
+        palette,
+        state.focused == SendField::General,
+    );
     let general_inner = general_block.inner(regions.general_panel);
     general_block.render(regions.general_panel, buf);
     (&state.general).render(general_inner, buf);
@@ -232,36 +250,51 @@ pub fn render_send_popover(
         .filter(|c| c.status == CommentStatus::Open)
         .count();
     let total = comments.len();
-    let guard = if state.unviewed_files == 0 {
-        String::new()
+    let command_hint = if state.unviewed_files == 0 {
+        "Ctrl-S send · Esc cancel"
     } else if state.guard_acknowledged {
-        format!(" · {} unviewed · Ctrl-S confirm", state.unviewed_files)
+        "Ctrl-S confirm · Esc cancel"
     } else {
-        format!(" · {} unviewed · Ctrl-S review", state.unviewed_files)
+        "Ctrl-S review unviewed · Esc cancel"
     };
-    let footer = if regions.compact {
-        format!(
-            "{} files · {} comments ({} open){} · Ctrl-S send · Esc cancel",
-            files.len(),
-            total,
-            open_count,
-            guard,
-        )
-    } else {
-        format!(
-            " ↑/↓: focus · ←/→: verdict · {} files · {} cmts ({} open){} · Ctrl-S: send · Esc: cancel",
-            files.len(),
-            total,
-            open_count,
-            guard,
-        )
-    };
-    Paragraph::new(Line::from(Span::styled(
-        footer,
-        Style::default().fg(palette.dim),
-    )))
-    .alignment(Alignment::Center)
-    .render(regions.footer, buf);
+    let stats = format!(
+        "{} files  ·  {} comments  ·  {} open",
+        files.len(),
+        total,
+        open_count
+    );
+    let mut footer = Line::from(vec![Span::styled(
+        stats,
+        Style::default().fg(tokens.muted).bg(tokens.raised),
+    )]);
+    if state.unviewed_files > 0 {
+        footer.spans.extend([
+            Span::styled("  ·  ", Style::default().fg(tokens.rule).bg(tokens.raised)),
+            Span::styled(
+                format!("{} unviewed", state.unviewed_files),
+                Style::default().fg(tokens.warning).bg(tokens.raised),
+            ),
+        ]);
+    }
+    footer.spans.push(Span::styled(
+        "  ·  ",
+        Style::default().fg(tokens.rule).bg(tokens.raised),
+    ));
+    if !regions.compact {
+        footer
+            .spans
+            .extend(hint_line("Tab field · ←→ verdict", tokens.raised, palette).spans);
+        footer.spans.push(Span::styled(
+            "  ·  ",
+            Style::default().fg(tokens.rule).bg(tokens.raised),
+        ));
+    }
+    footer
+        .spans
+        .extend(hint_line(command_hint, tokens.raised, palette).spans);
+    Paragraph::new(footer)
+        .alignment(Alignment::Center)
+        .render(regions.footer, buf);
 }
 
 /// What the send action actually does on disk. The TUI:
@@ -359,6 +392,26 @@ mod tests {
         let s = SendReviewState::new(3);
         assert_eq!(s.unviewed_files, 3);
         assert!(!s.guard_acknowledged);
+    }
+
+    #[test]
+    fn selected_verdict_uses_semantic_tone_and_selected_surface() {
+        let area = Rect::new(0, 0, 100, 30);
+        let palette = Palette::default();
+        let tokens = GridlineTokens::from(&palette);
+        let mut state = SendReviewState::new(0);
+        let mut buffer = Buffer::empty(area);
+        render_send_popover(&mut state, area, &palette, &[], &[], &mut buffer);
+        let regions = send_review_regions(area);
+        let row = regions
+            .verdict_rows
+            .iter()
+            .find(|(_, decision)| *decision == ReviewDecision::ChangesRequested)
+            .map(|(row, _)| *row)
+            .unwrap();
+        assert_eq!(buffer[(row.x + 1, row.y)].symbol(), GLYPHS.bullet);
+        assert_eq!(buffer[(row.x + 1, row.y)].style().fg, Some(tokens.warning));
+        assert_eq!(buffer[(row.x + 1, row.y)].style().bg, Some(tokens.selected));
     }
 
     #[test]
