@@ -10,6 +10,8 @@ describe('shell completions', () => {
     expect(s).toContain('complete -F _diffing diffing')
     expect(s).toContain('overview threads reviews')
     expect(s).toContain('summary files hunks slice search')
+    expect(s).toContain('mode')
+    expect(s).toContain('web tui')
   })
 
   it('zsh is a compdef script', () => {

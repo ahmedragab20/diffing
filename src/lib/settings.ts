@@ -9,8 +9,11 @@ export type LineDiffType = 'word' | 'word-alt' | 'char' | 'none'
 export type DiffIndicators = 'classic' | 'bars' | 'none'
 export type HunkSeparatorStyle = 'simple' | 'metadata' | 'line-info' | 'line-info-basic'
 export type LineHoverHighlight = 'disabled' | 'both' | 'number' | 'line'
+export type DefaultMode = 'web' | 'tui'
 
 export interface Settings {
+  /** Interactive mode used when no explicit output-mode flag is provided. */
+  defaultMode: DefaultMode
   staged: boolean
   untracked: boolean
   diffStyle: 'split' | 'unified'
@@ -78,6 +81,7 @@ export interface SavedReply {
 }
 
 const DEFAULTS: Settings = {
+  defaultMode: 'web',
   staged: true,
   untracked: true,
   diffStyle: 'split',
@@ -110,7 +114,11 @@ const DEFAULTS: Settings = {
 export function loadSettings(): Settings {
   try {
     const data = readFileSync(SETTINGS_FILE, 'utf-8')
-    return { ...DEFAULTS, ...JSON.parse(data) }
+    const settings = { ...DEFAULTS, ...JSON.parse(data) } as Settings
+    if (settings.defaultMode !== 'web' && settings.defaultMode !== 'tui') {
+      settings.defaultMode = DEFAULTS.defaultMode
+    }
+    return settings
   } catch {
     return { ...DEFAULTS }
   }

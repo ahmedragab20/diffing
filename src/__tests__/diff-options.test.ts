@@ -1,6 +1,43 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { DEFAULTS, intoShowMode, parseDiffOptions } from '../lib/diff-options.js'
+import { buildTuiGitDiffArgs, DEFAULTS, intoShowMode, parseDiffOptions } from '../lib/diff-options.js'
+
+function withStdoutTty<T>(isTTY: boolean, run: () => T): T {
+  const descriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
+  Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: isTTY })
+  try {
+    return run()
+  } finally {
+    if (descriptor) Object.defineProperty(process.stdout, 'isTTY', descriptor)
+    else delete (process.stdout as { isTTY?: boolean }).isTTY
+  }
+}
+
+describe('default interactive mode', () => {
+  it('uses the saved TUI preference for interactive output', () => {
+    const opts = withStdoutTty(true, () => parseDiffOptions([], 'tui'))
+    expect(opts.outputMode).toBe('tui')
+  })
+
+  it.each([
+    ['--web', 'tui', 'web'],
+    ['--tui', 'web', 'tui'],
+    ['--terminal', 'tui', 'terminal'],
+  ] as const)('lets %s override the saved %s preference', (flag, saved, expected) => {
+    const opts = withStdoutTty(true, () => parseDiffOptions([flag], saved))
+    expect(opts.outputMode).toBe(expected)
+  })
+
+  it('keeps non-interactive output in terminal mode', () => {
+    const opts = withStdoutTty(false, () => parseDiffOptions([], 'tui'))
+    expect(opts.outputMode).toBe('terminal')
+  })
+
+  it('keeps GitHub PR reviews in web mode', () => {
+    const opts = withStdoutTty(true, () => parseDiffOptions(['--gh-pr', '42'], 'tui'))
+    expect(opts.outputMode).toBe('web')
+  })
+})
 
 describe('parseDiffOptions --gh-pr', () => {
   it('parses --gh-pr <ref> into opts.ghPr', () => {
@@ -26,6 +63,59 @@ describe('parseDiffOptions session conflict flags', () => {
     expect(parseDiffOptions(['--replace-session']).replaceSession).toBe(true)
     expect(parseDiffOptions([]).reuseSession).toBe(false)
     expect(parseDiffOptions([]).replaceSession).toBe(false)
+  })
+})
+
+describe('native view mode', () => {
+  it('selects the focused TUI without leaking --view into revisions', () => {
+    const opts = parseDiffOptions(['--view', '--staged', 'HEAD~2'])
+    expect(opts.outputMode).toBe('tui')
+    expect(opts.viewOnly).toBe(true)
+    expect(opts.staged).toBe(true)
+    expect(opts.revisions).toEqual(['HEAD~2'])
+  })
+
+  it('is disabled by default', () => {
+    expect(parseDiffOptions([]).viewOnly).toBe(false)
+  })
+
+  it.each([
+    ['--stat'],
+    ['--name-only'],
+    ['--no-patch'],
+    ['--check'],
+    ['--color-moved=zebra'],
+    ['--line-prefix=review:'],
+    ['--submodule=short'],
+  ])('routes non-unified %s output back to terminal mode', (flag) => {
+    const opts = parseDiffOptions(['--view', flag])
+    expect(opts.outputMode).toBe('terminal')
+  })
+
+  it('keeps word-diff intent in the TUI for native intraline rendering', () => {
+    const opts = parseDiffOptions(['--view', '--word-diff=plain'])
+    expect(opts.outputMode).toBe('tui')
+    expect(opts.wordDiff).toBe('plain')
+    expect(buildTuiGitDiffArgs(opts)).not.toContain('--word-diff=plain')
+  })
+
+  it('builds a stable patch stream while preserving diff semantics', () => {
+    const opts = parseDiffOptions([
+      '--view',
+      '--word-diff=plain',
+      '--ignore-space-change',
+      '--diff-algorithm=histogram',
+      'main..feature',
+      '--',
+      'src/',
+    ])
+    expect(buildTuiGitDiffArgs(opts)).toEqual([
+      '--diff-algorithm=histogram',
+      '--ignore-space-change',
+      'main..feature',
+      '--',
+      'src/',
+    ])
   })
 })
 

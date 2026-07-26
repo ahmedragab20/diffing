@@ -11,6 +11,7 @@ import {
   DEFAULT_AWAIT_TIMEOUT_SECONDS,
 } from './lib/handoff.js'
 import { formatPlanReview } from './lib/plan-format.js'
+import { loadSettings, saveSettings } from './lib/settings.js'
 import type { ReviewComment } from './lib/types.js'
 import type { Plan } from './lib/plan-types.js'
 
@@ -329,6 +330,34 @@ async function comments(args: string[]): Promise<number> {
   } else {
     process.stdout.write(formatComments(selected) + '\n')
   }
+  return EXIT_OK
+}
+
+function mode(args: string[]): number {
+  if (args.length === 0) {
+    process.stdout.write(loadSettings().defaultMode + '\n')
+    return EXIT_OK
+  }
+
+  if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
+    process.stdout.write('Usage: diffing mode <web|tui>\n')
+    return EXIT_OK
+  }
+
+  const requested = args[0]
+  if (args.length !== 1 || (requested !== 'web' && requested !== 'tui')) {
+    console.error('Usage: diffing mode <web|tui>')
+    return EXIT_USAGE
+  }
+
+  try {
+    saveSettings({ defaultMode: requested })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error(`Failed to save default mode: ${detail}`)
+    return 1
+  }
+  process.stdout.write(`Default mode set to ${requested}.\n`)
   return EXIT_OK
 }
 
@@ -887,6 +916,8 @@ export async function runSubcommand(name: string, args: string[]): Promise<numbe
       return progress(args)
     case 'inspect':
       return inspect(args)
+    case 'mode':
+      return mode(args)
     default:
       console.error(`Unknown subcommand: ${name}`)
       return EXIT_USAGE

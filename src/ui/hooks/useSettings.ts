@@ -6,6 +6,8 @@ export type HunkSeparatorStyle = 'simple' | 'metadata' | 'line-info' | 'line-inf
 export type LineHoverHighlight = 'disabled' | 'both' | 'number' | 'line'
 
 export interface Settings {
+  /** Interactive mode used when no explicit output-mode flag is provided. */
+  defaultMode: 'web' | 'tui'
   staged: boolean
   untracked: boolean
   diffStyle: 'split' | 'unified'
@@ -57,6 +59,7 @@ export interface SavedReply {
 }
 
 const DEFAULTS: Settings = {
+  defaultMode: 'web',
   staged: true,
   untracked: true,
   diffStyle: 'split',

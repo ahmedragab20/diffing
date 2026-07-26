@@ -94,6 +94,7 @@ export interface DiffOptions {
   outputFile?: string
   exitCode: boolean
   quiet: boolean
+  suppressPatch: boolean
 
   // ── Prefixes ───────────────────────────────────────────
   srcPrefix?: string
@@ -155,6 +156,8 @@ export interface DiffOptions {
 
   /** Opt into the experimental native-Rust TUI. */
   tui: boolean
+  /** Open the focused, read-only native diff viewer. */
+  viewOnly: boolean
   /** Opt into the experimental GPU render backend (requires --tui). */
   gpu: boolean
 
@@ -197,6 +200,7 @@ export const DEFAULTS: DiffOptions = {
   pickaxeAll: false,
   exitCode: false,
   quiet: false,
+  suppressPatch: false,
   noPrefix: false,
   binary: false,
   fullIndex: false,
@@ -221,6 +225,7 @@ export const DEFAULTS: DiffOptions = {
   includeUnstaged: true,
   includeUntracked: true,
   tui: false,
+  viewOnly: false,
   gpu: false,
   showMode: false,
   showRevspecs: [],
@@ -337,6 +342,7 @@ export const DIFFING_OPTIONS = {
   web: { type: 'boolean' as const, default: false },
   terminal: { type: 'boolean' as const, default: false },
   tui: { type: 'boolean' as const, default: false },
+  view: { type: 'boolean' as const, default: false },
   gpu: { type: 'boolean' as const, default: false },
   'gh-pr': { type: 'string' as const },
   help: { type: 'boolean' as const, short: 'h' },
@@ -359,6 +365,7 @@ export function printHelp(): void {
 
 Usage: diffing [<git diff options>] [<revision>...] [-- <path>...]
        diffing --web [<git diff options>] [<revision>...] [-- <path>...]
+       diffing view [<git diff options>] [<revision>...] [-- <path>...]
        diffing [server options]
 
 Git Diff Options (drop-in replacement for git diff):`)
@@ -378,15 +385,18 @@ Diffing Server Options:
 Output Modes:
   By default diffing auto-selects the best output mode:
   - Terminal mode: when output is a pipe, redirect, or non-TTY
-  - Web mode:     when output is a TTY (interactive terminal)
+  - Web or TUI:   saved preference for an interactive terminal (web by default)
 
-  Force a mode with --web, --terminal, or --tui flags.
+  Force a mode with --web, --terminal, --tui, or --view flags.
+  Change the interactive default with: diffing mode <web|tui>
+  --view opens a focused, read-only diff browser with fff-powered search.
   --tui is experimental and opt-in. It opens a native-Rust terminal
   interface that mirrors the web dashboard. Falls back to git diff
   output if the environment cannot support a TUI (piped stdin, CI,
   missing binary).
 
 Subcommands:
+  view [diff options]    Browse diffs in the focused read-only native TUI
   show <revspec>...    Drop-in for 'git show'. Renders commit metadata
                        above the diff. Accepts commits, ranges, tags.
   await-review         Block until human clicks Send to agent; print XML
@@ -401,6 +411,7 @@ Subcommands:
   mcp [--repo PATH]    Stdio MCP server for agents
   inspect <summary|files|hunks|slice|search>
                        Bounded reads from a running web, TUI, or PR session
+  mode [web|tui]       Get or set the default interactive review mode
   doctor               Environment self-check
   completion <bash|zsh|fish>
   update               Check for a newer npm release
@@ -409,7 +420,7 @@ Custom ranges (e.g. main..feature) and 'gh pr' sessions also display a
 "what is this diff" banner in the web UI summarising the diff source.
 
 Examples:
-  diffing                        Review uncommitted changes (web UI)
+  diffing                        Review uncommitted changes (preferred UI)
   diffing --staged               Review staged changes
   diffing HEAD~3                 Review last 3 commits
   diffing main..feature          Compare branches
@@ -422,7 +433,11 @@ Examples:
   diffing --word-diff=color      Word-level diff in color
   diffing -b -w                  Ignore whitespace changes
   diffing --host 0.0.0.0         Allow other machines on the LAN to review
+  diffing view                   Browse the working-tree diff in the TUI
+  diffing view --staged          Browse staged changes
+  diffing --view main..feature   Browse a branch comparison
   diffing --tui                  Open the experimental TUI (native Rust)
+  diffing mode tui               Use the TUI by default in interactive terminals
   diffing await-review           Agent: wait for human handoff
   diffing plan submit PLAN.md    Agent: submit a plan for approval
   diffing mcp --repo /abs/path   MCP server bound to one repository
@@ -618,7 +633,10 @@ function preprocessOptionalValueArgs(rawArgs: string[]): string[] {
  * 3. Parse known flags via node:util.parseArgs
  * 4. Anything unknown / positional becomes a revision or pathspec
  */
-export function parseDiffOptions(rawArgs: string[]): DiffOptions {
+export function parseDiffOptions(
+  rawArgs: string[],
+  defaultInteractiveMode: Extract<OutputMode, 'web' | 'tui'> = 'web',
+): DiffOptions {
   const allOptions = { ...GIT_DIFF_OPTIONS, ...DIFFING_OPTIONS }
 
   const preprocessed = preprocessOptionalValueArgs(rawArgs)
@@ -650,6 +668,7 @@ export function parseDiffOptions(rawArgs: string[]): DiffOptions {
   if (values['reuse-session']) opts.reuseSession = true
   if (values['replace-session']) opts.replaceSession = true
   if (values['gh-pr']) opts.ghPr = String(values['gh-pr'])
+  if (values.view) opts.viewOnly = true
 
   // ── Staging / merge ───────────────────────────────
   if (values.staged || values.cached) opts.staged = true
@@ -732,8 +751,14 @@ export function parseDiffOptions(rawArgs: string[]): DiffOptions {
   if (values.dirstat) opts.dirstat = values.dirstat as string
   if (values['dirstat-by-file']) opts.dirstatByFile = values['dirstat-by-file'] as string
   if (values.cumulative) opts.cumulative = true
-  if (values['no-patch']) opts.outputFormat = undefined // -s suppresses output
-  if (values.check) opts.outputFormat = undefined // --check converts patch to ws-check mode
+  if (values['no-patch']) {
+    opts.outputFormat = undefined
+    opts.suppressPatch = true
+  }
+  if (values.check) {
+    opts.outputFormat = undefined
+    opts.check = true
+  }
 
   // ── Filtering ─────────────────────────────────────
   if (values['diff-filter']) opts.diffFilter = values['diff-filter'] as string
@@ -799,29 +824,44 @@ export function parseDiffOptions(rawArgs: string[]): DiffOptions {
   }
 
   // ── Determine output mode ─────────────────────────
-  // Explicit --tui / --web / --terminal flags win over auto-detection.
-  // `--tui` is checked first so it always wins against the other explicit
-  // flags (it's the most specific intent). Auto-detection never promotes
-  // to tui — it's strictly opt-in.
-  if (values.tui) opts.outputMode = 'tui'
+  // Explicit --view / --tui / --web / --terminal flags win over the saved
+  // interactive preference. GitHub PR reviews remain web-only.
+  if (values.view) opts.outputMode = 'tui'
+  else if (values.tui) opts.outputMode = 'tui'
   else if (values.web) opts.outputMode = 'web'
   else if (values.terminal) opts.outputMode = 'terminal'
 
-  // Default: auto (TTY → web, pipe → terminal)
+  // Default: saved preference for a TTY, terminal for pipes/redirects.
   if (process.stdout.isTTY && opts.outputMode === 'auto') {
-    opts.outputMode = 'web'
+    opts.outputMode = values['gh-pr'] ? 'web' : defaultInteractiveMode
   } else if (!process.stdout.isTTY && opts.outputMode === 'auto') {
     opts.outputMode = 'terminal'
   }
 
-  // Any explicit output-format flag forces terminal mode
+  // The native index accepts only a conventional unified patch. Flags that
+  // replace or decorate that format retain exact git behavior by routing to
+  // terminal mode instead of producing an empty or subtly corrupt TUI.
   if (
     opts.outputFormat ||
     opts.patchWithRaw ||
     opts.patchWithStat ||
+    opts.compactSummary ||
+    opts.dirstat ||
+    opts.dirstatByFile ||
+    opts.cumulative ||
+    opts.suppressPatch ||
+    opts.check ||
     opts.exitCode ||
     opts.quiet ||
-    opts.outputFile
+    opts.outputFile ||
+    opts.colorMoved ||
+    opts.colorMovedWs ||
+    opts.srcPrefix ||
+    opts.dstPrefix ||
+    opts.noPrefix ||
+    opts.linePrefix ||
+    (opts.submodule !== undefined && opts.submodule !== 'diff') ||
+    opts.extDiff
   ) {
     opts.outputMode = 'terminal'
   }
@@ -905,7 +945,7 @@ export function buildGitDiffArgs(opts: DiffOptions): string[] {
   if (opts.dirstatByFile) args.push(`--dirstat-by-file=${opts.dirstatByFile}`)
   if (opts.cumulative) args.push('--cumulative')
   if (opts.check) args.push('--check')
-  // --no-patch implies no output; let it pass to git
+  if (opts.suppressPatch) args.push('--no-patch')
 
   // ── Filtering ─────────────────────────────────────
   if (opts.diffFilter) args.push(`--diff-filter=${opts.diffFilter}`)
@@ -953,6 +993,24 @@ export function buildGitDiffArgs(opts: DiffOptions): string[] {
   }
 
   return args
+}
+
+/**
+ * Build the machine-stable patch arguments consumed by the native index.
+ * Presentation-only word/color modes are implemented by the renderer and
+ * must not rewrite the unified patch stream that Rust parses.
+ */
+export function buildTuiGitDiffArgs(opts: DiffOptions): string[] {
+  return buildGitDiffArgs({
+    ...opts,
+    revisions: opts.showMode ? [...opts.showRevspecs] : [...opts.revisions],
+    pathspecs: [...opts.pathspecs],
+    wordDiff: undefined,
+    wordDiffRegex: undefined,
+    colorWords: undefined,
+    colorMoved: undefined,
+    colorMovedWs: undefined,
+  })
 }
 
 /**

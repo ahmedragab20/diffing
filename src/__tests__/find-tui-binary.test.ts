@@ -20,6 +20,12 @@ vi.mock('node:child_process', async (importOriginal) => {
 const FAKE_CLI_URL = 'file:///fake/repo/dist/cli.mjs'
 
 describe('findTuiBinary', () => {
+  it('maps every supported runtime to its native package name', async () => {
+    const { tuiPackageName } = await import('../lib/find-tui-binary.js')
+    expect(tuiPackageName('darwin', 'arm64', null)).toBe('@diffing/tui-darwin-arm64')
+    expect(tuiPackageName('linux', 'x64', 'musl')).toBe('@diffing/tui-linux-x64-musl')
+    expect(tuiPackageName('win32', 'x64', 'msvc')).toBe('@diffing/tui-win32-x64-msvc')
+  })
   // The candidate list is order-sensitive: development builds should win
   // over a stale `bin/` artefact, and a PATH lookup is a last-resort fallback.
   // These tests pin down both the per-platform extension *and* the search
@@ -111,6 +117,21 @@ describe('findTuiBinary', () => {
     )
     const { findTuiBinary } = await import('../lib/find-tui-binary.js')
     expect(findTuiBinary(FAKE_CLI_URL)).toMatch(/target\/release\/diffing-tui$/)
+  })
+
+  it('exposes every candidate so callers can feature-probe mixed versions', async () => {
+    setPlatform('linux')
+    mockExistsSync.mockImplementation(
+      (p: string) =>
+        p.endsWith('/target/release/diffing-tui') ||
+        p.endsWith('/target/debug/diffing-tui'),
+    )
+    const { findTuiBinaries } = await import('../lib/find-tui-binary.js')
+    const found = findTuiBinaries(FAKE_CLI_URL)
+    expect(found.some(path => path.endsWith('/target/release/diffing-tui'))).toBe(true)
+    expect(found.some(path => path.endsWith('/target/debug/diffing-tui'))).toBe(true)
+    expect(found.findIndex(path => path.includes('/release/')))
+      .toBeLessThan(found.findIndex(path => path.includes('/debug/')))
   })
 
   it('returns null when nothing is on disk and PATH lookup fails', async () => {

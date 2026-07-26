@@ -13,6 +13,7 @@ afterEach(() => {
 })
 
 const defaultSettings = {
+  defaultMode: 'web',
   staged: true,
   untracked: true,
   diffStyle: 'split',

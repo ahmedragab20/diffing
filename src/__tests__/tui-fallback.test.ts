@@ -83,4 +83,20 @@ describe('TUI fallback (no TTY)', () => {
     expect(result.stdout).toContain('b.txt')
     execFileSync('git', ['reset', '-q'], { cwd: SANDBOX })
   })
+
+  it('the view subcommand falls back to git diff outside a TTY', () => {
+    const result = runCli(['view'])
+    expect(result.status).toBe(0)
+    expect(result.stderr).toContain('diffing view requires a TTY')
+    expect(result.stdout).toBe(runGitDiff())
+  })
+
+  it('--view forwards git diff arguments through the fallback', () => {
+    execFileSync('git', ['add', '.'], { cwd: SANDBOX })
+    const result = runCli(['--view', '--staged'])
+    expect(result.status).toBe(0)
+    expect(result.stderr).toContain('diffing view requires a TTY')
+    expect(result.stdout).toContain('b.txt')
+    execFileSync('git', ['reset', '-q'], { cwd: SANDBOX })
+  })
 })

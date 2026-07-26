@@ -2,6 +2,28 @@ import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+
+function packagedBinary(callerUrl: string, ext: string): string | null {
+  const report = process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined
+  const runtime = process.platform === 'linux'
+    ? report?.header?.glibcVersionRuntime ? 'gnu' : 'musl'
+    : process.platform === 'win32' ? 'msvc' : null
+  const packageName = tuiPackageName(process.platform, process.arch, runtime)
+  try {
+    return createRequire(callerUrl).resolve(`${packageName}/bin/diffing-tui${ext}`)
+  } catch {
+    return null
+  }
+}
+
+export function tuiPackageName(
+  platform: NodeJS.Platform,
+  arch: string,
+  runtime: 'gnu' | 'musl' | 'msvc' | null,
+): string {
+  return `@diffing/tui-${[platform, arch, runtime].filter(Boolean).join('-')}`
+}
 
 /**
  * Locate the `diffing-tui` native binary. Looks, in order:
@@ -20,20 +42,20 @@ import { fileURLToPath } from 'node:url'
  * from `cli.ts`. Exposed as a parameter so unit tests can pin the search
  * root to a known location instead of depending on the test runner's CWD.
  */
-export function findTuiBinary(callerUrl: string): string | null {
+export function findTuiBinaries(callerUrl: string): string[] {
   const ext = process.platform === 'win32' ? '.exe' : ''
   const here = dirname(fileURLToPath(callerUrl))
+  const packaged = packagedBinary(callerUrl, ext)
   const candidates: string[] = [
     resolve(here, `diffing-tui${ext}`),
+    ...(packaged ? [packaged] : []),
     resolve(here, '..', 'bin', `diffing-tui${ext}`),
     resolve(here, '..', 'target', 'release', `diffing-tui${ext}`),
     resolve(here, '..', '..', 'target', 'release', `diffing-tui${ext}`),
     resolve(here, '..', 'target', 'debug', `diffing-tui${ext}`),
     resolve(here, '..', '..', 'target', 'debug', `diffing-tui${ext}`),
   ]
-  for (const c of candidates) {
-    if (existsSync(c)) return c
-  }
+  const found = candidates.filter(c => existsSync(c))
   // Final fallback: $PATH lookup.
   try {
     const which = process.platform === 'win32' ? 'where' : 'which'
@@ -42,11 +64,17 @@ export function findTuiBinary(callerUrl: string): string | null {
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim()
     if (out) {
-      const first = out.split(/\r?\n/)[0]?.trim()
-      if (first && isAbsolute(first)) return first
+      for (const line of out.split(/\r?\n/)) {
+        const candidate = line.trim()
+        if (candidate && isAbsolute(candidate)) found.push(candidate)
+      }
     }
   } catch {
     // not on $PATH — fall through
   }
-  return null
+  return [...new Set(found)]
+}
+
+export function findTuiBinary(callerUrl: string): string | null {
+  return findTuiBinaries(callerUrl)[0] ?? null
 }

@@ -17,6 +17,7 @@ vi.mock('node:fs', async (importOriginal) => {
 })
 
 const DEFAULTS = {
+  defaultMode: 'web' as const,
   staged: true,
   untracked: true,
   diffStyle: 'split' as const,
@@ -69,6 +70,12 @@ describe('settings', () => {
       mockReadFileSync.mockReturnValue(JSON.stringify({ browser: 'firefox' }))
       const { loadSettings } = await import('../lib/settings.js')
       expect(loadSettings().browser).toBe('firefox')
+    })
+
+    it('falls back to web for an invalid default mode', async () => {
+      mockReadFileSync.mockReturnValue(JSON.stringify({ defaultMode: 'terminal' }))
+      const { loadSettings } = await import('../lib/settings.js')
+      expect(loadSettings().defaultMode).toBe('web')
     })
   })
 
