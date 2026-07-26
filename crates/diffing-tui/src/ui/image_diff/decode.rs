@@ -1,43 +1,24 @@
-//! Bounded, terminal-native image comparison.
-//!
-//! The TUI cannot assume a Kitty/iTerm/Sixel-capable terminal. Raster images
-//! are therefore decoded on a worker and painted with Unicode half-blocks,
-//! which works in every color terminal and degrades to luminance glyphs under
-//! `NO_COLOR`/`TERM=dumb`. Decoding is intentionally narrow and bounded: PNG
-//! (including indexed/interlaced PNG), GIF first frames, BMP, and PNG/DIB ICO
-//! files are supported without adding a new package download to the project.
-//! JPEG, WebP, AVIF, and locally self-contained SVG files can use a bounded,
-//! timeout-protected ImageMagick/ffmpeg fallback; otherwise the UI gives an
-//! actionable capability message instead of the old generic "binary" row.
+//! Image loaders, bounds, and raster decoders.
 
-use std::collections::{HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::io::{Cursor, Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use diffing_core::index::{IndexedChangeKind, IndexedFile};
+use diffing_core::index::IndexedChangeKind;
 use flate2::read::ZlibDecoder;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
-use ratatui::widgets::Widget;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::themes::{Palette, ThemeName};
-use crate::ui::gridline::{field_block, fill, GridlineTokens};
+use super::{ImageDiffData, ImageKey, ImageSide, RasterImage};
 
 const MAX_ENCODED_BYTES: usize = 32 * 1024 * 1024;
 const MAX_DECODED_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DIMENSION: u32 = 16_384;
 const MAX_PREVIEW_DIMENSION: u32 = 2_048;
-const CACHE_ENTRIES: usize = 6;
-const CACHE_MAX_BYTES: usize = 96 * 1024 * 1024;
 const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(8);
 
 const IMAGE_EXTENSIONS: &[&str] = &[
@@ -53,209 +34,7 @@ pub fn is_image_path(path: &Path) -> bool {
                 .any(|candidate| extension.eq_ignore_ascii_case(candidate))
         })
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ImageKey {
-    generation: u64,
-    old_path: Option<PathBuf>,
-    new_path: Option<PathBuf>,
-    old_oid: Option<String>,
-    new_oid: Option<String>,
-    kind: IndexedChangeKind,
-}
-
-impl ImageKey {
-    pub fn new(generation: u64, file: &IndexedFile) -> Self {
-        Self {
-            generation,
-            old_path: file.old_path.clone(),
-            new_path: file.new_path.clone(),
-            old_oid: file.old_oid.clone(),
-            new_oid: file.new_oid.clone(),
-            kind: file.kind,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RasterImage {
-    pub width: u32,
-    pub height: u32,
-    pub original_width: u32,
-    pub original_height: u32,
-    pub encoded_bytes: usize,
-    pixels: Arc<[u8]>,
-}
-
-impl RasterImage {
-    fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
-        let x = x.min(self.width.saturating_sub(1));
-        let y = y.min(self.height.saturating_sub(1));
-        let offset =
-            (u64::from(y) * u64::from(self.width) + u64::from(x)).saturating_mul(4) as usize;
-        self.pixels
-            .get(offset..offset.saturating_add(4))
-            .map(|value| [value[0], value[1], value[2], value[3]])
-            .unwrap_or([0, 0, 0, 0])
-    }
-
-    fn summary(&self) -> String {
-        let size = if self.encoded_bytes == 0 {
-            "derived".to_string()
-        } else {
-            human_bytes(self.encoded_bytes)
-        };
-        format!("{}×{} · {size}", self.original_width, self.original_height)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ImageSide {
-    Missing,
-    Ready(Arc<RasterImage>),
-    Error(String),
-}
-
-impl ImageSide {
-    fn ready(&self) -> Option<&Arc<RasterImage>> {
-        match self {
-            Self::Ready(image) => Some(image),
-            Self::Missing | Self::Error(_) => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ImageDiffData {
-    pub before: ImageSide,
-    pub after: ImageSide,
-    pub difference: Option<Arc<RasterImage>>,
-    pub changed_percent: Option<f32>,
-    pub mean_delta: Option<f32>,
-}
-
-impl ImageDiffData {
-    pub fn has_two_images(&self) -> bool {
-        self.before.ready().is_some() && self.after.ready().is_some()
-    }
-
-    fn memory_bytes(&self) -> usize {
-        let side_bytes = |side: &ImageSide| {
-            side.ready()
-                .map(|image| image.pixels.len())
-                .unwrap_or_default()
-        };
-        side_bytes(&self.before)
-            .saturating_add(side_bytes(&self.after))
-            .saturating_add(
-                self.difference
-                    .as_ref()
-                    .map(|image| image.pixels.len())
-                    .unwrap_or_default(),
-            )
-    }
-}
-
-struct ImageRequest {
-    key: ImageKey,
-}
-
-struct ImageEvent {
-    key: ImageKey,
-    data: ImageDiffData,
-}
-
-pub struct ImageDiffManager {
-    request_tx: SyncSender<ImageRequest>,
-    result_rx: Receiver<ImageEvent>,
-    pending: HashSet<ImageKey>,
-    cache: VecDeque<(ImageKey, Arc<ImageDiffData>)>,
-}
-
-impl ImageDiffManager {
-    pub fn new(repo_root: PathBuf) -> Result<Self> {
-        // Navigation can outrun image decoding. A bounded queue keeps a repo
-        // with many large images from accumulating stale preview work; a full
-        // queue is retried naturally on the next render.
-        let (request_tx, request_rx) = mpsc::sync_channel::<ImageRequest>(4);
-        let (result_tx, result_rx) = mpsc::channel::<ImageEvent>();
-        thread::Builder::new()
-            .name("diffing-image-preview".to_string())
-            .spawn(move || image_worker(repo_root, request_rx, result_tx))?;
-        Ok(Self {
-            request_tx,
-            result_rx,
-            pending: HashSet::new(),
-            cache: VecDeque::new(),
-        })
-    }
-
-    pub fn request(&mut self, key: ImageKey) {
-        if self.pending.contains(&key) || self.cache.iter().any(|(cached, _)| cached == &key) {
-            return;
-        }
-        match self.request_tx.try_send(ImageRequest { key: key.clone() }) {
-            Ok(()) => {
-                self.pending.insert(key);
-            }
-            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {}
-        }
-    }
-
-    pub fn poll(&mut self) -> bool {
-        let mut changed = false;
-        while let Ok(event) = self.result_rx.try_recv() {
-            self.pending.remove(&event.key);
-            if let Some(position) = self
-                .cache
-                .iter()
-                .position(|(cached, _)| cached == &event.key)
-            {
-                self.cache.remove(position);
-            }
-            self.cache.push_back((event.key, Arc::new(event.data)));
-            while self.cache.len() > CACHE_ENTRIES
-                || (self.cache.len() > 1
-                    && self.cache.iter().fold(0usize, |total, (_, data)| {
-                        total.saturating_add(data.memory_bytes())
-                    }) > CACHE_MAX_BYTES)
-            {
-                self.cache.pop_front();
-            }
-            changed = true;
-        }
-        changed
-    }
-
-    pub fn get(&mut self, key: &ImageKey) -> Option<Arc<ImageDiffData>> {
-        let position = self.cache.iter().position(|(cached, _)| cached == key)?;
-        let entry = self.cache.remove(position)?;
-        let data = entry.1.clone();
-        self.cache.push_back(entry);
-        Some(data)
-    }
-}
-
-fn image_worker(
-    repo_root: PathBuf,
-    request_rx: Receiver<ImageRequest>,
-    result_tx: Sender<ImageEvent>,
-) {
-    while let Ok(request) = request_rx.recv() {
-        let data = load_image_diff(&repo_root, &request.key);
-        if result_tx
-            .send(ImageEvent {
-                key: request.key,
-                data,
-            })
-            .is_err()
-        {
-            break;
-        }
-    }
-}
-
-fn load_image_diff(repo_root: &Path, key: &ImageKey) -> ImageDiffData {
+pub(crate) fn load_image_diff(repo_root: &Path, key: &ImageKey) -> ImageDiffData {
     let expects_before = !matches!(
         key.kind,
         IndexedChangeKind::Added | IndexedChangeKind::Untracked
@@ -278,7 +57,7 @@ fn load_image_diff(repo_root: &Path, key: &ImageKey) -> ImageDiffData {
     let (difference, changed_percent, mean_delta) = before
         .ready()
         .zip(after.ready())
-        .map(|(before, after)| build_difference(before, after))
+        .map(|(before, after)| super::compare::build_difference(before, after))
         .map(|(image, changed, mean)| (Some(Arc::new(image)), Some(changed), Some(mean)))
         .unwrap_or((None, None, None));
     ImageDiffData {
@@ -451,7 +230,7 @@ fn read_bounded_git_output(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-fn human_bytes(bytes: usize) -> String {
+pub(crate) fn human_bytes(bytes: usize) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = 1024.0 * 1024.0;
     if bytes as f64 >= MIB {
@@ -463,7 +242,7 @@ fn human_bytes(bytes: usize) -> String {
     }
 }
 
-fn decode_raster(bytes: &[u8], path: &Path) -> Result<RasterImage> {
+pub fn decode_raster(bytes: &[u8], path: &Path) -> Result<RasterImage> {
     if bytes.len() > MAX_ENCODED_BYTES {
         bail!(
             "image exceeds the {} preview limit",
@@ -491,6 +270,7 @@ fn decode_raster(bytes: &[u8], path: &Path) -> Result<RasterImage> {
         original_height: height,
         encoded_bytes,
         pixels: pixels.into(),
+        heat_map: false,
     })
 }
 
@@ -921,473 +701,6 @@ fn downsample_preview(width: u32, height: u32, pixels: Vec<u8>) -> (u32, u32, Ve
     }
     (target_width, target_height, output)
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImageCompareMode {
-    SideBySide,
-    Before,
-    After,
-    Difference,
-}
-
-impl ImageCompareMode {
-    const ALL: [Self; 4] = [
-        Self::SideBySide,
-        Self::Before,
-        Self::After,
-        Self::Difference,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::SideBySide => "Side by side",
-            Self::Before => "Before",
-            Self::After => "After",
-            Self::Difference => "Difference",
-        }
-    }
-
-    pub fn cycle(self, delta: isize, data: &ImageDiffData) -> Self {
-        let available = Self::ALL.into_iter().filter(|mode| mode.is_available(data));
-        let modes: Vec<Self> = available.collect();
-        if modes.is_empty() {
-            return self;
-        }
-        let current = modes.iter().position(|mode| *mode == self).unwrap_or(0);
-        modes[(current as isize + delta).rem_euclid(modes.len() as isize) as usize]
-    }
-
-    pub fn normalize(self, data: &ImageDiffData) -> Self {
-        if self.is_available(data) {
-            self
-        } else if data.after.ready().is_some() {
-            Self::After
-        } else if data.before.ready().is_some() {
-            Self::Before
-        } else {
-            self
-        }
-    }
-
-    pub fn is_available(self, data: &ImageDiffData) -> bool {
-        match self {
-            Self::SideBySide | Self::Difference => data.has_two_images(),
-            Self::Before => data.before.ready().is_some(),
-            Self::After => data.after.ready().is_some(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ImageViewState {
-    pub mode: ImageCompareMode,
-    zoom_step: usize,
-    pan_x: i32,
-    pan_y: i32,
-}
-
-impl Default for ImageViewState {
-    fn default() -> Self {
-        Self {
-            mode: ImageCompareMode::SideBySide,
-            zoom_step: 0,
-            pan_x: 0,
-            pan_y: 0,
-        }
-    }
-}
-
-impl ImageViewState {
-    const ZOOM: [f32; 7] = [1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0];
-
-    pub fn zoom_in(&mut self) {
-        self.zoom_step = (self.zoom_step + 1).min(Self::ZOOM.len() - 1);
-    }
-
-    pub fn zoom_out(&mut self) {
-        self.zoom_step = self.zoom_step.saturating_sub(1);
-        if self.zoom_step == 0 {
-            self.pan_x = 0;
-            self.pan_y = 0;
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.zoom_step = 0;
-        self.pan_x = 0;
-        self.pan_y = 0;
-    }
-
-    pub fn pan(&mut self, x: i32, y: i32) {
-        if self.zoom_step > 0 {
-            self.pan_x = self.pan_x.saturating_add(x);
-            self.pan_y = self.pan_y.saturating_add(y);
-        }
-    }
-
-    pub fn zoom_label(&self) -> String {
-        if self.zoom_step == 0 {
-            "Fit".to_string()
-        } else {
-            format!("{:.0}%", Self::ZOOM[self.zoom_step] * 100.0)
-        }
-    }
-}
-
-pub fn render_image_diff(
-    data: &ImageDiffData,
-    path: &Path,
-    state: &ImageViewState,
-    area: Rect,
-    theme: ThemeName,
-    palette: &Palette,
-    buf: &mut Buffer,
-) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let tokens = GridlineTokens::from(palette);
-    fill(area, tokens.canvas, buf);
-    let footer_height = u16::from(area.height >= 4);
-    let body = Rect::new(
-        area.x,
-        area.y,
-        area.width,
-        area.height.saturating_sub(footer_height),
-    );
-    let effective_mode = if state.mode == ImageCompareMode::SideBySide
-        && (!data.has_two_images() || body.width < 28)
-    {
-        if data.after.ready().is_some() {
-            ImageCompareMode::After
-        } else {
-            ImageCompareMode::Before
-        }
-    } else {
-        state.mode
-    };
-    match effective_mode {
-        ImageCompareMode::SideBySide if data.has_two_images() && body.width >= 28 => {
-            let left_width = body.width.saturating_sub(1) / 2;
-            let left = Rect::new(body.x, body.y, left_width, body.height);
-            let divider_x = body.x + left_width;
-            let right = Rect::new(
-                divider_x + 1,
-                body.y,
-                body.width.saturating_sub(left_width + 1),
-                body.height,
-            );
-            render_side(" Before ", &data.before, left, state, theme, palette, buf);
-            for y in body.y..body.y.saturating_add(body.height) {
-                buf[(divider_x, y)]
-                    .set_symbol("│")
-                    .set_style(Style::default().fg(tokens.rule).bg(tokens.canvas));
-            }
-            render_side(" After ", &data.after, right, state, theme, palette, buf);
-        }
-        ImageCompareMode::Before => {
-            render_side(" Before ", &data.before, body, state, theme, palette, buf)
-        }
-        ImageCompareMode::After => {
-            render_side(" After ", &data.after, body, state, theme, palette, buf)
-        }
-        ImageCompareMode::Difference => {
-            let side = data
-                .difference
-                .as_ref()
-                .map(|image| ImageSide::Ready(image.clone()))
-                .unwrap_or_else(|| ImageSide::Error("difference needs both versions".to_string()));
-            render_side(
-                " Pixel difference ",
-                &side,
-                body,
-                state,
-                theme,
-                palette,
-                buf,
-            );
-        }
-        ImageCompareMode::SideBySide => {
-            let side = if data.after.ready().is_some() {
-                &data.after
-            } else {
-                &data.before
-            };
-            render_side(" Image ", side, body, state, theme, palette, buf);
-        }
-    }
-    if footer_height > 0 {
-        let metrics = data
-            .changed_percent
-            .zip(data.mean_delta)
-            .map(|(changed, mean)| format!(" · {changed:.1}% pixels changed · mean Δ {mean:.1}"))
-            .unwrap_or_default();
-        let footer = format!(
-            "{} · {} · {}{}",
-            path.to_string_lossy(),
-            effective_mode.label(),
-            state.zoom_label(),
-            metrics
-        );
-        buf.set_stringn(
-            area.x + 1,
-            area.y + area.height - 1,
-            footer,
-            area.width.saturating_sub(2) as usize,
-            Style::default().fg(tokens.muted).bg(tokens.canvas),
-        );
-    }
-}
-
-fn render_side(
-    title: &str,
-    side: &ImageSide,
-    area: Rect,
-    state: &ImageViewState,
-    theme: ThemeName,
-    palette: &Palette,
-    buf: &mut Buffer,
-) {
-    if area.width < 3 || area.height < 3 {
-        return;
-    }
-    let tokens = GridlineTokens::from(palette);
-    let title = match side {
-        ImageSide::Ready(image) => format!("{title}{} ", image.summary()),
-        ImageSide::Missing | ImageSide::Error(_) => title.to_string(),
-    };
-    let block = field_block(title, palette, true);
-    let inner = block.inner(area);
-    block.render(area, buf);
-    match side {
-        ImageSide::Ready(image) => render_raster(image, inner, state, theme, palette, buf),
-        ImageSide::Missing => {
-            centered_message("Version does not exist", inner, tokens.muted, palette, buf)
-        }
-        ImageSide::Error(error) => centered_message(error, inner, tokens.warning, palette, buf),
-    }
-}
-
-fn centered_message(message: &str, area: Rect, color: Color, palette: &Palette, buf: &mut Buffer) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let maximum = area.width.saturating_sub(2) as usize;
-    let mut width = 0usize;
-    let message: String = message
-        .chars()
-        .take_while(|character| {
-            let next = width.saturating_add(UnicodeWidthChar::width(*character).unwrap_or(0));
-            if next > maximum {
-                false
-            } else {
-                width = next;
-                true
-            }
-        })
-        .collect();
-    let x = area.x
-        + area
-            .width
-            .saturating_sub(UnicodeWidthStr::width(message.as_str()) as u16)
-            / 2;
-    let y = area.y + area.height / 2;
-    buf.set_string(
-        x,
-        y,
-        message,
-        Style::default().fg(color).bg(palette.elevated),
-    );
-}
-
-fn render_raster(
-    image: &RasterImage,
-    area: Rect,
-    state: &ImageViewState,
-    theme: ThemeName,
-    palette: &Palette,
-    buf: &mut Buffer,
-) {
-    if area.width == 0 || area.height == 0 || image.width == 0 || image.height == 0 {
-        return;
-    }
-    let monochrome = std::env::var_os("NO_COLOR").is_some()
-        || std::env::var("TERM").is_ok_and(|term| term == "dumb");
-    let truecolor = std::env::var("COLORTERM").is_ok_and(|value| {
-        let value = value.to_ascii_lowercase();
-        value.contains("truecolor") || value.contains("24bit")
-    }) || std::env::var("TERM").is_ok_and(|value| {
-        let value = value.to_ascii_lowercase();
-        value.contains("direct") || value.contains("truecolor")
-    });
-    let raw_background = Palette::for_theme(theme).elevated;
-    let background = rgb_of(raw_background);
-    let pixel_height = u32::from(area.height).saturating_mul(2);
-    let base_scale =
-        (area.width as f64 / image.width as f64).min(pixel_height as f64 / image.height as f64);
-    let zoom = ImageViewState::ZOOM[state.zoom_step] as f64;
-    let draw_width = (image.width as f64 * base_scale * zoom).round().max(1.0) as i32;
-    let draw_height = (image.height as f64 * base_scale * zoom).round().max(1.0) as i32;
-    let pixel_height = pixel_height as i32;
-    let horizontal_overflow = (draw_width - i32::from(area.width)).max(0);
-    let vertical_overflow = (draw_height - pixel_height).max(0);
-    let max_pan_x = (horizontal_overflow + 1) / 2;
-    let max_pan_y = (vertical_overflow + 1) / 2;
-    let pan_x = state.pan_x.clamp(-max_pan_x, max_pan_x);
-    let pan_y = state.pan_y.saturating_mul(2).clamp(-max_pan_y, max_pan_y);
-    let origin_x = (i32::from(area.width) - draw_width) / 2 + pan_x;
-    let origin_y = (pixel_height - draw_height) / 2 + pan_y;
-    let color = |pixel: [u8; 4]| {
-        let [r, g, b] = composite(pixel, background);
-        if truecolor {
-            Color::Rgb(r, g, b)
-        } else {
-            ansi256(r, g, b)
-        }
-    };
-    for cell_y in 0..area.height {
-        for cell_x in 0..area.width {
-            let sample = |pixel_y: i32| {
-                let x = i32::from(cell_x) - origin_x;
-                let y = pixel_y - origin_y;
-                if x < 0 || y < 0 || x >= draw_width || y >= draw_height {
-                    return [background.0, background.1, background.2, 255];
-                }
-                let source_x = (x as u64 * u64::from(image.width) / draw_width as u64) as u32;
-                let source_y = (y as u64 * u64::from(image.height) / draw_height as u64) as u32;
-                image.pixel(source_x, source_y)
-            };
-            let top = sample(i32::from(cell_y) * 2);
-            let bottom = sample(i32::from(cell_y) * 2 + 1);
-            let target = &mut buf[(area.x + cell_x, area.y + cell_y)];
-            if monochrome {
-                let [tr, tg, tb] = composite(top, background);
-                let [br, bg, bb] = composite(bottom, background);
-                let luminance = (u32::from(tr) * 54
-                    + u32::from(tg) * 183
-                    + u32::from(tb) * 19
-                    + u32::from(br) * 54
-                    + u32::from(bg) * 183
-                    + u32::from(bb) * 19)
-                    / 512;
-                let ramp = b" .:-=+*#%@";
-                let index = (luminance as usize * (ramp.len() - 1) / 255).min(ramp.len() - 1);
-                target
-                    .set_char(ramp[index] as char)
-                    .set_style(Style::default().fg(palette.fg).bg(palette.elevated));
-            } else {
-                target
-                    .set_symbol("▀")
-                    .set_style(Style::default().fg(color(top)).bg(color(bottom)));
-            }
-        }
-    }
-}
-
-fn rgb_of(color: Color) -> (u8, u8, u8) {
-    match color {
-        Color::Rgb(red, green, blue) => (red, green, blue),
-        _ => (0, 0, 0),
-    }
-}
-
-fn composite(pixel: [u8; 4], background: (u8, u8, u8)) -> [u8; 3] {
-    let alpha = u16::from(pixel[3]);
-    let blend = |foreground: u8, back: u8| {
-        ((u16::from(foreground) * alpha + u16::from(back) * (255 - alpha) + 127) / 255) as u8
-    };
-    [
-        blend(pixel[0], background.0),
-        blend(pixel[1], background.1),
-        blend(pixel[2], background.2),
-    ]
-}
-
-fn ansi256(red: u8, green: u8, blue: u8) -> Color {
-    let component = |value: u8| ((value as u16 * 5 + 127) / 255) as u8;
-    Color::Indexed(16 + 36 * component(red) + 6 * component(green) + component(blue))
-}
-
-fn build_difference(before: &RasterImage, after: &RasterImage) -> (RasterImage, f32, f32) {
-    let original_width = before.original_width.max(after.original_width);
-    let original_height = before.original_height.max(after.original_height);
-    let scale = (MAX_PREVIEW_DIMENSION as f64 / original_width as f64)
-        .min(MAX_PREVIEW_DIMENSION as f64 / original_height as f64)
-        .min(1.0);
-    let width = (original_width as f64 * scale).round().max(1.0) as u32;
-    let height = (original_height as f64 * scale).round().max(1.0) as u32;
-    let mut pixels = vec![0; width as usize * height as usize * 4];
-    let mut changed = 0u64;
-    let mut total_delta = 0u64;
-    for y in 0..height {
-        for x in 0..width {
-            let original_x = u64::from(x) * u64::from(original_width) / u64::from(width);
-            let original_y = u64::from(y) * u64::from(original_height) / u64::from(height);
-            let sample = |image: &RasterImage| {
-                if original_x >= u64::from(image.original_width)
-                    || original_y >= u64::from(image.original_height)
-                {
-                    return None;
-                }
-                let sx = original_x * u64::from(image.width) / u64::from(image.original_width);
-                let sy = original_y * u64::from(image.height) / u64::from(image.original_height);
-                Some(image.pixel(sx as u32, sy as u32))
-            };
-            let visual = |pixel: [u8; 4]| {
-                let alpha = u16::from(pixel[3]);
-                [
-                    (u16::from(pixel[0]) * alpha / 255) as u8,
-                    (u16::from(pixel[1]) * alpha / 255) as u8,
-                    (u16::from(pixel[2]) * alpha / 255) as u8,
-                    pixel[3],
-                ]
-            };
-            let delta = match (sample(before), sample(after)) {
-                (Some(left), Some(right)) => visual(left)
-                    .iter()
-                    .zip(visual(right).iter())
-                    .map(|(left, right)| left.abs_diff(*right) as u16)
-                    .max()
-                    .unwrap_or(0) as u8,
-                (None, None) => 0,
-                (Some(_), None) | (None, Some(_)) => 255,
-            };
-            changed += u64::from(delta > 8);
-            total_delta += u64::from(delta);
-            let offset = (u64::from(y) * u64::from(width) + u64::from(x)) as usize * 4;
-            pixels[offset..offset + 4].copy_from_slice(&[
-                delta,
-                delta.saturating_mul(3) / 5,
-                if delta == 0 { 16 } else { 0 },
-                255,
-            ]);
-        }
-    }
-    let count = u64::from(width) * u64::from(height);
-    let changed_percent = if count == 0 {
-        0.0
-    } else {
-        changed as f32 * 100.0 / count as f32
-    };
-    let mean_delta = if count == 0 {
-        0.0
-    } else {
-        total_delta as f32 / count as f32
-    };
-    (
-        RasterImage {
-            width,
-            height,
-            original_width,
-            original_height,
-            encoded_bytes: 0,
-            pixels: pixels.into(),
-        },
-        changed_percent,
-        mean_delta,
-    )
-}
-
 // Decoder implementations live below. They intentionally return a plain RGBA
 // buffer so rendering and comparison never depend on codec-specific state.
 
@@ -2196,9 +1509,8 @@ fn read_le_u32(bytes: &[u8], offset: usize) -> Result<u32> {
 fn read_le_i32(bytes: &[u8], offset: usize) -> Result<i32> {
     Ok(read_le_u32(bytes, offset)? as i32)
 }
-
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use flate2::write::ZlibEncoder;
     use flate2::Compression;
@@ -2214,7 +1526,7 @@ mod tests {
         output.extend_from_slice(&hasher.finalize().to_be_bytes());
     }
 
-    fn rgba_png(width: u32, height: u32, pixels: &[[u8; 4]]) -> Vec<u8> {
+    pub fn rgba_png(width: u32, height: u32, pixels: &[[u8; 4]]) -> Vec<u8> {
         let mut raw = Vec::new();
         for row in pixels.chunks(width as usize).take(height as usize) {
             raw.push(0);
@@ -2328,99 +1640,12 @@ mod tests {
     }
 
     #[test]
-    fn image_difference_reports_changed_pixels() {
-        let before = decode_raster(
-            &rgba_png(2, 1, &[[0, 0, 0, 255], [0, 0, 0, 255]]),
-            Path::new("before.png"),
-        )
-        .unwrap();
-        let after = decode_raster(
-            &rgba_png(2, 1, &[[255, 255, 255, 255], [0, 0, 0, 255]]),
-            Path::new("after.png"),
-        )
-        .unwrap();
-        let (_, changed, mean) = build_difference(&before, &after);
-        assert_eq!(changed, 50.0);
-        assert_eq!(mean, 127.5);
-    }
-
-    #[test]
-    fn image_difference_ignores_hidden_rgb_in_fully_transparent_pixels() {
-        let before =
-            decode_raster(&rgba_png(1, 1, &[[255, 0, 0, 0]]), Path::new("before.png")).unwrap();
-        let after =
-            decode_raster(&rgba_png(1, 1, &[[0, 255, 255, 0]]), Path::new("after.png")).unwrap();
-        let (_, changed, mean) = build_difference(&before, &after);
-        assert_eq!(changed, 0.0);
-        assert_eq!(mean, 0.0);
-    }
-
-    #[test]
-    fn image_difference_treats_canvas_size_as_a_visual_change() {
-        let before =
-            decode_raster(&rgba_png(1, 1, &[[0, 0, 0, 0]]), Path::new("before.png")).unwrap();
-        let after = decode_raster(
-            &rgba_png(2, 1, &[[0, 0, 0, 0], [0, 0, 0, 0]]),
-            Path::new("after.png"),
-        )
-        .unwrap();
-        let (difference, changed, mean) = build_difference(&before, &after);
-        assert_eq!((difference.width, difference.height), (2, 1));
-        assert_eq!(changed, 50.0);
-        assert_eq!(mean, 127.5);
-    }
-
-    #[test]
-    fn unavailable_comparison_modes_fall_back_to_the_existing_side() {
-        let after =
-            decode_raster(&rgba_png(1, 1, &[[1, 2, 3, 255]]), Path::new("after.png")).unwrap();
-        let data = ImageDiffData {
-            before: ImageSide::Missing,
-            after: ImageSide::Ready(Arc::new(after)),
-            difference: None,
-            changed_percent: None,
-            mean_delta: None,
-        };
-        assert_eq!(
-            ImageCompareMode::SideBySide.normalize(&data),
-            ImageCompareMode::After
-        );
-        assert_eq!(
-            ImageCompareMode::Difference.normalize(&data),
-            ImageCompareMode::After
-        );
-    }
-
-    #[test]
     fn ppm_decoder_accepts_comments_without_consuming_pixel_whitespace() {
         let mut ppm = b"P6\n# generated\n2 1\n255\n".to_vec();
         ppm.extend_from_slice(&[32, 0, 255, 0, 255, 0]);
         let (width, height, pixels) = decode_ppm(&ppm).unwrap();
         assert_eq!((width, height), (2, 1));
         assert_eq!(&pixels[..8], &[32, 0, 255, 255, 0, 255, 0, 255]);
-    }
-
-    #[test]
-    fn raster_render_uses_half_blocks_and_bounded_pan_zoom() {
-        let image = decode_raster(
-            &rgba_png(1, 2, &[[255, 0, 0, 255], [0, 0, 255, 255]]),
-            Path::new("sample.png"),
-        )
-        .unwrap();
-        let mut state = ImageViewState::default();
-        state.zoom_in();
-        state.pan(2, -1);
-        let area = Rect::new(0, 0, 12, 4);
-        let mut buffer = Buffer::empty(area);
-        render_raster(
-            &image,
-            area,
-            &state,
-            ThemeName::default(),
-            &Palette::default(),
-            &mut buffer,
-        );
-        assert!((0..area.height).any(|y| (0..area.width).any(|x| buffer[(x, y)].symbol() != " ")));
     }
 
     #[test]

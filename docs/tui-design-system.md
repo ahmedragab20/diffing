@@ -17,6 +17,17 @@ web-derived theme the same semantic hierarchy.
    never the only signal.
 5. **Themes provide values; components consume roles.** Component code must
    not add RGB values or reinterpret a palette field.
+6. **One control surface.** Primary navigation and mode verbs live in the
+   status strip. Content may show a single muted footer line; it never repeats
+   the full keymap.
+7. **Same verbs everywhere.** A binding shown in the status strip uses the
+   same key in help and in any mouse affordance. Chips mirror status verbs —
+   they are not a second help system.
+8. **Chrome never restates thrice.** Do not put the same bindings in a modal
+   title, a chip row, and the status strip for the common path. Fullscreen may
+   add mouse chips; keyboard users learn from the strip.
+9. **Tokens all the way down.** Presentation paths — including image difference
+   heat — consume `GridlineTokens` and `Tone`, not ad hoc RGB.
 
 ## Token layers
 
@@ -90,18 +101,37 @@ border; one boundary should occupy one cell.
 
 ### Images
 
-- Image comparisons are content, not decorative chrome. Give the raster the
-  largest available surface and put path, dimensions, mode, zoom, and metrics
-  in one quiet footer.
+- Image comparisons are **inline-first** content in the diff pane. Optional
+  thin fullscreen (`i`) shares the same `ImageViewState` and renderer — opening
+  fullscreen does not reset zoom, pan, or mode.
+- Give the raster the largest available surface. Path, dimensions, mode, zoom,
+  and metrics belong in **one** quiet `content_footer` under the raster. The
+  status strip owns key hints (`Tab mode · +/- zoom · hjkl pan · 0 fit · i
+  fullscreen`).
 - Before/After existence comes from Git change semantics and blob ids, not from
-  whether a worktree path happens to exist.
-- Side-by-side may collapse to the available single side, and normal diff Split
-  layout falls back to Unified below its readable breakpoint.
+  whether a worktree path happens to exist. Default mode: both sides →
+  side-by-side; added → after; deleted → before.
+- Side-by-side may collapse to the available single side at narrow width, and
+  normal diff Split layout falls back to Unified below its readable breakpoint.
+- Use quiet side labels and a single `vertical_rule` between panes — not paired
+  `field_block` borders around every raster.
 - Decode and subprocess fallbacks must have byte, dimension, memory, and time
   bounds. An unavailable codec names the missing capability and recovery path.
+- Difference heat maps through `GridlineTokens` / `Tone`, never hardcoded RGB in
+  the presentation path.
 - Render truecolor when available, ANSI-256 otherwise, and luminance glyphs for
   `NO_COLOR` / `TERM=dumb`; terminal-specific graphics protocols are optional,
   never required.
+
+### Chip / toolbar (mouse affordance)
+
+- Use `chip` / `chip_row` only where pointer users need targets — typically thin
+  fullscreen image mode. Chips mirror status-strip verbs (mode, zoom, close);
+  they do not introduce new bindings.
+- Selected chips use `selected` / `accent`; idle chips stay on `canvas` or
+  `surface`. Hover uses `selected` without changing the verb.
+- Keyboard users should never need chips. If a chip label duplicates a status
+  hint, remove the chip or the duplicate hint — not both control surfaces.
 
 ### Command hints
 
@@ -174,3 +204,4 @@ cargo test -p diffing-tui --lib --tests
   enabled?
 - Are binary/image dimensions, allocations, subprocesses, and Git paths
   bounded and repository-contained?
+- Did this add a third place that shows the same binding?

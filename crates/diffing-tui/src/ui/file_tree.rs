@@ -35,6 +35,7 @@ pub enum FileNodeKind {
 pub struct FileTree {
     pub nodes: Vec<FileNode>,
     pub cursor: usize,
+    anchor_file: Option<usize>,
     all_nodes: Vec<FileNode>,
     filtered_file_indices: Vec<usize>,
     file_positions: HashMap<usize, usize>,
@@ -64,10 +65,14 @@ impl FileTree {
             .iter()
             .position(|n| n.kind == FileNodeKind::File)
             .unwrap_or(0);
+        let anchor_file = nodes
+            .get(cursor)
+            .and_then(|node| node.file_diff_idx);
         let mut tree = Self {
             all_nodes: nodes.clone(),
             nodes,
             cursor,
+            anchor_file,
             filtered_file_indices: (0..files.len()).collect(),
             file_positions: HashMap::new(),
             collapsed: std::collections::HashSet::new(),
@@ -78,6 +83,44 @@ impl FileTree {
 
     pub fn selected_file_idx(&self) -> Option<usize> {
         self.nodes.get(self.cursor).and_then(|n| n.file_diff_idx)
+    }
+
+    pub fn active_file_idx(&self) -> Option<usize> {
+        if let Some(index) = self.selected_file_idx() {
+            return Some(index);
+        }
+        self.anchor_file
+            .filter(|index| self.filtered_file_indices.contains(index))
+    }
+
+    fn touch_anchor_from_cursor(&mut self) {
+        if let Some(index) = self.selected_file_idx() {
+            self.anchor_file = Some(index);
+        }
+    }
+
+    fn parent_visible_index(&self, index: usize) -> Option<usize> {
+        let node = self.nodes.get(index)?;
+        let child_depth = node.depth;
+        let child_path = &node.path;
+        (0..index).rev().find_map(|candidate| {
+            let parent = self.nodes.get(candidate)?;
+            (parent.depth < child_depth && child_path.starts_with(&parent.path)).then_some(candidate)
+        })
+    }
+
+    fn nearest_visible_ancestor(&self, path: &Path) -> Option<usize> {
+        let mut current = Some(path.to_path_buf());
+        while let Some(path) = current {
+            if let Some(index) = self.nodes.iter().position(|node| node.path == path) {
+                return Some(index);
+            }
+            current = path
+                .parent()
+                .map(Path::to_path_buf)
+                .filter(|path| !path.as_os_str().is_empty());
+        }
+        None
     }
 
     pub fn navigable_file_indices(&self) -> &[usize] {
@@ -101,11 +144,62 @@ impl FileTree {
             next = len - 1;
         }
         self.cursor = next as usize;
+        self.touch_anchor_from_cursor();
+    }
+
+    pub fn set_cursor(&mut self, index: usize) {
+        if self.nodes.is_empty() {
+            self.cursor = 0;
+            return;
+        }
+        self.cursor = index.min(self.nodes.len() - 1);
+        self.touch_anchor_from_cursor();
+    }
+
+    pub fn relative_file_idx(&self, delta: isize) -> Option<usize> {
+        let visible_files: Vec<usize> = self
+            .nodes
+            .iter()
+            .filter_map(|node| node.file_diff_idx)
+            .collect();
+        if visible_files.is_empty() {
+            return None;
+        }
+        let len = visible_files.len() as isize;
+        let start = if let Some(file_idx) = self.selected_file_idx() {
+            visible_files
+                .iter()
+                .position(|index| *index == file_idx)? as isize
+        } else if delta > 0 {
+            let first_after = self
+                .nodes
+                .iter()
+                .skip(self.cursor + 1)
+                .find_map(|node| node.file_diff_idx)?;
+            visible_files
+                .iter()
+                .position(|index| *index == first_after)? as isize
+                - 1
+        } else {
+            let last_before = self
+                .nodes
+                .iter()
+                .take(self.cursor)
+                .rev()
+                .find_map(|node| node.file_diff_idx)?;
+            visible_files
+                .iter()
+                .position(|index| *index == last_before)? as isize
+                + 1
+        };
+        let next = (start + delta).rem_euclid(len) as usize;
+        visible_files.get(next).copied()
     }
 
     pub fn jump_to_file(&mut self, file_idx: usize) {
         if let Some(position) = self.file_positions.get(&file_idx) {
             self.cursor = *position;
+            self.touch_anchor_from_cursor();
             return;
         }
         if !self.filtered_file_indices.contains(&file_idx) {
@@ -124,6 +218,50 @@ impl FileTree {
             .retain(|directory| !path.starts_with(directory));
         if self.collapsed.len() != previous {
             self.rebuild_visible(Some(path));
+        }
+    }
+
+    pub fn navigate_left(&mut self) {
+        let Some(node) = self.nodes.get(self.cursor).cloned() else {
+            return;
+        };
+        if node.kind == FileNodeKind::Dir && node.expanded {
+            self.collapse_selected();
+            return;
+        }
+        if let Some(parent) = self.parent_visible_index(self.cursor) {
+            self.cursor = parent;
+            self.touch_anchor_from_cursor();
+        }
+    }
+
+    pub fn navigate_right(&mut self) {
+        let Some(node) = self.nodes.get(self.cursor).cloned() else {
+            return;
+        };
+        if node.kind != FileNodeKind::Dir {
+            return;
+        }
+        if !node.expanded {
+            self.expand_selected();
+            return;
+        }
+        let child_depth = node.depth + 1;
+        let parent_path = node.path.clone();
+        if let Some(child) = self
+            .nodes
+            .iter()
+            .enumerate()
+            .skip(self.cursor + 1)
+            .find(|(_, candidate)| {
+                candidate.depth == child_depth
+                    && candidate.path != parent_path
+                    && candidate.path.starts_with(&parent_path)
+            })
+            .map(|(index, _)| index)
+        {
+            self.cursor = child;
+            self.touch_anchor_from_cursor();
         }
     }
 
@@ -239,11 +377,17 @@ impl FileTree {
             .as_ref()
             .and_then(|path| self.nodes.iter().position(|node| &node.path == path))
             .or_else(|| {
+                selected_path
+                    .as_ref()
+                    .and_then(|path| self.nearest_visible_ancestor(path))
+            })
+            .or_else(|| {
                 self.nodes
                     .iter()
                     .position(|node| node.kind == FileNodeKind::File)
             })
             .unwrap_or(0);
+        self.touch_anchor_from_cursor();
         self.rebuild_positions();
     }
 
@@ -481,7 +625,8 @@ mod tests {
         ];
         let mut tree = FileTree::build(&files);
         tree.apply_filter("beta", false, false);
-        assert_eq!(tree.selected_file_idx(), Some(1));
+        assert_eq!(tree.selected_file_idx(), None);
+        assert_eq!(tree.nodes[tree.cursor].name, "src");
         assert_eq!(tree.navigable_file_indices(), &[1]);
         assert_eq!(tree.filtered_file_count(), 1);
     }
@@ -547,5 +692,112 @@ mod tests {
         tree.jump_to_file(1);
         assert_eq!(tree.selected_file_idx(), Some(1));
         assert!(tree.nodes.iter().any(|node| node.name == "nested"));
+    }
+
+    #[test]
+    fn navigate_left_from_deep_file_moves_to_parent_directory() {
+        let files = vec![
+            fd("src/core/a.rs", ChangeKind::Modified),
+            fd("src/core/nested/b.rs", ChangeKind::Added),
+            fd("README.md", ChangeKind::Modified),
+        ];
+        let mut tree = FileTree::build(&files);
+        tree.jump_to_file(1);
+        assert_eq!(tree.nodes[tree.cursor].name, "b.rs");
+        tree.navigate_left();
+        assert_eq!(tree.nodes[tree.cursor].kind, FileNodeKind::Dir);
+        assert_eq!(tree.nodes[tree.cursor].name, "nested");
+    }
+
+    #[test]
+    fn navigate_left_on_expanded_directory_collapses_then_climbs_parent() {
+        let files = vec![
+            fd("src/a.rs", ChangeKind::Modified),
+            fd("src/b.rs", ChangeKind::Added),
+            fd("README.md", ChangeKind::Modified),
+        ];
+        let mut tree = FileTree::build(&files);
+        tree.cursor = 0;
+        assert!(tree.nodes[0].expanded);
+        tree.navigate_left();
+        assert!(!tree.nodes[0].expanded);
+        assert_eq!(tree.cursor, 0);
+        tree.navigate_left();
+        assert_eq!(tree.cursor, 0);
+    }
+
+    #[test]
+    fn navigate_right_expands_collapsed_directory_then_moves_to_first_child() {
+        let files = vec![
+            fd("src/a.rs", ChangeKind::Modified),
+            fd("src/b.rs", ChangeKind::Added),
+            fd("README.md", ChangeKind::Modified),
+        ];
+        let mut tree = FileTree::build(&files);
+        tree.cursor = 0;
+        tree.navigate_left();
+        assert!(!tree.nodes[0].expanded);
+        tree.navigate_right();
+        assert!(tree.nodes[0].expanded);
+        assert_eq!(tree.cursor, 0);
+        tree.navigate_right();
+        assert_eq!(tree.nodes[tree.cursor].name, "a.rs");
+    }
+
+    #[test]
+    fn navigate_left_at_root_is_no_op() {
+        let files = vec![fd("README.md", ChangeKind::Modified)];
+        let mut tree = FileTree::build(&files);
+        let cursor = tree.cursor;
+        tree.navigate_left();
+        assert_eq!(tree.cursor, cursor);
+    }
+
+    #[test]
+    fn active_file_idx_keeps_anchor_when_cursor_on_directory() {
+        let files = vec![
+            fd("src/a.rs", ChangeKind::Modified),
+            fd("src/b.rs", ChangeKind::Added),
+            fd("README.md", ChangeKind::Modified),
+        ];
+        let mut tree = FileTree::build(&files);
+        tree.jump_to_file(1);
+        assert_eq!(tree.active_file_idx(), Some(1));
+        tree.cursor = 0;
+        assert_eq!(tree.selected_file_idx(), None);
+        assert_eq!(tree.active_file_idx(), Some(1));
+    }
+
+    #[test]
+    fn rebuild_visible_restores_nearest_visible_ancestor() {
+        let files = vec![
+            fd("src/alpha.rs", ChangeKind::Modified),
+            fd("src/beta.rs", ChangeKind::Added),
+            fd("README.md", ChangeKind::Modified),
+        ];
+        let mut tree = FileTree::build(&files);
+        tree.jump_to_file(0);
+        assert_eq!(tree.nodes[tree.cursor].name, "alpha.rs");
+        tree.apply_filter("beta", false, false);
+        assert_eq!(tree.nodes[tree.cursor].kind, FileNodeKind::Dir);
+        assert_eq!(tree.nodes[tree.cursor].name, "src");
+        assert_ne!(tree.nodes[tree.cursor].name, "README.md");
+    }
+
+    #[test]
+    fn relative_file_idx_from_directory_cursor_uses_adjacent_visible_files() {
+        let files = vec![
+            fd("README.md", ChangeKind::Modified),
+            fd("src/a.rs", ChangeKind::Added),
+            fd("src/b.rs", ChangeKind::Modified),
+        ];
+        let mut tree = FileTree::build(&files);
+        tree.cursor = tree
+            .nodes
+            .iter()
+            .position(|node| node.kind == FileNodeKind::Dir && node.name == "src")
+            .expect("src directory");
+        assert_eq!(tree.relative_file_idx(1), Some(1));
+        assert_eq!(tree.relative_file_idx(-1), Some(0));
     }
 }

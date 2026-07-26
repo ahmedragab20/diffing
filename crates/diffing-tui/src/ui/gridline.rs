@@ -9,6 +9,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::themes::Palette;
 
@@ -390,6 +391,151 @@ pub fn vertical_rule(area: Rect, palette: &Palette, background: Color, buf: &mut
     }
 }
 
+/// A compact mouse target that mirrors a status-strip verb. Selected chips use
+/// accent on the key portion; idle chips stay muted.
+pub fn chip<'a>(
+    label: &'a str,
+    selected: bool,
+    hovered: bool,
+    palette: &Palette,
+) -> Line<'a> {
+    let tokens = GridlineTokens::from(palette);
+    let background = if hovered {
+        tokens.selected
+    } else if selected {
+        tokens.surface
+    } else {
+        tokens.canvas
+    };
+    let key_style = Style::default()
+        .fg(if selected || hovered {
+            tokens.accent
+        } else {
+            tokens.muted
+        })
+        .bg(background)
+        .add_modifier(Modifier::BOLD);
+    let text_style = Style::default()
+        .fg(if selected || hovered {
+            tokens.text
+        } else {
+            tokens.muted
+        })
+        .bg(background);
+    if let Some((key, description)) = label.split_once(' ') {
+        Line::from(vec![
+            Span::styled(key.to_string(), key_style),
+            Span::styled(format!(" {description}"), text_style),
+        ])
+    } else {
+        Line::from(Span::styled(label.to_string(), text_style))
+    }
+}
+
+/// Render a row of chips for pointer affordances. Returns each chip's screen
+/// rectangle in the same order as `labels`.
+pub fn chip_row(
+    area: Rect,
+    labels: &[(&str, bool)],
+    pointer: Option<(u16, u16)>,
+    palette: &Palette,
+    buf: &mut Buffer,
+) -> Vec<Rect> {
+    let tokens = GridlineTokens::from(palette);
+    fill(area, tokens.canvas, buf);
+    let mut regions = Vec::with_capacity(labels.len());
+    let mut x = area.x.saturating_add(1);
+    let end = area.x.saturating_add(area.width).saturating_sub(1);
+    for (label, selected) in labels {
+        let width = UnicodeWidthStr::width(*label) as u16 + 2;
+        if x.saturating_add(width) > end {
+            break;
+        }
+        let region = Rect::new(x, area.y, width, 1);
+        let hovered = pointer
+            .map(|(column, row)| {
+                column >= region.x
+                    && column < region.x.saturating_add(region.width)
+                    && row == region.y
+            })
+            .unwrap_or(false);
+        let background = if hovered {
+            tokens.selected
+        } else if *selected {
+            tokens.surface
+        } else {
+            tokens.canvas
+        };
+        fill(region, background, buf);
+        let line = chip(label, *selected, hovered, palette);
+        let mut offset = x + 1;
+        for span in line.spans {
+            let width = UnicodeWidthStr::width(span.content.as_ref()) as u16;
+            buf.set_string(offset, area.y, span.content.as_ref(), span.style);
+            offset = offset.saturating_add(width);
+        }
+        regions.push(region);
+        x = x.saturating_add(width + 1);
+    }
+    regions
+}
+
+/// One muted status line directly under primary content (path, metrics, mode).
+pub fn content_footer(text: &str, area: Rect, palette: &Palette, buf: &mut Buffer) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let tokens = GridlineTokens::from(palette);
+    fill(area, tokens.canvas, buf);
+    let maximum = area.width.saturating_sub(2) as usize;
+    let mut width = 0usize;
+    let clipped: String = text
+        .chars()
+        .take_while(|character| {
+            let next = width.saturating_add(UnicodeWidthChar::width(*character).unwrap_or(0));
+            if next > maximum {
+                false
+            } else {
+                width = next;
+                true
+            }
+        })
+        .collect();
+    buf.set_string(
+        area.x + 1,
+        area.y,
+        clipped,
+        Style::default().fg(tokens.muted).bg(tokens.canvas),
+    );
+}
+
+fn rgb_components(color: Color) -> [u8; 3] {
+    match color {
+        Color::Rgb(red, green, blue) => [red, green, blue],
+        _ => [0, 0, 0],
+    }
+}
+
+fn lerp_u8(left: u8, right: u8, amount: f32) -> u8 {
+    let amount = amount.clamp(0.0, 1.0);
+    (f32::from(left) + (f32::from(right) - f32::from(left)) * amount).round() as u8
+}
+
+/// Map a difference magnitude (0–255) to themed RGB for raster heat maps.
+pub fn difference_heat_rgb(tokens: GridlineTokens, delta: u8) -> [u8; 3] {
+    if delta == 0 {
+        return rgb_components(tokens.canvas);
+    }
+    let amount = (f32::from(delta) / 255.0).sqrt();
+    let [low_r, low_g, _] = rgb_components(tokens.warning);
+    let [high_r, high_g, high_b] = rgb_components(tokens.negative);
+    [
+        lerp_u8(low_r, high_r, amount),
+        lerp_u8(low_g, high_g, amount),
+        lerp_u8(high_b, high_b, amount),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +568,38 @@ mod tests {
         assert_eq!(tokens.positive, palette.added);
         assert_eq!(tokens.negative, palette.removed);
         assert_ne!(tokens.rule_subtle, tokens.focus);
+    }
+
+    #[test]
+    fn chip_selected_and_idle_use_distinct_foregrounds() {
+        let palette = Palette::default();
+        let tokens = GridlineTokens::from(&palette);
+        let selected = chip("1 Before", true, false, &palette);
+        assert_eq!(selected.spans[0].style.fg, Some(tokens.accent));
+        let idle = chip("2 After", false, false, &palette);
+        assert_eq!(idle.spans[0].style.fg, Some(tokens.muted));
+    }
+
+    #[test]
+    fn content_footer_truncates_to_area_width() {
+        let palette = Palette::default();
+        let area = Rect::new(0, 0, 12, 1);
+        let mut buffer = Buffer::empty(area);
+        content_footer("abcdefghijklmnop", area, &palette, &mut buffer);
+        let rendered: String = (0..area.width)
+            .map(|x| buffer[(x, 0)].symbol().to_string())
+            .collect();
+        assert!(rendered.chars().count() <= 12);
+    }
+
+    #[test]
+    fn difference_heat_uses_token_colors() {
+        let palette = Palette::default();
+        let tokens = GridlineTokens::from(&palette);
+        let zero = difference_heat_rgb(tokens, 0);
+        assert_eq!(zero, rgb_components(tokens.canvas));
+        let high = difference_heat_rgb(tokens, 255);
+        assert_eq!(high, rgb_components(tokens.negative));
     }
 
     #[test]

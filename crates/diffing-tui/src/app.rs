@@ -46,13 +46,13 @@ use crate::ui::file_tree_render::{
     content_area as file_tree_content_area, render_file_tree, FileTreeRenderOptions,
 };
 use crate::ui::gridline::{
-    dim_buffer, hint_line, horizontal_rule, overlay_block, safe_terminal_character,
-    safe_terminal_text, shortcut_help, shortcut_help_columns, vertical_rule, GridlineTokens,
-    GLYPHS, METRICS,
+    chip_row, dim_buffer, fill, hint_line, horizontal_rule, overlay_block,
+    safe_terminal_character, safe_terminal_text, shortcut_help, shortcut_help_columns,
+    vertical_rule, GridlineTokens, GLYPHS, METRICS,
 };
 use crate::ui::image_diff::{
-    is_image_path, render_image_diff, ImageCompareMode, ImageDiffData, ImageDiffManager, ImageKey,
-    ImageViewState,
+    default_compare_mode, is_image_path, render_image_diff, ImageCompareMode, ImageDiffData,
+    ImageDiffManager, ImageKey, ImagePresentation, ImageViewState,
 };
 use crate::ui::send_review_popover::{
     build_send_payload, render_send_popover, send_review_regions, SendField, SendReviewState,
@@ -932,7 +932,7 @@ impl App {
         };
         let selected_path = self
             .file_tree
-            .selected_file_idx()
+            .active_file_idx()
             .and_then(|index| self.files.get(index))
             .map(|file| file.display_path().to_path_buf());
         self.files = metadata_files(&snapshot);
@@ -1156,7 +1156,7 @@ impl App {
 
         let path = self
             .file_tree
-            .selected_file_idx()
+            .active_file_idx()
             .and_then(|index| self.files.get(index))
             .map(|file| file.display_path().to_path_buf());
         if path != self.lsp_active_path {
@@ -1413,7 +1413,7 @@ impl App {
     }
 
     fn capture_refresh_anchor(&self) -> Option<RefreshAnchor> {
-        let file_index = self.file_tree.selected_file_idx()?;
+        let file_index = self.file_tree.active_file_idx()?;
         let path = self.files.get(file_index)?.display_path().to_path_buf();
         let ViewRow::Line {
             kind,
@@ -1529,6 +1529,9 @@ impl App {
                 if key.code == crossterm::event::KeyCode::Esc && self.visual_anchor.take().is_some()
                 {
                     self.status_message = Some("line selection cancelled".to_string());
+                    return;
+                }
+                if self.image_focus_active() && self.try_handle_image_key(key) {
                     return;
                 }
                 if self.focus == Focus::FileTree && key.code == crossterm::event::KeyCode::Enter {
@@ -1965,7 +1968,7 @@ impl App {
                     .map(|(_, node)| *node)
                 {
                     let previous = self.file_tree.selected_file_idx();
-                    self.file_tree.cursor = node;
+                    self.file_tree.set_cursor(node);
                     self.focus = Focus::FileTree;
                     if self.file_tree.selected_file_idx().is_none() {
                         self.file_tree.toggle_selected();
@@ -2075,6 +2078,15 @@ impl App {
                 {
                     self.focus = Focus::Tracker;
                     self.tracker.move_visible_cursor(3, &self.comments);
+                } else if self.selected_image().is_some()
+                    && self
+                        .regions
+                        .diff_inner
+                        .map(|area| contains(area, mouse.column, mouse.row))
+                        .unwrap_or(false)
+                {
+                    self.focus = Focus::Diff;
+                    self.image_view.zoom_out();
                 } else {
                     self.focus = Focus::Diff;
                     self.move_diff_cursor(3);
@@ -2099,6 +2111,15 @@ impl App {
                 {
                     self.focus = Focus::Tracker;
                     self.tracker.move_visible_cursor(-3, &self.comments);
+                } else if self.selected_image().is_some()
+                    && self
+                        .regions
+                        .diff_inner
+                        .map(|area| contains(area, mouse.column, mouse.row))
+                        .unwrap_or(false)
+                {
+                    self.focus = Focus::Diff;
+                    self.image_view.zoom_in();
                 } else {
                     self.focus = Focus::Diff;
                     self.move_diff_cursor(-3);
@@ -2234,10 +2255,10 @@ impl App {
             Action::ExpandContext => self.change_context(true),
             Action::CollapseContext => self.change_context(false),
             Action::ScrollLeft if self.focus == Focus::FileTree => {
-                self.file_tree.collapse_selected();
+                self.file_tree.navigate_left();
             }
             Action::ScrollRight if self.focus == Focus::FileTree => {
-                self.file_tree.expand_selected();
+                self.file_tree.navigate_right();
             }
             Action::ScrollLeft => {
                 self.horizontal_offset = self
@@ -2257,6 +2278,8 @@ impl App {
             }
             Action::NextFile => self.jump_to_relative_file(command.count as isize),
             Action::PrevFile => self.jump_to_relative_file(-(command.count as isize)),
+            Action::FocusFileTree if self.image_focus_active() => self.cycle_image_mode(1),
+            Action::FocusDiff if self.image_focus_active() => self.cycle_image_mode(-1),
             Action::FocusFileTree => self.cycle_focus(1),
             Action::FocusDiff => self.cycle_focus(-1),
             action => {
@@ -2925,33 +2948,85 @@ impl App {
             return;
         };
         self.image_diff.request(key);
-        self.image_view = ImageViewState::default();
         self.mode = Mode::ImagePreview;
+    }
+
+    fn image_focus_active(&self) -> bool {
+        self.mode == Mode::Normal
+            && self.focus == Focus::Diff
+            && self.selected_image().is_some()
+    }
+
+    fn cycle_image_mode(&mut self, delta: isize) {
+        let Some((image_key, _)) = self.selected_image() else {
+            return;
+        };
+        if let Some(data) = self.image_diff.get(&image_key) {
+            self.image_view.mode = self.image_view.mode.cycle(delta, &data);
+        }
+    }
+
+    fn try_handle_image_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Char('+' | '=') => {
+                self.image_view.zoom_in();
+                true
+            }
+            KeyCode::Char('-') => {
+                self.image_view.zoom_out();
+                true
+            }
+            KeyCode::Char('0') => {
+                self.image_view.reset();
+                true
+            }
+            KeyCode::Char('h') | KeyCode::Left if self.image_view.is_zoomed() => {
+                self.image_view.pan(-2, 0);
+                true
+            }
+            KeyCode::Char('l') | KeyCode::Right if self.image_view.is_zoomed() => {
+                self.image_view.pan(2, 0);
+                true
+            }
+            KeyCode::Char('k') | KeyCode::Up if self.image_view.is_zoomed() => {
+                self.image_view.pan(0, -2);
+                true
+            }
+            KeyCode::Char('j') | KeyCode::Down if self.image_view.is_zoomed() => {
+                self.image_view.pan(0, 2);
+                true
+            }
+            KeyCode::Char('1') => {
+                self.image_view.mode = ImageCompareMode::Before;
+                true
+            }
+            KeyCode::Char('2') => {
+                self.image_view.mode = ImageCompareMode::After;
+                true
+            }
+            KeyCode::Char('3') => {
+                self.image_view.mode = ImageCompareMode::SideBySide;
+                true
+            }
+            KeyCode::Char('4') => {
+                self.image_view.mode = ImageCompareMode::Difference;
+                true
+            }
+            KeyCode::Tab | KeyCode::BackTab => {
+                let delta = if key.code == KeyCode::BackTab { -1 } else { 1 };
+                self.cycle_image_mode(delta);
+                true
+            }
+            _ => false,
+        }
     }
 
     fn handle_image_preview_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Char('+' | '=') => self.image_view.zoom_in(),
-            KeyCode::Char('-') => self.image_view.zoom_out(),
-            KeyCode::Char('0') => self.image_view.reset(),
-            KeyCode::Char('h') | KeyCode::Left => self.image_view.pan(-2, 0),
-            KeyCode::Char('l') | KeyCode::Right => self.image_view.pan(2, 0),
-            KeyCode::Char('k') | KeyCode::Up => self.image_view.pan(0, -2),
-            KeyCode::Char('j') | KeyCode::Down => self.image_view.pan(0, 2),
-            KeyCode::Char('1') => self.image_view.mode = ImageCompareMode::Before,
-            KeyCode::Char('2') => self.image_view.mode = ImageCompareMode::After,
-            KeyCode::Char('3') => self.image_view.mode = ImageCompareMode::SideBySide,
-            KeyCode::Char('4') => self.image_view.mode = ImageCompareMode::Difference,
-            KeyCode::Tab | KeyCode::BackTab => {
-                let delta = if key.code == KeyCode::BackTab { -1 } else { 1 };
-                if let Some((image_key, _)) = self.selected_image() {
-                    if let Some(data) = self.image_diff.get(&image_key) {
-                        self.image_view.mode = self.image_view.mode.cycle(delta, &data);
-                    }
-                }
-            }
+            KeyCode::Esc | KeyCode::Char('q' | 'i') => self.mode = Mode::Normal,
+            _ if self.try_handle_image_key(key) => {}
             _ => {}
         }
     }
@@ -3063,7 +3138,7 @@ impl App {
         if self.file_display == FileDisplay::Continuous {
             let target = previous_continuous_position
                 .filter(|(file, _)| visible_files.contains(file))
-                .or_else(|| self.file_tree.selected_file_idx().map(|file| (file, 0)));
+                .or_else(|| self.file_tree.active_file_idx().map(|file| (file, 0)));
             if let Some((file, row)) = target {
                 let row = row.min(
                     self.index
@@ -3495,9 +3570,10 @@ impl App {
         match action {
             Action::ScrollDown => self.file_tree.move_cursor(1),
             Action::ScrollUp => self.file_tree.move_cursor(-1),
-            Action::ScrollTop => self.file_tree.cursor = 0,
+            Action::ScrollTop => self.file_tree.set_cursor(0),
             Action::ScrollBottom => {
-                self.file_tree.cursor = self.file_tree.nodes.len().saturating_sub(1);
+                self.file_tree
+                    .set_cursor(self.file_tree.nodes.len().saturating_sub(1));
             }
             Action::NextFile => self.jump_to_relative_file(1),
             Action::PrevFile => self.jump_to_relative_file(-1),
@@ -3755,7 +3831,7 @@ impl App {
                 }
             }
             FileDisplay::Continuous => {
-                let file = self.file_tree.selected_file_idx().unwrap_or(0);
+                let file = self.file_tree.active_file_idx().unwrap_or(0);
                 self.continuous_cursor = self.continuous_offset_for_file(file) + self.cursor_row;
                 self.continuous_scroll = self
                     .continuous_cursor
@@ -3931,23 +4007,12 @@ impl App {
     }
 
     fn jump_to_relative_file(&mut self, delta: isize) {
-        let navigable = self.file_tree.navigable_file_indices();
-        if navigable.is_empty() {
+        let Some(next) = self.file_tree.relative_file_idx(delta) else {
             self.status_message = Some(format!(
                 "no files match the {} filter",
                 self.file_filter_mode.label().to_ascii_lowercase()
             ));
             return;
-        }
-        let next = if let Some(current) = self
-            .file_tree
-            .selected_file_idx()
-            .and_then(|file| navigable.iter().position(|index| *index == file))
-        {
-            navigable[(current as isize + delta).rem_euclid(navigable.len() as isize) as usize]
-        } else {
-            let offset = if delta > 0 { delta - 1 } else { delta };
-            navigable[offset.rem_euclid(navigable.len() as isize) as usize]
         };
         self.file_tree.jump_to_file(next);
         self.visual_anchor = None;
@@ -4014,7 +4079,7 @@ impl App {
         let next =
             (self.cursor_row as isize + delta).clamp(0, rows.saturating_sub(1) as isize) as u64;
         self.cursor_row = next;
-        let selected_file = self.file_tree.selected_file_idx();
+        let selected_file = self.file_tree.active_file_idx();
         let bounds = self
             .rendered_diff_rows
             .iter()
@@ -4069,7 +4134,7 @@ impl App {
 
     fn current_file_rows(&self) -> u64 {
         self.file_tree
-            .selected_file_idx()
+            .active_file_idx()
             .and_then(|index| self.index.files.get(index))
             .map(|file| file.row_count)
             .unwrap_or(0)
@@ -4093,7 +4158,7 @@ impl App {
     }
 
     fn jump_relative_hunk(&mut self, delta: isize) {
-        let Some(file_index) = self.file_tree.selected_file_idx() else {
+        let Some(file_index) = self.file_tree.active_file_idx() else {
             return;
         };
         let Some(file) = self.index.files.get(file_index) else {
@@ -4471,7 +4536,7 @@ impl App {
     }
 
     fn current_view_row(&self) -> Option<ViewRow> {
-        let file_index = self.file_tree.selected_file_idx()?;
+        let file_index = self.file_tree.active_file_idx()?;
         self.index
             .viewport(file_index, self.cursor_row, 1, 64 * 1024)
             .ok()?
@@ -4518,12 +4583,12 @@ impl App {
     }
 
     fn current_file(&self) -> Option<&diffing_core::diff::FileDiff> {
-        let idx = self.file_tree.selected_file_idx()?;
+        let idx = self.file_tree.active_file_idx()?;
         self.files.get(idx)
     }
 
     fn selected_image(&self) -> Option<(ImageKey, PathBuf)> {
-        let file_index = self.file_tree.selected_file_idx()?;
+        let file_index = self.file_tree.active_file_idx()?;
         let file = self.index.files.get(file_index)?;
         let path = file.display_path().to_path_buf();
         is_image_path(&path).then(|| (ImageKey::new(self.index.generation, file), path))
@@ -4546,14 +4611,19 @@ impl App {
         let Some((key, path)) = self.selected_image() else {
             return None;
         };
-        if self.active_image_key.as_ref() != Some(&key) {
+        let key_changed = self.active_image_key.as_ref() != Some(&key);
+        if key_changed {
             self.image_view = ImageViewState::default();
             self.active_image_key = Some(key.clone());
         }
         self.image_diff.request(key.clone());
         let data = self.image_diff.get(&key);
         if let Some(data) = data.as_ref() {
-            self.image_view.mode = self.image_view.mode.normalize(&data);
+            self.image_view.mode = if key_changed {
+                default_compare_mode(data)
+            } else {
+                self.image_view.mode.normalize(data)
+            };
         }
         Some((path, data))
     }
@@ -4563,6 +4633,7 @@ impl App {
         path: &PathBuf,
         data: Option<&Arc<ImageDiffData>>,
         area: Rect,
+        presentation: ImagePresentation,
         buf: &mut Buffer,
     ) {
         if let Some(data) = data {
@@ -4573,6 +4644,7 @@ impl App {
                 area,
                 self.theme,
                 &self.palette,
+                presentation,
                 buf,
             );
         } else {
@@ -4587,7 +4659,13 @@ impl App {
         let Some((path, data)) = self.prepare_selected_image() else {
             return;
         };
-        self.render_prepared_image(&path, data.as_ref(), area, buf);
+        self.render_prepared_image(
+            &path,
+            data.as_ref(),
+            area,
+            ImagePresentation::Inline,
+            buf,
+        );
     }
 
     fn render_image_preview(&mut self, area: Rect, buf: &mut Buffer) {
@@ -4595,114 +4673,93 @@ impl App {
         dim_buffer(area, buf);
         let popup = inset(area, 1);
         Clear.render(popup, buf);
-        let block = overlay_block(
-            " Image comparison · 1 before · 2 after · 3 side-by-side · 4 difference ",
-            &self.palette,
+        let tokens = GridlineTokens::from(&self.palette);
+        fill(popup, tokens.canvas, buf);
+        let controls_height = u16::from(popup.height >= 4);
+        let content = Rect::new(
+            popup.x,
+            popup.y + controls_height,
+            popup.width,
+            popup.height.saturating_sub(controls_height),
         );
-        let inner = block.inner(popup);
-        block.render(popup, buf);
-        let controls_height = u16::from(inner.height >= 3);
         if controls_height > 0 {
-            let controls = Rect::new(inner.x, inner.y, inner.width, 1);
-            fill_area(controls, self.palette.elevated, buf);
-            let mut x = controls.x + 1;
-            let end = controls.x.saturating_add(controls.width).saturating_sub(1);
-            for (label, control, active) in [
+            let controls = Rect::new(popup.x, popup.y, popup.width, 1);
+            let data = prepared
+                .as_ref()
+                .and_then(|(_, data)| data.as_deref());
+            let mut labels = Vec::new();
+            let mut mapped = Vec::new();
+            for (label, mode, control) in [
                 (
                     "1 Before",
+                    ImageCompareMode::Before,
                     ImageControl::Mode(ImageCompareMode::Before),
-                    self.image_view.mode == ImageCompareMode::Before,
                 ),
                 (
                     "2 After",
+                    ImageCompareMode::After,
                     ImageControl::Mode(ImageCompareMode::After),
-                    self.image_view.mode == ImageCompareMode::After,
                 ),
                 (
                     "3 Side",
+                    ImageCompareMode::SideBySide,
                     ImageControl::Mode(ImageCompareMode::SideBySide),
-                    self.image_view.mode == ImageCompareMode::SideBySide,
                 ),
                 (
                     "4 Diff",
+                    ImageCompareMode::Difference,
                     ImageControl::Mode(ImageCompareMode::Difference),
-                    self.image_view.mode == ImageCompareMode::Difference,
                 ),
-                ("-", ImageControl::ZoomOut, false),
-                ("0 Fit", ImageControl::Reset, false),
-                ("+", ImageControl::ZoomIn, false),
             ] {
-                if let ImageControl::Mode(mode) = control {
-                    if prepared
-                        .as_ref()
-                        .and_then(|(_, data)| data.as_deref())
-                        .is_some_and(|data| !mode.is_available(data))
-                    {
-                        continue;
-                    }
+                if data.is_none_or(|data| mode.is_available(data)) {
+                    labels.push((label, self.image_view.mode == mode));
+                    mapped.push(control);
                 }
-                let width = UnicodeWidthStr::width(label) as u16 + 2;
-                if x.saturating_add(width) > end {
-                    break;
-                }
-                let region = render_chip(
-                    x,
-                    controls.y,
-                    label,
-                    active,
-                    self.mouse_position,
-                    &self.palette,
-                    buf,
-                );
+            }
+            labels.push(("-", false));
+            mapped.push(ImageControl::ZoomOut);
+            labels.push(("0 Fit", false));
+            mapped.push(ImageControl::Reset);
+            labels.push(("+", false));
+            mapped.push(ImageControl::ZoomIn);
+            let regions = chip_row(controls, &labels, self.mouse_position, &self.palette, buf);
+            for (region, control) in regions.into_iter().zip(mapped) {
                 self.regions.image_controls.push((region, control));
-                x = x.saturating_add(width + 1);
             }
             let close_label = "Esc close";
             let close_width = UnicodeWidthStr::width(close_label) as u16 + 2;
-            let close_x = end.saturating_sub(close_width);
-            if close_x > x {
-                let region = render_chip(
-                    close_x,
-                    controls.y,
-                    close_label,
-                    false,
-                    self.mouse_position,
-                    &self.palette,
-                    buf,
-                );
+            let close_x = popup
+                .x
+                .saturating_add(popup.width)
+                .saturating_sub(close_width + 1);
+            if close_x > controls.x.saturating_add(2) {
+                let region = Rect::new(close_x, controls.y, close_width, 1);
+                fill(region, tokens.canvas, buf);
+                let line = crate::ui::gridline::chip(close_label, false, false, &self.palette);
+                let mut offset = close_x + 1;
+                for span in line.spans {
+                    buf.set_string(offset, controls.y, span.content.as_ref(), span.style);
+                    offset = offset
+                        .saturating_add(UnicodeWidthStr::width(span.content.as_ref()) as u16);
+                }
                 self.regions
                     .image_controls
                     .push((region, ImageControl::Close));
             }
         }
-        let content = Rect::new(
-            inner.x,
-            inner.y + controls_height,
-            inner.width,
-            inner.height.saturating_sub(controls_height),
-        );
         if let Some((path, data)) = prepared.as_ref() {
-            self.render_prepared_image(path, data.as_ref(), content, buf);
+            self.render_prepared_image(
+                path,
+                data.as_ref(),
+                content,
+                ImagePresentation::Fullscreen,
+                buf,
+            );
         } else {
             Paragraph::new("Selected image is no longer in this diff · Esc closes")
                 .style(Style::default().fg(self.palette.dim).bg(self.palette.bg))
                 .centered()
                 .render(content, buf);
-        }
-        if popup.width > 28 {
-            let hint = " Tab view · +/- zoom · hjkl pan · 0 fit · Esc close ";
-            let x = popup
-                .x
-                .saturating_add(popup.width.saturating_sub(hint.len() as u16 + 2));
-            buf.set_stringn(
-                x,
-                popup.y + popup.height.saturating_sub(1),
-                hint,
-                popup.width.saturating_sub(2) as usize,
-                Style::default()
-                    .fg(self.palette.dim)
-                    .bg(self.palette.elevated),
-            );
         }
     }
 
@@ -5037,9 +5094,9 @@ impl App {
         } else {
             AgentStatus::Idle
         };
-        let selected_file_idx = self.file_tree.selected_file_idx();
+        let active_file_idx = self.file_tree.active_file_idx();
         let navigable_files = self.file_tree.navigable_file_indices();
-        let file_idx = selected_file_idx
+        let file_idx = active_file_idx
             .and_then(|selected| navigable_files.iter().position(|index| *index == selected))
             .unwrap_or(0);
         let file_count = navigable_files.len();
@@ -5055,15 +5112,20 @@ impl App {
             }
             Mode::Settings => "↑↓ select · ←→ change · Esc close",
             Mode::Hover => "j/k or wheel scroll · Esc close",
-            Mode::ImagePreview => "Tab view · +/- zoom · hjkl pan · 0 fit · Esc close",
+            Mode::ImagePreview => "Tab mode · +/- zoom · hjkl pan · 0 fit · Esc close",
             Mode::CommentDetail => {
                 "j/k scroll · Enter jump · e edit · r reply · x resolve · Esc close"
             }
+            _ if self.image_focus_active() => {
+                "Tab mode · +/- zoom · hjkl pan · 0 fit · i fullscreen"
+            }
             _ => match self.focus {
                 Focus::FileTree if self.experience == Experience::Viewer => {
-                    "jk select · Enter open · h/l collapse · Tab diff · / search"
+                    "jk select · Enter open · h parent/collapse · l expand · Tab diff · / search"
                 }
-                Focus::FileTree => "click/jk select · h/l collapse · v viewed · Tab diff",
+                Focus::FileTree => {
+                    "click/jk select · h parent/collapse · l expand · v viewed · Tab diff"
+                }
                 Focus::Tracker => "jk select · s status · p severity · o open · x resolve",
                 Focus::Diff if self.experience == Experience::Viewer => {
                     "jk move · J/K files · ]h/[h hunks · / search · ? help"
@@ -5096,7 +5158,7 @@ impl App {
                 self.file_filter_mode.label()
             ))
         } else {
-            selected_file_idx.map(|_| {
+            active_file_idx.map(|_| {
                 format!(
                     "{}{}{}",
                     self.current_location_label(),
@@ -5209,9 +5271,9 @@ impl App {
                 cell.set_style(ratatui::style::Style::default().bg(self.palette.bg));
             }
         }
-        let Some(idx) = self.file_tree.selected_file_idx() else {
+        let Some(idx) = self.file_tree.active_file_idx() else {
             let message = if !self.index.files.is_empty() {
-                "Select a file · Enter or → expands directories"
+                "Select a file · Enter or l expands directories"
             } else if self.index.complete {
                 "✓  Working tree is clean"
             } else {
@@ -5312,7 +5374,7 @@ impl App {
         }
         let tokens = GridlineTokens::from(&self.palette);
         fill_area(area, tokens.surface, buf);
-        let Some(index) = self.file_tree.selected_file_idx() else {
+        let Some(index) = self.file_tree.active_file_idx() else {
             buf.set_string(
                 area.x + 2,
                 area.y,
@@ -5384,7 +5446,7 @@ impl App {
         let end = area.x.saturating_add(area.width).saturating_sub(2);
         let mut metadata = vec![(
             if is_image_path(file.display_path()) {
-                "  image · i compare".to_string()
+                "  image · Tab mode · i fullscreen".to_string()
             } else if file.is_binary {
                 "  binary file".to_string()
             } else {
@@ -6398,7 +6460,7 @@ impl App {
                     .iter()
                     .any(|file| file.display_path() == std::path::Path::new(path));
             let message = if changed_image {
-                "Changed image · Enter selects it · i opens comparison"
+                "Changed image · Tab mode · i fullscreen"
             } else if preview.binary {
                 "Binary file — no text preview"
             } else {

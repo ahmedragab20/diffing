@@ -277,9 +277,9 @@ REVIEW
   S              send review
 
 IMAGE DIFFS
-  i              open image comparison
+  i              fullscreen image comparison (Esc exits)
   1/2/3/4        before/after/side/difference
-  Tab            cycle available image views
+  Tab            cycle image view (diff pane, image selected)
   +/- / 0        zoom in/out / fit
   h/j/k/l        pan a zoomed image
 
@@ -326,9 +326,9 @@ CODE & IMAGES
   e              open line in $EDITOR
   gh / gd        hover / go to definition
   Alt-h/l        symbol column left/right
-  i              open image comparison
+  i              fullscreen image comparison (Esc exits)
   1/2/3/4        before/after/side/difference
-  Tab            cycle available image views
+  Tab            cycle image view (diff pane, image selected)
   +/- / 0        zoom in/out / fit
   h/j/k/l        pan a zoomed image
 

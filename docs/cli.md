@@ -794,7 +794,8 @@ Viewer keys are intentionally small: `j/k`, `gg/G`, `Ctrl-d/u`, `J/K`,
 search; `n/N` traverses the active search results; the palette uses `Tab`,
 `Ctrl-G`, arrows, and `Enter` for scope, Changed-only filtering, selection,
 and navigation; `m`, `w`, and `t` control diff layout, wrapping, and theme;
-`i` opens changed-image comparison;
+`i` opens changed-image comparison inline in the diff pane; press `i` again
+(or `Esc`) to exit thin fullscreen while keeping zoom, pan, and mode;
 `Space e` (or `b`) toggles the file sidebar; `?` shows the complete in-app
 help.
 
@@ -967,7 +968,7 @@ shows valid completions while a multi-key sequence is pending.
 | `t` | Open the theme picker |
 | `,` | Open Settings |
 | `m` | Toggle split / unified view |
-| `i` | Open comparison for the selected changed image |
+| `i` | Fullscreen for the selected changed image (`Esc` exits; inline review uses `Tab`, `1`–`4`, zoom, and pan without a modal) |
 | `Enter` / `+` / `-` | Expand / expand / collapse diff context |
 | `/` | Open the repository search palette |
 | `f` | Open the search palette in Files scope |
