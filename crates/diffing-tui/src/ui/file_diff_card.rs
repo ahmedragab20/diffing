@@ -20,7 +20,8 @@ use unicode_width::UnicodeWidthChar;
 use crate::diff::highlight::highlight_line;
 use crate::lsp::LspDiagnostic;
 use crate::themes::{Palette, ThemeName};
-use crate::ui::gridline::GridlineTokens;
+use crate::ui::gridline::{safe_terminal_character, GridlineTokens};
+use crate::ui::image_diff::is_image_path;
 
 const VIEWPORT_CACHE_ENTRIES: usize = 12;
 const VIEWPORT_OVERSCAN_MULTIPLIER: usize = 6;
@@ -103,6 +104,7 @@ pub struct DiffRenderCache {
     frames: VecDeque<(FrameKey, Arc<CachedFrame>)>,
     frame_cells: usize,
     last_request: Option<FrameKey>,
+    rendered_rows: Vec<[Option<u64>; 2]>,
     #[cfg(test)]
     fills: usize,
     #[cfg(test)]
@@ -186,6 +188,14 @@ impl CachedFrame {
             }
         }
     }
+
+    fn visible_logical_rows(&self, source_row: usize, height: u16) -> &[[Option<u64>; 2]] {
+        let start = source_row.min(self.logical_rows.len());
+        let end = start
+            .saturating_add(height as usize)
+            .min(self.logical_rows.len());
+        &self.logical_rows[start..end]
+    }
 }
 
 struct CachedViewport {
@@ -198,6 +208,10 @@ struct CachedViewport {
 }
 
 impl DiffRenderCache {
+    pub fn rendered_logical_rows(&self) -> &[[Option<u64>; 2]] {
+        &self.rendered_rows
+    }
+
     fn sequential_request(&mut self, request: FrameKey) -> bool {
         let sequential = self.last_request.is_some_and(|previous| {
             previous.same_layout(request)
@@ -344,6 +358,7 @@ pub fn render_card(
     palette: &Palette,
     buf: &mut Buffer,
 ) {
+    cache.rendered_rows.clear();
     let request = FrameKey {
         generation: index.generation,
         patch_bytes: index.patch_bytes,
@@ -378,6 +393,9 @@ pub fn render_card(
         ..request
     };
     if let Some(frame) = cache.frame(key) {
+        cache
+            .rendered_rows
+            .extend_from_slice(frame.visible_logical_rows(source_row, area.height));
         frame.render(
             area,
             source_row,
@@ -453,6 +471,9 @@ pub fn render_card(
         cache.frame_builds += 1;
     }
     let frame = cache.insert_frame(key, frame);
+    cache
+        .rendered_rows
+        .extend_from_slice(frame.visible_logical_rows(source_row, area.height));
     frame.render(
         area,
         source_row,
@@ -1071,7 +1092,7 @@ fn render_line(
         } else {
             span.style
         };
-        for symbol in span.content.chars() {
+        for symbol in span.content.chars().map(safe_terminal_character) {
             let symbol_width = UnicodeWidthChar::width(symbol).unwrap_or(0);
             if x.saturating_add(symbol_width as u16) > area.x + area.width {
                 break;
@@ -1124,7 +1145,11 @@ fn build_file_header(
     ];
     if binary {
         spans.push(Span::styled(
-            "  (binary file; no textual diff)",
+            if is_image_path(std::path::Path::new(path)) {
+                "  (image diff · press i to compare)"
+            } else {
+                "  (binary file · no textual preview)"
+            },
             Style::default().fg(palette.comment).bg(palette.panel),
         ));
     }
@@ -1951,6 +1976,44 @@ mod tests {
         assert_eq!(segments.len(), 3);
         assert!(segments.iter().all(|segment| cell_width(segment) == 80));
         assert_eq!(segments.iter().map(String::len).sum::<usize>(), 240);
+    }
+
+    #[test]
+    fn retained_frames_expose_physical_to_logical_row_mapping() {
+        let palette = Palette::default();
+        let rows = vec![ViewRow::Line {
+            hunk_index: 0,
+            kind: IndexedLineKind::Add,
+            old_lineno: None,
+            new_lineno: Some(8),
+            content: "wrapped ".repeat(20),
+        }];
+        let options = RowRenderOptions {
+            path: "src/a.rs",
+            horizontal_offset: 0,
+            wrap: true,
+            split: false,
+            line_numbers: true,
+            tab_size: 4,
+            theme: ThemeName::default(),
+            width: 28,
+            max_lines: 4,
+            palette: &palette,
+        };
+        let frame = build_cached_frame(
+            &rows,
+            7,
+            false,
+            30,
+            4,
+            "src/a.rs",
+            options,
+            &[],
+            &[],
+            &palette,
+        );
+        assert!(frame.logical_rows.len() > 1);
+        assert!(frame.logical_rows.iter().all(|row| *row == [Some(7), None]));
     }
 
     #[test]

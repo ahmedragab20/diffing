@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn glob_supports_common_editorconfig_sections() {
-        assert!(glob_matches("*.{ts,tsx}", "view.tsx") == false);
+        assert!(!glob_matches("*.{ts,tsx}", "view.tsx"));
         assert!(pattern_alternatives("*.{ts,tsx}")
             .iter()
             .any(|pattern| glob_matches(pattern, "view.tsx")));

@@ -8,7 +8,9 @@ use ratatui::widgets::{List, ListItem, StatefulWidget};
 
 use crate::themes::Palette;
 use crate::ui::file_tree::{FileNodeKind, FileTree};
-use crate::ui::gridline::{fill, selected_row_style, selection_marker, GridlineTokens, METRICS};
+use crate::ui::gridline::{
+    fill, safe_terminal_text, selected_row_style, selection_marker, GridlineTokens, METRICS,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct FileTreeRenderOptions {
@@ -16,6 +18,8 @@ pub struct FileTreeRenderOptions {
     pub scroll: usize,
     pub minimal: bool,
     pub file_count: usize,
+    pub visible_file_count: usize,
+    pub filter_label: &'static str,
 }
 
 pub fn render_file_tree(
@@ -30,6 +34,8 @@ pub fn render_file_tree(
         scroll,
         minimal,
         file_count,
+        visible_file_count,
+        filter_label,
     } = options;
     let tokens = GridlineTokens::from(palette);
     let surface = if minimal {
@@ -42,13 +48,21 @@ pub fn render_file_tree(
         buf.set_string(
             area.x + METRICS.inline_pad,
             area.y,
-            "Changes",
+            if filter_label == "All" {
+                "Changes".to_string()
+            } else {
+                format!("Changes · {filter_label}")
+            },
             Style::default()
                 .fg(tokens.text)
                 .bg(surface)
                 .add_modifier(Modifier::BOLD),
         );
-        let count = file_count.to_string();
+        let count = if visible_file_count == file_count {
+            file_count.to_string()
+        } else {
+            format!("{visible_file_count}/{file_count}")
+        };
         if count.len() as u16 + 3 < area.width {
             buf.set_string(
                 area.x + area.width - count.len() as u16 - METRICS.inline_pad,
@@ -59,6 +73,17 @@ pub fn render_file_tree(
         }
     }
     let inner = content_area(area, minimal);
+
+    if tree.nodes.is_empty() && inner.width > 0 && inner.height > 0 {
+        buf.set_stringn(
+            inner.x + 1,
+            inner.y,
+            "No files match this filter",
+            inner.width.saturating_sub(2) as usize,
+            Style::default().fg(tokens.muted).bg(surface),
+        );
+        return;
+    }
 
     let body_height = inner.height as usize;
     let items: Vec<ListItem> = tree
@@ -129,7 +154,10 @@ fn build_item<'a>(
         Span::raw(" "),
         Span::raw(indent),
         Span::styled(kind_str, Style::default().fg(kind_color)),
-        Span::styled(node.name.clone(), Style::default().fg(name_color)),
+        Span::styled(
+            safe_terminal_text(&node.name),
+            Style::default().fg(name_color),
+        ),
     ];
     if !viewed_dot.is_empty() {
         spans.push(Span::styled(

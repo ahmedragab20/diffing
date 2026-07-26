@@ -80,6 +80,28 @@ border; one boundary should occupy one cell.
   complete border.
 - Use the shared modal margins. A modal may be wider when its content genuinely
   benefits, such as search preview.
+- Every destructive or completing modal action needs both a documented key and
+  a visible button-sized mouse target. Never make clicking the dimmed content
+  behind an overlay activate the underlying workspace.
+- Single-line editors show an in-band caret, keep it visible while horizontally
+  scrolling, and support Left/Right, Home/End, Backspace/Delete, `Ctrl-W`,
+  `Ctrl-U`, and bracketed paste. Multi-line fields use `tui-textarea` and accept
+  paste as one edit.
+
+### Images
+
+- Image comparisons are content, not decorative chrome. Give the raster the
+  largest available surface and put path, dimensions, mode, zoom, and metrics
+  in one quiet footer.
+- Before/After existence comes from Git change semantics and blob ids, not from
+  whether a worktree path happens to exist.
+- Side-by-side may collapse to the available single side, and normal diff Split
+  layout falls back to Unified below its readable breakpoint.
+- Decode and subprocess fallbacks must have byte, dimension, memory, and time
+  bounds. An unavailable codec names the missing capability and recovery path.
+- Render truecolor when available, ANSI-256 otherwise, and luminance glyphs for
+  `NO_COLOR` / `TERM=dumb`; terminal-specific graphics protocols are optional,
+  never required.
 
 ### Command hints
 
@@ -102,6 +124,17 @@ border; one boundary should occupy one cell.
 Toasts are one-row raised strips with a semantic rail and bullet. They do not
 use a box border: a one-row box spends all its space on chrome and can overwrite
 the message.
+Toasts redraw only when created or expired, expose a visible dismiss mark, and
+must not turn a static screen into a high-frequency animation loop.
+
+### Pointer mapping
+
+- Keep render-time physical-to-logical row metadata. Wrapped lines and paired
+  split rows make `scroll + pointer_y` incorrect.
+- Give the change map its own click/drag target and map its height
+  proportionally to the logical document.
+- Modal geometry is shared between renderer and hit testing; duplicate modal
+  rectangle math is a bug source.
 
 ## Theme and accessibility contract
 
@@ -135,3 +168,9 @@ cargo test -p diffing-tui --lib --tests
 - Did render tests cover the selected, focused, warning, and empty states?
 - Does the result remain readable in light, dark, ANSI-256, and monochrome
   terminals?
+- Can every text field edit in the middle, paste, clear, and recover from an
+  empty/no-match state?
+- Do mouse targets still select the correct logical row with wrap and split
+  enabled?
+- Are binary/image dimensions, allocations, subprocesses, and Git paths
+  bounded and repository-contained?

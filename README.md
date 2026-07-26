@@ -199,8 +199,8 @@ web UI's fff-powered `All`, `Files`, `Text`, and `Symbols` search with the same
 result totals, frecency, and
 syntax-highlighted preview; `f` opens directly in file search. The viewer
 hides comments, viewed state, and agent handoff. Search starts diff-local and
-`Ctrl-G` opts into the whole repository; language intelligence starts off and
-can be enabled on demand. This keeps the default experience focused and fast.
+`Ctrl-G` opts into the whole repository. Viewer and review sessions share the
+persisted language-intelligence preference (Auto by default).
 
 Its diff-first **Gridline** design system derives a tonal canvas, quiet
 surfaces, diff fills, selection, gutters, and syntax roles from every web
@@ -245,10 +245,11 @@ diffing --tui -- -- src/            # Limit a TUI review to a directory
 - **Disk-backed streaming index** — Git output is parsed as bytes into sparse file/hunk/checkpoint metadata. The first partial generation is usable during ingestion; neither the TUI nor an agent needs to retain the full patch in memory.
 - **Retained, viewport-only rendering** — visible rows are sought into a bounded overscan window, decoded with per-line byte caps, theme-aware syntax-highlighted, and retained as terminal cells. Cursor, hover, and selection are cheap overlays; nearby scrolls reuse the same surface. Split mode pairs deletion/addition runs and highlights changed tokens within the pair. Terminal colors automatically degrade from truecolor to ANSI-256 or monochrome. Per-file tab widths follow nested `.editorconfig` files.
 - **Focused navigation** — `Enter`/`+` progressively expand Git context and `-` collapses it; live refresh restores the selected source line and its viewport position; the file rail shows compact `+N -N` stats. In viewer mode, `e` safely suspends the alternate screen, opens the focused line in `$VISUAL`/`$EDITOR`, then restores the TUI.
-- **Optional local language intelligence** — review mode keeps the persisted setting; viewer mode starts Off and enables it only on request. Auto mode lazily discovers an existing `rust-analyzer`, `typescript-language-server`, `pyright-langserver`, `gopls`, or `clangd`; diffing never downloads a server or sends source off-machine.
-- **Vim-style file tree & keymap** — numeric counts plus `j/k`, `gg/G`, `Ctrl-d/u`, `J/K`, `]h/[h`, `]c/[c`, `zz`, `h/l`, `gh`, `gd`, `/`, `n/N`, `f`, `a`, `:`, `Tab`, `v`, `b`, `w`, `m`, `t`, `,`, and `?`. `Esc` cancels a mode; `q` or `Ctrl-C` quits. Sidebar visibility and width, single/continuous file display, mouse input, and language intelligence are changed from Settings.
+- **Terminal-native image diffs** — `i` opens exact Git before/after blobs with side-by-side, individual, and pixel-difference modes plus fit, zoom, and pan. PNG, GIF, BMP, and ICO decode in-process; JPEG, WebP, AVIF, and SVG use a bounded ImageMagick/ffmpeg fallback when installed. Truecolor half-block rendering degrades to ANSI-256 and monochrome without requiring Kitty, iTerm, or Sixel support.
+- **Optional local language intelligence** — viewer and review modes share the persisted setting. Auto mode lazily discovers an existing `rust-analyzer`, `typescript-language-server`, `pyright-langserver`, `gopls`, or `clangd`; diffing never downloads a server or sends source off-machine.
+- **Vim-style file tree & keymap** — numeric counts plus `j/k`, `gg/G`, `Ctrl-d/u`, `J/K`, `]h/[h`, `]c/[c`, `zz`, `h/l`, `gh`, `gd`, `/`, `n/N`, `f`, `a`, `:`, `Tab`, `v`, `b`, `w`, `m`, `i`, `t`, `,`, and `?`. `Esc` cancels a mode; `q` or `Ctrl-C` quits. Sidebar visibility and width, single/continuous file display, mouse input, and language intelligence are changed from Settings.
 - **Review-complete comments** — line, same-side range, and file-level threads share the web JSON schema, including severity. The drawer filters open/replied/resolved and blocking/question/nit/praise threads; the diff gutter distinguishes their states without relying on color alone.
-- **Multi-line `tui-textarea` form** with markdown rendering in the preview pane.
+- **Complete text-entry and thread UX** — bracketed paste, cursor-aware single-line fields, multi-line `tui-textarea` comment/reply forms, explicit Save/Reply/Cancel controls, and a scrollable full-thread overlay with jump/edit/reply/resolve actions.
 - **Live updates** via `notify` watcher on `comments.json` and the repo working tree — write a comment in another window and it appears immediately.
 - **Send review & agent handoff** — compact verdict + general-comment popover with an unviewed-files guard. `Ctrl-S` persists the review, copies its XML payload to the clipboard when available, and immediately wakes every `diffing await-review` waiter. Waiting-agent state appears only while a waiter is active.
 - **Headless, token-bounded inspection** — `diffing inspect summary|files|hunks|slice|search` and the equivalent MCP tools page the same index with strict row/byte limits, generation checks, and compact JSON. Every request is loopback-only and requires the session capability.

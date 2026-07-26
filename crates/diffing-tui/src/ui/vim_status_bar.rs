@@ -4,9 +4,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 use crate::themes::Palette;
-use crate::ui::gridline::{hint_line, GridlineTokens};
+use crate::ui::gridline::{hint_line, safe_terminal_text, GridlineTokens};
 
 pub struct StatusBarContext<'a> {
     pub mode: &'a str,
@@ -45,23 +46,32 @@ pub fn render_status_bar(
         context_spans.push(Span::styled("  ".to_string(), bg));
     }
     if let Some(file) = context.current_file {
-        context_spans.push(Span::styled(file.to_string(), file_style.bg(tokens.canvas)));
         context_spans.push(Span::styled(
-            format!(" · {}/{}", context.file_idx + 1, context.file_count.max(1)),
-            dim,
+            safe_terminal_text(file),
+            file_style.bg(tokens.canvas),
         ));
+        let position = if context.file_count == 0 {
+            "0/0".to_string()
+        } else {
+            format!(
+                "{}/{}",
+                context.file_idx.min(context.file_count - 1) + 1,
+                context.file_count
+            )
+        };
+        context_spans.push(Span::styled(format!(" · {position}"), dim));
     }
     let context_line = Line::from(context_spans);
     let context_width = context_line
         .spans
         .iter()
-        .map(|span| span.content.chars().count() as u16)
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()) as u16)
         .sum::<u16>();
     let hint_line = styled_hint(context.hint, palette);
     let hint_width = hint_line
         .spans
         .iter()
-        .map(|span| span.content.chars().count() as u16)
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()) as u16)
         .sum::<u16>();
 
     if context.mode.is_empty() {
@@ -83,21 +93,29 @@ pub fn render_status_bar(
 }
 
 fn styled_hint(hint: &str, palette: &Palette) -> Line<'static> {
-    hint_line(hint, GridlineTokens::from(palette).canvas, palette)
+    hint_line(
+        &safe_terminal_text(hint),
+        GridlineTokens::from(palette).canvas,
+        palette,
+    )
 }
 
 fn write_line(x: u16, area: Rect, line: &Line<'_>, buf: &mut Buffer) {
     let mut cursor = x;
     for span in &line.spans {
-        for character in span.content.chars() {
-            if cursor >= area.x + area.width {
-                return;
-            }
-            buf[(cursor, area.y)]
-                .set_char(character)
-                .set_style(span.style);
-            cursor += 1;
+        let remaining = area.x.saturating_add(area.width).saturating_sub(cursor);
+        if remaining == 0 {
+            return;
         }
+        buf.set_stringn(
+            cursor,
+            area.y,
+            span.content.as_ref(),
+            remaining as usize,
+            span.style,
+        );
+        let used = UnicodeWidthStr::width(span.content.as_ref()).min(remaining as usize) as u16;
+        cursor = cursor.saturating_add(used);
     }
 }
 

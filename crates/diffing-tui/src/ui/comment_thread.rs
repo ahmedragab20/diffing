@@ -15,8 +15,13 @@ use ratatui::widgets::{Block, BorderType, Borders, ListItem, Paragraph, Widget, 
 use crate::themes::Palette;
 use crate::ui::gridline::{selection_marker, GridlineTokens, Tone, GLYPHS};
 
-#[allow(dead_code)]
-pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf: &mut Buffer) {
+pub fn render_thread(
+    comment: &ReviewComment,
+    scroll: u16,
+    area: Rect,
+    palette: &Palette,
+    buf: &mut Buffer,
+) -> u16 {
     let tokens = GridlineTokens::from(palette);
     let status_color = match comment.status {
         CommentStatus::Open => tokens.tone(comment_tone(comment)),
@@ -26,10 +31,22 @@ pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf
         CommentStatus::Open => "open",
         CommentStatus::Resolved => "resolved",
     };
+    let severity = comment
+        .severity
+        .filter(|severity| *severity != CommentSeverity::None)
+        .map(|severity| format!(" · {}", severity.as_str()))
+        .unwrap_or_default();
+    let replies = if comment.replies.is_empty() {
+        String::new()
+    } else {
+        format!(" · {} replies", comment.replies.len())
+    };
     let title = format!(
-        " {} · {} ",
+        " {} · {}{}{} ",
         comment_location_label(comment, &comment.file_path),
-        status_label
+        status_label,
+        severity,
+        replies,
     );
     let block = Block::default()
         .borders(Borders::ALL)
@@ -77,8 +94,20 @@ pub fn render_thread(comment: &ReviewComment, area: Rect, palette: &Palette, buf
             )));
         }
     }
-    let para = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let width = inner.width.max(1) as usize;
+    let visual_lines: usize = lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(width))
+        .sum();
+    let max_scroll = visual_lines
+        .saturating_sub(inner.height as usize)
+        .min(u16::MAX as usize) as u16;
+    let para = Paragraph::new(lines)
+        .style(Style::default().fg(tokens.text).bg(tokens.raised))
+        .wrap(Wrap { trim: false })
+        .scroll((scroll.min(max_scroll), 0));
     para.render(inner, buf);
+    max_scroll
 }
 
 pub fn render_tracker_row(
@@ -238,7 +267,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 8);
         let mut buf = Buffer::empty(area);
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
-        render_thread(&c, area, &palette, &mut buf);
+        render_thread(&c, 0, area, &palette, &mut buf);
     }
 
     #[test]
@@ -261,7 +290,7 @@ mod tests {
         let area = Rect::new(0, 0, 72, 10);
         let mut buf = Buffer::empty(area);
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
-        render_thread(&c, area, &palette, &mut buf);
+        render_thread(&c, 0, area, &palette, &mut buf);
         let rendered = (0..area.height)
             .map(|y| {
                 (0..area.width)

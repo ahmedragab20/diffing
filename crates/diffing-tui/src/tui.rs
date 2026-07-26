@@ -5,23 +5,32 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
+use ratatui::buffer::Buffer;
 use ratatui::Terminal;
 
 use crate::app::{App, EditorTarget};
+use crate::ui::gridline::safe_terminal_character;
 
 struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         disable_raw_mode().ok();
-        execute!(stdout(), LeaveAlternateScreen, DisableMouseCapture).ok();
+        execute!(
+            stdout(),
+            DisableBracketedPaste,
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )
+        .ok();
     }
 }
 
@@ -29,13 +38,15 @@ pub fn run(_repo_root: &str, app: &mut App) -> Result<()> {
     let mut stdout = stdout();
     enable_raw_mode().context("enabling raw mode")?;
     let _guard = TerminalGuard;
-    execute!(stdout, EnterAlternateScreen).context("entering alternate screen")?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)
+        .context("entering alternate screen")?;
     let mut mouse_capture_enabled = false;
     sync_mouse_capture(&mut stdout, &mut mouse_capture_enabled, app.mouse_enabled)
         .context("configuring mouse capture")?;
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("creating ratatui terminal")?;
+    terminal.hide_cursor().ok();
 
     let result = event_loop(&mut terminal, app, mouse_capture_enabled);
 
@@ -63,6 +74,7 @@ fn event_loop(
             let rect = ratatui::layout::Rect::new(0, 0, size.width, size.height);
             terminal.draw(|frame| {
                 app.render(rect, frame.buffer_mut());
+                sanitize_terminal_buffer(frame.buffer_mut());
             })?;
             dirty = false;
         }
@@ -74,20 +86,31 @@ fn event_loop(
             for event_index in 0..MAX_EVENTS_PER_FRAME {
                 match crossterm::event::read().context("reading input")? {
                     Event::Key(key) => {
+                        if key.kind == KeyEventKind::Release {
+                            continue;
+                        }
                         if is_global_quit(&key) {
                             return Ok(());
                         }
                         app.handle_key(key);
                         if let Some(target) = app.take_editor_target() {
-                            open_editor(terminal, &target, &mut mouse_capture_enabled)?;
+                            if let Err(error) =
+                                open_editor(terminal, &target, &mut mouse_capture_enabled)?
+                            {
+                                app.report_error(format!("editor failed: {error:#}"));
+                            }
                         }
                         dirty = true;
                     }
+                    Event::Paste(text) => {
+                        app.handle_paste(&text);
+                        dirty = true;
+                    }
+                    Event::FocusGained | Event::FocusLost => dirty = true,
                     Event::Resize(_, _) => dirty = true,
                     Event::Mouse(mouse) => {
                         dirty |= app.handle_mouse(mouse);
                     }
-                    _ => {}
                 }
                 if event_index + 1 == MAX_EVENTS_PER_FRAME
                     || !crossterm::event::poll(Duration::ZERO).context("checking queued input")?
@@ -97,10 +120,33 @@ fn event_loop(
             }
         }
         dirty |= app.poll_background();
-        dirty |= app.has_animations();
         if app.quit {
             return Ok(());
         }
+    }
+}
+
+/// Treat the completed frame as the sole terminal-output trust boundary.
+///
+/// Repository paths, source lines, comments, search results, LSP messages, and
+/// agent-authored text can all reach a Ratatui cell. Crossterm writes each cell
+/// symbol verbatim, so letting an ESC/C1 sequence survive would allow untrusted
+/// repository data to issue terminal commands. Bidirectional controls are not
+/// terminal commands, but making them visible prevents source-review spoofing.
+fn sanitize_terminal_buffer(buffer: &mut Buffer) {
+    for cell in &mut buffer.content {
+        let symbol = cell.symbol();
+        if symbol
+            .chars()
+            .all(|character| safe_terminal_character(character) == character)
+        {
+            continue;
+        }
+        // A Ratatui cell may contain a multi-scalar grapheme. Expanding a
+        // zero-width bidi control into a visible character inside that same
+        // symbol would make the terminal cursor advance farther than the
+        // buffer expects. Redact the whole suspect cell to exactly one glyph.
+        cell.set_symbol("�");
     }
 }
 
@@ -108,11 +154,12 @@ fn open_editor(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     target: &EditorTarget,
     mouse_capture_enabled: &mut bool,
-) -> Result<()> {
+) -> Result<std::result::Result<(), anyhow::Error>> {
     terminal.show_cursor().ok();
     disable_raw_mode().context("leaving raw mode for editor")?;
     execute!(
         terminal.backend_mut(),
+        DisableBracketedPaste,
         LeaveAlternateScreen,
         DisableMouseCapture
     )
@@ -121,11 +168,16 @@ fn open_editor(
 
     let result = run_editor(target);
 
-    execute!(terminal.backend_mut(), EnterAlternateScreen)
-        .context("restoring diff viewer screen")?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableBracketedPaste
+    )
+    .context("restoring diff viewer screen")?;
     enable_raw_mode().context("restoring raw mode after editor")?;
     terminal.clear().context("redrawing after editor")?;
-    result
+    terminal.hide_cursor().ok();
+    Ok(result)
 }
 
 fn run_editor(target: &EditorTarget) -> Result<()> {
@@ -244,6 +296,7 @@ fn is_global_quit(key: &KeyEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::layout::Rect;
 
     #[test]
     fn editor_command_parser_preserves_quoted_arguments() {
@@ -277,5 +330,19 @@ mod tests {
         sync_mouse_capture(&mut output, &mut enabled, false).unwrap();
         assert!(!enabled);
         assert!(output.len() > enabled_bytes);
+    }
+
+    #[test]
+    fn terminal_boundary_replaces_escape_and_bidi_controls() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buffer[(0, 0)].set_symbol("safe");
+        buffer[(1, 0)].set_symbol("\u{1b}[2J");
+        buffer[(2, 0)].set_symbol("a\u{202e}b");
+
+        sanitize_terminal_buffer(&mut buffer);
+
+        assert_eq!(buffer[(0, 0)].symbol(), "safe");
+        assert_eq!(buffer[(1, 0)].symbol(), "�");
+        assert_eq!(buffer[(2, 0)].symbol(), "�");
     }
 }

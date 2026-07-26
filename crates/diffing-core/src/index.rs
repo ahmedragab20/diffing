@@ -48,6 +48,16 @@ pub struct DiffIndex {
 pub struct IndexedFile {
     pub old_path: Option<PathBuf>,
     pub new_path: Option<PathBuf>,
+    /// Blob identifiers advertised by Git's `index <old>..<new>` header.
+    ///
+    /// They are renderer implementation details rather than part of the
+    /// bounded inspect API. The TUI uses them to load the exact before/after
+    /// bytes for binary previews (falling back to the index or worktree when
+    /// Git has not materialized a worktree blob).
+    #[serde(skip)]
+    pub old_oid: Option<String>,
+    #[serde(skip)]
+    pub new_oid: Option<String>,
     pub kind: IndexedChangeKind,
     pub is_binary: bool,
     pub hunks: Vec<IndexedHunk>,
@@ -66,7 +76,7 @@ impl IndexedFile {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IndexedChangeKind {
     Modified,
@@ -952,8 +962,19 @@ where
             continue;
         }
         if line.starts_with(b"Binary files ") && line.ends_with(b" differ") {
-            file.kind = IndexedChangeKind::Binary;
+            // Keep Added/Deleted so binary previews know which side exists.
+            // Modified binary files retain the dedicated Binary marker.
+            if file.kind == IndexedChangeKind::Modified {
+                file.kind = IndexedChangeKind::Binary;
+            }
             file.is_binary = true;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix(b"index ") {
+            if let Some((old_oid, new_oid)) = parse_index_oids(rest) {
+                file.old_oid = old_oid;
+                file.new_oid = new_oid;
+            }
             continue;
         }
         if let Some(rest) = line.strip_prefix(b"--- ") {
@@ -1123,6 +1144,8 @@ fn parse_file_header_bytes(rest: &[u8]) -> IndexedFile {
     IndexedFile {
         old_path,
         new_path,
+        old_oid: None,
+        new_oid: None,
         kind,
         is_binary: false,
         hunks: Vec::new(),
@@ -1130,6 +1153,20 @@ fn parse_file_header_bytes(rest: &[u8]) -> IndexedFile {
         additions: 0,
         deletions: 0,
     }
+}
+
+fn parse_index_oids(input: &[u8]) -> Option<(Option<String>, Option<String>)> {
+    let token = input.split(|byte| byte.is_ascii_whitespace()).next()?;
+    let separator = token.windows(2).position(|window| window == b"..")?;
+    let old = &token[..separator];
+    let new = &token[separator + 2..];
+    let parse = |value: &[u8]| {
+        (!value.is_empty()
+            && value.iter().all(u8::is_ascii_hexdigit)
+            && value.iter().any(|byte| *byte != b'0'))
+        .then(|| String::from_utf8_lossy(value).into_owned())
+    };
+    Some((parse(old), parse(new)))
 }
 
 fn parse_git_header_tokens(input: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
@@ -1314,6 +1351,8 @@ mod tests {
         assert_eq!(index.additions, 1);
         assert_eq!(index.deletions, 1);
         assert_eq!(index.files[0].row_count, 5);
+        assert_eq!(index.files[0].old_oid.as_deref(), Some("1"));
+        assert_eq!(index.files[0].new_oid.as_deref(), Some("2"));
         let page = index.viewport(0, 1, 2, 4096).unwrap();
         assert_eq!(page.rows.len(), 2);
         assert!(matches!(page.rows[0], ViewRow::HunkHeader { .. }));
@@ -1329,6 +1368,21 @@ mod tests {
         assert!(serialized.get("oldLineno").is_some());
         assert!(serialized.get("old_lineno").is_none());
         assert_eq!(page.next_row, Some(3));
+    }
+
+    #[test]
+    fn binary_index_keeps_side_existence_and_blob_ids() {
+        let patch = b"diff --git a/new.png b/new.png\nnew file mode 100644\nindex 0000000..abc1234\nBinary files /dev/null and b/new.png differ\ndiff --git a/old.png b/old.png\ndeleted file mode 100644\nindex def5678..0000000\nBinary files a/old.png and /dev/null differ\n";
+        let (_dir, index) = indexed(patch);
+
+        assert_eq!(index.files[0].kind, IndexedChangeKind::Added);
+        assert!(index.files[0].is_binary);
+        assert_eq!(index.files[0].old_oid, None);
+        assert_eq!(index.files[0].new_oid.as_deref(), Some("abc1234"));
+        assert_eq!(index.files[1].kind, IndexedChangeKind::Deleted);
+        assert!(index.files[1].is_binary);
+        assert_eq!(index.files[1].old_oid.as_deref(), Some("def5678"));
+        assert_eq!(index.files[1].new_oid, None);
     }
 
     #[test]

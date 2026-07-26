@@ -134,6 +134,30 @@ pub const GLYPHS: GridlineGlyphs = GridlineGlyphs {
     resolved: "○",
 };
 
+/// Replace terminal-command and source-spoofing controls with a visible cell.
+/// The mapping is deliberately one input scalar to one output scalar so line,
+/// selection, and intraline-highlight offsets remain stable.
+pub fn safe_terminal_character(character: char) -> char {
+    if character.is_control()
+        || matches!(
+            character,
+            '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
+    {
+        '\u{fffd}'
+    } else {
+        character
+    }
+}
+
+pub fn safe_terminal_text(value: &str) -> String {
+    value.chars().map(safe_terminal_character).collect()
+}
+
 pub fn square_block<'a>(title: impl Into<Line<'a>>, palette: &Palette, focused: bool) -> Block<'a> {
     let tokens = GridlineTokens::from(palette);
     Block::default()
@@ -419,6 +443,12 @@ mod tests {
             .add_modifier
             .contains(Modifier::BOLD));
         assert_eq!(text.lines[1].spans[1].style.fg, Some(palette.code_fg));
+    }
+
+    #[test]
+    fn terminal_text_makes_escape_and_bidi_controls_visible() {
+        assert_eq!(safe_terminal_text("a\u{1b}[2J\u{202e}b"), "a�[2J�b");
+        assert_eq!(safe_terminal_text("emoji 👩‍💻"), "emoji 👩‍💻");
     }
 
     #[test]

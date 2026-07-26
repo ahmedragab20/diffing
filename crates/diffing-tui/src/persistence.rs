@@ -148,9 +148,9 @@ pub fn save_layout(
     sidebar_visible: bool,
     comments_visible: bool,
     file_display: FileDisplay,
-) {
+) -> std::io::Result<()> {
     let path = project_storage_dir(repo_root).join("ui-state.json");
-    let mut root = read_object(&path);
+    let mut root = read_object_for_update(&path)?;
     root.insert("tuiSidebarWidth".to_string(), json!(sidebar_width));
     root.insert("tuiCommentHeight".to_string(), json!(comment_height));
     root.insert("tuiSidebarVisible".to_string(), json!(sidebar_visible));
@@ -162,19 +162,19 @@ pub fn save_layout(
             FileDisplay::Continuous => "continuous",
         }),
     );
-    let _ = write_object(&path, root);
+    write_object(&path, root)
 }
 
-pub fn save_viewed(repo_root: &str, viewed: &HashSet<PathBuf>) {
+pub fn save_viewed(repo_root: &str, viewed: &HashSet<PathBuf>) -> std::io::Result<()> {
     let path = project_storage_dir(repo_root).join("ui-state.json");
-    let mut root = read_object(&path);
+    let mut root = read_object_for_update(&path)?;
     let mut files: Vec<String> = viewed
         .iter()
         .map(|path| path.to_string_lossy().into_owned())
         .collect();
     files.sort();
     root.insert("tuiViewedFiles".to_string(), json!(files));
-    let _ = write_object(&path, root);
+    write_object(&path, root)
 }
 
 pub fn save_settings(
@@ -185,9 +185,9 @@ pub fn save_settings(
     line_numbers: bool,
     mouse_enabled: bool,
     intelligence_mode: IntelligenceMode,
-) {
+) -> std::io::Result<()> {
     let path = settings_path();
-    let mut root = read_object(&path);
+    let mut root = read_object_for_update(&path)?;
     root.insert("theme".to_string(), json!(theme.label()));
     root.insert("lineWrap".to_string(), json!(wrap));
     root.insert(
@@ -204,7 +204,7 @@ pub fn save_settings(
             IntelligenceMode::Off => "off",
         }),
     );
-    let _ = write_object(&path, root);
+    write_object(&path, root)
 }
 
 fn settings_path() -> PathBuf {
@@ -219,6 +219,24 @@ fn read_object(path: &Path) -> Map<String, Value> {
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default()
+}
+
+fn read_object_for_update(path: &Path) -> std::io::Result<Map<String, Value>> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
+        Err(error) => return Err(error),
+    };
+    serde_json::from_str::<Value>(&raw)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?
+        .as_object()
+        .cloned()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "diffing settings must contain a JSON object",
+            )
+        })
 }
 
 fn write_object(path: &Path, value: Map<String, Value>) -> std::io::Result<()> {
@@ -249,5 +267,17 @@ mod tests {
         assert!(load_mouse_enabled(&settings));
         settings.insert("tuiMouseEnabled".to_string(), Value::Bool(false));
         assert!(!load_mouse_enabled(&settings));
+    }
+
+    #[test]
+    fn malformed_state_is_not_silently_overwritten() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        fs::write(&path, "not json").unwrap();
+        assert_eq!(
+            read_object_for_update(&path).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), "not json");
     }
 }

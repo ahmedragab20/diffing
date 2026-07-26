@@ -87,7 +87,7 @@ MCP also advertises workflow prompts `review_local_changes` and `submit_plan_for
 | Plan gate | `diffing plan submit|await|list|show|versions|reply|resolve` |
 | GitHub PR | `diffing "gh pr <ref>"`; `diffing gh status|overview|threads|reviews|pr-fetch|pr-list-comments|pr-review` |
 | Bounded diff reads | `diffing inspect summary|files|hunks|slice|search` |
-| Discovery/DX | `diffing url`; `doctor`; `completion bash|zsh|fish`; `update` |
+| Discovery/DX | `diffing url`; `mode [web|tui]`; `doctor`; `completion bash|zsh|fish`; `update` |
 
 Use `diffing --help` and `docs/cli.md` for the full git-compatible option set and exact exit codes. Prefer stdin for long Markdown bodies/replies. `comment delete`, `delete_comment`, `delete_reply`, and GitHub publication are destructive or externally visible; use them only when the request clearly authorizes them.
 

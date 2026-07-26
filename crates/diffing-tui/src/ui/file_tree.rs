@@ -5,7 +5,7 @@
 //! later phase. Each file node carries its index into the original
 //! `files` vec so the main view can jump to the corresponding diff.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use diffing_core::diff::{FileDiff, LineKind};
@@ -80,6 +80,14 @@ impl FileTree {
         self.nodes.get(self.cursor).and_then(|n| n.file_diff_idx)
     }
 
+    pub fn navigable_file_indices(&self) -> &[usize] {
+        &self.filtered_file_indices
+    }
+
+    pub fn filtered_file_count(&self) -> usize {
+        self.filtered_file_indices.len()
+    }
+
     pub fn move_cursor(&mut self, delta: isize) {
         if self.nodes.is_empty() {
             return;
@@ -98,6 +106,24 @@ impl FileTree {
     pub fn jump_to_file(&mut self, file_idx: usize) {
         if let Some(position) = self.file_positions.get(&file_idx) {
             self.cursor = *position;
+            return;
+        }
+        if !self.filtered_file_indices.contains(&file_idx) {
+            return;
+        }
+        let Some(path) = self
+            .all_nodes
+            .iter()
+            .find(|node| node.file_diff_idx == Some(file_idx))
+            .map(|node| node.path.clone())
+        else {
+            return;
+        };
+        let previous = self.collapsed.len();
+        self.collapsed
+            .retain(|directory| !path.starts_with(directory));
+        if self.collapsed.len() != previous {
+            self.rebuild_visible(Some(path));
         }
     }
 
@@ -183,29 +209,27 @@ impl FileTree {
     }
 
     fn rebuild_visible(&mut self, selected_path: Option<PathBuf>) {
-        let filtered = &self.filtered_file_indices;
-        self.nodes = self
-            .all_nodes
-            .iter()
-            .filter(|node| match node.kind {
-                FileNodeKind::File => node
-                    .file_diff_idx
-                    .is_some_and(|index| filtered.contains(&index)),
-                FileNodeKind::Dir => self.all_nodes.iter().any(|file| {
-                    file.file_diff_idx
-                        .is_some_and(|index| filtered.contains(&index))
-                        && file.path.starts_with(&node.path)
-                }),
-            })
-            .filter(|node| {
-                node.kind == FileNodeKind::Dir
-                    || !self
-                        .collapsed
-                        .iter()
-                        .any(|directory| node.path.starts_with(directory))
-            })
-            .cloned()
-            .collect();
+        let filtered: HashSet<usize> = self.filtered_file_indices.iter().copied().collect();
+        self.nodes =
+            self.all_nodes
+                .iter()
+                .filter(|node| match node.kind {
+                    FileNodeKind::File => node
+                        .file_diff_idx
+                        .is_some_and(|index| filtered.contains(&index)),
+                    FileNodeKind::Dir => self.all_nodes.iter().any(|file| {
+                        file.file_diff_idx
+                            .is_some_and(|index| filtered.contains(&index))
+                            && file.path.starts_with(&node.path)
+                    }),
+                })
+                .filter(|node| {
+                    !self.collapsed.iter().any(|directory| {
+                        node.path != *directory && node.path.starts_with(directory)
+                    })
+                })
+                .cloned()
+                .collect();
         for node in &mut self.nodes {
             if node.kind == FileNodeKind::Dir {
                 node.expanded = !self.collapsed.contains(&node.path);
@@ -458,6 +482,8 @@ mod tests {
         let mut tree = FileTree::build(&files);
         tree.apply_filter("beta", false, false);
         assert_eq!(tree.selected_file_idx(), Some(1));
+        assert_eq!(tree.navigable_file_indices(), &[1]);
+        assert_eq!(tree.filtered_file_count(), 1);
     }
 
     #[test]
@@ -497,5 +523,29 @@ mod tests {
         assert_eq!(tree.nodes.len(), 4);
         tree.jump_to_file(1);
         assert_eq!(tree.selected_file_idx(), Some(1));
+    }
+
+    #[test]
+    fn collapsing_hides_nested_directories_and_file_jumps_reveal_them() {
+        let files = vec![
+            fd("src/core/a.rs", ChangeKind::Modified),
+            fd("src/core/nested/b.rs", ChangeKind::Added),
+            fd("README.md", ChangeKind::Modified),
+        ];
+        let mut tree = FileTree::build(&files);
+        tree.cursor = 0;
+        tree.collapse_selected();
+        assert_eq!(
+            tree.nodes
+                .iter()
+                .map(|node| node.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/core", "README.md"]
+        );
+        assert_eq!(tree.navigable_file_indices(), &[0, 1, 2]);
+
+        tree.jump_to_file(1);
+        assert_eq!(tree.selected_file_idx(), Some(1));
+        assert!(tree.nodes.iter().any(|node| node.name == "nested"));
     }
 }

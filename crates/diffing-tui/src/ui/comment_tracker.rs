@@ -139,6 +139,20 @@ impl TrackerState {
         self.scroll = 0;
     }
 
+    pub fn keep_cursor_visible(&mut self, comments: &[ReviewComment], height: usize) {
+        let visible = self.visible_indices(comments);
+        let Some(cursor) = visible.iter().position(|index| *index == self.cursor) else {
+            self.scroll = 0;
+            return;
+        };
+        let height = height.max(1);
+        if cursor < self.scroll {
+            self.scroll = cursor;
+        } else if cursor >= self.scroll.saturating_add(height) {
+            self.scroll = cursor.saturating_add(1).saturating_sub(height);
+        }
+    }
+
     #[allow(dead_code)]
     pub fn focus_first_open(&mut self, comments: &[ReviewComment]) {
         if let Some(idx) = comments
@@ -152,6 +166,12 @@ impl TrackerState {
     }
 }
 
+impl Default for TrackerState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn render_tracker(
     comments: &[ReviewComment],
     outdated_comments: &HashSet<String>,
@@ -162,8 +182,11 @@ pub fn render_tracker(
     buf: &mut Buffer,
 ) {
     let tokens = GridlineTokens::from(palette);
+    let visible = state.visible_indices(comments);
     let title = format!(
-        " comments · {} · {} ",
+        " comments {}/{} · {} · {} ",
+        visible.len(),
+        comments.len(),
         state.status_filter.label(),
         state.severity_filter.label()
     );
@@ -171,7 +194,24 @@ pub fn render_tracker(
     let inner = block.inner(area);
     block.render(area, buf);
 
-    let visible = state.visible_indices(comments);
+    state.keep_cursor_visible(comments, inner.height as usize);
+    let visible_cursor = visible.iter().position(|index| *index == state.cursor);
+    if visible.is_empty() && inner.width > 0 && inner.height > 0 {
+        let message = if comments.is_empty() {
+            "No comments yet · c adds a line comment"
+        } else {
+            "No comments match these filters · s/p changes filters"
+        };
+        buf.set_stringn(
+            inner.x + 1,
+            inner.y,
+            message,
+            inner.width.saturating_sub(2) as usize,
+            Style::default().fg(tokens.muted).bg(tokens.surface),
+        );
+        focus_rail(area, focused, palette, buf);
+        return;
+    }
     let items: Vec<_> = visible
         .iter()
         .skip(state.scroll)
@@ -188,7 +228,6 @@ pub fn render_tracker(
         .collect();
     let list = List::new(items).highlight_style(Style::default().bg(tokens.selected));
     let mut ls = ratatui::widgets::ListState::default();
-    let visible_cursor = visible.iter().position(|index| *index == state.cursor);
     if let Some(cursor) = visible_cursor.and_then(|cursor| cursor.checked_sub(state.scroll)) {
         if cursor < inner.height as usize {
             ls.select(Some(cursor));
@@ -298,5 +337,27 @@ mod tests {
             buf[(area.x, area.y + 1)].style().fg,
             Some(palette.border_focused)
         );
+    }
+
+    #[test]
+    fn rendering_keeps_the_filtered_cursor_in_view() {
+        let comments = (0..8)
+            .map(|index| make_comment(&index.to_string(), CommentStatus::Open))
+            .collect::<Vec<_>>();
+        let mut state = TrackerState::new();
+        state.cursor = 7;
+        let area = Rect::new(0, 0, 80, 4);
+        let mut buffer = Buffer::empty(area);
+        render_tracker(
+            &comments,
+            &HashSet::new(),
+            &mut state,
+            true,
+            area,
+            &Palette::default(),
+            &mut buffer,
+        );
+        assert!(state.scroll > 0);
+        assert!(state.scroll <= 7);
     }
 }

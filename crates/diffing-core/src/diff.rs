@@ -156,7 +156,9 @@ pub fn parse_patch(input: &str) -> Result<Vec<FileDiff>, ParseError> {
         }
         if line.starts_with("Binary files ") && line.contains("differ") {
             f.is_binary = true;
-            f.kind = ChangeKind::Binary;
+            if f.kind == ChangeKind::Modified {
+                f.kind = ChangeKind::Binary;
+            }
             continue;
         }
         if let Some(rest) = line.strip_prefix("--- ") {
@@ -473,6 +475,16 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert!(files[0].is_binary);
         assert_eq!(files[0].kind, ChangeKind::Binary);
+    }
+
+    #[test]
+    fn binary_additions_and_deletions_keep_their_change_kind() {
+        let patch = "diff --git a/new.png b/new.png\nnew file mode 100644\nBinary files /dev/null and b/new.png differ\ndiff --git a/old.png b/old.png\ndeleted file mode 100644\nBinary files a/old.png and /dev/null differ\n";
+        let files = parse_patch(patch).unwrap();
+        assert_eq!(files[0].kind, ChangeKind::Added);
+        assert!(files[0].is_binary);
+        assert_eq!(files[1].kind, ChangeKind::Deleted);
+        assert!(files[1].is_binary);
     }
 
     #[test]

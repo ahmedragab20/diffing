@@ -33,7 +33,7 @@ impl ReviewDecision {
     }
 
     #[allow(dead_code)]
-    pub fn from_str(s: &str) -> Option<ReviewDecision> {
+    pub fn from_slug(s: &str) -> Option<ReviewDecision> {
         match s {
             "approved" => Some(ReviewDecision::Approved),
             "changes-requested" => Some(ReviewDecision::ChangesRequested),
@@ -56,7 +56,7 @@ mod tests {
     #[test]
     fn label_round_trip() {
         for d in ReviewDecision::ALL {
-            assert_eq!(ReviewDecision::from_str(d.as_str()), Some(*d));
+            assert_eq!(ReviewDecision::from_slug(d.as_str()), Some(*d));
         }
     }
 }

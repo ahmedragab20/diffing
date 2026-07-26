@@ -1,14 +1,14 @@
 //! Dismissable bottom-of-screen toast for fresh agent activity. Shown
 //! when the notify watcher detects a new comment, reply, or status
 //! change on disk (e.g., the agent unblocked, the agent replied). The
-//! toast auto-dismisses after a few seconds OR when the user presses
-//! the dismiss key.
+//! toast auto-dismisses after a few seconds or when the user clicks it.
 
 use std::time::{Duration, Instant};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use unicode_width::UnicodeWidthChar;
 
 use crate::themes::Palette;
 use crate::ui::gridline::{fill, GridlineTokens, Tone, GLYPHS};
@@ -19,15 +19,12 @@ pub struct Toast {
     pub accent: ToastAccent,
     pub created_at: Instant,
     pub ttl: Duration,
-    #[allow(dead_code)]
-    pub dismissed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastAccent {
     Info,
     Success,
-    #[allow(dead_code)]
     Warn,
 }
 
@@ -38,7 +35,6 @@ impl Toast {
     pub fn success(msg: impl Into<String>) -> Self {
         Self::new(msg, ToastAccent::Success, Duration::from_secs(4))
     }
-    #[allow(dead_code)]
     pub fn warn(msg: impl Into<String>) -> Self {
         Self::new(msg, ToastAccent::Warn, Duration::from_secs(6))
     }
@@ -48,7 +44,6 @@ impl Toast {
             accent,
             created_at: Instant::now(),
             ttl,
-            dismissed: false,
         }
     }
     pub fn is_expired(&self) -> bool {
@@ -80,10 +75,20 @@ pub fn render_toast(toast: &Toast, area: Rect, palette: &Palette, buf: &mut Buff
         );
     }
     if area.width > 4 {
+        let max_width = area.width.saturating_sub(6) as usize;
+        let mut used = 0usize;
         let message: String = toast
             .message
             .chars()
-            .take(area.width.saturating_sub(5) as usize)
+            .take_while(|character| {
+                let width = UnicodeWidthChar::width(*character).unwrap_or(0);
+                if used.saturating_add(width) > max_width {
+                    false
+                } else {
+                    used = used.saturating_add(width);
+                    true
+                }
+            })
             .collect();
         buf.set_string(
             area.x + 4,
@@ -93,6 +98,12 @@ pub fn render_toast(toast: &Toast, area: Rect, palette: &Palette, buf: &mut Buff
                 .fg(tokens.text)
                 .bg(tokens.raised)
                 .add_modifier(Modifier::BOLD),
+        );
+        buf.set_string(
+            area.x + area.width.saturating_sub(2),
+            area.y,
+            "×",
+            Style::default().fg(tokens.muted).bg(tokens.raised),
         );
     }
 }

@@ -32,6 +32,7 @@ pub enum Action {
     ToggleSidebar,
     ToggleWrap,
     ToggleLayout,
+    OpenImagePreview,
     OpenHelp,
     OpenSearch,
     OpenFileFilter,
@@ -203,6 +204,7 @@ pub fn classify(key: &KeyEvent) -> Action {
         KeyCode::Char('n') if !ctrl => Action::NextSearch,
         KeyCode::Char('N') if !ctrl => Action::PrevSearch,
         KeyCode::Char('m') if !ctrl => Action::ToggleLayout,
+        KeyCode::Char('i') if !ctrl => Action::OpenImagePreview,
         KeyCode::Char('v') if !ctrl => Action::ToggleViewed,
         KeyCode::Char('t') if !ctrl => Action::OpenThemePicker,
         KeyCode::Char(',') if !ctrl => Action::OpenSettings,
@@ -238,11 +240,108 @@ pub fn classify(key: &KeyEvent) -> Action {
 }
 
 pub fn help_text() -> &'static str {
-    "NAVIGATION\n  j/k, ↑/↓       row down/up\n  {count}j/k     repeat motion\n  gg / G         first/last row\n  Ctrl-d/u       half page down/up\n  J / K          next/previous file\n  ]h / [h        next/previous hunk\n  ]c / [c        next/previous comment\n  Enter/+ / -    expand/collapse context\n  h / l          horizontal scroll\n  Alt-h/l        symbol column left/right\n  zz             center cursor\n\nSEARCH · POWERED BY FFF\n  / / f          all-scope / file search\n  Tab/Shift-Tab  cycle search scope\n  Ctrl-g/r       changed-only / regex in Text\n  ↑/↓, Ctrl-n/p  select · Enter jump\n  n / N          next/previous search result\n\nREVIEW\n  c / C          line / file comment\n  V              start/cancel line selection\n  e / r          edit/reply\n  x / X          resolve thread / all\n  d d            delete thread\n  s / p          filter status/severity\n  v              toggle viewed\n  m              split/unified layout\n  S              send review\n\nTOOLS\n  a              all/unviewed/commented files\n  :              command line\n  ,              settings (layout + language)\n  Space e / b    toggle file sidebar\n  t / w          theme / wrap\n  Tab / Shift-Tab focus panes\n  ?              this help\n  q              quit\n  Esc            cancel current mode"
+    r#"NAVIGATION
+  j/k, ↑/↓       row down/up
+  {count}j/k     repeat motion
+  gg / G         first/last row
+  Ctrl-d/u       half page down/up
+  J / K          next/previous matching file
+  ]h / [h        next/previous hunk
+  ]c / [c        next/previous comment
+  Enter/+ / -    expand/collapse context
+  h / l          horizontal scroll
+  Alt-h/l        symbol column left/right
+  zz             center cursor
+
+SEARCH · POWERED BY FFF
+  / / f          all-scope / file search
+  Tab/Shift-Tab  cycle scope
+  Ctrl-g/r       whole repo / text regex
+  ↑/↓, Ctrl-n/p  select result
+  PgUp/PgDn      page result list
+  Shift-↑/↓      scroll preview
+  ←/→, Home/End  edit query cursor
+  Ctrl-w/u       delete word / clear query
+  Enter          jump to selected match
+  n / N          next/previous result
+
+REVIEW
+  c / C          line / file comment
+  V              start/cancel line selection
+  o / Enter      open focused thread
+  e / r          edit/reply
+  x / X          resolve thread / all
+  d d            confirm thread deletion
+  s / p          filter status/severity
+  v              toggle viewed
+  S              send review
+
+IMAGE DIFFS
+  i              open image comparison
+  1/2/3/4        before/after/side/difference
+  Tab            cycle available image views
+  +/- / 0        zoom in/out / fit
+  h/j/k/l        pan a zoomed image
+
+LAYOUT & TOOLS
+  m              split/unified layout
+  a              all/unviewed/commented files
+  :              command line
+  ,              settings
+  Space e / b    toggle file sidebar
+  t / w          theme / wrap
+  Tab/Shift-Tab  cycle pane focus
+  mouse          click, resize, map-jump, dismiss
+  ?              this help
+  q              quit
+  Esc            cancel current mode"#
 }
 
 pub fn viewer_help_text() -> &'static str {
-    "DIFF NAVIGATION\n  j/k, ↑/↓       line down/up\n  {count}j/k     repeat motion\n  gg / G         first/last change\n  Ctrl-d/u       half page down/up\n  J / K          next/previous file\n  ]h / [h        next/previous hunk\n  Enter/+ / -    expand/collapse context\n  h / l          horizontal scroll\n  zz             center cursor\n\nSEARCH · POWERED BY FFF\n  / / f          diff-local / file search\n  Tab/Shift-Tab  cycle search scope\n  Ctrl-g         opt into whole repository\n  Ctrl-r         regex in Text scope\n  ↑/↓, Ctrl-n/p  wrap through results\n  Ctrl-d/u       move eight results\n  Shift-↑/↓      scroll file preview\n  Enter          jump when present in diff\n  n / N          next/previous search result\n\nVIEW\n  e              open line in $EDITOR\n  gh / gd        hover / go to definition\n  Alt-h/l        symbol column left/right\n  m              split/unified diff\n  Space e / b    toggle file sidebar\n  w              toggle line wrap\n  t              choose theme\n  ,              settings\n  Tab            files/diff focus\n  ?              this help\n  q              quit"
+    r#"DIFF NAVIGATION
+  j/k, ↑/↓       line down/up
+  {count}j/k     repeat motion
+  gg / G         first/last change
+  Ctrl-d/u       half page down/up
+  J / K          next/previous matching file
+  ]h / [h        next/previous hunk
+  Enter/+ / -    expand/collapse context
+  h / l          horizontal scroll
+  zz             center cursor
+
+SEARCH · POWERED BY FFF
+  / / f          diff-local / file search
+  Tab/Shift-Tab  cycle scope
+  Ctrl-g         include/exclude whole repository
+  Ctrl-r         regex in Text scope
+  ↑/↓, Ctrl-n/p  select result
+  PgUp/PgDn      page result list
+  Shift-↑/↓      scroll file preview
+  ←/→, Home/End  edit query cursor
+  Ctrl-w/u       delete word / clear query
+  Enter          jump when present in diff
+  n / N          next/previous result
+
+CODE & IMAGES
+  e              open line in $EDITOR
+  gh / gd        hover / go to definition
+  Alt-h/l        symbol column left/right
+  i              open image comparison
+  1/2/3/4        before/after/side/difference
+  Tab            cycle available image views
+  +/- / 0        zoom in/out / fit
+  h/j/k/l        pan a zoomed image
+
+LAYOUT & TOOLS
+  m              split/unified diff
+  Space e / b    toggle file sidebar
+  w              toggle line wrap
+  t              choose theme
+  ,              settings
+  Tab/Shift-Tab  cycle pane focus
+  mouse          click, resize, map-jump, dismiss
+  ?              this help
+  q              quit"#
 }
 
 #[cfg(test)]
@@ -275,6 +374,14 @@ mod tests {
         assert_eq!(
             classify(&key(KeyCode::Esc, KeyModifiers::NONE)),
             Action::Noop
+        );
+    }
+
+    #[test]
+    fn image_comparison_has_a_direct_binding() {
+        assert_eq!(
+            classify(&key(KeyCode::Char('i'), KeyModifiers::NONE)),
+            Action::OpenImagePreview
         );
     }
 

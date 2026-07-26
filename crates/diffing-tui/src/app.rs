@@ -19,6 +19,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::agent_api::AgentApi;
 use crate::diff::highlight::highlight_line;
@@ -27,8 +28,8 @@ use crate::editorconfig::EditorConfigCache;
 use crate::handoff::{CommentsWatcher, RepoWatcher};
 use crate::keys::{help_text, viewer_help_text, Action, Command, Keymap};
 use crate::lsp::{
-    character_column_from_utf16, utf16_column, DefinitionTarget, IntelligenceMode,
-    LanguageResponse, LspManager, RequestKind, RequestToken, ServerState,
+    character_column_from_utf16, utf16_column, DefinitionTarget, LanguageResponse, LspManager,
+    RequestKind, RequestToken, ServerState,
 };
 use crate::persistence::FileDisplay;
 use crate::search::{
@@ -36,7 +37,8 @@ use crate::search::{
 };
 use crate::themes::{Palette, ThemeName};
 use crate::ui::agent_activity_toast::{render_toast, Toast};
-use crate::ui::comment_form::{render_form, CommentFormState};
+use crate::ui::comment_form::{comment_form_regions, render_form, CommentFormState};
+use crate::ui::comment_thread::render_thread;
 use crate::ui::comment_tracker::{render_tracker, TrackerState};
 use crate::ui::file_diff_card::{render_card, DiffRenderCache};
 use crate::ui::file_tree::FileTree;
@@ -44,14 +46,23 @@ use crate::ui::file_tree_render::{
     content_area as file_tree_content_area, render_file_tree, FileTreeRenderOptions,
 };
 use crate::ui::gridline::{
-    dim_buffer, hint_line, horizontal_rule, overlay_block, shortcut_help, shortcut_help_columns,
-    vertical_rule, GridlineTokens, GLYPHS, METRICS,
+    dim_buffer, hint_line, horizontal_rule, overlay_block, safe_terminal_character,
+    safe_terminal_text, shortcut_help, shortcut_help_columns, vertical_rule, GridlineTokens,
+    GLYPHS, METRICS,
+};
+use crate::ui::image_diff::{
+    is_image_path, render_image_diff, ImageCompareMode, ImageDiffData, ImageDiffManager, ImageKey,
+    ImageViewState,
 };
 use crate::ui::send_review_popover::{
     build_send_payload, render_send_popover, send_review_regions, SendField, SendReviewState,
 };
 use crate::ui::settings_sheet::{render_settings, settings_row_at, SettingsState, SettingsValues};
 use crate::ui::vim_status_bar::{render_status_bar, StatusBarContext};
+
+const MAX_MODAL_INPUT_CHARACTERS: usize = 4_096;
+const MAX_PASTE_CHARACTERS: usize = 1_048_576;
+const MAX_TEXTAREA_CHARACTERS: usize = 1_048_576;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -84,6 +95,8 @@ pub enum Mode {
     ThemePicker,
     Settings,
     Hover,
+    ImagePreview,
+    CommentDetail,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,8 +136,29 @@ enum ToolbarAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageControl {
+    Mode(ImageCompareMode),
+    ZoomOut,
+    Reset,
+    ZoomIn,
+    Close,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommentDetailControl {
+    Jump,
+    Edit,
+    Reply,
+    Resolve,
+    Delete,
+    Close,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PointerVisualTarget {
     Toolbar(ToolbarAction),
+    Image(ImageControl),
+    CommentDetail(CommentDetailControl),
     DiffRow(u16),
     None,
 }
@@ -135,19 +169,36 @@ enum DragState {
     Comments,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RenderedDiffRow {
+    file_index: usize,
+    logical_rows: [Option<u64>; 2],
+    split: bool,
+}
+
 #[derive(Default)]
 struct UiRegions {
     root: Option<Rect>,
     toolbar: Vec<(Rect, ToolbarAction)>,
+    image_controls: Vec<(Rect, ImageControl)>,
+    comment_detail_controls: Vec<(Rect, CommentDetailControl)>,
     file_tree: Option<Rect>,
     file_rows: Vec<(Rect, usize)>,
     diff: Option<Rect>,
     diff_inner: Option<Rect>,
+    change_map: Option<Rect>,
     comment_panel: Option<Rect>,
     comment_rows: Vec<(Rect, usize)>,
     sidebar_divider: Option<Rect>,
     comment_divider: Option<Rect>,
     theme_rows: Vec<(Rect, ThemeName)>,
+    toast_rows: Vec<(Rect, usize)>,
+    search_scopes: Vec<(Rect, SearchScope)>,
+    search_changed: Option<Rect>,
+    search_regex: Option<Rect>,
+    modal_input: Option<Rect>,
+    search_results: Vec<(Rect, usize)>,
+    search_preview: Option<Rect>,
 }
 
 impl UiRegions {
@@ -162,6 +213,22 @@ impl UiRegions {
             .map(|(_, action)| *action)
         {
             return PointerVisualTarget::Toolbar(action);
+        }
+        if let Some(control) = self
+            .image_controls
+            .iter()
+            .find(|(area, _)| contains(*area, column, row))
+            .map(|(_, control)| *control)
+        {
+            return PointerVisualTarget::Image(control);
+        }
+        if let Some(control) = self
+            .comment_detail_controls
+            .iter()
+            .find(|(area, _)| contains(*area, column, row))
+            .map(|(_, control)| *control)
+        {
+            return PointerVisualTarget::CommentDetail(control);
         }
         if self
             .diff_inner
@@ -293,6 +360,11 @@ pub struct App {
     pub viewport_height: usize,
     render_metadata: DiffRenderMetadata,
     diff_render_cache: DiffRenderCache,
+    rendered_diff_rows: Vec<RenderedDiffRow>,
+    pointer_overlay_dirty: bool,
+    image_diff: ImageDiffManager,
+    image_view: ImageViewState,
+    active_image_key: Option<ImageKey>,
     pub horizontal_offset: usize,
     code_column: Option<usize>,
     lsp: LspManager,
@@ -316,9 +388,11 @@ pub struct App {
     theme_cursor: usize,
     theme_original: ThemeName,
     theme_return_to_settings: bool,
+    help_scroll: u16,
     settings_state: SettingsState,
     pub keymap: Keymap,
     pub modal_input: String,
+    modal_cursor: usize,
     pub search_cursor: usize,
     search_client: Option<SearchClient>,
     search_scope: SearchScope,
@@ -349,6 +423,7 @@ pub struct App {
     comments_revision: u64,
     pub comment_store: FileCommentStore,
     pub tracker: TrackerState,
+    comment_detail_scroll: u16,
     pub comment_form: Option<CommentFormState>,
     pub send_review: Option<SendReviewState>,
     pub toasts: Vec<Toast>,
@@ -398,6 +473,33 @@ struct RefreshAnchor {
 }
 
 const CHANGE_MAP_CACHE_ENTRIES: usize = 16;
+const EX_COMMANDS: &[&str] = &[
+    "bottom",
+    "comments",
+    "continuous",
+    "display",
+    "files",
+    "h",
+    "help",
+    "image",
+    "mouse",
+    "nomouse",
+    "nowrap",
+    "q",
+    "quit",
+    "refresh",
+    "reload",
+    "set",
+    "settings",
+    "sidebar",
+    "single",
+    "split",
+    "theme",
+    "top",
+    "unified",
+    "w",
+    "wrap",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChangeMapMarker {
@@ -419,7 +521,9 @@ struct CachedChangeMap {
 
 #[derive(Default)]
 struct DiffRenderMetadata {
-    /// Inclusive file starts followed by one terminal total-row sentinel.
+    /// Original file indices in the active continuous-view order, plus their
+    /// inclusive starts and one terminal total-row sentinel.
+    file_indices: Vec<usize>,
     file_offsets: Vec<u64>,
     change_maps: VecDeque<CachedChangeMap>,
 }
@@ -432,11 +536,25 @@ impl DiffRenderMetadata {
     }
 
     fn rebuild(&mut self, index: &DiffIndex) {
+        self.rebuild_visible(index, 0..index.files.len());
+    }
+
+    fn set_visible_files(&mut self, index: &DiffIndex, files: &[usize]) {
+        if self.file_indices == files {
+            return;
+        }
+        self.rebuild_visible(index, files.iter().copied());
+    }
+
+    fn rebuild_visible(&mut self, index: &DiffIndex, files: impl IntoIterator<Item = usize>) {
+        self.file_indices.clear();
         self.file_offsets.clear();
-        self.file_offsets
-            .reserve(index.files.len().saturating_add(1));
         self.file_offsets.push(0);
-        for file in &index.files {
+        for file_index in files {
+            let Some(file) = index.files.get(file_index) else {
+                continue;
+            };
+            self.file_indices.push(file_index);
             let next = self
                 .file_offsets
                 .last()
@@ -453,27 +571,27 @@ impl DiffRenderMetadata {
     }
 
     fn file_offset(&self, file_index: usize) -> u64 {
-        self.file_offsets
-            .get(file_index)
+        self.file_indices
+            .iter()
+            .position(|index| *index == file_index)
+            .and_then(|position| self.file_offsets.get(position))
             .copied()
             .unwrap_or_else(|| self.total_rows())
     }
 
     fn position(&self, global_row: u64) -> Option<(usize, u64)> {
         let total = self.total_rows();
-        if total == 0 || self.file_offsets.len() < 2 {
+        if total == 0 || self.file_offsets.len() < 2 || self.file_indices.is_empty() {
             return None;
         }
         let row = global_row.min(total.saturating_sub(1));
-        let file_index = self
+        let position = self
             .file_offsets
             .partition_point(|offset| *offset <= row)
             .saturating_sub(1)
-            .min(self.file_offsets.len().saturating_sub(2));
-        Some((
-            file_index,
-            row.saturating_sub(self.file_offsets[file_index]),
-        ))
+            .min(self.file_indices.len().saturating_sub(1));
+        let file_index = self.file_indices[position];
+        Some((file_index, row.saturating_sub(self.file_offsets[position])))
     }
 
     fn change_map(
@@ -503,6 +621,9 @@ impl DiffRenderMetadata {
                 if file_index.is_some_and(|selected| selected != current_index) {
                     continue;
                 }
+                if file_index.is_none() && !self.file_indices.contains(&current_index) {
+                    continue;
+                }
                 let base = if file_index.is_some() {
                     0
                 } else {
@@ -510,8 +631,9 @@ impl DiffRenderMetadata {
                 };
                 for hunk in &file.hunks {
                     let logical = base.saturating_add(hunk.row_start);
+                    let content_span = total_rows.saturating_sub(1).max(1);
                     let bucket = (logical.saturating_mul(height.saturating_sub(1) as u64)
-                        / total_rows) as usize;
+                        / content_span) as usize;
                     let bucket = bucket.min(markers.len().saturating_sub(1));
                     markers[bucket] = Some(if hunk.new_lines > hunk.old_lines {
                         ChangeMapMarker::Added
@@ -631,6 +753,7 @@ impl App {
             .join("pending.patch");
         let index = Arc::new(DiffIndex::empty(now_ms(), empty_spool, false));
         let render_metadata = DiffRenderMetadata::new(&index);
+        let image_diff = ImageDiffManager::new(repo_root.clone())?;
         let shared_index = Arc::new(RwLock::new(index.clone()));
         let (index_tx, index_rx) = mpsc::channel();
         let default_context_lines = context_lines_from_args(&git_diff_args).unwrap_or(3);
@@ -657,14 +780,7 @@ impl App {
             spawn_preview_worker(client, preview_request_rx, preview_result_tx)?;
         }
         let theme = persisted.theme;
-        let lsp = LspManager::new(
-            repo_root.clone(),
-            if experience == Experience::Viewer {
-                IntelligenceMode::Off
-            } else {
-                persisted.intelligence_mode
-            },
-        );
+        let lsp = LspManager::new(repo_root.clone(), persisted.intelligence_mode);
         let store = FileCommentStore::new(repo_str);
         let comments = store.load().unwrap_or_default();
         let last_comment_count = comments.len();
@@ -716,6 +832,11 @@ impl App {
             viewport_height: 1,
             render_metadata,
             diff_render_cache: DiffRenderCache::default(),
+            rendered_diff_rows: Vec::new(),
+            pointer_overlay_dirty: false,
+            image_diff,
+            image_view: ImageViewState::default(),
+            active_image_key: None,
             horizontal_offset: 0,
             code_column: None,
             lsp,
@@ -739,9 +860,11 @@ impl App {
             theme_cursor: 0,
             theme_original: theme,
             theme_return_to_settings: false,
+            help_scroll: 0,
             settings_state: SettingsState::default(),
             keymap: Keymap::default(),
             modal_input: String::new(),
+            modal_cursor: 0,
             search_cursor: 0,
             search_client,
             search_scope: SearchScope::All,
@@ -769,6 +892,7 @@ impl App {
             pending_delete_id: None,
             quit: false,
             tracker: TrackerState::new(),
+            comment_detail_scroll: 0,
             comments,
             comments_revision: 1,
             comment_store: store,
@@ -832,10 +956,10 @@ impl App {
                 self.file_tree.jump_to_file(file_index);
             }
         }
-        self.apply_file_filter();
         let complete = snapshot.complete;
         self.render_metadata.rebuild(&snapshot);
         self.index = Arc::new(snapshot);
+        self.apply_file_filter();
         self.lsp_active_path = None;
         if let Ok(mut shared) = self.shared_index.write() {
             *shared = self.index.clone();
@@ -856,19 +980,76 @@ impl App {
     }
 
     pub fn reload_comments(&mut self) {
+        self.reload_comments_with_notifications(true);
+    }
+
+    fn reload_comments_with_notifications(&mut self, notify: bool) {
         match self.comment_store.load() {
             Ok(comments) => {
+                let detail_id = (self.mode == Mode::CommentDetail)
+                    .then(|| {
+                        self.comments
+                            .get(self.tracker.cursor)
+                            .map(|comment| comment.id.clone())
+                    })
+                    .flatten();
                 let delta = comments.len() as isize - self.last_comment_count as isize;
-                if delta > 0 {
+                let reply_delta = comments
+                    .iter()
+                    .map(|comment| comment.replies.len())
+                    .sum::<usize>()
+                    .saturating_sub(
+                        self.comments
+                            .iter()
+                            .map(|comment| comment.replies.len())
+                            .sum::<usize>(),
+                    );
+                if notify && delta > 0 {
                     self.toasts.push(Toast::info(format!(
                         "{} new comment{}",
                         delta,
                         if delta == 1 { "" } else { "s" }
                     )));
+                } else if notify && reply_delta > 0 {
+                    self.toasts.push(Toast::info(format!(
+                        "{} new repl{}",
+                        reply_delta,
+                        if reply_delta == 1 { "y" } else { "ies" }
+                    )));
+                } else if notify && comments != self.comments {
+                    self.toasts
+                        .push(Toast::info("review threads updated".to_string()));
                 }
                 self.comments = comments;
                 self.comments_revision = self.comments_revision.wrapping_add(1);
                 self.last_comment_count = self.comments.len();
+                if let Some(detail_id) = detail_id {
+                    if let Some(index) = self
+                        .comments
+                        .iter()
+                        .position(|comment| comment.id == detail_id)
+                    {
+                        self.tracker.cursor = index;
+                    } else {
+                        self.mode = Mode::Normal;
+                        self.pending_delete_id = None;
+                        self.status_message
+                            .get_or_insert_with(|| "thread was removed while open".to_string());
+                    }
+                }
+                if !self
+                    .tracker
+                    .visible_indices(&self.comments)
+                    .contains(&self.tracker.cursor)
+                {
+                    if self.mode == Mode::CommentDetail {
+                        self.mode = Mode::Normal;
+                        self.status_message.get_or_insert_with(|| {
+                            "thread no longer matches the active filters".to_string()
+                        });
+                    }
+                    self.tracker.normalize_filter_cursor(&self.comments);
+                }
                 self.apply_file_filter();
             }
             Err(e) => {
@@ -889,6 +1070,7 @@ impl App {
     }
 
     pub fn poll_background(&mut self) -> bool {
+        let pointer_dirty = std::mem::take(&mut self.pointer_overlay_dirty);
         let repo_dirty = self.tick_repo_watcher();
         let review_dirty = if self.experience == Experience::Review {
             self.tick_watcher()
@@ -899,8 +1081,11 @@ impl App {
             | self.tick_search()
             | self.tick_search_preview()
             | self.tick_lsp()
+            | self.image_diff.poll()
+            | self.tick_toasts()
             | review_dirty
             | repo_dirty
+            | pointer_dirty
     }
 
     fn tick_search(&mut self) -> bool {
@@ -1161,7 +1346,7 @@ impl App {
             ));
             return;
         };
-        self.file_tree.jump_to_file(file_index);
+        self.reveal_file_for_direct_jump(file_index);
         self.focus = Focus::Diff;
         self.cursor_row = row;
         self.code_column = self
@@ -1187,8 +1372,10 @@ impl App {
         self.status_message = Some(format!("→ {}:{line_number}", relative.display()));
     }
 
-    pub fn has_animations(&self) -> bool {
-        !self.toasts.is_empty()
+    fn tick_toasts(&mut self) -> bool {
+        let previous = self.toasts.len();
+        self.toasts.retain(|toast| !toast.is_expired());
+        self.toasts.len() != previous
     }
 
     fn tick_repo_watcher(&mut self) -> bool {
@@ -1266,6 +1453,13 @@ impl App {
         else {
             return;
         };
+        if !self
+            .file_tree
+            .navigable_file_indices()
+            .contains(&file_index)
+        {
+            return;
+        }
         let Some(row) = self
             .index
             .find_line_row(file_index, anchor.kind, anchor.line)
@@ -1328,20 +1522,16 @@ impl App {
             Mode::ThemePicker => self.handle_theme_picker_key(key),
             Mode::Settings => self.handle_settings_key(key),
             Mode::Hover => self.handle_hover_key(key),
-            Mode::Help => {
-                self.mode = Mode::Normal;
-                self.keymap.clear();
-            }
+            Mode::ImagePreview => self.handle_image_preview_key(key),
+            Mode::CommentDetail => self.handle_comment_detail_key(key),
+            Mode::Help => self.handle_help_key(key),
             Mode::Normal => {
                 if key.code == crossterm::event::KeyCode::Esc && self.visual_anchor.take().is_some()
                 {
                     self.status_message = Some("line selection cancelled".to_string());
                     return;
                 }
-                if self.experience == Experience::Viewer
-                    && self.focus == Focus::FileTree
-                    && key.code == crossterm::event::KeyCode::Enter
-                {
+                if self.focus == Focus::FileTree && key.code == crossterm::event::KeyCode::Enter {
                     if self.file_tree.selected_file_idx().is_some() {
                         self.focus = Focus::Diff;
                     } else {
@@ -1363,6 +1553,7 @@ impl App {
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
         let previous_target = self.regions.pointer_visual_target(self.mouse_position);
+        let previous_diff_target = self.pointer_diff_target(self.mouse_position);
         let moved = matches!(mouse.kind, MouseEventKind::Moved);
         if !self.mouse_enabled {
             self.mouse_position = None;
@@ -1375,7 +1566,9 @@ impl App {
             return previous_target
                 != self
                     .regions
-                    .pointer_visual_target(Some((mouse.column, mouse.row)));
+                    .pointer_visual_target(Some((mouse.column, mouse.row)))
+                || previous_diff_target
+                    != self.pointer_diff_target(Some((mouse.column, mouse.row)));
         }
 
         if self.mode == Mode::ThemePicker {
@@ -1392,7 +1585,13 @@ impl App {
                     self.preview_theme_at_cursor();
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some((_, theme)) = self
+                    if let Some(input) = self
+                        .regions
+                        .modal_input
+                        .filter(|area| contains(*area, mouse.column, mouse.row))
+                    {
+                        self.place_modal_cursor("/ ", input, mouse.column);
+                    } else if let Some((_, theme)) = self
                         .regions
                         .theme_rows
                         .iter()
@@ -1408,7 +1607,7 @@ impl App {
                         } else {
                             Mode::Normal
                         };
-                        self.modal_input.clear();
+                        self.clear_modal_input();
                     }
                 }
                 _ => {}
@@ -1422,7 +1621,9 @@ impl App {
                 MouseEventKind::ScrollUp => self.settings_state.move_cursor(-1),
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(root) = self.regions.root {
-                        if let Some(index) = settings_row_at(root, mouse.column, mouse.row) {
+                        if let Some(index) =
+                            settings_row_at(&self.settings_state, root, mouse.column, mouse.row)
+                        {
                             self.settings_state.cursor = index;
                             self.activate_setting(1);
                         }
@@ -1449,8 +1650,149 @@ impl App {
         }
 
         if self.mode == Mode::Help {
-            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-                self.mode = Mode::Normal;
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.help_scroll = self.help_scroll.saturating_add(3),
+                MouseEventKind::ScrollUp => self.help_scroll = self.help_scroll.saturating_sub(3),
+                _ => {}
+            }
+            return true;
+        }
+
+        if self.mode == Mode::ImagePreview {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.image_view.zoom_out(),
+                MouseEventKind::ScrollUp => self.image_view.zoom_in(),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(control) = self
+                        .regions
+                        .image_controls
+                        .iter()
+                        .find(|(area, _)| contains(*area, mouse.column, mouse.row))
+                        .map(|(_, control)| *control)
+                    {
+                        match control {
+                            ImageControl::Mode(mode) => self.image_view.mode = mode,
+                            ImageControl::ZoomOut => self.image_view.zoom_out(),
+                            ImageControl::Reset => self.image_view.reset(),
+                            ImageControl::ZoomIn => self.image_view.zoom_in(),
+                            ImageControl::Close => self.mode = Mode::Normal,
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return true;
+        }
+
+        if self.mode == Mode::CommentDetail {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => {
+                    self.comment_detail_scroll = self.comment_detail_scroll.saturating_add(3)
+                }
+                MouseEventKind::ScrollUp => {
+                    self.comment_detail_scroll = self.comment_detail_scroll.saturating_sub(3)
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(control) = self
+                        .regions
+                        .comment_detail_controls
+                        .iter()
+                        .find(|(area, _)| contains(*area, mouse.column, mouse.row))
+                        .map(|(_, control)| *control)
+                    {
+                        if control != CommentDetailControl::Delete {
+                            self.pending_delete_id = None;
+                        }
+                        match control {
+                            CommentDetailControl::Jump => {
+                                self.mode = Mode::Normal;
+                                self.jump_to_focused_comment();
+                            }
+                            CommentDetailControl::Edit => self.open_edit_form_for_focused(),
+                            CommentDetailControl::Reply => self.open_reply_form_for_focused(),
+                            CommentDetailControl::Resolve => self.resolve_focused(),
+                            CommentDetailControl::Delete => self.delete_focused(),
+                            CommentDetailControl::Close => self.mode = Mode::Normal,
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return true;
+        }
+
+        if self.mode == Mode::Search {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => {
+                    if self
+                        .regions
+                        .search_preview
+                        .is_some_and(|area| contains(area, mouse.column, mouse.row))
+                    {
+                        self.search_preview_scroll = self.search_preview_scroll.saturating_add(4);
+                    } else {
+                        self.move_search_cursor(3);
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    if self
+                        .regions
+                        .search_preview
+                        .is_some_and(|area| contains(area, mouse.column, mouse.row))
+                    {
+                        self.search_preview_scroll = self.search_preview_scroll.saturating_sub(4);
+                    } else {
+                        self.move_search_cursor(-3);
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(scope) = self
+                        .regions
+                        .search_scopes
+                        .iter()
+                        .find(|(area, _)| contains(*area, mouse.column, mouse.row))
+                        .map(|(_, scope)| *scope)
+                    {
+                        self.search_scope = scope;
+                        if scope != SearchScope::Text {
+                            self.search_regex = false;
+                        }
+                        self.search_cursor = 0;
+                        self.queue_repo_search();
+                    } else if self
+                        .regions
+                        .search_changed
+                        .is_some_and(|area| contains(area, mouse.column, mouse.row))
+                    {
+                        self.toggle_search_changed_only();
+                    } else if self
+                        .regions
+                        .search_regex
+                        .is_some_and(|area| contains(area, mouse.column, mouse.row))
+                    {
+                        self.toggle_search_regex();
+                    } else if let Some(index) = self
+                        .regions
+                        .search_results
+                        .iter()
+                        .find(|(area, _)| contains(*area, mouse.column, mouse.row))
+                        .map(|(_, index)| *index)
+                    {
+                        let activate = self.search_cursor == index;
+                        self.search_cursor = index;
+                        self.queue_search_preview();
+                        if activate {
+                            self.activate_repo_search_hit();
+                        }
+                    } else if let Some(input) = self
+                        .regions
+                        .modal_input
+                        .filter(|area| contains(*area, mouse.column, mouse.row))
+                    {
+                        self.place_modal_cursor("/ ", input, mouse.column);
+                    }
+                }
+                _ => {}
             }
             return true;
         }
@@ -1464,34 +1806,129 @@ impl App {
                 return true;
             };
             let regions = send_review_regions(root);
-            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-                if let Some(decision) = regions
-                    .verdict_rows
-                    .iter()
-                    .find(|(area, _)| contains(*area, mouse.column, mouse.row))
-                    .map(|(_, decision)| *decision)
-                {
-                    if let Some(state) = self.send_review.as_mut() {
-                        state.verdict = decision;
-                        state.focused = SendField::Verdict;
-                    }
-                } else if contains(regions.general, mouse.column, mouse.row) {
-                    if let Some(state) = self.send_review.as_mut() {
-                        state.focused = SendField::General;
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if contains(regions.send_button, mouse.column, mouse.row) {
+                        self.submit_send_review();
+                    } else if contains(regions.cancel_button, mouse.column, mouse.row) {
+                        self.send_review = None;
+                        self.mode = Mode::Normal;
+                        self.status_message = Some("send cancelled".to_string());
+                    } else if let Some(decision) = regions
+                        .verdict_rows
+                        .iter()
+                        .find(|(area, _)| contains(*area, mouse.column, mouse.row))
+                        .map(|(_, decision)| *decision)
+                    {
+                        if let Some(state) = self.send_review.as_mut() {
+                            state.verdict = decision;
+                            state.focused = SendField::Verdict;
+                        }
+                    } else if contains(regions.general, mouse.column, mouse.row) {
+                        if let Some(state) = self.send_review.as_mut() {
+                            state.focused = SendField::General;
+                        }
                     }
                 }
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                    if contains(regions.general, mouse.column, mouse.row) =>
+                {
+                    if let Some(state) = self.send_review.as_mut() {
+                        state.focused = SendField::General;
+                        let code = if mouse.kind == MouseEventKind::ScrollDown {
+                            crossterm::event::KeyCode::PageDown
+                        } else {
+                            crossterm::event::KeyCode::PageUp
+                        };
+                        state
+                            .general
+                            .input(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE));
+                    }
+                }
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                    if let Some(state) = self.send_review.as_mut() {
+                        state.focused = SendField::Verdict;
+                        state.cycle_verdict(if mouse.kind == MouseEventKind::ScrollDown {
+                            1
+                        } else {
+                            -1
+                        });
+                    }
+                }
+                _ => {}
+            }
+            return true;
+        }
+
+        if self.mode == Mode::CommentForm {
+            let Some(root) = self.regions.root else {
+                return true;
+            };
+            let regions = comment_form_regions(root);
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if contains(regions.save_button, mouse.column, mouse.row) {
+                        self.submit_form();
+                    } else if contains(regions.cancel_button, mouse.column, mouse.row) {
+                        self.comment_form = None;
+                        self.pending_comment_target = None;
+                        self.mode = Mode::Normal;
+                        self.status_message = Some("comment cancelled".to_string());
+                    } else if contains(regions.severity_button, mouse.column, mouse.row) {
+                        if let Some(form) = self.comment_form.as_mut() {
+                            if form.kind == crate::ui::comment_form::FormKind::New {
+                                form.cycle_severity();
+                            }
+                        }
+                    }
+                }
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                    if contains(regions.body, mouse.column, mouse.row) =>
+                {
+                    if let Some(form) = self.comment_form.as_mut() {
+                        let code = if mouse.kind == MouseEventKind::ScrollDown {
+                            crossterm::event::KeyCode::PageDown
+                        } else {
+                            crossterm::event::KeyCode::PageUp
+                        };
+                        form.textarea
+                            .input(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE));
+                    }
+                }
+                _ => {}
             }
             return true;
         }
 
         // Text-entry modals own the pointer; do not let clicks leak through to
         // the diff underneath them.
-        if matches!(self.mode, Mode::CommentForm | Mode::Search | Mode::Command) {
+        if self.mode == Mode::Command {
+            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                if let Some(input) = self
+                    .regions
+                    .modal_input
+                    .filter(|area| contains(*area, mouse.column, mouse.row))
+                {
+                    self.place_modal_cursor(":", input, mouse.column);
+                }
+            }
             return true;
         }
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(index) = self
+                    .regions
+                    .toast_rows
+                    .iter()
+                    .find(|(area, _)| contains(*area, mouse.column, mouse.row))
+                    .map(|(_, index)| *index)
+                {
+                    if index < self.toasts.len() {
+                        self.toasts.remove(index);
+                    }
+                    return true;
+                }
                 if self
                     .regions
                     .sidebar_divider
@@ -1548,6 +1985,14 @@ impl App {
                     }
                     return true;
                 }
+                if let Some(map) = self
+                    .regions
+                    .change_map
+                    .filter(|area| contains(*area, mouse.column, mouse.row))
+                {
+                    self.jump_from_change_map(map, mouse.row);
+                    return true;
+                }
                 if let Some((inner, _)) = self
                     .regions
                     .diff_inner
@@ -1555,16 +2000,18 @@ impl App {
                     .filter(|(inner, _)| contains(*inner, mouse.column, mouse.row))
                 {
                     self.focus = Focus::Diff;
-                    if self.file_display == FileDisplay::Continuous {
-                        self.continuous_cursor = self
-                            .continuous_scroll
-                            .saturating_add(mouse.row.saturating_sub(inner.y) as u64)
-                            .min(self.continuous_total_rows().saturating_sub(1));
-                        self.sync_continuous_active();
-                    } else {
-                        self.cursor_row = (self.scroll as u64)
-                            .saturating_add(mouse.row.saturating_sub(inner.y) as u64)
-                            .min(self.current_file_rows().saturating_sub(1));
+                    if let Some((file_index, logical_row)) =
+                        self.diff_target_at(inner, mouse.column, mouse.row)
+                    {
+                        self.file_tree.jump_to_file(file_index);
+                        self.cursor_row = logical_row;
+                        if self.file_display == FileDisplay::Continuous {
+                            self.continuous_cursor = self
+                                .continuous_offset_for_file(file_index)
+                                .saturating_add(logical_row)
+                                .min(self.continuous_total_rows().saturating_sub(1));
+                            self.sync_continuous_active();
+                        }
                     }
                     return true;
                 }
@@ -1575,25 +2022,35 @@ impl App {
                     .find(|(area, _)| contains(*area, mouse.column, mouse.row))
                     .map(|(_, comment)| *comment)
                 {
+                    self.pending_delete_id = None;
                     self.tracker.cursor = comment;
                     self.focus = Focus::Tracker;
-                    self.jump_to_focused_comment();
                 }
             }
-            MouseEventKind::Drag(MouseButton::Left) => match self.drag {
-                Some(DragState::Sidebar) => {
-                    if let Some(root) = self.regions.root {
-                        self.sidebar_width = sidebar_width_for_pointer(root, mouse.column);
-                    }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(map) = self
+                    .regions
+                    .change_map
+                    .filter(|area| contains(*area, mouse.column, mouse.row))
+                {
+                    self.jump_from_change_map(map, mouse.row);
+                    return true;
                 }
-                Some(DragState::Comments) => {
-                    if let Some(panel) = self.regions.comment_panel {
-                        let bottom = panel.y.saturating_add(panel.height);
-                        self.comment_height = bottom.saturating_sub(mouse.row).clamp(4, 20);
+                match self.drag {
+                    Some(DragState::Sidebar) => {
+                        if let Some(root) = self.regions.root {
+                            self.sidebar_width = sidebar_width_for_pointer(root, mouse.column);
+                        }
                     }
+                    Some(DragState::Comments) => {
+                        if let Some(panel) = self.regions.comment_panel {
+                            let bottom = panel.y.saturating_add(panel.height);
+                            self.comment_height = bottom.saturating_sub(mouse.row).clamp(4, 20);
+                        }
+                    }
+                    None => {}
                 }
-                None => {}
-            },
+            }
             MouseEventKind::Up(MouseButton::Left) => {
                 if self.drag.take().is_some() {
                     self.persist_layout();
@@ -1664,6 +2121,31 @@ impl App {
         }
     }
 
+    fn jump_from_change_map(&mut self, area: Rect, row: u16) {
+        let relative = row.saturating_sub(area.y) as u64;
+        let denominator = area.height.saturating_sub(1).max(1) as u64;
+        if self.file_display == FileDisplay::Continuous {
+            let total = self.continuous_total_rows();
+            if total == 0 {
+                return;
+            }
+            let target = relative.saturating_mul(total.saturating_sub(1)) / denominator;
+            self.continuous_cursor = target;
+            self.continuous_scroll = target.saturating_sub((self.viewport_height / 2) as u64);
+            self.sync_continuous_active();
+        } else {
+            let total = self.current_file_rows();
+            if total == 0 {
+                return;
+            }
+            let target = relative.saturating_mul(total.saturating_sub(1)) / denominator;
+            self.cursor_row = target;
+            self.scroll = target.saturating_sub((self.viewport_height / 2) as u64) as usize;
+        }
+        self.focus = Focus::Diff;
+        self.code_column = None;
+    }
+
     fn dispatch_command(&mut self, command: Command) {
         if self.experience == Experience::Viewer && command.action == Action::EditComment {
             self.queue_editor_for_current_line();
@@ -1681,14 +2163,14 @@ impl App {
             Action::OpenSendReview => self.open_send_review(),
             Action::OpenHelp => {
                 self.mode = Mode::Help;
-                self.modal_input.clear();
+                self.help_scroll = 0;
+                self.clear_modal_input();
             }
             Action::OpenSearch => {
                 self.mode = Mode::Search;
-                self.modal_input.clear();
+                self.clear_modal_input();
                 self.search_scope = SearchScope::All;
-                self.search_changed_only =
-                    self.experience == Experience::Viewer || self.search_request_tx.is_none();
+                self.search_changed_only = true;
                 self.search_regex = false;
                 self.search_cursor = 0;
                 self.clear_search_preview();
@@ -1696,10 +2178,9 @@ impl App {
             }
             Action::OpenFileFilter => {
                 self.mode = Mode::Search;
-                self.modal_input.clear();
+                self.clear_modal_input();
                 self.search_scope = SearchScope::Files;
-                self.search_changed_only =
-                    self.experience == Experience::Viewer || self.search_request_tx.is_none();
+                self.search_changed_only = true;
                 self.search_regex = false;
                 self.search_cursor = 0;
                 self.clear_search_preview();
@@ -1712,8 +2193,9 @@ impl App {
             }
             Action::OpenCommand => {
                 self.mode = Mode::Command;
-                self.modal_input.clear();
+                self.clear_modal_input();
             }
+            Action::OpenImagePreview => self.open_image_preview(),
             Action::ToggleSidebar => self.toggle_sidebar(),
             Action::OpenSettings => self.open_settings(),
             Action::LanguageHover => self.request_language(RequestKind::Hover),
@@ -1807,6 +2289,148 @@ impl App {
         self.pending_editor.take()
     }
 
+    pub fn report_error(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        self.status_message = Some(message.clone());
+        self.toasts.push(Toast::warn(message));
+    }
+
+    /// Route bracketed paste to the active editor without letting pasted
+    /// escape sequences or newlines leak into normal-mode commands.
+    pub fn handle_paste(&mut self, text: &str) {
+        let mut text_buffer = String::with_capacity(text.len().min(MAX_PASTE_CHARACTERS));
+        let mut truncated = false;
+        for (index, character) in text
+            .chars()
+            .filter(|character| !character.is_control() || matches!(character, '\r' | '\n' | '\t'))
+            .enumerate()
+        {
+            if index == MAX_PASTE_CHARACTERS {
+                truncated = true;
+                break;
+            }
+            text_buffer.push(character);
+        }
+        if truncated {
+            self.status_message = Some("paste limited to 1,048,576 characters".to_string());
+        }
+        let text = text_buffer;
+        match self.mode {
+            Mode::CommentForm => {
+                if let Some(form) = self.comment_form.as_mut() {
+                    if insert_textarea_bounded(&mut form.textarea, &text) {
+                        self.status_message = Some(format!(
+                            "comment limited to {MAX_TEXTAREA_CHARACTERS} characters"
+                        ));
+                    }
+                }
+            }
+            Mode::SendReview => {
+                if let Some(state) = self.send_review.as_mut() {
+                    state.focused = SendField::General;
+                    if insert_textarea_bounded(&mut state.general, &text) {
+                        self.status_message = Some(format!(
+                            "general comment limited to {MAX_TEXTAREA_CHARACTERS} characters"
+                        ));
+                    }
+                }
+            }
+            Mode::Search => {
+                self.insert_modal_text(&text);
+                self.search_cursor = 0;
+                self.queue_repo_search();
+            }
+            Mode::ThemePicker => {
+                self.insert_modal_text(&text);
+                self.theme_cursor = 0;
+                self.preview_theme_at_cursor();
+            }
+            Mode::Command => self.insert_modal_text(&text),
+            _ => {
+                self.status_message = Some("paste is available in text fields".to_string());
+            }
+        }
+    }
+
+    fn clear_modal_input(&mut self) {
+        self.modal_input.clear();
+        self.modal_cursor = 0;
+    }
+
+    fn insert_modal_text(&mut self, text: &str) {
+        let existing = self.modal_input.chars().count();
+        let remaining = MAX_MODAL_INPUT_CHARACTERS.saturating_sub(existing);
+        if remaining == 0 {
+            self.status_message = Some(format!(
+                "text field limited to {MAX_MODAL_INPUT_CHARACTERS} characters"
+            ));
+            return;
+        }
+        let mut characters = text.chars().filter_map(|character| match character {
+            '\r' | '\n' | '\t' => Some(' '),
+            other if other.is_control() => None,
+            other => Some(other),
+        });
+        let text: String = characters.by_ref().take(remaining).collect();
+        if characters.next().is_some() {
+            self.status_message = Some(format!(
+                "text field limited to {MAX_MODAL_INPUT_CHARACTERS} characters"
+            ));
+        }
+        let byte = char_byte_index(&self.modal_input, self.modal_cursor);
+        self.modal_input.insert_str(byte, &text);
+        self.modal_cursor = self.modal_cursor.saturating_add(text.chars().count());
+    }
+
+    fn delete_modal_back(&mut self) {
+        if self.modal_cursor == 0 {
+            return;
+        }
+        let end = char_byte_index(&self.modal_input, self.modal_cursor);
+        let start = char_byte_index(&self.modal_input, self.modal_cursor - 1);
+        self.modal_input.replace_range(start..end, "");
+        self.modal_cursor -= 1;
+    }
+
+    fn delete_modal_forward(&mut self) {
+        let length = self.modal_input.chars().count();
+        if self.modal_cursor >= length {
+            return;
+        }
+        let start = char_byte_index(&self.modal_input, self.modal_cursor);
+        let end = char_byte_index(&self.modal_input, self.modal_cursor + 1);
+        self.modal_input.replace_range(start..end, "");
+    }
+
+    fn delete_modal_word(&mut self) {
+        let mut characters: Vec<char> = self.modal_input.chars().collect();
+        self.modal_cursor = self.modal_cursor.min(characters.len());
+        let end = self.modal_cursor;
+        while self.modal_cursor > 0 && characters[self.modal_cursor - 1].is_whitespace() {
+            self.modal_cursor -= 1;
+        }
+        while self.modal_cursor > 0 && !characters[self.modal_cursor - 1].is_whitespace() {
+            self.modal_cursor -= 1;
+        }
+        characters.drain(self.modal_cursor..end);
+        self.modal_input = characters.into_iter().collect();
+    }
+
+    fn move_modal_cursor(&mut self, delta: isize) {
+        let length = self.modal_input.chars().count();
+        self.modal_cursor = (self.modal_cursor as isize + delta).clamp(0, length as isize) as usize;
+    }
+
+    fn place_modal_cursor(&mut self, prefix: &str, area: Rect, column: u16) {
+        self.modal_cursor = modal_cursor_at(
+            prefix,
+            &self.modal_input,
+            self.modal_cursor,
+            area.width as usize,
+            column.saturating_sub(area.x) as usize,
+        );
+    }
+
     fn cycle_focus(&mut self, delta: isize) {
         let mut order = vec![Focus::Diff];
         if self.sidebar_visible {
@@ -1848,7 +2472,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
-                self.modal_input.clear();
+                self.clear_modal_input();
                 self.clear_search_preview();
             }
             KeyCode::Enter => self.activate_repo_search_hit(),
@@ -1874,35 +2498,61 @@ impl App {
             KeyCode::Up if preview_scroll => {
                 self.search_preview_scroll = self.search_preview_scroll.saturating_sub(4);
             }
-            KeyCode::PageDown => {
+            KeyCode::PageDown if preview_scroll => {
                 self.search_preview_scroll = self.search_preview_scroll.saturating_add(10)
             }
-            KeyCode::PageUp => {
+            KeyCode::PageUp if preview_scroll => {
                 self.search_preview_scroll = self.search_preview_scroll.saturating_sub(10)
+            }
+            KeyCode::PageDown => self.move_search_cursor(10),
+            KeyCode::PageUp => self.move_search_cursor(-10),
+            KeyCode::Home if control => {
+                self.search_cursor = 0;
+                self.queue_search_preview();
+            }
+            KeyCode::End if control => {
+                self.search_cursor = self.repo_search_hits.len().saturating_sub(1);
+                self.queue_search_preview();
             }
             KeyCode::Down => self.move_search_cursor(1),
             KeyCode::Up => self.move_search_cursor(-1),
             KeyCode::Char('n' | 'j') if control => self.move_search_cursor(1),
             KeyCode::Char('p' | 'k') if control => self.move_search_cursor(-1),
             KeyCode::Char('d') if control => self.move_search_cursor(8),
-            KeyCode::Char('u') if control => self.move_search_cursor(-8),
-            KeyCode::Char('g') if control => {
-                self.search_changed_only = !self.search_changed_only;
+            KeyCode::Char('u') if control => {
+                self.clear_modal_input();
                 self.search_cursor = 0;
                 self.queue_repo_search();
+            }
+            KeyCode::Char('w') if control => {
+                self.delete_modal_word();
+                self.search_cursor = 0;
+                self.queue_repo_search();
+            }
+            KeyCode::Char('a') if control => self.modal_cursor = 0,
+            KeyCode::Char('e') if control => self.modal_cursor = self.modal_input.chars().count(),
+            KeyCode::Char('g') if control => {
+                self.toggle_search_changed_only();
             }
             KeyCode::Char('r') if control && self.search_scope == SearchScope::Text => {
-                self.search_regex = !self.search_regex;
+                self.toggle_search_regex();
+            }
+            KeyCode::Left => self.move_modal_cursor(-1),
+            KeyCode::Right => self.move_modal_cursor(1),
+            KeyCode::Home => self.modal_cursor = 0,
+            KeyCode::End => self.modal_cursor = self.modal_input.chars().count(),
+            KeyCode::Backspace => {
+                self.delete_modal_back();
                 self.search_cursor = 0;
                 self.queue_repo_search();
             }
-            KeyCode::Backspace => {
-                self.modal_input.pop();
+            KeyCode::Delete => {
+                self.delete_modal_forward();
                 self.search_cursor = 0;
                 self.queue_repo_search();
             }
             KeyCode::Char(character) if !control && !key.modifiers.contains(KeyModifiers::ALT) => {
-                self.modal_input.push(character);
+                self.insert_modal_text(&character.to_string());
                 self.search_cursor = 0;
                 self.queue_repo_search();
             }
@@ -1941,6 +2591,28 @@ impl App {
         }
     }
 
+    fn toggle_search_changed_only(&mut self) {
+        if self.search_request_tx.is_none() {
+            self.status_message =
+                Some("whole-repository search requires the diffing Node launcher".to_string());
+            return;
+        }
+        self.search_changed_only = !self.search_changed_only;
+        self.search_cursor = 0;
+        self.queue_repo_search();
+    }
+
+    fn toggle_search_regex(&mut self) {
+        if self.search_request_tx.is_none() {
+            self.status_message =
+                Some("regex search requires the diffing Node launcher".to_string());
+            return;
+        }
+        self.search_regex = !self.search_regex;
+        self.search_cursor = 0;
+        self.queue_repo_search();
+    }
+
     fn refresh_changed_search_fallback(&mut self) {
         self.search_changed_only = true;
         self.repo_search_query = self.modal_input.trim().to_string();
@@ -1951,12 +2623,57 @@ impl App {
         self.repo_search_error = None;
         self.clear_search_preview();
 
-        if self.repo_search_query.is_empty() {
-            return;
-        }
         if self.search_scope == SearchScope::Symbols {
             self.repo_search_error =
                 Some("Symbol search requires the diffing Node launcher".to_string());
+            return;
+        }
+        if self.search_regex {
+            self.repo_search_error =
+                Some("Regex search requires the diffing Node launcher".to_string());
+            return;
+        }
+        if self.repo_search_query.is_empty() {
+            if matches!(self.search_scope, SearchScope::All | SearchScope::Files) {
+                self.repo_search_hits = self
+                    .index
+                    .files
+                    .iter()
+                    .map(|file| {
+                        let path = file.display_path().to_string_lossy().into_owned();
+                        let title = file
+                            .display_path()
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or(&path)
+                            .to_string();
+                        let detail = file
+                            .display_path()
+                            .parent()
+                            .filter(|parent| !parent.as_os_str().is_empty())
+                            .map(|parent| format!("{}/", parent.to_string_lossy()))
+                            .unwrap_or_else(|| "./".to_string());
+                        let git_status = match file.kind {
+                            IndexedChangeKind::Modified => "modified",
+                            IndexedChangeKind::Added => "added",
+                            IndexedChangeKind::Deleted => "deleted",
+                            IndexedChangeKind::Renamed => "renamed",
+                            IndexedChangeKind::Untracked => "untracked",
+                            IndexedChangeKind::Binary => "binary",
+                        }
+                        .to_string();
+                        SearchHit {
+                            kind: SearchHitKind::File,
+                            path,
+                            line: None,
+                            title,
+                            detail,
+                            git_status,
+                        }
+                    })
+                    .collect();
+                self.repo_search_total = self.repo_search_hits.len();
+            }
             return;
         }
 
@@ -2046,7 +2763,8 @@ impl App {
             return;
         }
         self.search_cursor = (self.search_cursor as isize + delta)
-            .rem_euclid(self.repo_search_hits.len() as isize) as usize;
+            .clamp(0, self.repo_search_hits.len().saturating_sub(1) as isize)
+            as usize;
         self.queue_search_preview();
     }
 
@@ -2132,7 +2850,7 @@ impl App {
             };
             row
         };
-        self.file_tree.jump_to_file(file_index);
+        self.reveal_file_for_direct_jump(file_index);
         self.cursor_row = row;
         self.continuous_cursor = self.continuous_offset_for_file(file_index) + row;
         self.continuous_scroll = self
@@ -2147,7 +2865,7 @@ impl App {
             (_, Some(line)) => format!("→ {}:{line}", hit.path),
             _ => format!("→ {}", hit.path),
         });
-        self.modal_input.clear();
+        self.clear_modal_input();
     }
 
     fn handle_hover_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -2176,7 +2894,148 @@ impl App {
         }
     }
 
+    fn handle_help_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | '?') => {
+                self.mode = Mode::Normal;
+                self.keymap.clear();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.help_scroll = self.help_scroll.saturating_add(1)
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.help_scroll = self.help_scroll.saturating_sub(1)
+            }
+            KeyCode::PageDown | KeyCode::Char('d') => {
+                self.help_scroll = self.help_scroll.saturating_add(8)
+            }
+            KeyCode::PageUp | KeyCode::Char('u') => {
+                self.help_scroll = self.help_scroll.saturating_sub(8)
+            }
+            KeyCode::Home | KeyCode::Char('g') => self.help_scroll = 0,
+            KeyCode::End | KeyCode::Char('G') => self.help_scroll = u16::MAX,
+            _ => {}
+        }
+    }
+
+    fn open_image_preview(&mut self) {
+        let Some((key, _)) = self.selected_image() else {
+            self.status_message = Some("select a changed image to open its comparison".to_string());
+            return;
+        };
+        self.image_diff.request(key);
+        self.image_view = ImageViewState::default();
+        self.mode = Mode::ImagePreview;
+    }
+
+    fn handle_image_preview_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char('+' | '=') => self.image_view.zoom_in(),
+            KeyCode::Char('-') => self.image_view.zoom_out(),
+            KeyCode::Char('0') => self.image_view.reset(),
+            KeyCode::Char('h') | KeyCode::Left => self.image_view.pan(-2, 0),
+            KeyCode::Char('l') | KeyCode::Right => self.image_view.pan(2, 0),
+            KeyCode::Char('k') | KeyCode::Up => self.image_view.pan(0, -2),
+            KeyCode::Char('j') | KeyCode::Down => self.image_view.pan(0, 2),
+            KeyCode::Char('1') => self.image_view.mode = ImageCompareMode::Before,
+            KeyCode::Char('2') => self.image_view.mode = ImageCompareMode::After,
+            KeyCode::Char('3') => self.image_view.mode = ImageCompareMode::SideBySide,
+            KeyCode::Char('4') => self.image_view.mode = ImageCompareMode::Difference,
+            KeyCode::Tab | KeyCode::BackTab => {
+                let delta = if key.code == KeyCode::BackTab { -1 } else { 1 };
+                if let Some((image_key, _)) = self.selected_image() {
+                    if let Some(data) = self.image_diff.get(&image_key) {
+                        self.image_view.mode = self.image_view.mode.cycle(delta, &data);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn open_comment_detail(&mut self) {
+        if self.comments.get(self.tracker.cursor).is_none() {
+            self.status_message = Some("no comment selected".to_string());
+            return;
+        }
+        self.comment_detail_scroll = 0;
+        self.mode = Mode::CommentDetail;
+    }
+
+    fn handle_comment_detail_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        if key.code != KeyCode::Delete {
+            self.pending_delete_id = None;
+        }
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'o') => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                self.mode = Mode::Normal;
+                self.jump_to_focused_comment();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.comment_detail_scroll = self.comment_detail_scroll.saturating_add(1)
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.comment_detail_scroll = self.comment_detail_scroll.saturating_sub(1)
+            }
+            KeyCode::PageDown | KeyCode::Char('d') => {
+                self.comment_detail_scroll = self.comment_detail_scroll.saturating_add(8)
+            }
+            KeyCode::PageUp | KeyCode::Char('u') => {
+                self.comment_detail_scroll = self.comment_detail_scroll.saturating_sub(8)
+            }
+            KeyCode::Home | KeyCode::Char('g') => self.comment_detail_scroll = 0,
+            KeyCode::End | KeyCode::Char('G') => self.comment_detail_scroll = u16::MAX,
+            KeyCode::Char('e') => self.open_edit_form_for_focused(),
+            KeyCode::Char('r') => self.open_reply_form_for_focused(),
+            KeyCode::Char('x') => self.resolve_focused(),
+            KeyCode::Delete => self.delete_focused(),
+            _ => {}
+        }
+    }
+
+    fn focus_comment_at_current_line(&mut self) -> bool {
+        let Some(file) = self.current_file() else {
+            self.status_message = Some("no file selected".to_string());
+            return false;
+        };
+        let path = file.display_path().to_string_lossy();
+        let line = self.current_line();
+        let side = self.current_side();
+        let selected = self
+            .comments
+            .iter()
+            .enumerate()
+            .filter(|(_, comment)| comment.file_path == path)
+            .filter(|(_, comment)| {
+                if comment.line_number == 0 {
+                    return line == 0;
+                }
+                comment.side == side
+                    && (comment.start_line_number.unwrap_or(comment.line_number)
+                        ..=comment.line_number)
+                        .contains(&line)
+            })
+            .min_by_key(|(_, comment)| comment.status == CommentStatus::Resolved)
+            .map(|(index, _)| index);
+        if let Some(index) = selected {
+            self.tracker.cursor = index;
+            true
+        } else {
+            self.status_message = Some("no comment thread on this line · c adds one".to_string());
+            false
+        }
+    }
+
     fn apply_file_filter(&mut self) {
+        let previous_continuous_position = self.continuous_position(self.continuous_cursor);
+        let previous_viewport_offset = self
+            .continuous_cursor
+            .saturating_sub(self.continuous_scroll);
         for index in 0..self.files.len() {
             let path = self.files[index].display_path();
             let count = if self.experience == Experience::Review {
@@ -2198,7 +3057,45 @@ impl App {
             self.file_filter_mode == FileFilterMode::Unviewed,
             self.file_filter_mode == FileFilterMode::Comments,
         );
+        let visible_files = self.file_tree.navigable_file_indices().to_vec();
+        self.render_metadata
+            .set_visible_files(&self.index, &visible_files);
+        if self.file_display == FileDisplay::Continuous {
+            let target = previous_continuous_position
+                .filter(|(file, _)| visible_files.contains(file))
+                .or_else(|| self.file_tree.selected_file_idx().map(|file| (file, 0)));
+            if let Some((file, row)) = target {
+                let row = row.min(
+                    self.index
+                        .files
+                        .get(file)
+                        .map(|file| file.row_count.saturating_sub(1))
+                        .unwrap_or(0),
+                );
+                self.continuous_cursor = self.continuous_offset_for_file(file).saturating_add(row);
+                self.continuous_scroll = self
+                    .continuous_cursor
+                    .saturating_sub(previous_viewport_offset);
+                self.cursor_row = row;
+            } else {
+                self.continuous_cursor = 0;
+                self.continuous_scroll = 0;
+                self.cursor_row = 0;
+            }
+        }
         self.file_tree_scroll = 0;
+    }
+
+    fn reveal_file_for_direct_jump(&mut self, file_index: usize) {
+        if !self
+            .file_tree
+            .navigable_file_indices()
+            .contains(&file_index)
+        {
+            self.file_filter_mode = FileFilterMode::All;
+            self.apply_file_filter();
+        }
+        self.file_tree.jump_to_file(file_index);
     }
 
     fn jump_search(&mut self, delta: isize) {
@@ -2212,17 +3109,28 @@ impl App {
     }
 
     fn handle_command_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
-                self.modal_input.clear();
+                self.clear_modal_input();
             }
             KeyCode::Enter => self.execute_ex_command(),
-            KeyCode::Backspace => {
-                self.modal_input.pop();
+            KeyCode::Tab => self.complete_ex_command(),
+            KeyCode::Left => self.move_modal_cursor(-1),
+            KeyCode::Right => self.move_modal_cursor(1),
+            KeyCode::Home => self.modal_cursor = 0,
+            KeyCode::Char('a') if control => self.modal_cursor = 0,
+            KeyCode::End => self.modal_cursor = self.modal_input.chars().count(),
+            KeyCode::Char('e') if control => self.modal_cursor = self.modal_input.chars().count(),
+            KeyCode::Char('u') if control => self.clear_modal_input(),
+            KeyCode::Char('w') if control => self.delete_modal_word(),
+            KeyCode::Backspace => self.delete_modal_back(),
+            KeyCode::Delete => self.delete_modal_forward(),
+            KeyCode::Char(character) if !control && !key.modifiers.contains(KeyModifiers::ALT) => {
+                self.insert_modal_text(&character.to_string())
             }
-            KeyCode::Char(character) => self.modal_input.push(character),
             _ => {}
         }
     }
@@ -2236,23 +3144,84 @@ impl App {
                 self.wrap = !self.wrap;
                 self.persist_settings();
             }
-            "mouse" => self.set_mouse_enabled(!self.mouse_enabled),
+            "nowrap" => {
+                self.wrap = false;
+                self.persist_settings();
+            }
+            "split" => {
+                self.split = true;
+                self.persist_settings();
+            }
+            "unified" => {
+                self.split = false;
+                self.persist_settings();
+            }
+            "single" => {
+                if self.file_display != FileDisplay::Single {
+                    self.toggle_file_display();
+                }
+            }
+            "continuous" => {
+                if self.file_display != FileDisplay::Continuous {
+                    self.toggle_file_display();
+                }
+            }
+            "mouse" => self.set_mouse_enabled(true),
+            "nomouse" => self.set_mouse_enabled(false),
+            "sidebar" | "files" => self.toggle_sidebar(),
+            "comments" if self.experience == Experience::Review => {
+                self.comments_visible = !self.comments_visible;
+                if !self.comments_visible && self.focus == Focus::Tracker {
+                    self.focus = Focus::Diff;
+                }
+                self.persist_layout();
+            }
+            "refresh" | "reload" => {
+                if self.indexing {
+                    self.reindex_pending = true;
+                    self.status_message = Some("refresh queued after current index".to_string());
+                } else {
+                    self.start_reindex();
+                }
+            }
+            "image" => self.open_image_preview(),
             "theme" => self.open_theme_picker(),
             "settings" | "set" => self.open_settings(),
-            "files" | "display" => self.open_settings(),
-            "help" | "h" => self.mode = Mode::Help,
-            "top" => {
-                self.cursor_row = 0;
-                self.scroll = 0;
+            "display" => self.open_settings(),
+            "help" | "h" => {
+                self.help_scroll = 0;
+                self.mode = Mode::Help;
             }
+            "top" => self.dispatch_command(Command {
+                action: Action::ScrollTop,
+                count: 1,
+            }),
             "bottom" => self.dispatch_command(Command {
                 action: Action::ScrollBottom,
                 count: 1,
             }),
             "" => {}
-            _ => self.status_message = Some(format!("unknown command: {command}")),
+            _ => {
+                self.status_message = Some(format!(
+                    "unknown command: {command} · try :help, :settings, :refresh, :image"
+                ))
+            }
         }
-        self.modal_input.clear();
+        self.clear_modal_input();
+    }
+
+    fn complete_ex_command(&mut self) {
+        let query = self.modal_input.trim().to_ascii_lowercase();
+        let Some(command) = ex_command_completion(&query) else {
+            self.status_message = Some(if query.is_empty() {
+                "type a command; suggestions appear below".to_string()
+            } else {
+                format!("no command starts with {query:?}")
+            });
+            return;
+        };
+        self.modal_input = command.to_string();
+        self.modal_cursor = self.modal_input.chars().count();
     }
 
     fn handle_send_review_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -2265,14 +3234,6 @@ impl App {
         }
         if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.submit_send_review();
-            return;
-        }
-        if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if let Some(form) = self.comment_form.as_mut() {
-                if form.kind == crate::ui::comment_form::FormKind::New {
-                    form.cycle_severity();
-                }
-            }
             return;
         }
         let Some(sr) = self.send_review.as_mut() else {
@@ -2309,6 +3270,14 @@ impl App {
         }
         // Otherwise feed the key to the general-comment textarea.
         if sr.focused == SendField::General {
+            if textarea_character_count(&sr.general) >= MAX_TEXTAREA_CHARACTERS
+                && textarea_key_inserts(&key)
+            {
+                self.status_message = Some(format!(
+                    "general comment limited to {MAX_TEXTAREA_CHARACTERS} characters"
+                ));
+                return;
+            }
             sr.general.input(key);
         }
     }
@@ -2328,7 +3297,7 @@ impl App {
             if state.unviewed_files > 0 && !state.guard_acknowledged {
                 state.guard_acknowledged = true;
                 self.status_message = Some(format!(
-                    "{} unviewed file{} · press Ctrl-S again to send",
+                    "{} unviewed file{} · activate Send again to confirm",
                     state.unviewed_files,
                     if state.unviewed_files == 1 { "" } else { "s" }
                 ));
@@ -2338,11 +3307,11 @@ impl App {
         let Some(sr) = self.send_review.take() else {
             return;
         };
-        self.mode = Mode::Normal;
         let body = sr.body();
         let verdict = sr.verdict;
         let next_round = self.review_round.saturating_add(1);
         let Some(xml) = build_send_payload(&self.comments, &body, Some(verdict), next_round) else {
+            self.send_review = Some(sr);
             self.status_message = Some("nothing to send (no comments, no verdict)".to_string());
             return;
         };
@@ -2350,13 +3319,18 @@ impl App {
         let path = crate::ui::send_review_popover::pending_review_path(
             self.repo_root.to_str().unwrap_or("."),
         );
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Err(e) = std::fs::write(&path, &xml) {
+        let persisted = path
+            .parent()
+            .map(std::fs::create_dir_all)
+            .transpose()
+            .and_then(|_| std::fs::write(&path, &xml));
+        if let Err(e) = persisted {
+            self.send_review = Some(sr);
+            self.mode = Mode::SendReview;
             self.status_message = Some(format!("send failed: {e}"));
             return;
         }
+        self.mode = Mode::Normal;
         // 2. Release every CLI/MCP waiter through the embedded loopback API.
         self.review_round = self
             .agent_api
@@ -2400,6 +3374,14 @@ impl App {
             return;
         }
         if let Some(form) = self.comment_form.as_mut() {
+            if textarea_character_count(&form.textarea) >= MAX_TEXTAREA_CHARACTERS
+                && textarea_key_inserts(&key)
+            {
+                self.status_message = Some(format!(
+                    "comment limited to {MAX_TEXTAREA_CHARACTERS} characters"
+                ));
+                return;
+            }
             form.textarea.input(key);
         }
     }
@@ -2410,15 +3392,30 @@ impl App {
         };
         let body = form.body();
         let severity = form.severity;
-        self.mode = Mode::Normal;
         if body.trim().is_empty() {
-            self.status_message = Some("comment empty, discarded".to_string());
+            self.comment_form = Some(form);
+            self.status_message = Some("write a comment before saving · Esc cancels".to_string());
             return;
         }
+        let selected_comment_id = self
+            .comments
+            .get(self.tracker.cursor)
+            .map(|comment| comment.id.clone());
+        if form.kind != crate::ui::comment_form::FormKind::New && selected_comment_id.is_none() {
+            self.comment_form = Some(form);
+            self.status_message =
+                Some("the selected thread no longer exists · draft kept".to_string());
+            return;
+        }
+        let success_message = match form.kind {
+            crate::ui::comment_form::FormKind::New => "comment saved",
+            crate::ui::comment_form::FormKind::Edit => "comment updated",
+            crate::ui::comment_form::FormKind::Reply => "reply sent",
+        };
         let now = now_ms();
         let result: Result<()> = match form.kind {
             crate::ui::comment_form::FormKind::New => {
-                let target = self.pending_comment_target.take().unwrap_or_else(|| {
+                let target = self.pending_comment_target.clone().unwrap_or_else(|| {
                     let file_path = self
                         .current_file()
                         .map(|file| file.display_path().to_string_lossy().to_string())
@@ -2454,41 +3451,41 @@ impl App {
                     )
                     .map(|_| ())
             }
-            crate::ui::comment_form::FormKind::Edit => {
-                let target = self.comments.get(self.tracker.cursor).map(|c| c.id.clone());
-                match target {
-                    Some(id) => self
-                        .comment_store
-                        .update(&id, Some(&body), None)
-                        .map(|_| ()),
-                    None => {
-                        self.status_message = Some("no comment selected to edit".to_string());
-                        return;
-                    }
-                }
-            }
-            crate::ui::comment_form::FormKind::Reply => {
-                let target = self.comments.get(self.tracker.cursor).map(|c| c.id.clone());
-                match target {
-                    Some(id) => self
-                        .comment_store
-                        .add_reply(&id, &body, Some("user"), None, now)
-                        .map(|_| ()),
-                    None => {
-                        self.status_message = Some("no comment selected to reply to".to_string());
-                        return;
-                    }
-                }
-            }
+            crate::ui::comment_form::FormKind::Edit => match selected_comment_id.as_deref() {
+                Some(id) => self
+                    .comment_store
+                    .update(&id, Some(&body), None)
+                    .and_then(|updated| {
+                        updated
+                            .map(|_| ())
+                            .ok_or_else(|| anyhow::anyhow!("comment no longer exists"))
+                    }),
+                None => Err(anyhow::anyhow!("comment no longer exists")),
+            },
+            crate::ui::comment_form::FormKind::Reply => match selected_comment_id.as_deref() {
+                Some(id) => self
+                    .comment_store
+                    .add_reply(&id, &body, Some("user"), None, now)
+                    .and_then(|updated| {
+                        updated
+                            .map(|_| ())
+                            .ok_or_else(|| anyhow::anyhow!("comment no longer exists"))
+                    }),
+                None => Err(anyhow::anyhow!("comment no longer exists")),
+            },
         };
         match result {
             Ok(()) => {
-                self.status_message = Some("comment saved".to_string());
-                self.reload_comments();
+                self.pending_comment_target = None;
+                self.mode = Mode::Normal;
+                self.status_message = Some(success_message.to_string());
+                self.reload_comments_with_notifications(false);
                 self.toasts
-                    .push(Toast::success("comment saved".to_string()));
+                    .push(Toast::success(success_message.to_string()));
             }
             Err(e) => {
+                self.comment_form = Some(form);
+                self.mode = Mode::CommentForm;
                 self.status_message = Some(format!("save failed: {e}"));
             }
         }
@@ -2570,16 +3567,30 @@ impl App {
             Action::AddComment => self.open_new_comment_form(),
             Action::AddFileComment => self.open_file_comment_form(),
             Action::ToggleVisualSelection => self.toggle_visual_selection(),
-            Action::EditComment => self.open_edit_form_for_focused(),
-            Action::ReplyComment => self.open_reply_form_for_focused(),
-            Action::ResolveComment => self.resolve_focused(),
-            Action::DeleteComment => self.delete_focused(),
+            Action::EditComment => {
+                if self.focus_comment_at_current_line() {
+                    self.open_edit_form_for_focused();
+                }
+            }
+            Action::ReplyComment => {
+                if self.focus_comment_at_current_line() {
+                    self.open_reply_form_for_focused();
+                }
+            }
+            Action::ResolveComment => {
+                if self.focus_comment_at_current_line() {
+                    self.resolve_focused();
+                }
+            }
+            Action::DeleteComment => {
+                if self.focus_comment_at_current_line() {
+                    self.delete_focused();
+                }
+            }
             Action::NextComment => self.jump_relative_comment(1),
             Action::PrevComment => self.jump_relative_comment(-1),
-            Action::OpenCommentThread => {
-                self.comments_visible = true;
-                self.focus = Focus::Tracker;
-                self.persist_layout();
+            Action::OpenCommentThread if self.focus_comment_at_current_line() => {
+                self.open_comment_detail();
             }
             _ => {}
         }
@@ -2593,18 +3604,23 @@ impl App {
             Action::ScrollUp | Action::PrevComment => {
                 self.tracker.move_visible_cursor(-1, &self.comments);
             }
-            Action::ScrollTop => self.tracker.cursor = 0,
-            Action::ScrollBottom => match self.comments.len() {
-                0 => {}
-                n => self.tracker.cursor = n - 1,
-            },
+            Action::ScrollTop => {
+                if let Some(first) = self.tracker.visible_indices(&self.comments).first() {
+                    self.tracker.cursor = *first;
+                }
+            }
+            Action::ScrollBottom => {
+                if let Some(last) = self.tracker.visible_indices(&self.comments).last() {
+                    self.tracker.cursor = *last;
+                }
+            }
             Action::FocusDiff => self.focus = Focus::Diff,
             Action::FocusTracker | Action::FocusFileTree => self.focus = Focus::Tracker,
             Action::EditComment => self.open_edit_form_for_focused(),
             Action::ReplyComment => self.open_reply_form_for_focused(),
             Action::ResolveComment => self.resolve_focused(),
             Action::DeleteComment => self.delete_focused(),
-            Action::OpenCommentThread => self.jump_to_focused_comment(),
+            Action::OpenCommentThread | Action::ExpandContext => self.open_comment_detail(),
             Action::CycleCommentStatus => {
                 self.tracker.status_filter = self.tracker.status_filter.next();
                 self.tracker.normalize_filter_cursor(&self.comments);
@@ -2625,7 +3641,7 @@ impl App {
             .iter()
             .position(|theme| *theme == self.theme)
             .unwrap_or(0);
-        self.modal_input.clear();
+        self.clear_modal_input();
         self.mode = Mode::ThemePicker;
     }
 
@@ -2687,6 +3703,11 @@ impl App {
                     Some(format!("sidebar width: {} columns", self.sidebar_width));
             }
             8 => {
+                if self.experience == Experience::Viewer {
+                    self.status_message =
+                        Some("review drawer is available in review mode".to_string());
+                    return;
+                }
                 self.comments_visible = !self.comments_visible;
                 if !self.comments_visible && self.focus == Focus::Tracker {
                     self.focus = Focus::Diff;
@@ -2770,7 +3791,8 @@ impl App {
     }
 
     fn handle_theme_picker_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => {
                 self.theme = self.theme_original;
@@ -2780,9 +3802,13 @@ impl App {
                 } else {
                     Mode::Normal
                 };
-                self.modal_input.clear();
+                self.clear_modal_input();
             }
             KeyCode::Enter => {
+                if self.filtered_themes().is_empty() {
+                    self.status_message = Some("no themes match this filter".to_string());
+                    return;
+                }
                 self.preview_theme_at_cursor();
                 self.persist_settings();
                 self.status_message = Some(format!("theme: {}", self.theme.display_name()));
@@ -2791,7 +3817,7 @@ impl App {
                 } else {
                     Mode::Normal
                 };
-                self.modal_input.clear();
+                self.clear_modal_input();
             }
             KeyCode::Down => {
                 let len = self.filtered_themes().len();
@@ -2804,13 +3830,45 @@ impl App {
                 self.theme_cursor = self.theme_cursor.saturating_sub(1);
                 self.preview_theme_at_cursor();
             }
-            KeyCode::Backspace => {
-                self.modal_input.pop();
+            KeyCode::PageDown => {
+                let len = self.filtered_themes().len();
+                if len > 0 {
+                    self.theme_cursor = self.theme_cursor.saturating_add(8).min(len - 1);
+                    self.preview_theme_at_cursor();
+                }
+            }
+            KeyCode::PageUp => {
+                self.theme_cursor = self.theme_cursor.saturating_sub(8);
+                self.preview_theme_at_cursor();
+            }
+            KeyCode::Left => self.move_modal_cursor(-1),
+            KeyCode::Right => self.move_modal_cursor(1),
+            KeyCode::Home => self.modal_cursor = 0,
+            KeyCode::End => self.modal_cursor = self.modal_input.chars().count(),
+            KeyCode::Char('a') if control => self.modal_cursor = 0,
+            KeyCode::Char('e') if control => self.modal_cursor = self.modal_input.chars().count(),
+            KeyCode::Char('u') if control => {
+                self.clear_modal_input();
                 self.theme_cursor = 0;
                 self.preview_theme_at_cursor();
             }
-            KeyCode::Char(character) => {
-                self.modal_input.push(character);
+            KeyCode::Char('w') if control => {
+                self.delete_modal_word();
+                self.theme_cursor = 0;
+                self.preview_theme_at_cursor();
+            }
+            KeyCode::Backspace => {
+                self.delete_modal_back();
+                self.theme_cursor = 0;
+                self.preview_theme_at_cursor();
+            }
+            KeyCode::Delete => {
+                self.delete_modal_forward();
+                self.theme_cursor = 0;
+                self.preview_theme_at_cursor();
+            }
+            KeyCode::Char(character) if !control && !key.modifiers.contains(KeyModifiers::ALT) => {
+                self.insert_modal_text(&character.to_string());
                 self.theme_cursor = 0;
                 self.preview_theme_at_cursor();
             }
@@ -2836,12 +3894,17 @@ impl App {
             true
         };
         self.file_tree.set_viewed(index, viewed);
-        crate::persistence::save_viewed(self.repo_root.to_str().unwrap_or("."), &self.viewed_paths);
+        if let Err(error) = crate::persistence::save_viewed(
+            self.repo_root.to_str().unwrap_or("."),
+            &self.viewed_paths,
+        ) {
+            self.report_error(format!("could not save viewed files: {error}"));
+        }
         self.apply_file_filter();
     }
 
-    fn persist_settings(&self) {
-        crate::persistence::save_settings(
+    fn persist_settings(&mut self) {
+        if let Err(error) = crate::persistence::save_settings(
             self.theme,
             self.wrap,
             self.split,
@@ -2849,30 +3912,43 @@ impl App {
             self.line_numbers,
             self.mouse_enabled,
             self.lsp.mode(),
-        );
+        ) {
+            self.report_error(format!("could not save settings: {error}"));
+        }
     }
 
-    fn persist_layout(&self) {
-        crate::persistence::save_layout(
+    fn persist_layout(&mut self) {
+        if let Err(error) = crate::persistence::save_layout(
             self.repo_root.to_str().unwrap_or("."),
             self.sidebar_width,
             self.comment_height,
             self.sidebar_visible,
             self.comments_visible,
             self.file_display,
-        );
+        ) {
+            self.report_error(format!("could not save layout: {error}"));
+        }
     }
 
     fn jump_to_relative_file(&mut self, delta: isize) {
-        if self.files.is_empty() {
+        let navigable = self.file_tree.navigable_file_indices();
+        if navigable.is_empty() {
+            self.status_message = Some(format!(
+                "no files match the {} filter",
+                self.file_filter_mode.label().to_ascii_lowercase()
+            ));
             return;
         }
-        let current = self
+        let next = if let Some(current) = self
             .file_tree
             .selected_file_idx()
-            .unwrap_or(0)
-            .min(self.files.len() - 1);
-        let next = (current as isize + delta).rem_euclid(self.files.len() as isize) as usize;
+            .and_then(|file| navigable.iter().position(|index| *index == file))
+        {
+            navigable[(current as isize + delta).rem_euclid(navigable.len() as isize) as usize]
+        } else {
+            let offset = if delta > 0 { delta - 1 } else { delta };
+            navigable[offset.rem_euclid(navigable.len() as isize) as usize]
+        };
         self.file_tree.jump_to_file(next);
         self.visual_anchor = None;
         if self.file_display == FileDisplay::Continuous {
@@ -2898,15 +3974,35 @@ impl App {
             self.continuous_cursor = (self.continuous_cursor as isize + delta)
                 .clamp(0, rows.saturating_sub(1) as isize)
                 as u64;
-            let top = self.continuous_scroll;
-            let height = self.viewport_height.max(1) as u64;
-            if self.continuous_cursor < top {
-                self.continuous_scroll = self.continuous_cursor;
-            } else if self.continuous_cursor >= top + height {
-                self.continuous_scroll = self
-                    .continuous_cursor
-                    .saturating_add(1)
-                    .saturating_sub(height);
+            let visible = self.rendered_diff_rows.iter().flat_map(|rendered| {
+                rendered.logical_rows.iter().flatten().map(|logical| {
+                    self.continuous_offset_for_file(rendered.file_index)
+                        .saturating_add(*logical)
+                })
+            });
+            let bounds = visible.fold(None, |bounds, row| match bounds {
+                None => Some((row, row)),
+                Some((minimum, maximum)) => Some((minimum.min(row), maximum.max(row))),
+            });
+            if let Some((minimum, maximum)) = bounds {
+                if self.continuous_cursor < minimum {
+                    self.continuous_scroll = self.continuous_cursor;
+                } else if self.continuous_cursor > maximum {
+                    self.continuous_scroll = self
+                        .continuous_scroll
+                        .saturating_add(self.continuous_cursor.saturating_sub(maximum));
+                }
+            } else {
+                let top = self.continuous_scroll;
+                let height = self.viewport_height.max(1) as u64;
+                if self.continuous_cursor < top {
+                    self.continuous_scroll = self.continuous_cursor;
+                } else if self.continuous_cursor >= top + height {
+                    self.continuous_scroll = self
+                        .continuous_cursor
+                        .saturating_add(1)
+                        .saturating_sub(height);
+                }
             }
             self.sync_continuous_active();
             return;
@@ -2918,12 +4014,31 @@ impl App {
         let next =
             (self.cursor_row as isize + delta).clamp(0, rows.saturating_sub(1) as isize) as u64;
         self.cursor_row = next;
-        let top = self.scroll as u64;
-        let height = self.viewport_height.max(1) as u64;
-        if next < top {
-            self.scroll = next as usize;
-        } else if next >= top + height {
-            self.scroll = next.saturating_add(1).saturating_sub(height) as usize;
+        let selected_file = self.file_tree.selected_file_idx();
+        let bounds = self
+            .rendered_diff_rows
+            .iter()
+            .filter(|rendered| Some(rendered.file_index) == selected_file)
+            .flat_map(|rendered| rendered.logical_rows.iter().flatten().copied())
+            .fold(None, |bounds, row| match bounds {
+                None => Some((row, row)),
+                Some((minimum, maximum)) => Some((minimum.min(row), maximum.max(row))),
+            });
+        if let Some((minimum, maximum)) = bounds {
+            if next < minimum {
+                self.scroll = next as usize;
+            } else if next > maximum {
+                self.scroll =
+                    (self.scroll as u64).saturating_add(next.saturating_sub(maximum)) as usize;
+            }
+        } else {
+            let top = self.scroll as u64;
+            let height = self.viewport_height.max(1) as u64;
+            if next < top {
+                self.scroll = next as usize;
+            } else if next >= top + height {
+                self.scroll = next.saturating_add(1).saturating_sub(height) as usize;
+            }
         }
     }
 
@@ -2988,11 +4103,20 @@ impl App {
             self.status_message = Some("file has no textual hunks".to_string());
             return;
         }
-        let current = file
-            .hunks
-            .partition_point(|hunk| hunk.row_start <= self.cursor_row)
-            .saturating_sub(1);
-        let next = (current as isize + delta).rem_euclid(file.hunks.len() as isize) as usize;
+        let count = file.hunks.len() as isize;
+        let next = if delta > 0 {
+            let first_after = file
+                .hunks
+                .partition_point(|hunk| hunk.row_start <= self.cursor_row)
+                as isize;
+            (first_after + delta - 1).rem_euclid(count) as usize
+        } else {
+            let first_at_or_after = file
+                .hunks
+                .partition_point(|hunk| hunk.row_start < self.cursor_row)
+                as isize;
+            (first_at_or_after + delta).rem_euclid(count) as usize
+        };
         self.code_column = None;
         self.cursor_row = file.hunks[next].row_start;
         if self.file_display == FileDisplay::Continuous {
@@ -3016,7 +4140,7 @@ impl App {
             .iter()
             .position(|f| f.display_path() == std::path::Path::new(&c.file_path))
         {
-            self.file_tree.jump_to_file(file_idx);
+            self.reveal_file_for_direct_jump(file_idx);
             self.focus = Focus::Diff;
             let target_row = if c.line_number == 0 {
                 Some(0)
@@ -3167,13 +4291,13 @@ impl App {
             return;
         };
         let label = format!("reply · {}:{}", c.file_path, c.line_number);
-        let quoted = c.body.clone();
-        self.comment_form = Some(CommentFormState::reply(label, &quoted));
+        self.comment_form = Some(CommentFormState::reply(label));
         self.mode = Mode::CommentForm;
     }
 
     fn resolve_focused(&mut self) {
         let Some(c) = self.comments.get(self.tracker.cursor) else {
+            self.status_message = Some("no comment focused".to_string());
             return;
         };
         let id = c.id.clone();
@@ -3191,11 +4315,10 @@ impl App {
                         "reopened"
                     }
                 ));
-                self.reload_comments();
+                self.reload_comments_with_notifications(false);
             }
-            _ => {
-                self.status_message = Some("resolve failed".to_string());
-            }
+            Ok(None) => self.report_error("resolve failed: comment no longer exists"),
+            Err(error) => self.report_error(format!("resolve failed: {error}")),
         }
     }
 
@@ -3204,9 +4327,9 @@ impl App {
             Ok(0) => self.status_message = Some("no open comments".to_string()),
             Ok(count) => {
                 self.status_message = Some(format!("resolved {count} comment threads"));
-                self.reload_comments();
+                self.reload_comments_with_notifications(false);
             }
-            Err(_) => self.status_message = Some("resolve all failed".to_string()),
+            Err(error) => self.report_error(format!("resolve all failed: {error}")),
         }
     }
 
@@ -3262,24 +4385,30 @@ impl App {
 
     fn delete_focused(&mut self) {
         let Some(c) = self.comments.get(self.tracker.cursor) else {
+            self.status_message = Some("no comment focused".to_string());
             return;
         };
         let id = c.id.clone();
         if self.pending_delete_id.as_deref() != Some(&id) {
             self.pending_delete_id = Some(id);
-            self.status_message =
-                Some("press d again to permanently delete this thread".to_string());
+            self.status_message = Some(if self.mode == Mode::CommentDetail {
+                "delete requires confirmation · press Delete or activate Delete again".to_string()
+            } else {
+                "delete requires confirmation · press d again".to_string()
+            });
             return;
         }
         self.pending_delete_id = None;
         match self.comment_store.remove(&id) {
             Ok(true) => {
                 self.status_message = Some("comment deleted".to_string());
-                self.reload_comments();
+                if self.mode == Mode::CommentDetail {
+                    self.mode = Mode::Normal;
+                }
+                self.reload_comments_with_notifications(false);
             }
-            _ => {
-                self.status_message = Some("delete failed".to_string());
-            }
+            Ok(false) => self.report_error("delete failed: comment no longer exists"),
+            Err(error) => self.report_error(format!("delete failed: {error}")),
         }
     }
 
@@ -3290,7 +4419,37 @@ impl App {
                 new_lineno,
                 ..
             }) => new_lineno.or(old_lineno).unwrap_or(1),
+            Some(ViewRow::FileHeader { .. }) => 0,
             _ => 1,
+        }
+    }
+
+    fn current_location_label(&self) -> String {
+        match self.current_view_row() {
+            Some(ViewRow::Line {
+                kind: IndexedLineKind::Add,
+                new_lineno: Some(line),
+                ..
+            }) => format!("new +{line}"),
+            Some(ViewRow::Line {
+                kind: IndexedLineKind::Del,
+                old_lineno: Some(line),
+                ..
+            }) => format!("old -{line}"),
+            Some(ViewRow::Line {
+                old_lineno,
+                new_lineno,
+                ..
+            }) => format!("line {}", new_lineno.or(old_lineno).unwrap_or(0)),
+            Some(ViewRow::HunkHeader {
+                old_start,
+                new_start,
+                ..
+            }) => format!("hunk -{old_start}/+{new_start}"),
+            Some(ViewRow::FileHeader { binary: true, .. }) => "binary file".to_string(),
+            Some(ViewRow::FileHeader { .. }) => "file header".to_string(),
+            Some(ViewRow::NoNewline { .. }) => "newline marker".to_string(),
+            None => "no line".to_string(),
         }
     }
 
@@ -3363,8 +4522,266 @@ impl App {
         self.files.get(idx)
     }
 
+    fn selected_image(&self) -> Option<(ImageKey, PathBuf)> {
+        let file_index = self.file_tree.selected_file_idx()?;
+        let file = self.index.files.get(file_index)?;
+        let path = file.display_path().to_path_buf();
+        is_image_path(&path).then(|| (ImageKey::new(self.index.generation, file), path))
+    }
+
+    fn diff_target_at(&self, area: Rect, column: u16, row: u16) -> Option<(usize, u64)> {
+        rendered_diff_target_at(&self.rendered_diff_rows, area, column, row)
+    }
+
+    fn pointer_diff_target(&self, position: Option<(u16, u16)>) -> Option<(usize, u64)> {
+        let (column, row) = position?;
+        let area = self
+            .regions
+            .diff_inner
+            .filter(|area| contains(*area, column, row))?;
+        self.diff_target_at(area, column, row)
+    }
+
+    fn prepare_selected_image(&mut self) -> Option<(PathBuf, Option<Arc<ImageDiffData>>)> {
+        let Some((key, path)) = self.selected_image() else {
+            return None;
+        };
+        if self.active_image_key.as_ref() != Some(&key) {
+            self.image_view = ImageViewState::default();
+            self.active_image_key = Some(key.clone());
+        }
+        self.image_diff.request(key.clone());
+        let data = self.image_diff.get(&key);
+        if let Some(data) = data.as_ref() {
+            self.image_view.mode = self.image_view.mode.normalize(&data);
+        }
+        Some((path, data))
+    }
+
+    fn render_prepared_image(
+        &self,
+        path: &PathBuf,
+        data: Option<&Arc<ImageDiffData>>,
+        area: Rect,
+        buf: &mut Buffer,
+    ) {
+        if let Some(data) = data {
+            render_image_diff(
+                data,
+                path,
+                &self.image_view,
+                area,
+                self.theme,
+                &self.palette,
+                buf,
+            );
+        } else {
+            Paragraph::new("◌  Loading image comparison…")
+                .style(Style::default().fg(self.palette.dim).bg(self.palette.bg))
+                .centered()
+                .render(area, buf);
+        }
+    }
+
+    fn render_selected_image(&mut self, area: Rect, buf: &mut Buffer) {
+        let Some((path, data)) = self.prepare_selected_image() else {
+            return;
+        };
+        self.render_prepared_image(&path, data.as_ref(), area, buf);
+    }
+
+    fn render_image_preview(&mut self, area: Rect, buf: &mut Buffer) {
+        let prepared = self.prepare_selected_image();
+        dim_buffer(area, buf);
+        let popup = inset(area, 1);
+        Clear.render(popup, buf);
+        let block = overlay_block(
+            " Image comparison · 1 before · 2 after · 3 side-by-side · 4 difference ",
+            &self.palette,
+        );
+        let inner = block.inner(popup);
+        block.render(popup, buf);
+        let controls_height = u16::from(inner.height >= 3);
+        if controls_height > 0 {
+            let controls = Rect::new(inner.x, inner.y, inner.width, 1);
+            fill_area(controls, self.palette.elevated, buf);
+            let mut x = controls.x + 1;
+            let end = controls.x.saturating_add(controls.width).saturating_sub(1);
+            for (label, control, active) in [
+                (
+                    "1 Before",
+                    ImageControl::Mode(ImageCompareMode::Before),
+                    self.image_view.mode == ImageCompareMode::Before,
+                ),
+                (
+                    "2 After",
+                    ImageControl::Mode(ImageCompareMode::After),
+                    self.image_view.mode == ImageCompareMode::After,
+                ),
+                (
+                    "3 Side",
+                    ImageControl::Mode(ImageCompareMode::SideBySide),
+                    self.image_view.mode == ImageCompareMode::SideBySide,
+                ),
+                (
+                    "4 Diff",
+                    ImageControl::Mode(ImageCompareMode::Difference),
+                    self.image_view.mode == ImageCompareMode::Difference,
+                ),
+                ("-", ImageControl::ZoomOut, false),
+                ("0 Fit", ImageControl::Reset, false),
+                ("+", ImageControl::ZoomIn, false),
+            ] {
+                if let ImageControl::Mode(mode) = control {
+                    if prepared
+                        .as_ref()
+                        .and_then(|(_, data)| data.as_deref())
+                        .is_some_and(|data| !mode.is_available(data))
+                    {
+                        continue;
+                    }
+                }
+                let width = UnicodeWidthStr::width(label) as u16 + 2;
+                if x.saturating_add(width) > end {
+                    break;
+                }
+                let region = render_chip(
+                    x,
+                    controls.y,
+                    label,
+                    active,
+                    self.mouse_position,
+                    &self.palette,
+                    buf,
+                );
+                self.regions.image_controls.push((region, control));
+                x = x.saturating_add(width + 1);
+            }
+            let close_label = "Esc close";
+            let close_width = UnicodeWidthStr::width(close_label) as u16 + 2;
+            let close_x = end.saturating_sub(close_width);
+            if close_x > x {
+                let region = render_chip(
+                    close_x,
+                    controls.y,
+                    close_label,
+                    false,
+                    self.mouse_position,
+                    &self.palette,
+                    buf,
+                );
+                self.regions
+                    .image_controls
+                    .push((region, ImageControl::Close));
+            }
+        }
+        let content = Rect::new(
+            inner.x,
+            inner.y + controls_height,
+            inner.width,
+            inner.height.saturating_sub(controls_height),
+        );
+        if let Some((path, data)) = prepared.as_ref() {
+            self.render_prepared_image(path, data.as_ref(), content, buf);
+        } else {
+            Paragraph::new("Selected image is no longer in this diff · Esc closes")
+                .style(Style::default().fg(self.palette.dim).bg(self.palette.bg))
+                .centered()
+                .render(content, buf);
+        }
+        if popup.width > 28 {
+            let hint = " Tab view · +/- zoom · hjkl pan · 0 fit · Esc close ";
+            let x = popup
+                .x
+                .saturating_add(popup.width.saturating_sub(hint.len() as u16 + 2));
+            buf.set_stringn(
+                x,
+                popup.y + popup.height.saturating_sub(1),
+                hint,
+                popup.width.saturating_sub(2) as usize,
+                Style::default()
+                    .fg(self.palette.dim)
+                    .bg(self.palette.elevated),
+            );
+        }
+    }
+
+    fn render_comment_detail(&mut self, area: Rect, buf: &mut Buffer) {
+        let Some(comment) = self.comments.get(self.tracker.cursor) else {
+            return;
+        };
+        dim_buffer(area, buf);
+        let width = area.width.saturating_sub(METRICS.modal_margin_x).min(104);
+        let height = area
+            .height
+            .saturating_sub(METRICS.modal_margin_y)
+            .clamp(7, 30);
+        let popup = Rect::new(
+            area.x + area.width.saturating_sub(width) / 2,
+            area.y + area.height.saturating_sub(height) / 2,
+            width,
+            height,
+        );
+        Clear.render(popup, buf);
+        let max_scroll = render_thread(
+            comment,
+            self.comment_detail_scroll,
+            popup,
+            &self.palette,
+            buf,
+        );
+        self.comment_detail_scroll = self.comment_detail_scroll.min(max_scroll);
+        if popup.width > 20 && popup.height > 0 {
+            let y = popup.y + popup.height.saturating_sub(1);
+            let end = popup.x + popup.width.saturating_sub(1);
+            let resolve_label = if comment.status == CommentStatus::Resolved {
+                "x Reopen"
+            } else {
+                "x Resolve"
+            };
+            let delete_label = if self.pending_delete_id.as_deref() == Some(&comment.id) {
+                "Del Confirm"
+            } else {
+                "Del Delete"
+            };
+            let mut x = popup.x + 1;
+            for (label, control) in [
+                ("Enter Jump", CommentDetailControl::Jump),
+                ("e Edit", CommentDetailControl::Edit),
+                ("r Reply", CommentDetailControl::Reply),
+                (resolve_label, CommentDetailControl::Resolve),
+                (delete_label, CommentDetailControl::Delete),
+            ] {
+                let width = UnicodeWidthStr::width(label) as u16 + 2;
+                if x.saturating_add(width) >= end {
+                    break;
+                }
+                let region =
+                    render_chip(x, y, label, false, self.mouse_position, &self.palette, buf);
+                self.regions.comment_detail_controls.push((region, control));
+                x = x.saturating_add(width + 1);
+            }
+            let close_label = "Esc Close";
+            let close_width = UnicodeWidthStr::width(close_label) as u16 + 2;
+            let close_x = end.saturating_sub(close_width);
+            if close_x > x {
+                let region = render_chip(
+                    close_x,
+                    y,
+                    close_label,
+                    false,
+                    self.mouse_position,
+                    &self.palette,
+                    buf,
+                );
+                self.regions
+                    .comment_detail_controls
+                    .push((region, CommentDetailControl::Close));
+            }
+        }
+    }
+
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        self.toasts.retain(|t| !t.is_expired());
         self.regions = UiRegions::default();
         self.regions.root = Some(area);
         fill_area(area, self.palette.bg, buf);
@@ -3477,6 +4894,8 @@ impl App {
                     scroll: self.file_tree_scroll,
                     minimal: minimal_tree,
                     file_count: self.files.len(),
+                    visible_file_count: self.file_tree.filtered_file_count(),
+                    filter_label: self.file_filter_mode.label(),
                 },
                 &self.palette,
                 buf,
@@ -3522,6 +4941,14 @@ impl App {
             }
             self.regions.diff = Some(diff_content);
             self.regions.diff_inner = Some(diff_content);
+            self.regions.change_map = (diff_content.width >= 8).then(|| {
+                Rect::new(
+                    diff_content.x + diff_content.width.saturating_sub(1),
+                    diff_content.y,
+                    1,
+                    diff_content.height,
+                )
+            });
             self.render_diff(diff_content, buf);
         }
 
@@ -3541,12 +4968,15 @@ impl App {
                 self.regions.comment_divider = Some(divider);
                 Rect::new(area.x, divider_y, area.width, tracker_height)
             };
+            let tracker_inner = inset(tracker_area, 1);
+            self.tracker
+                .keep_cursor_visible(&self.comments, tracker_inner.height as usize);
             let outdated_comments: HashSet<String> = self
                 .tracker
                 .visible_indices(&self.comments)
                 .into_iter()
                 .skip(self.tracker.scroll)
-                .take(tracker_area.height as usize)
+                .take(tracker_inner.height as usize)
                 .filter_map(|index| self.comments.get(index))
                 .filter(|comment| self.comment_is_outdated(comment))
                 .map(|comment| comment.id.clone())
@@ -3561,7 +4991,7 @@ impl App {
                 buf,
             );
             self.regions.comment_panel = Some(tracker_area);
-            let inner = inset(tracker_area, 1);
+            let inner = tracker_inner;
             let visible_comments = self.tracker.visible_indices(&self.comments);
             self.regions.comment_rows = (0..inner.height as usize)
                 .filter_map(|offset| {
@@ -3594,6 +5024,8 @@ impl App {
                 Mode::ThemePicker => "THEME",
                 Mode::Settings => "SETTINGS",
                 Mode::Hover => "HOVER",
+                Mode::ImagePreview => "IMAGE",
+                Mode::CommentDetail => "THREAD",
             }
         };
         self.agent_status = if self
@@ -3605,17 +5037,28 @@ impl App {
         } else {
             AgentStatus::Idle
         };
-        let file_idx = self.file_tree.selected_file_idx().unwrap_or(0);
-        let file_count = self.files.len();
+        let selected_file_idx = self.file_tree.selected_file_idx();
+        let navigable_files = self.file_tree.navigable_file_indices();
+        let file_idx = selected_file_idx
+            .and_then(|selected| navigable_files.iter().position(|index| *index == selected))
+            .unwrap_or(0);
+        let file_count = navigable_files.len();
         let hint = match self.mode {
             Mode::ThemePicker => "type to filter · ↑↓ preview · Enter apply · Esc restore",
             Mode::CommentForm => "Ctrl-S save · Esc cancel",
             Mode::SendReview => "Tab field · ←→ verdict · Ctrl-S send · Esc cancel",
+            Mode::Search if self.search_changed_only => {
+                "type/edit query · Tab scope · ^G whole repo · ↑↓/Pg select · ⇧↑↓ preview · Enter jump"
+            }
             Mode::Search => {
-                "type to search · Tab scope · ^G changed · ↑↓ select · ⇧↑↓ preview · Enter jump"
+                "type/edit query · Tab scope · ^G changed only · ↑↓/Pg select · ⇧↑↓ preview · Enter jump"
             }
             Mode::Settings => "↑↓ select · ←→ change · Esc close",
             Mode::Hover => "j/k or wheel scroll · Esc close",
+            Mode::ImagePreview => "Tab view · +/- zoom · hjkl pan · 0 fit · Esc close",
+            Mode::CommentDetail => {
+                "j/k scroll · Enter jump · e edit · r reply · x resolve · Esc close"
+            }
             _ => match self.focus {
                 Focus::FileTree if self.experience == Experience::Viewer => {
                     "jk select · Enter open · h/l collapse · Tab diff · / search"
@@ -3641,13 +5084,22 @@ impl App {
             .or(diagnostic_hint.as_deref())
             .or(pending_key_hint)
             .unwrap_or(hint);
-        render_status_bar(
-            status,
-            StatusBarContext {
-                mode: mode_str,
-                current_file: Some(&format!(
-                    "Ln {}{}{}",
-                    self.cursor_row + 1,
+        let status_location = if self.files.is_empty() {
+            Some(if self.indexing {
+                "indexing changes…".to_string()
+            } else {
+                "working tree clean".to_string()
+            })
+        } else if navigable_files.is_empty() {
+            Some(format!(
+                "{} filter · no matching files",
+                self.file_filter_mode.label()
+            ))
+        } else {
+            selected_file_idx.map(|_| {
+                format!(
+                    "{}{}{}",
+                    self.current_location_label(),
                     if self.experience == Experience::Viewer || self.comments.is_empty() {
                         String::new()
                     } else {
@@ -3658,7 +5110,14 @@ impl App {
                     } else {
                         format!(" · keys {}", self.keymap.pending_display())
                     }
-                )),
+                )
+            })
+        };
+        render_status_bar(
+            status,
+            StatusBarContext {
+                mode: mode_str,
+                current_file: status_location.as_deref(),
                 file_idx,
                 file_count,
                 hint,
@@ -3691,6 +5150,7 @@ impl App {
                     sidebar_visible: self.sidebar_visible,
                     sidebar_width: self.sidebar_width,
                     comments_visible: self.comments_visible,
+                    review_enabled: self.experience == Experience::Review,
                     intelligence_mode: self.lsp.mode(),
                     theme_name: self.theme.display_name(),
                 },
@@ -3699,19 +5159,32 @@ impl App {
                 buf,
             ),
             Mode::Hover => self.render_hover(area, buf),
+            Mode::ImagePreview => self.render_image_preview(area, buf),
+            Mode::CommentDetail => self.render_comment_detail(area, buf),
             _ => {}
         }
 
         // Toasts: bottom-right overlay.
         if self.mode == Mode::Normal && !self.toasts.is_empty() {
-            let toast_height = self.toasts.len() as u16;
+            let visible = self
+                .toasts
+                .len()
+                .min(3)
+                .min(area.height.saturating_sub(1) as usize);
+            let toast_height = visible as u16;
             let toast_area = Rect {
                 x: area.x + area.width.saturating_sub(40),
                 y: area.y + area.height.saturating_sub(toast_height + 1),
                 width: 38.min(area.width),
-                height: toast_height.min(area.height),
+                height: toast_height,
             };
-            for (i, toast) in self.toasts.iter().rev().take(3).enumerate() {
+            for (i, (index, toast)) in self
+                .toasts
+                .iter()
+                .enumerate()
+                .skip(self.toasts.len().saturating_sub(visible))
+                .enumerate()
+            {
                 let row = Rect {
                     x: toast_area.x,
                     y: toast_area.y + i as u16,
@@ -3719,11 +5192,16 @@ impl App {
                     height: 1,
                 };
                 render_toast(toast, row, &self.palette, buf);
+                self.regions.toast_rows.push((row, index));
             }
         }
     }
 
     fn render_diff(&mut self, area: Rect, buf: &mut Buffer) {
+        let hovered_target = self
+            .mouse_position
+            .and_then(|(column, row)| self.diff_target_at(area, column, row));
+        self.rendered_diff_rows.clear();
         for y in area.y..area.y + area.height {
             for x in area.x..area.x + area.width {
                 let cell = &mut buf[(x, y)];
@@ -3732,7 +5210,9 @@ impl App {
             }
         }
         let Some(idx) = self.file_tree.selected_file_idx() else {
-            let message = if self.index.complete {
+            let message = if !self.index.files.is_empty() {
+                "Select a file · Enter or → expands directories"
+            } else if self.index.complete {
                 "✓  Working tree is clean"
             } else {
                 "◌  Indexing changes…"
@@ -3741,25 +5221,36 @@ impl App {
                 .style(Style::default().fg(self.palette.dim).bg(self.palette.bg))
                 .centered()
                 .render(area, buf);
+            self.finish_pointer_mapping(area, hovered_target);
             return;
         };
         if self.file_display == FileDisplay::Continuous {
-            self.render_continuous_diff(area, buf);
+            self.render_continuous_diff(area, hovered_target, buf);
+            self.finish_pointer_mapping(area, hovered_target);
             return;
         }
         let Some(file) = self.index.files.get(idx) else {
+            self.finish_pointer_mapping(area, hovered_target);
             return;
         };
+        if file.is_binary && is_image_path(file.display_path()) {
+            self.viewport_height = area.height.max(1) as usize;
+            self.render_selected_image(area, buf);
+            self.finish_pointer_mapping(area, hovered_target);
+            return;
+        }
         let file_row_count = file.row_count;
         self.viewport_height = area.height.max(1) as usize;
         let total = file.row_count as usize;
-        if self.scroll + self.viewport_height > total {
+        let effective_split = self.split && area.width >= 76;
+        if !self.wrap && !effective_split && self.scroll + self.viewport_height > total {
             self.scroll = total.saturating_sub(self.viewport_height);
+        } else if total > 0 {
+            self.scroll = self.scroll.min(total - 1);
         }
-        let hovered_row = self.mouse_position.and_then(|(column, row)| {
-            contains(area, column, row)
-                .then_some(self.scroll as u64 + row.saturating_sub(area.y) as u64)
-        });
+        let hovered_row = hovered_target
+            .filter(|(file_index, _)| *file_index == idx)
+            .map(|(_, row)| row);
         let diagnostics = self.lsp.diagnostics_for(file.display_path());
         let tab_size =
             self.editorconfig
@@ -3783,7 +5274,7 @@ impl App {
             hovered_row,
             self.horizontal_offset,
             self.wrap,
-            self.split,
+            effective_split,
             self.line_numbers,
             tab_size,
             self.theme,
@@ -3793,7 +5284,26 @@ impl App {
             &self.palette,
             buf,
         );
+        self.rendered_diff_rows.extend(
+            self.diff_render_cache
+                .rendered_logical_rows()
+                .iter()
+                .copied()
+                .map(|logical_rows| RenderedDiffRow {
+                    file_index: idx,
+                    logical_rows,
+                    split: effective_split,
+                }),
+        );
         self.render_change_map(area, Some(idx), self.scroll as u64, file_row_count, buf);
+        self.finish_pointer_mapping(area, hovered_target);
+    }
+
+    fn finish_pointer_mapping(&mut self, area: Rect, previous: Option<(usize, u64)>) {
+        let current = self
+            .mouse_position
+            .and_then(|(column, row)| self.diff_target_at(area, column, row));
+        self.pointer_overlay_dirty |= current != previous;
     }
 
     fn render_active_file_header(&self, area: Rect, buf: &mut Buffer) {
@@ -3858,20 +5368,42 @@ impl App {
         if area.height < 2 {
             return;
         }
-        let mut x = render_change_counts(
-            area.x + 5,
-            area.y + 1,
-            file.additions,
-            file.deletions,
-            tokens.surface,
-            &self.palette,
-            buf,
-        );
+        let mut x = if file.is_binary {
+            area.x + 5
+        } else {
+            render_change_counts(
+                area.x + 5,
+                area.y + 1,
+                file.additions,
+                file.deletions,
+                tokens.surface,
+                &self.palette,
+                buf,
+            )
+        };
         let end = area.x.saturating_add(area.width).saturating_sub(2);
         let mut metadata = vec![(
-            format!("  {} hunks", file.hunks.len()),
-            Style::default().fg(tokens.muted).bg(tokens.surface),
+            if is_image_path(file.display_path()) {
+                "  image · i compare".to_string()
+            } else if file.is_binary {
+                "  binary file".to_string()
+            } else {
+                format!("  {} hunks", file.hunks.len())
+            },
+            Style::default()
+                .fg(if is_image_path(file.display_path()) {
+                    tokens.info
+                } else {
+                    tokens.muted
+                })
+                .bg(tokens.surface),
         )];
+        if self.split && area.width < 76 {
+            metadata.push((
+                "  unified · widen for split".to_string(),
+                Style::default().fg(tokens.warning).bg(tokens.surface),
+            ));
+        }
         if self.experience == Experience::Viewer {
             render_metadata_segments(&mut x, end, area.y + 1, metadata, buf);
             return;
@@ -3911,17 +5443,28 @@ impl App {
         render_metadata_segments(&mut x, end, area.y + 1, metadata, buf);
     }
 
-    fn render_continuous_diff(&mut self, area: Rect, buf: &mut Buffer) {
+    fn render_continuous_diff(
+        &mut self,
+        area: Rect,
+        hovered_target: Option<(usize, u64)>,
+        buf: &mut Buffer,
+    ) {
         self.viewport_height = area.height.max(1) as usize;
         let total = self.continuous_total_rows();
         if total == 0 {
             return;
         }
         self.continuous_cursor = self.continuous_cursor.min(total.saturating_sub(1));
-        self.continuous_scroll = self
-            .continuous_scroll
-            .min(total.saturating_sub(area.height.max(1) as u64));
+        let layout_expands_physical_rows = self.wrap || (self.split && area.width >= 76);
+        let max_scroll = if layout_expands_physical_rows {
+            total.saturating_sub(1)
+        } else {
+            total.saturating_sub(area.height.max(1) as u64)
+        };
+        self.continuous_scroll = self.continuous_scroll.min(max_scroll);
         self.sync_continuous_active();
+        let effective_split = self.split && area.width >= 76;
+        let active_cursor = self.continuous_position(self.continuous_cursor);
 
         let mut global = self.continuous_scroll;
         let mut y = area.y;
@@ -3938,19 +5481,22 @@ impl App {
                 global = self.continuous_offset_for_file(file_index.saturating_add(1));
                 continue;
             }
-            let height = available.min(bottom.saturating_sub(y) as u64) as u16;
-            let segment = Rect::new(area.x, y, area.width, height);
-            let cursor = if global <= self.continuous_cursor
-                && self.continuous_cursor < global.saturating_add(height as u64)
-            {
-                local_start + self.continuous_cursor.saturating_sub(global)
+            let remaining_height = bottom.saturating_sub(y);
+            let height = if layout_expands_physical_rows {
+                remaining_height
             } else {
-                u64::MAX
+                available.min(u64::from(remaining_height)) as u16
             };
-            let hovered = self.mouse_position.and_then(|(column, row)| {
-                contains(segment, column, row)
-                    .then_some(local_start + row.saturating_sub(segment.y) as u64)
-            });
+            let segment = Rect::new(area.x, y, area.width, height);
+            let cursor = active_cursor
+                .filter(|(active_file, active_row)| {
+                    *active_file == file_index && *active_row >= local_start
+                })
+                .map(|(_, active_row)| active_row)
+                .unwrap_or(u64::MAX);
+            let hovered = hovered_target
+                .filter(|(hovered_file, _)| *hovered_file == file_index)
+                .map(|(_, row)| row);
             let diagnostics = self.lsp.diagnostics_for(file.display_path());
             let tab_size =
                 self.editorconfig
@@ -3975,7 +5521,7 @@ impl App {
                 hovered,
                 self.horizontal_offset,
                 self.wrap,
-                self.split,
+                effective_split,
                 self.line_numbers,
                 tab_size,
                 self.theme,
@@ -3985,8 +5531,28 @@ impl App {
                 &self.palette,
                 buf,
             );
-            y = y.saturating_add(height);
-            global = global.saturating_add(height as u64);
+            let logical_rows = self.diff_render_cache.rendered_logical_rows();
+            self.rendered_diff_rows
+                .extend(
+                    logical_rows
+                        .iter()
+                        .copied()
+                        .map(|logical_rows| RenderedDiffRow {
+                            file_index,
+                            logical_rows,
+                            split: effective_split,
+                        }),
+                );
+            let physical_rows = logical_rows.len() as u16;
+            let last_logical = logical_rows.iter().flatten().flatten().copied().max();
+            let consumed_logical = last_logical
+                .map(|last| last.saturating_sub(local_start).saturating_add(1))
+                .unwrap_or(0);
+            if physical_rows == 0 || consumed_logical == 0 {
+                break;
+            }
+            y = y.saturating_add(physical_rows);
+            global = global.saturating_add(consumed_logical);
         }
         self.render_change_map(area, None, self.continuous_scroll, total, buf);
     }
@@ -4009,38 +5575,63 @@ impl App {
                 .set_symbol("│")
                 .set_style(Style::default().fg(tokens.rule_subtle).bg(tokens.canvas));
         }
-        if self.experience == Experience::Review {
-            let markers = self
-                .render_metadata
-                .change_map(&self.index, single_file, area.height);
-            for (offset, marker) in markers.iter().enumerate() {
-                let Some(marker) = marker else {
-                    continue;
-                };
-                let color = match marker {
-                    ChangeMapMarker::Added => tokens.positive,
-                    ChangeMapMarker::Removed => tokens.negative,
-                    ChangeMapMarker::Modified => tokens.accent,
-                };
-                let y = area.y.saturating_add(offset as u16);
-                if y < area.y.saturating_add(area.height) {
-                    buf[(x, y)]
-                        .set_symbol("▪")
-                        .set_style(Style::default().fg(color).bg(tokens.canvas));
-                }
+        let markers = self
+            .render_metadata
+            .change_map(&self.index, single_file, area.height);
+        for (offset, marker) in markers.iter().enumerate() {
+            let Some(marker) = marker else {
+                continue;
+            };
+            let color = match marker {
+                ChangeMapMarker::Added => tokens.positive,
+                ChangeMapMarker::Removed => tokens.negative,
+                ChangeMapMarker::Modified => tokens.accent,
+            };
+            let y = area.y.saturating_add(offset as u16);
+            if y < area.y.saturating_add(area.height) {
+                buf[(x, y)]
+                    .set_symbol("▪")
+                    .set_style(Style::default().fg(color).bg(tokens.canvas));
             }
         }
-        let viewport_start = ((scroll.saturating_mul(area.height as u64) / total_rows) as u16)
+        let viewport_start = ((scroll
+            .min(total_rows.saturating_sub(1))
+            .saturating_mul(area.height.saturating_sub(1) as u64)
+            / total_rows.saturating_sub(1).max(1)) as u16)
             .min(area.height.saturating_sub(1));
-        let viewport_rows = ((self.viewport_height as u64)
+        let visible_logical_rows = self
+            .rendered_diff_rows
+            .iter()
+            .flat_map(|rendered| {
+                rendered.logical_rows.iter().flatten().map(|row| {
+                    if single_file.is_some() {
+                        *row
+                    } else {
+                        self.continuous_offset_for_file(rendered.file_index)
+                            .saturating_add(*row)
+                    }
+                })
+            })
+            .fold(None, |bounds, row| match bounds {
+                None => Some((row, row)),
+                Some((minimum, maximum)) => Some((minimum.min(row), maximum.max(row))),
+            })
+            .map(|(minimum, maximum)| maximum.saturating_sub(minimum).saturating_add(1))
+            .unwrap_or(self.viewport_height as u64);
+        let viewport_rows = (visible_logical_rows
             .saturating_mul(area.height as u64)
             .div_ceil(total_rows))
         .max(1) as u16;
         for offset in 0..viewport_rows.min(area.height) {
             let y = area.y + (viewport_start + offset).min(area.height.saturating_sub(1));
+            let color = if buf[(x, y)].symbol() == "▪" {
+                buf[(x, y)].style().fg.unwrap_or(tokens.muted)
+            } else {
+                tokens.muted
+            };
             buf[(x, y)]
                 .set_symbol("┃")
-                .set_style(Style::default().fg(tokens.muted).bg(tokens.canvas));
+                .set_style(Style::default().fg(color).bg(tokens.canvas));
         }
     }
 
@@ -4157,7 +5748,7 @@ impl App {
                 );
             }
         }
-        let action_x = area.x + title.chars().count() as u16 + 5;
+        let action_x = area.x + UnicodeWidthStr::width(title.as_str()) as u16 + 5;
         if self.experience == Experience::Review && action_x + 15 < summary_x {
             let rect = render_chip(
                 action_x,
@@ -4228,9 +5819,20 @@ impl App {
         buf.set_string(
             inner.x + 1,
             inner.y,
-            format!("/ {}", self.modal_input),
+            modal_input_display(
+                "/ ",
+                &self.modal_input,
+                self.modal_cursor,
+                inner.width.saturating_sub(2) as usize,
+            ),
             Style::default().fg(tokens.text).bg(tokens.element),
         );
+        self.regions.modal_input = Some(Rect::new(
+            inner.x + 1,
+            inner.y,
+            inner.width.saturating_sub(2),
+            1,
+        ));
         let themes = self.filtered_themes();
         self.theme_cursor = self.theme_cursor.min(themes.len().saturating_sub(1));
         let body_y = inner.y + 1 + METRICS.section_gap;
@@ -4239,6 +5841,15 @@ impl App {
             .theme_cursor
             .saturating_sub(body_height.saturating_sub(1));
         self.regions.theme_rows.clear();
+        if themes.is_empty() && body_height > 0 {
+            buf.set_stringn(
+                inner.x + 2,
+                body_y,
+                "No themes match this filter",
+                inner.width.saturating_sub(4) as usize,
+                Style::default().fg(tokens.muted).bg(tokens.raised),
+            );
+        }
         for (visible, theme) in themes.iter().skip(scroll).take(body_height).enumerate() {
             let index = scroll + visible;
             let row = Rect::new(inner.x, body_y + visible as u16, inner.width, 1);
@@ -4308,7 +5919,7 @@ impl App {
         );
     }
 
-    fn render_help(&self, area: Rect, buf: &mut Buffer) {
+    fn render_help(&mut self, area: Rect, buf: &mut Buffer) {
         dim_buffer(area, buf);
         let width = area
             .width
@@ -4322,6 +5933,10 @@ impl App {
             height,
         );
         Clear.render(popup, buf);
+        let block = overlay_block(" Help ", &self.palette);
+        let inner = block.inner(popup);
+        block.render(popup, buf);
+        fill_area(inner, self.palette.elevated, buf);
         let help = if self.experience == Experience::Viewer {
             viewer_help_text()
         } else {
@@ -4333,24 +5948,54 @@ impl App {
         } else {
             shortcut_help(help, &self.palette)
         };
+        let body = Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.saturating_sub(1),
+        );
+        let max_scroll = help
+            .lines
+            .len()
+            .saturating_sub(body.height as usize)
+            .min(u16::MAX as usize) as u16;
+        self.help_scroll = self.help_scroll.min(max_scroll);
+        let scroll = self.help_scroll;
         Paragraph::new(help)
             .style(
                 Style::default()
                     .fg(self.palette.fg)
                     .bg(self.palette.elevated),
             )
-            .block(overlay_block(" Help ", &self.palette))
-            .render(popup, buf);
+            .scroll((scroll, 0))
+            .render(body, buf);
+        if inner.height > 0 {
+            let footer = format!(
+                "j/k scroll · PgUp/PgDn page · Esc close · {}/{}",
+                scroll.saturating_add(1),
+                max_scroll.saturating_add(1)
+            );
+            Paragraph::new(hint_line(&footer, self.palette.elevated, &self.palette)).render(
+                Rect::new(
+                    inner.x,
+                    inner.y + inner.height.saturating_sub(1),
+                    inner.width,
+                    1,
+                ),
+                buf,
+            );
+        }
     }
 
-    fn render_search_palette(&self, area: Rect, buf: &mut Buffer) {
+    fn render_search_palette(&mut self, area: Rect, buf: &mut Buffer) {
         let tokens = GridlineTokens::from(&self.palette);
         dim_buffer(area, buf);
         let width = area.width.saturating_sub(METRICS.modal_margin_x).min(132);
         let height = area
             .height
             .saturating_sub(METRICS.modal_margin_y)
-            .clamp(10, 26);
+            .min(26)
+            .max(10.min(area.height));
         let popup = Rect::new(
             area.x + area.width.saturating_sub(width) / 2,
             area.y + area.height.saturating_sub(height) / 2,
@@ -4359,13 +6004,14 @@ impl App {
         );
         Clear.render(popup, buf);
         fill_area(popup, self.palette.elevated, buf);
-        let title = if self.repo_search_loading {
-            " Search · loading "
+        let state = if self.repo_search_loading {
+            " · loading"
         } else if self.repo_search_indexing {
-            " Search · indexing "
+            " · indexing"
         } else {
-            " Search "
+            ""
         };
+        let title = format!(" Search · {}{state} ", self.search_scope.label());
         let block = overlay_block(
             Span::styled(
                 title,
@@ -4384,11 +6030,29 @@ impl App {
             SearchScope::Text,
             SearchScope::Symbols,
         ];
+        let changed_label = if self.search_changed_only {
+            " ✓ Changed "
+        } else {
+            " Changed "
+        };
+        let regex_label = if self.search_scope == SearchScope::Text {
+            if self.search_regex {
+                " .*✓ "
+            } else {
+                " .* "
+            }
+        } else {
+            ""
+        };
+        let controls_width = changed_label.chars().count() as u16 + regex_label.len() as u16;
+        let controls_x =
+            (controls_width + 1 < inner.width).then(|| inner.x + inner.width - controls_width - 1);
+        let scope_end = controls_x.unwrap_or_else(|| inner.x.saturating_add(inner.width));
         let mut x = inner.x + 1;
         for scope in scopes {
             let active = scope == self.search_scope;
             let label = format!(" {} ", scope.label());
-            if x + label.len() as u16 >= inner.x + inner.width {
+            if x + label.len() as u16 >= scope_end {
                 break;
             }
             buf.set_string(
@@ -4408,26 +6072,15 @@ impl App {
                         Modifier::empty()
                     }),
             );
+            self.regions
+                .search_scopes
+                .push((Rect::new(x, inner.y, label.len() as u16, 1), scope));
             x += label.len() as u16 + 1;
         }
-        let changed_label = if self.search_changed_only {
-            " ✓ Changed "
-        } else {
-            " Changed "
-        };
-        let regex_label = if self.search_scope == SearchScope::Text {
-            if self.search_regex {
-                " .*✓ "
-            } else {
-                " .* "
-            }
-        } else {
-            ""
-        };
-        let controls_width = changed_label.chars().count() as u16 + regex_label.len() as u16;
-        if controls_width + 1 < inner.width {
-            let controls_x = inner.x + inner.width - controls_width - 1;
+        if let Some(controls_x) = controls_x {
             if !regex_label.is_empty() {
+                self.regions.search_regex =
+                    Some(Rect::new(controls_x, inner.y, regex_label.len() as u16, 1));
                 buf.set_string(
                     controls_x,
                     inner.y,
@@ -4441,6 +6094,12 @@ impl App {
                         .bg(tokens.element),
                 );
             }
+            self.regions.search_changed = Some(Rect::new(
+                controls_x + regex_label.len() as u16,
+                inner.y,
+                changed_label.chars().count() as u16,
+                1,
+            ));
             buf.set_string(
                 controls_x + regex_label.len() as u16,
                 inner.y,
@@ -4461,10 +6120,21 @@ impl App {
             tokens.element,
             buf,
         );
+        self.regions.modal_input = Some(Rect::new(
+            inner.x + 1,
+            input_y,
+            inner.width.saturating_sub(2),
+            1,
+        ));
         buf.set_string(
             inner.x + 1,
             input_y,
-            format!("/ {}_", self.modal_input),
+            modal_input_display(
+                "/ ",
+                &self.modal_input,
+                self.modal_cursor,
+                inner.width.saturating_sub(2) as usize,
+            ),
             Style::default().fg(tokens.text).bg(tokens.element),
         );
 
@@ -4496,6 +6166,7 @@ impl App {
                 body.width.saturating_sub(list.width + 1),
                 body.height,
             );
+            self.regions.search_preview = Some(preview);
             self.render_search_results(list, buf);
             self.render_search_preview(preview, buf);
         } else {
@@ -4508,8 +6179,13 @@ impl App {
         } else {
             format!("{shown}")
         };
+        let repository_toggle = if self.search_changed_only {
+            "^G whole repo"
+        } else {
+            "^G changed only"
+        };
         let footer = format!(
-            "{count} result{} · Tab scope · ^G Changed · ↑↓ move · Enter jump · ⇧↑↓ preview · Esc close",
+            "{count} result{} · Tab scope · {repository_toggle} · ↑↓/Pg move · Enter jump · ⇧↑↓ preview · ^U clear · Esc",
             if self.repo_search_total == 1 { "" } else { "s" }
         );
         buf.set_string(
@@ -4522,7 +6198,7 @@ impl App {
         );
     }
 
-    fn render_search_results(&self, area: Rect, buf: &mut Buffer) {
+    fn render_search_results(&mut self, area: Rect, buf: &mut Buffer) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -4561,6 +6237,7 @@ impl App {
             {
                 let index = scroll + visible;
                 let row = Rect::new(area.x, area.y + visible as u16, area.width, 1);
+                self.regions.search_results.push((row, index));
                 let selected = index == self.search_cursor;
                 let background = if selected {
                     self.palette.selection_bg
@@ -4648,7 +6325,7 @@ impl App {
         }
     }
 
-    fn render_search_preview(&self, area: Rect, buf: &mut Buffer) {
+    fn render_search_preview(&mut self, area: Rect, buf: &mut Buffer) {
         if area.width < 8 || area.height == 0 {
             return;
         }
@@ -4691,6 +6368,18 @@ impl App {
             );
             return;
         }
+        let max_scroll = self
+            .search_preview
+            .as_ref()
+            .map(|preview| {
+                preview
+                    .content
+                    .lines()
+                    .count()
+                    .saturating_sub(content_height as usize)
+            })
+            .unwrap_or(0);
+        self.search_preview_scroll = self.search_preview_scroll.min(max_scroll);
         let Some(preview) = self.search_preview.as_ref() else {
             buf.set_string(
                 area.x + 1,
@@ -4701,8 +6390,17 @@ impl App {
             return;
         };
         if preview.binary || preview.missing {
-            let message = if preview.binary {
-                "Binary file — no preview"
+            let changed_image = preview.binary
+                && is_image_path(std::path::Path::new(path))
+                && self
+                    .index
+                    .files
+                    .iter()
+                    .any(|file| file.display_path() == std::path::Path::new(path));
+            let message = if changed_image {
+                "Changed image · Enter selects it · i opens comparison"
+            } else if preview.binary {
+                "Binary file — no text preview"
             } else {
                 "File not present in the working tree"
             };
@@ -4755,8 +6453,8 @@ impl App {
                     break;
                 }
                 let remaining = end.saturating_sub(x) as usize;
-                let text: String = span.text.chars().take(remaining).collect();
-                let used = text.chars().count() as u16;
+                let text = truncate_cells(&span.text, remaining);
+                let used = UnicodeWidthStr::width(text.as_str()) as u16;
                 if used > 0 {
                     buf.set_string(x, y, text, span.style.bg(background));
                     x = x.saturating_add(used);
@@ -4779,7 +6477,7 @@ impl App {
         }
     }
 
-    fn render_hover(&self, area: Rect, buf: &mut Buffer) {
+    fn render_hover(&mut self, area: Rect, buf: &mut Buffer) {
         let Some(content) = self.hover_content.as_deref() else {
             return;
         };
@@ -4796,6 +6494,18 @@ impl App {
             height,
         );
         Clear.render(popup, buf);
+        let block = overlay_block(" Hover ", &self.palette);
+        let inner = block.inner(popup);
+        let line_width = inner.width.max(1) as usize;
+        let visual_lines = content
+            .lines()
+            .map(|line| UnicodeWidthStr::width(line).max(1).div_ceil(line_width))
+            .sum::<usize>();
+        let max_scroll = visual_lines
+            .saturating_sub(inner.height as usize)
+            .min(u16::MAX as usize) as u16;
+        self.hover_scroll = self.hover_scroll.min(max_scroll);
+        block.render(popup, buf);
         Paragraph::new(content)
             .style(
                 Style::default()
@@ -4804,29 +6514,76 @@ impl App {
             )
             .wrap(Wrap { trim: false })
             .scroll((self.hover_scroll, 0))
-            .block(overlay_block(" Hover ", &self.palette))
-            .render(popup, buf);
+            .render(inner, buf);
     }
 
-    fn render_prompt(&self, area: Rect, prefix: char, title: &str, buf: &mut Buffer) {
+    fn render_prompt(&mut self, area: Rect, prefix: char, title: &str, buf: &mut Buffer) {
         dim_buffer(area, buf);
         let width = area.width.saturating_sub(METRICS.modal_margin_x).min(90);
+        let height = 4.min(area.height);
         let popup = Rect::new(
             area.x + area.width.saturating_sub(width) / 2,
-            area.y + area.height.saturating_sub(3),
+            area.y + area.height.saturating_sub(height),
             width,
-            3.min(area.height),
+            height,
         );
         Clear.render(popup, buf);
-        Paragraph::new(format!("{prefix}{}", self.modal_input))
-            .style(
+        let block = overlay_block(format!(" {title} · Tab completes "), &self.palette);
+        let inner = block.inner(popup);
+        block.render(popup, buf);
+        self.regions.modal_input = Some(Rect::new(inner.x, inner.y, inner.width, 1));
+        buf.set_string(
+            inner.x,
+            inner.y,
+            modal_input_display(
+                &prefix.to_string(),
+                &self.modal_input,
+                self.modal_cursor,
+                inner.width as usize,
+            ),
+            Style::default()
+                .fg(self.palette.fg)
+                .bg(self.palette.elevated),
+        );
+        if inner.height > 1 {
+            let query = self.modal_input.trim().to_ascii_lowercase();
+            let matches = EX_COMMANDS
+                .iter()
+                .filter(|command| command.starts_with(&query))
+                .take(8)
+                .copied()
+                .collect::<Vec<_>>();
+            let suggestions = if matches.is_empty() {
+                "No matching commands".to_string()
+            } else {
+                matches.join("  ")
+            };
+            buf.set_stringn(
+                inner.x,
+                inner.y + 1,
+                suggestions,
+                inner.width as usize,
                 Style::default()
-                    .fg(self.palette.fg)
+                    .fg(self.palette.dim)
                     .bg(self.palette.elevated),
-            )
-            .block(overlay_block(format!(" {title} "), &self.palette))
-            .render(popup, buf);
+            );
+        }
     }
+}
+
+fn ex_command_completion(query: &str) -> Option<&'static str> {
+    if query.is_empty() {
+        return None;
+    }
+    EX_COMMANDS
+        .iter()
+        .find(|command| command.starts_with(query) && **command != query)
+        .or_else(|| {
+            EX_COMMANDS
+                .iter()
+                .find(|command| command.starts_with(query))
+        })
+        .copied()
 }
 
 fn inset(area: Rect, amount: u16) -> Rect {
@@ -4836,6 +6593,209 @@ fn inset(area: Rect, amount: u16) -> Rect {
         area.width.saturating_sub(amount.saturating_mul(2)),
         area.height.saturating_sub(amount.saturating_mul(2)),
     )
+}
+
+fn char_byte_index(value: &str, character_index: usize) -> usize {
+    value
+        .char_indices()
+        .nth(character_index)
+        .map(|(byte, _)| byte)
+        .unwrap_or(value.len())
+}
+
+fn textarea_character_count(textarea: &tui_textarea::TextArea<'_>) -> usize {
+    textarea
+        .lines()
+        .iter()
+        .fold(0usize, |total, line| {
+            total.saturating_add(line.chars().count())
+        })
+        .saturating_add(textarea.lines().len().saturating_sub(1))
+}
+
+fn insert_textarea_bounded(textarea: &mut tui_textarea::TextArea<'_>, text: &str) -> bool {
+    let remaining = MAX_TEXTAREA_CHARACTERS.saturating_sub(textarea_character_count(textarea));
+    let mut characters = text.chars();
+    let accepted: String = characters.by_ref().take(remaining).collect();
+    let truncated = characters.next().is_some();
+    if !accepted.is_empty() {
+        textarea.insert_str(accepted);
+    }
+    truncated
+}
+
+fn textarea_key_inserts(key: &crossterm::event::KeyEvent) -> bool {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    matches!(key.code, KeyCode::Enter | KeyCode::Tab)
+        || (matches!(key.code, KeyCode::Char(_))
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModalInputLayout {
+    text: String,
+    cursor_by_cell: Vec<usize>,
+    trailing_cursor: usize,
+}
+
+fn push_modal_token(
+    text: &mut String,
+    cells: &mut Vec<usize>,
+    character: char,
+    before: usize,
+    after: usize,
+) {
+    text.push(character);
+    let width = UnicodeWidthChar::width(character).unwrap_or(0);
+    for cell in 0..width {
+        cells.push(if cell.saturating_mul(2) >= width {
+            after
+        } else {
+            before
+        });
+    }
+}
+
+fn modal_input_layout(prefix: &str, value: &str, cursor: usize, width: usize) -> ModalInputLayout {
+    let characters: Vec<char> = value.chars().collect();
+    let widths: Vec<usize> = characters
+        .iter()
+        .map(|character| UnicodeWidthChar::width(*character).unwrap_or(0))
+        .collect();
+    let cursor = cursor.min(characters.len());
+    let prefix = truncate_cells(prefix, width);
+    let prefix_width = UnicodeWidthStr::width(prefix.as_str());
+    let available = width.saturating_sub(prefix_width);
+
+    let full_width = widths
+        .iter()
+        .fold(1usize, |total, width| total.saturating_add(*width));
+    let (start, end, left_overflow, right_overflow) = if full_width <= available {
+        (0, characters.len(), false, false)
+    } else if available <= 1 {
+        (cursor, cursor, false, false)
+    } else if available == 2 {
+        if cursor > 0 {
+            (cursor, cursor, true, false)
+        } else {
+            (0, 0, false, !characters.is_empty())
+        }
+    } else {
+        let reserve_right = usize::from(cursor < characters.len());
+        let left_budget = available.saturating_sub(1 + reserve_right);
+        let mut start = cursor;
+        let mut left_width = 0usize;
+        while start > 0 {
+            let next = widths[start - 1];
+            if left_width.saturating_add(next) > left_budget {
+                break;
+            }
+            start -= 1;
+            left_width = left_width.saturating_add(next);
+        }
+        let left_overflow = start > 0;
+        if left_overflow {
+            while start < cursor && left_width.saturating_add(1) > left_budget {
+                left_width = left_width.saturating_sub(widths[start]);
+                start += 1;
+            }
+        }
+
+        let used = 1usize
+            .saturating_add(left_width)
+            .saturating_add(usize::from(left_overflow));
+        let mut forward_budget = available.saturating_sub(used);
+        if cursor < characters.len() {
+            forward_budget = forward_budget.saturating_sub(1);
+        }
+        let mut end = cursor;
+        let mut forward_width = 0usize;
+        while end < characters.len() {
+            let next = widths[end];
+            if forward_width.saturating_add(next) > forward_budget {
+                break;
+            }
+            end += 1;
+            forward_width = forward_width.saturating_add(next);
+        }
+        (start, end, left_overflow, end < characters.len())
+    };
+
+    let mut text = String::new();
+    let mut cursor_by_cell = Vec::with_capacity(width);
+    for character in prefix.chars() {
+        push_modal_token(&mut text, &mut cursor_by_cell, character, start, start);
+    }
+    if available > 0 {
+        if left_overflow {
+            push_modal_token(&mut text, &mut cursor_by_cell, '‹', start, start);
+        }
+        for (index, character) in characters
+            .iter()
+            .copied()
+            .enumerate()
+            .take(cursor)
+            .skip(start)
+        {
+            push_modal_token(&mut text, &mut cursor_by_cell, character, index, index + 1);
+        }
+        push_modal_token(&mut text, &mut cursor_by_cell, '│', cursor, cursor);
+        for (index, character) in characters
+            .iter()
+            .copied()
+            .enumerate()
+            .take(end)
+            .skip(cursor)
+        {
+            push_modal_token(&mut text, &mut cursor_by_cell, character, index, index + 1);
+        }
+        if right_overflow {
+            push_modal_token(&mut text, &mut cursor_by_cell, '›', end, end);
+        }
+    }
+    ModalInputLayout {
+        text,
+        cursor_by_cell,
+        trailing_cursor: if right_overflow {
+            end
+        } else {
+            characters.len()
+        },
+    }
+}
+
+fn modal_input_display(prefix: &str, value: &str, cursor: usize, width: usize) -> String {
+    modal_input_layout(prefix, value, cursor, width).text
+}
+
+fn modal_cursor_at(prefix: &str, value: &str, cursor: usize, width: usize, cell: usize) -> usize {
+    let layout = modal_input_layout(prefix, value, cursor, width);
+    layout
+        .cursor_by_cell
+        .get(cell)
+        .copied()
+        .unwrap_or(layout.trailing_cursor)
+}
+
+fn rendered_diff_target_at(
+    rows: &[RenderedDiffRow],
+    area: Rect,
+    column: u16,
+    row: u16,
+) -> Option<(usize, u64)> {
+    if !contains(area, column, row) {
+        return None;
+    }
+    let rendered = rows.get(row.saturating_sub(area.y) as usize)?;
+    let logical =
+        if rendered.split && column.saturating_sub(area.x) >= area.width.saturating_sub(2) / 2 {
+            rendered.logical_rows[1].or(rendered.logical_rows[0])
+        } else {
+            rendered.logical_rows[0].or(rendered.logical_rows[1])
+        }?;
+    Some((rendered.file_index, logical))
 }
 
 fn contains(area: Rect, column: u16, row: u16) -> bool {
@@ -4866,11 +6826,29 @@ fn panel_visibility(
     )
 }
 
-fn ellipsize(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_string();
+fn truncate_cells(value: &str, max_width: usize) -> String {
+    let mut output = String::new();
+    let mut width = 0usize;
+    for character in value.chars().map(safe_terminal_character) {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width.saturating_add(character_width) > max_width {
+            break;
+        }
+        output.push(character);
+        width = width.saturating_add(character_width);
     }
-    let mut shortened: String = value.chars().take(max_chars.saturating_sub(1)).collect();
+    output
+}
+
+fn ellipsize(value: &str, max_width: usize) -> String {
+    let value = safe_terminal_text(value);
+    if UnicodeWidthStr::width(value.as_str()) <= max_width {
+        return value;
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    let mut shortened = truncate_cells(&value, max_width.saturating_sub(1));
     shortened.push('…');
     shortened
 }
@@ -4917,7 +6895,7 @@ fn render_metadata_segments(
     buf: &mut Buffer,
 ) {
     for (text, style) in segments {
-        let width = text.chars().count() as u16;
+        let width = UnicodeWidthStr::width(text.as_str()) as u16;
         if (*x).saturating_add(width) > end {
             break;
         }
@@ -4946,7 +6924,7 @@ fn render_chip(
     buf: &mut Buffer,
 ) -> Rect {
     let tokens = GridlineTokens::from(palette);
-    let width = label.chars().count() as u16 + 2;
+    let width = UnicodeWidthStr::width(label) as u16 + 2;
     let area = Rect::new(x, y, width, 1);
     let hovered = pointer
         .map(|(column, row)| contains(area, column, row))
@@ -4974,7 +6952,7 @@ fn render_chip(
                 .add_modifier(Modifier::BOLD),
         );
         buf.set_string(
-            x + 1 + key.chars().count() as u16,
+            x + 1 + UnicodeWidthStr::width(key) as u16,
             y,
             format!(" {description}"),
             Style::default()
@@ -5323,8 +7301,50 @@ mod tests {
     }
 
     #[test]
+    fn rendered_pointer_rows_preserve_wrap_and_split_targets() {
+        let area = Rect::new(10, 4, 80, 4);
+        let rows = vec![
+            RenderedDiffRow {
+                file_index: 2,
+                logical_rows: [Some(10), Some(11)],
+                split: true,
+            },
+            RenderedDiffRow {
+                file_index: 2,
+                logical_rows: [Some(10), Some(11)],
+                split: true,
+            },
+            RenderedDiffRow {
+                file_index: 3,
+                logical_rows: [Some(5), None],
+                split: false,
+            },
+        ];
+        assert_eq!(rendered_diff_target_at(&rows, area, 20, 4), Some((2, 10)));
+        assert_eq!(rendered_diff_target_at(&rows, area, 75, 5), Some((2, 11)));
+        assert_eq!(rendered_diff_target_at(&rows, area, 75, 6), Some((3, 5)));
+        assert_eq!(rendered_diff_target_at(&rows, area, 20, 7), None);
+    }
+
+    #[test]
+    fn modal_editor_display_keeps_a_unicode_cursor_visible() {
+        assert_eq!(char_byte_index("aλb", 2), 3);
+        assert_eq!(modal_input_display("/ ", "alpha", 2, 12), "/ al│pha");
+        let scrolled = modal_input_display("/ ", "abcdefghijk", 10, 8);
+        assert!(scrolled.contains('‹'));
+        assert!(scrolled.contains('│'));
+        assert!(UnicodeWidthStr::width(scrolled.as_str()) <= 8);
+
+        let wide = modal_input_display("/ ", "界面alpha", 2, 8);
+        assert!(wide.contains('│'));
+        assert!(UnicodeWidthStr::width(wide.as_str()) <= 8);
+        assert_eq!(modal_cursor_at("/ ", "alpha", 2, 12, 3), 1);
+    }
+
+    #[test]
     fn render_metadata_maps_global_rows_with_prefix_offsets() {
         let metadata = DiffRenderMetadata {
+            file_indices: vec![0, 1, 2],
             file_offsets: vec![0, 3, 3, 8],
             change_maps: VecDeque::new(),
         };
@@ -5335,6 +7355,15 @@ mod tests {
         assert_eq!(metadata.position(2), Some((0, 2)));
         assert_eq!(metadata.position(3), Some((2, 0)));
         assert_eq!(metadata.position(99), Some((2, 4)));
+
+        let filtered = DiffRenderMetadata {
+            file_indices: vec![2],
+            file_offsets: vec![0, 5],
+            change_maps: VecDeque::new(),
+        };
+        assert_eq!(filtered.position(0), Some((2, 0)));
+        assert_eq!(filtered.position(99), Some((2, 4)));
+        assert_eq!(filtered.file_offset(0), 5);
     }
 
     #[test]
@@ -5347,9 +7376,20 @@ mod tests {
     }
 
     #[test]
+    fn command_completion_is_bounded_and_keeps_short_aliases_discoverable() {
+        assert_eq!(ex_command_completion(""), None);
+        assert_eq!(ex_command_completion("ref"), Some("refresh"));
+        assert_eq!(ex_command_completion("w"), Some("wrap"));
+        assert_eq!(ex_command_completion("not-a-command"), None);
+        assert!(EX_COMMANDS.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
     fn toolbar_labels_are_bounded_without_splitting_characters() {
         assert_eq!(ellipsize("GitHub Dark", 16), "GitHub Dark");
         assert_eq!(ellipsize("A very long theme", 8), "A very …");
+        assert_eq!(ellipsize("界面theme", 6), "界面t…");
+        assert!(UnicodeWidthStr::width(ellipsize("界面theme", 5).as_str()) <= 5);
     }
 
     #[test]

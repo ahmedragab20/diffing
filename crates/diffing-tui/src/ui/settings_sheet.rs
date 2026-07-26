@@ -28,6 +28,7 @@ pub struct SettingsValues {
     pub sidebar_visible: bool,
     pub sidebar_width: u16,
     pub comments_visible: bool,
+    pub review_enabled: bool,
     pub intelligence_mode: IntelligenceMode,
     pub theme_name: &'static str,
 }
@@ -40,7 +41,11 @@ impl SettingsState {
 
 fn settings_geometry(area: Rect) -> (Rect, Rect) {
     let width = area.width.saturating_sub(METRICS.modal_margin_x).min(70);
-    let height = area.height.saturating_sub(METRICS.modal_margin_y).min(26);
+    let height = area
+        .height
+        .saturating_sub(METRICS.modal_margin_y)
+        .min(26)
+        .max(8.min(area.height));
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -56,12 +61,19 @@ fn settings_geometry(area: Rect) -> (Rect, Rect) {
     (popup, inner)
 }
 
-pub fn settings_row_at(area: Rect, column: u16, row: u16) -> Option<usize> {
+pub fn settings_row_at(state: &SettingsState, area: Rect, column: u16, row: u16) -> Option<usize> {
     let (_, inner) = settings_geometry(area);
     let stride = settings_row_stride(inner);
-    (0..SETTINGS_ROWS).find(|index| {
-        let y = inner.y + 1 + *index as u16 * stride;
-        row == y && column >= inner.x && column < inner.x.saturating_add(inner.width)
+    let visible = visible_setting_rows(inner, stride);
+    let scroll = setting_scroll(state.cursor, visible);
+    (0..visible).find_map(|offset| {
+        let index = scroll + offset;
+        let y = inner.y + 1 + offset as u16 * stride;
+        (index < SETTINGS_ROWS
+            && row == y
+            && column >= inner.x
+            && column < inner.x.saturating_add(inner.width))
+        .then_some(index)
     })
 }
 
@@ -72,6 +84,23 @@ fn settings_row_stride(inner: Rect) -> u16 {
     } else {
         1
     }
+}
+
+fn visible_setting_rows(inner: Rect, stride: u16) -> usize {
+    if inner.height < 3 {
+        0
+    } else {
+        (usize::from(inner.height - 3) / usize::from(stride.max(1)) + 1).min(SETTINGS_ROWS)
+    }
+}
+
+fn setting_scroll(cursor: usize, visible: usize) -> usize {
+    if visible == 0 {
+        return 0;
+    }
+    cursor
+        .saturating_sub(visible.saturating_sub(1))
+        .min(SETTINGS_ROWS.saturating_sub(visible))
 }
 
 pub fn render_settings(
@@ -91,6 +120,8 @@ pub fn render_settings(
 
     let sidebar_width = format!("{} cols", values.sidebar_width);
     let stride = settings_row_stride(inner);
+    let visible = visible_setting_rows(inner, stride);
+    let scroll = setting_scroll(state.cursor, visible);
     let rows = [
         ("File display", values.file_display.label()),
         (
@@ -133,7 +164,9 @@ pub fn render_settings(
         ("Sidebar width", sidebar_width.as_str()),
         (
             "Review drawer",
-            if values.comments_visible {
+            if !values.review_enabled {
+                "Review mode only"
+            } else if values.comments_visible {
                 "Shown"
             } else {
                 "Hidden"
@@ -143,12 +176,16 @@ pub fn render_settings(
         ("Theme", values.theme_name),
     ];
 
-    for (index, (label, value)) in rows.into_iter().enumerate() {
-        let y = inner.y + 1 + index as u16 * stride;
-        if y >= inner.y + inner.height.saturating_sub(1) {
-            break;
-        }
+    for (offset, (index, (label, value))) in rows
+        .into_iter()
+        .enumerate()
+        .skip(scroll)
+        .take(visible)
+        .enumerate()
+    {
+        let y = inner.y + 1 + offset as u16 * stride;
         let selected = state.cursor == index;
+        let enabled = index != 8 || values.review_enabled;
         let background = if selected {
             tokens.selected
         } else {
@@ -169,7 +206,7 @@ pub fn render_settings(
             row.y,
             label,
             Style::default()
-                .fg(tokens.text)
+                .fg(if enabled { tokens.text } else { tokens.muted })
                 .bg(background)
                 .add_modifier(if selected {
                     Modifier::BOLD
@@ -183,17 +220,37 @@ pub fn render_settings(
             row.y,
             value,
             Style::default()
-                .fg(if selected { tokens.focus } else { tokens.muted })
+                .fg(if !enabled {
+                    tokens.muted
+                } else if selected {
+                    tokens.focus
+                } else {
+                    tokens.muted
+                })
                 .bg(background),
         );
     }
 
-    Paragraph::new(hint_line(
-        "↑↓ select · ←→/Enter change · Esc close",
-        tokens.raised,
-        palette,
-    ))
-    .render(
+    const DESCRIPTIONS: [&str; SETTINGS_ROWS] = [
+        "Single focuses one file; continuous scrolls through every file",
+        "Split aligns old/new sides; unified maximizes code width",
+        "Wrap keeps long lines visible; off enables horizontal scrolling",
+        "Display width used when expanding tab characters",
+        "Show or hide old/new source line gutters",
+        "Enable clicks, wheel scrolling, hover, and panel resizing",
+        "Show or hide the changed-files sidebar",
+        "Adjust sidebar width in terminal columns",
+        "Show the review thread drawer (review mode only)",
+        "Hover, definitions, and diagnostics through language servers",
+        "Choose a terminal-aware color palette",
+    ];
+    let footer = format!(
+        "{}/{} · {} · ↑↓ select · ←→/Enter change · Esc close",
+        state.cursor.min(SETTINGS_ROWS - 1) + 1,
+        SETTINGS_ROWS,
+        DESCRIPTIONS[state.cursor.min(SETTINGS_ROWS - 1)]
+    );
+    Paragraph::new(hint_line(&footer, tokens.raised, palette)).render(
         Rect::new(
             inner.x + 1,
             inner.y + inner.height.saturating_sub(1),
@@ -221,18 +278,38 @@ mod tests {
     fn settings_rows_are_mouse_addressable() {
         let area = Rect::new(0, 0, 100, 30);
         let (_, inner) = settings_geometry(area);
-        assert_eq!(settings_row_at(area, inner.x + 3, inner.y + 1), Some(0));
-        assert_eq!(settings_row_at(area, inner.x + 3, inner.y + 3), Some(1));
-        assert_eq!(settings_row_at(area, inner.x + 3, inner.y + 21), Some(10));
-        assert_eq!(settings_row_at(area, inner.x - 1, inner.y + 1), None);
+        let state = SettingsState::default();
+        assert_eq!(
+            settings_row_at(&state, area, inner.x + 3, inner.y + 1),
+            Some(0)
+        );
+        assert_eq!(
+            settings_row_at(&state, area, inner.x + 3, inner.y + 3),
+            Some(1)
+        );
+        assert_eq!(
+            settings_row_at(&state, area, inner.x + 3, inner.y + 21),
+            Some(10)
+        );
+        assert_eq!(
+            settings_row_at(&state, area, inner.x - 1, inner.y + 1),
+            None
+        );
     }
 
     #[test]
     fn compact_settings_keep_every_row_reachable() {
-        let area = Rect::new(0, 0, 80, 20);
+        let area = Rect::new(0, 0, 80, 14);
         let (_, inner) = settings_geometry(area);
         assert_eq!(settings_row_stride(inner), 1);
-        assert_eq!(settings_row_at(area, inner.x + 3, inner.y + 11), Some(10));
+        let state = SettingsState {
+            cursor: SETTINGS_ROWS - 1,
+        };
+        let visible = visible_setting_rows(inner, 1);
+        let scroll = setting_scroll(state.cursor, visible);
+        let row = inner.y + 1 + (state.cursor - scroll) as u16;
+        assert!(row < inner.y + inner.height.saturating_sub(1));
+        assert_eq!(settings_row_at(&state, area, inner.x + 3, row), Some(10));
     }
 
     #[test]
@@ -255,6 +332,7 @@ mod tests {
                 sidebar_visible: true,
                 sidebar_width: 34,
                 comments_visible: true,
+                review_enabled: true,
                 intelligence_mode: IntelligenceMode::Auto,
                 theme_name: "Rose Pine",
             },
@@ -285,6 +363,7 @@ mod tests {
                 sidebar_visible: true,
                 sidebar_width: 34,
                 comments_visible: true,
+                review_enabled: true,
                 intelligence_mode: IntelligenceMode::Auto,
                 theme_name: "GitHub Dark",
             },

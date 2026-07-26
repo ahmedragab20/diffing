@@ -33,6 +33,66 @@ pub struct CommentFormState {
     pub severity: Option<CommentSeverity>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct CommentFormRegions {
+    pub popup: Rect,
+    pub body: Rect,
+    pub severity_button: Rect,
+    pub save_button: Rect,
+    pub cancel_button: Rect,
+    footer: Rect,
+}
+
+pub fn comment_form_regions(area: Rect) -> CommentFormRegions {
+    let popup = centered_rect(
+        area.width.saturating_sub(METRICS.modal_margin_x).min(72),
+        area.height.min(14),
+        area,
+    );
+    let inner = Rect::new(
+        popup.x.saturating_add(1),
+        popup.y.saturating_add(1),
+        popup.width.saturating_sub(2),
+        popup.height.saturating_sub(2),
+    );
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(inner);
+    let footer = chunks[1];
+    let cancel_width = 10.min(footer.width);
+    let save_width = 8.min(footer.width.saturating_sub(cancel_width));
+    let cancel_button = Rect::new(
+        footer.x + footer.width.saturating_sub(cancel_width),
+        footer.y,
+        cancel_width,
+        footer.height,
+    );
+    let save_button = Rect::new(
+        cancel_button.x.saturating_sub(save_width),
+        footer.y,
+        save_width,
+        footer.height,
+    );
+    let severity_button = Rect::new(
+        footer.x,
+        footer.y,
+        footer
+            .width
+            .saturating_sub(save_width + cancel_width)
+            .min(16),
+        footer.height,
+    );
+    CommentFormRegions {
+        popup,
+        body: chunks[0],
+        severity_button,
+        save_button,
+        cancel_button,
+        footer,
+    }
+}
+
 impl CommentFormState {
     /// Open a new-comment form. `target_label` is rendered as the
     /// form's title (e.g. "new comment on src/a.rs:42").
@@ -51,10 +111,10 @@ impl CommentFormState {
         }
     }
 
-    /// Open a reply form pre-filled with the quoted parent body.
-    pub fn reply(target_label: String, quoted_body: &str) -> Self {
-        let lines = textarea_lines(quoted_body);
-        let mut ta = TextArea::new(lines);
+    /// Open an empty reply form. The parent remains visible in the thread;
+    /// duplicating it in the editor makes accidental quote-only replies easy.
+    pub fn reply(target_label: String) -> Self {
+        let mut ta = TextArea::new(vec![String::new()]);
         ta.set_placeholder_text("reply, Ctrl-S to save, Esc to cancel");
         Self {
             kind: FormKind::Reply,
@@ -104,11 +164,8 @@ fn textarea_lines(body: &str) -> Vec<String> {
 }
 
 pub fn render_form(form: &mut CommentFormState, area: Rect, palette: &Palette, buf: &mut Buffer) {
-    let popup = centered_rect(
-        area.width.saturating_sub(METRICS.modal_margin_x).min(72),
-        area.height.min(14),
-        area,
-    );
+    let regions = comment_form_regions(area);
+    let popup = regions.popup;
     let tokens = GridlineTokens::from(palette);
     dim_buffer(area, buf);
     Clear.render(popup, buf);
@@ -122,16 +179,7 @@ pub fn render_form(form: &mut CommentFormState, area: Rect, palette: &Palette, b
         ),
         palette,
     );
-    let inner = block.inner(popup);
     block.render(popup, buf);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
-        .split(inner);
-    // Body — the textarea.
-    let body = chunks[0];
-    let footer = chunks[1];
 
     // Style the textarea border-less inside the modal.
     form.textarea
@@ -144,7 +192,7 @@ pub fn render_form(form: &mut CommentFormState, area: Rect, palette: &Palette, b
             .add_modifier(Modifier::REVERSED),
     );
     let ta_widget = &form.textarea;
-    ta_widget.render(body, buf);
+    ta_widget.render(regions.body, buf);
 
     // Footer.
     let hint = match form.kind {
@@ -174,9 +222,33 @@ pub fn render_form(form: &mut CommentFormState, area: Rect, palette: &Palette, b
         .spans
         .extend(hint_line(hint, tokens.raised, palette).spans);
     Paragraph::new(footer_line)
-        .alignment(Alignment::Right)
+        .alignment(Alignment::Left)
         .wrap(Wrap { trim: false })
-        .render(footer, buf);
+        .render(regions.footer, buf);
+    let save_label = if form.kind == FormKind::Reply {
+        "Reply"
+    } else {
+        "Save"
+    };
+    crate::ui::gridline::fill(regions.save_button, tokens.selected, buf);
+    buf.set_stringn(
+        regions.save_button.x + 1,
+        regions.save_button.y,
+        save_label,
+        regions.save_button.width.saturating_sub(2) as usize,
+        Style::default()
+            .fg(tokens.accent)
+            .bg(tokens.selected)
+            .add_modifier(Modifier::BOLD),
+    );
+    crate::ui::gridline::fill(regions.cancel_button, tokens.element, buf);
+    buf.set_stringn(
+        regions.cancel_button.x + 1,
+        regions.cancel_button.y,
+        "Cancel",
+        regions.cancel_button.width.saturating_sub(2) as usize,
+        Style::default().fg(tokens.text_subtle).bg(tokens.element),
+    );
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
@@ -211,9 +283,9 @@ mod tests {
     }
 
     #[test]
-    fn reply_prefills_quoted_body() {
-        let f = CommentFormState::reply("reply".to_string(), "parent says hi");
-        assert!(f.body().contains("parent says hi"));
+    fn reply_starts_empty() {
+        let f = CommentFormState::reply("reply".to_string());
+        assert!(f.body().is_empty());
     }
 
     #[test]

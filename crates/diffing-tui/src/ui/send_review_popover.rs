@@ -3,11 +3,9 @@
 //!  - an optional overall comment — multi-line textarea
 //!  - a compact summary of the review handoff
 //!
-//! On Send: writes the XML to `pending-review.xml` in the per-repo
-//! storage dir, updates the lockfile with a `pendingReview` marker so
-//! a long-running `diffing await-review` (or any consumer that polls
-//! the lockfile) can pick it up, and copies the XML to the system
-//! clipboard when possible.
+//! On Send: writes the XML to `pending-review.xml` in per-repo storage,
+//! releases long-running `diffing await-review` clients through the embedded
+//! capability-scoped API, and copies the XML to the clipboard when possible.
 
 use std::path::PathBuf;
 
@@ -45,7 +43,10 @@ pub struct SendReviewRegions {
     general_panel: Rect,
     pub general: Rect,
     footer: Rect,
+    pub send_button: Rect,
+    pub cancel_button: Rect,
     compact: bool,
+    ultra_compact: bool,
 }
 
 /// Shared geometry for rendering and mouse hit-testing.
@@ -53,45 +54,104 @@ pub fn send_review_regions(area: Rect) -> SendReviewRegions {
     let compact = area.width < 100 || area.height < 18;
     let popup = centered_rect(
         area.width.saturating_sub(METRICS.modal_margin_x).min(78),
-        area.height.saturating_sub(METRICS.modal_margin_y).min(20),
+        area.height
+            .saturating_sub(METRICS.modal_margin_y)
+            .min(20)
+            .max(8.min(area.height)),
         area,
     );
     let inner = Block::default().borders(Borders::ALL).inner(popup);
-    let left_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(5),
-            Constraint::Min(4),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-    let verdict_panel = left_chunks[0];
-    let general_panel = left_chunks[1];
-    let verdict_inner = Block::default().borders(Borders::ALL).inner(verdict_panel);
-    let verdict_rows = ReviewDecision::ALL
-        .iter()
-        .enumerate()
-        .filter_map(|(index, decision)| {
-            (index < verdict_inner.height as usize).then_some((
-                Rect::new(
-                    verdict_inner.x,
-                    verdict_inner.y + index as u16,
-                    verdict_inner.width,
-                    1,
-                ),
-                *decision,
-            ))
-        })
-        .collect();
+    let ultra_compact = inner.height < 10;
+    let (verdict_panel, general_panel, footer) = if ultra_compact {
+        (
+            Rect::new(inner.x, inner.y, inner.width, u16::from(inner.height > 0)),
+            Rect::new(
+                inner.x,
+                inner.y.saturating_add(1),
+                inner.width,
+                inner.height.saturating_sub(2),
+            ),
+            Rect::new(
+                inner.x,
+                inner.y.saturating_add(inner.height.saturating_sub(1)),
+                inner.width,
+                u16::from(inner.height > 0),
+            ),
+        )
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Min(4),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+        (chunks[0], chunks[1], chunks[2])
+    };
+    let verdict_rows = if ultra_compact {
+        let count = ReviewDecision::ALL.len() as u16;
+        ReviewDecision::ALL
+            .iter()
+            .enumerate()
+            .map(|(index, decision)| {
+                let start = verdict_panel.width.saturating_mul(index as u16) / count;
+                let end = verdict_panel.width.saturating_mul(index as u16 + 1) / count;
+                (
+                    Rect::new(
+                        verdict_panel.x.saturating_add(start),
+                        verdict_panel.y,
+                        end.saturating_sub(start),
+                        verdict_panel.height,
+                    ),
+                    *decision,
+                )
+            })
+            .collect()
+    } else {
+        let verdict_inner = Block::default().borders(Borders::ALL).inner(verdict_panel);
+        ReviewDecision::ALL
+            .iter()
+            .enumerate()
+            .filter_map(|(index, decision)| {
+                (index < verdict_inner.height as usize).then_some((
+                    Rect::new(
+                        verdict_inner.x,
+                        verdict_inner.y + index as u16,
+                        verdict_inner.width,
+                        1,
+                    ),
+                    *decision,
+                ))
+            })
+            .collect()
+    };
 
+    let cancel_width = 10.min(footer.width);
+    let send_width = 8.min(footer.width.saturating_sub(cancel_width));
+    let cancel_button = Rect::new(
+        footer.x + footer.width.saturating_sub(cancel_width),
+        footer.y,
+        cancel_width,
+        footer.height,
+    );
+    let send_button = Rect::new(
+        cancel_button.x.saturating_sub(send_width),
+        footer.y,
+        send_width,
+        footer.height,
+    );
     SendReviewRegions {
         popup,
         verdict_rows,
         verdict_panel,
         general_panel,
         general: Block::default().borders(Borders::ALL).inner(general_panel),
-        footer: left_chunks[2],
+        footer,
+        send_button,
+        cancel_button,
         compact,
+        ultra_compact,
     }
 }
 
@@ -163,13 +223,14 @@ pub fn render_send_popover(
     block.render(popup, buf);
 
     // Verdict radios
-    let verdict_block = field_block(" Verdict ", palette, state.focused == SendField::Verdict);
-    let verdict_inner = verdict_block.inner(regions.verdict_panel);
-    verdict_block.render(regions.verdict_panel, buf);
+    if !regions.ultra_compact {
+        let verdict_block = field_block(" Verdict ", palette, state.focused == SendField::Verdict);
+        verdict_block.render(regions.verdict_panel, buf);
+    }
     for (index, decision) in ReviewDecision::ALL.iter().enumerate() {
-        if index >= verdict_inner.height as usize {
+        let Some((row, _)) = regions.verdict_rows.get(index).copied() else {
             break;
-        }
+        };
         let selected = *decision == state.verdict;
         let background = if selected {
             tokens.selected
@@ -181,13 +242,33 @@ pub fn render_send_popover(
             ReviewDecision::ChangesRequested => Tone::Warning,
             ReviewDecision::Rejected => Tone::Negative,
         };
-        let row = Rect::new(
-            verdict_inner.x,
-            verdict_inner.y + index as u16,
-            verdict_inner.width,
-            1,
-        );
         fill(row, background, buf);
+        if regions.ultra_compact {
+            let label = match decision {
+                ReviewDecision::Approved => "✓ Approve",
+                ReviewDecision::ChangesRequested => "! Changes",
+                ReviewDecision::Rejected => "× Reject",
+            };
+            buf.set_stringn(
+                row.x.saturating_add(1),
+                row.y,
+                label,
+                row.width.saturating_sub(2) as usize,
+                Style::default()
+                    .fg(if selected {
+                        tokens.tone(tone)
+                    } else {
+                        tokens.text_subtle
+                    })
+                    .bg(background)
+                    .add_modifier(if selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            );
+            continue;
+        }
         buf.set_string(
             row.x + 1,
             row.y,
@@ -295,11 +376,30 @@ pub fn render_send_popover(
     Paragraph::new(footer)
         .alignment(Alignment::Center)
         .render(regions.footer, buf);
+    fill(regions.send_button, tokens.selected, buf);
+    buf.set_stringn(
+        regions.send_button.x + 1,
+        regions.send_button.y,
+        "Send",
+        regions.send_button.width.saturating_sub(2) as usize,
+        Style::default()
+            .fg(tokens.accent)
+            .bg(tokens.selected)
+            .add_modifier(Modifier::BOLD),
+    );
+    fill(regions.cancel_button, tokens.element, buf);
+    buf.set_stringn(
+        regions.cancel_button.x + 1,
+        regions.cancel_button.y,
+        "Cancel",
+        regions.cancel_button.width.saturating_sub(2) as usize,
+        Style::default().fg(tokens.text_subtle).bg(tokens.element),
+    );
 }
 
 /// What the send action actually does on disk. The TUI:
 ///   1. writes the XML to `pending-review.xml` next to `comments.json`
-///   2. updates `server.json` with `pendingReview: { sentAt, verdict, round }`
+///   2. releases capability-authorized waiters through the embedded API
 ///   3. tries to copy the XML to the system clipboard (best-effort)
 ///
 /// Returns the XML that was sent (also stored on disk). `None` means
@@ -432,5 +532,22 @@ mod tests {
         assert_eq!(regions.popup.width, 76);
         assert!(regions.general.width > 70);
         assert_eq!(regions.verdict_rows.len(), ReviewDecision::ALL.len());
+    }
+
+    #[test]
+    fn short_terminal_keeps_all_actions_and_a_writable_textarea() {
+        let area = Rect::new(0, 0, 48, 8);
+        let regions = send_review_regions(area);
+        assert!(regions.ultra_compact);
+        assert_eq!(regions.verdict_rows.len(), ReviewDecision::ALL.len());
+        assert!(regions.verdict_rows.iter().all(|(row, _)| row.width > 0));
+        assert!(regions.general.width > 0);
+        assert!(regions.general.height > 0);
+        assert!(regions.send_button.width > 0);
+        assert!(regions.cancel_button.width > 0);
+
+        let mut state = SendReviewState::new(1);
+        let mut buffer = Buffer::empty(area);
+        render_send_popover(&mut state, area, &Palette::default(), &[], &[], &mut buffer);
     }
 }

@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CAPABILITY_BYTES: usize = 256;
+const MAX_SEARCH_HITS: usize = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -90,6 +92,12 @@ impl SearchClient {
     }
 
     pub fn new(endpoint: &str, capability: String) -> Result<Self> {
+        if capability.is_empty()
+            || capability.len() > MAX_CAPABILITY_BYTES
+            || !capability.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            bail!("TUI search capability is invalid");
+        }
         let authority = endpoint
             .strip_prefix("http://")
             .ok_or_else(|| anyhow!("TUI search endpoint must use http://"))?
@@ -100,9 +108,13 @@ impl SearchClient {
         if host != "127.0.0.1" && host != "localhost" {
             bail!("TUI search endpoint must be loopback");
         }
+        let port = port.parse().context("invalid TUI search endpoint port")?;
+        if port == 0 {
+            bail!("TUI search endpoint port must be non-zero");
+        }
         Ok(Self {
             host: host.to_string(),
-            port: port.parse().context("invalid TUI search endpoint port")?,
+            port,
             capability,
         })
     }
@@ -188,7 +200,11 @@ impl SearchClient {
 }
 
 fn decode_response(value: Value, scope: SearchScope) -> Result<SearchResponse> {
-    let total = value.get("total").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let total = value
+        .get("total")
+        .and_then(Value::as_u64)
+        .and_then(|total| usize::try_from(total).ok())
+        .unwrap_or(usize::MAX);
     let indexing = value
         .get("indexing")
         .and_then(Value::as_bool)
@@ -203,6 +219,7 @@ fn decode_response(value: Value, scope: SearchScope) -> Result<SearchResponse> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .take(MAX_SEARCH_HITS)
     {
         let (kind, hit) = if scope == SearchScope::All {
             let kind = match item.get("kind").and_then(Value::as_str) {
@@ -228,7 +245,7 @@ fn decode_response(value: Value, scope: SearchScope) -> Result<SearchResponse> {
         let line = hit
             .get("line")
             .and_then(Value::as_u64)
-            .map(|line| line as u32);
+            .and_then(|line| u32::try_from(line).ok());
         let content = hit
             .get("content")
             .and_then(Value::as_str)
@@ -321,6 +338,33 @@ mod tests {
     fn rejects_non_loopback_endpoints() {
         assert!(SearchClient::new("http://example.com:80", "token".into()).is_err());
         assert!(SearchClient::new("https://127.0.0.1:80", "token".into()).is_err());
+    }
+
+    #[test]
+    fn rejects_header_injection_and_invalid_ports() {
+        assert!(SearchClient::new("http://127.0.0.1:80", "token\r\nInjected: yes".into()).is_err());
+        assert!(SearchClient::new("http://127.0.0.1:80", "".into()).is_err());
+        assert!(SearchClient::new("http://127.0.0.1:0", "token".into()).is_err());
+    }
+
+    #[test]
+    fn rejects_overflowing_line_numbers_and_bounds_hits() {
+        let items: Vec<Value> = (0..100)
+            .map(|index| {
+                json!({
+                    "path": format!("src/{index}.rs"),
+                    "line": u64::from(u32::MAX) + 1,
+                })
+            })
+            .collect();
+        let response = decode_response(
+            json!({ "total": u64::MAX, "items": items }),
+            SearchScope::Files,
+        )
+        .unwrap();
+
+        assert_eq!(response.hits.len(), MAX_SEARCH_HITS);
+        assert!(response.hits.iter().all(|hit| hit.line.is_none()));
     }
 
     #[test]

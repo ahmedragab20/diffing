@@ -761,8 +761,8 @@ active-file banner are omitted in continuous mode so the diff owns the
 terminal.
 Comment creation, viewed state, and agent handoff do not appear in this mode.
 Local diagnostics, hover (`gh`), and definition navigation (`gd`) remain
-available, but language intelligence defaults Off in viewer mode and is
-started only when enabled.
+available. Viewer and review sessions share the persisted language-
+intelligence setting (Auto by default).
 
 The `/` palette uses the same `@ff-labs/fff-node` engine, watcher, and
 repository-scoped frecency databases as the web UI. `All`, `Files`, `Text`,
@@ -771,8 +771,10 @@ the current diff by default and render beside a syntax-highlighted file
 preview; `Ctrl-G` opts into or out of whole-repository results,
 and `Ctrl-R` toggles regular expressions in Text scope. `Enter` jumps when the
 selected file or line is present in the diff and otherwise keeps its preview
-open. Arrow keys and `Ctrl-N/P/J/K` wrap through results; `Shift`/`Alt` +
-arrows and Page Up/Down scroll the preview. The Node launcher owns a
+open. Arrow keys and `Ctrl-N/P/J/K` move through results; Page Up/Down pages
+the result list; `Shift`/`Alt` + arrows or Page Up/Down scroll the preview.
+Left/Right, Home/End, `Ctrl-W`, bracketed paste, and `Ctrl-U` provide normal
+query editing. The Node launcher owns a
 random-port, capability-scoped loopback bridge while the Rust renderer is
 open. If fff cannot start, the TUI remains usable and falls back to literal
 changed-text search.
@@ -792,6 +794,7 @@ Viewer keys are intentionally small: `j/k`, `gg/G`, `Ctrl-d/u`, `J/K`,
 search; `n/N` traverses the active search results; the palette uses `Tab`,
 `Ctrl-G`, arrows, and `Enter` for scope, Changed-only filtering, selection,
 and navigation; `m`, `w`, and `t` control diff layout, wrapping, and theme;
+`i` opens changed-image comparison;
 `Space e` (or `b`) toggles the file sidebar; `?` shows the complete in-app
 help.
 
@@ -817,7 +820,9 @@ collapse automatically.
 Layout adapts by terminal width: wide terminals can show files, diff, and
 active comments together; medium terminals move active comments below the
 diff; compact terminals show one focused workspace at a time so the diff
-remains usable instead of collapsing into narrow columns.
+remains usable instead of collapsing into narrow columns. A saved Split
+preference temporarily renders Unified below 76 columns and advertises why,
+rather than squeezing two unreadable code panes together.
 
 Press `,` to open Settings. **File display** lives there and is persisted per
 repository: **Single file** keeps navigation focused on one patch, while
@@ -831,6 +836,20 @@ repository; `Space e` (or `b`) toggles visibility without opening Settings. Turn
 mouse input off releases terminal mouse capture completely: hover, clicks,
 dragging, and wheel navigation are disabled, and the preference is restored
 on the next launch. Use keyboard navigation in Settings to turn it back on.
+With mouse input enabled, search chips/results, modal actions, panel dividers,
+the whole-diff change map, file rows, comment rows, and dismissible toasts all
+have explicit hit targets. Wrapped and split rows map pointer positions back
+to their real logical diff lines.
+
+Changed images use the exact blob ids from Git's patch header, so
+added/deleted/renamed sides remain correct. Press `i` for Before, After,
+Side-by-side, and Pixel difference views; `Tab` cycles available views,
+`+`/`-` zoom, `0` fits, and `h/j/k/l` pans. PNG, GIF, BMP, and ICO are decoded
+in-process under encoded, decoded, and dimension limits. JPEG, WebP, AVIF, and
+SVG use a bounded, timeout-protected ImageMagick or ffmpeg decoder when one is
+available. Rendering uses Unicode half blocks, supports truecolor and
+ANSI-256, and has a monochrome luminance fallback, so no terminal-specific
+graphics protocol is required.
 
 Rendering work is bounded by terminal size, not total diff size. The TUI keeps
 a small overscanned terminal-cell surface, applies cursor/hover/selection as
@@ -857,8 +876,8 @@ reusing a generic dark or light syntax palette. Token colors are
 contrast-corrected against addition and deletion backgrounds so meaning is not
 conveyed by low-contrast color alone.
 
-Language intelligence defaults to **Auto** for review sessions and **Off** for
-the read-only viewer. When enabled, it lazily starts a compatible
+Language intelligence is persisted across review and viewer sessions and
+defaults to **Auto**. When enabled, it lazily starts a compatible
 server from the repository's `node_modules/.bin` or `PATH` for the selected
 file:
 `rust-analyzer`, `typescript-language-server --stdio`,
@@ -948,9 +967,11 @@ shows valid completions while a multi-key sequence is pending.
 | `t` | Open the theme picker |
 | `,` | Open Settings |
 | `m` | Toggle split / unified view |
+| `i` | Open comparison for the selected changed image |
 | `Enter` / `+` / `-` | Expand / expand / collapse diff context |
 | `/` | Open the repository search palette |
 | `f` | Open the search palette in Files scope |
+| `:` | Open the command prompt (`Tab` completes visible commands) |
 | `a` | Cycle all / unviewed / commented files |
 | `?` | Open shortcuts help |
 | `c` | New comment on the current line |
@@ -962,6 +983,7 @@ shows valid completions while a multi-key sequence is pending.
 | `X` | Resolve all open comment threads |
 | `d d` | Confirm and permanently delete the current thread |
 | `s` / `p` | Cycle comment status / severity filters |
+| `o` / `Enter` (review pane) | Open the complete focused thread |
 | `]c` / `[c` | Jump to the next / previous comment thread |
 | `S` | Open Send Review |
 | `Esc` | Exit insert / popover mode |
@@ -982,10 +1004,16 @@ following operations are byte-identical between the two clients:
 - Resolving or reopening a comment.
 - Deleting a comment thread after an explicit second-key confirmation.
 
+`o` or `Enter` in the review pane opens a scrollable full-thread view. From
+there, `Enter` jumps to the source anchor and `e`, `r`, and `x` edit, reply, or
+resolve. Reply editors start empty (the parent remains visible in the thread),
+and every textarea accepts bracketed paste and exposes Save/Reply/Cancel mouse
+controls as well as `Ctrl-S`/`Esc`.
+
 The diff review gutter distinguishes open, resolved, blocking, question, nit,
 and praise threads without relying on color alone. The review drawer can be
-filtered by status and severity, and file filters combine path search with
-all/unviewed/commented scopes.
+filtered by status and severity; the file rail cycles all/unviewed/commented
+scopes while `/` and `f` handle repository and path search.
 
 The TUI watches `comments.json` (120ms debounce) and broadcasts every
 change through the same atomic-write protocol the web server uses, so a
