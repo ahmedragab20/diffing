@@ -129,6 +129,42 @@ importers:
       vitest:
         specifier: ^4.1.7
         version: 4.1.7(@types/node@25.5.2)(jsdom@29.1.1)(vite@8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@25.5.2)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0))
+    optionalDependencies:
+      '@diffing/tui-darwin-arm64':
+        specifier: 0.10.5
+        version: link:npm/tui-darwin-arm64
+      '@diffing/tui-darwin-x64':
+        specifier: 0.10.5
+        version: link:npm/tui-darwin-x64
+      '@diffing/tui-linux-arm64-gnu':
+        specifier: 0.10.5
+        version: link:npm/tui-linux-arm64-gnu
+      '@diffing/tui-linux-arm64-musl':
+        specifier: 0.10.5
+        version: link:npm/tui-linux-arm64-musl
+      '@diffing/tui-linux-x64-gnu':
+        specifier: 0.10.5
+        version: link:npm/tui-linux-x64-gnu
+      '@diffing/tui-linux-x64-musl':
+        specifier: 0.10.5
+        version: link:npm/tui-linux-x64-musl
+      '@diffing/tui-win32-x64-msvc':
+        specifier: 0.10.5
+        version: link:npm/tui-win32-x64-msvc
+
+  npm/tui-darwin-arm64: {}
+
+  npm/tui-darwin-x64: {}
+
+  npm/tui-linux-arm64-gnu: {}
+
+  npm/tui-linux-arm64-musl: {}
+
+  npm/tui-linux-x64-gnu: {}
+
+  npm/tui-linux-x64-musl: {}
+
+  npm/tui-win32-x64-msvc: {}
 
 packages:
 

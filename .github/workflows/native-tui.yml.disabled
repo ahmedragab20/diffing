@@ -1,0 +1,84 @@
+name: Native TUI packages
+
+on:
+  pull_request:
+    paths: ["crates/**", "Cargo.*", "npm/**", ".github/workflows/native-tui.yml"]
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin, package: tui-darwin-arm64, binary: diffing-tui }
+          - { os: macos-13, target: x86_64-apple-darwin, package: tui-darwin-x64, binary: diffing-tui }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, package: tui-linux-x64-gnu, binary: diffing-tui }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, package: tui-linux-arm64-gnu, binary: diffing-tui }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl, package: tui-linux-x64-musl, binary: diffing-tui, zig: true }
+          - { os: ubuntu-24.04, target: aarch64-unknown-linux-musl, package: tui-linux-arm64-musl, binary: diffing-tui, zig: true }
+          - { os: windows-2025, target: x86_64-pc-windows-msvc, package: tui-win32-x64-msvc, binary: diffing-tui.exe }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: goto-bus-stop/setup-zig@v2
+        if: matrix.zig
+      - run: cargo install cargo-zigbuild --locked
+        if: matrix.zig
+      - run: cargo build --locked --release --target ${{ matrix.target }} -p diffing-tui
+        if: ${{ !matrix.zig }}
+      - run: cargo zigbuild --locked --release --target ${{ matrix.target }} -p diffing-tui
+        if: matrix.zig
+      - shell: bash
+        run: |
+          mkdir -p npm/${{ matrix.package }}/bin
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} npm/${{ matrix.package }}/bin/${{ matrix.binary }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: npm/${{ matrix.package }}
+
+  test-install:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tui-*
+          path: native-packages
+      - run: test -x native-packages/tui-linux-x64-gnu/bin/diffing-tui
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, test-install]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      matrix:
+        package:
+          - tui-darwin-arm64
+          - tui-darwin-x64
+          - tui-linux-arm64-gnu
+          - tui-linux-arm64-musl
+          - tui-linux-x64-gnu
+          - tui-linux-x64-musl
+          - tui-win32-x64-msvc
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: package
+      - run: npm publish package --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,1 @@
+{"name":"@diffing/tui-darwin-x64","version":"0.10.5","description":"diffing native TUI for macOS x64","license":"MIT","os":["darwin"],"cpu":["x64"],"files":["bin"]}

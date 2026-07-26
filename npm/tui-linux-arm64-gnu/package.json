@@ -1,0 +1,1 @@
+{"name":"@diffing/tui-linux-arm64-gnu","version":"0.10.5","description":"diffing native TUI for Linux arm64 glibc","license":"MIT","os":["linux"],"cpu":["arm64"],"libc":["glibc"],"files":["bin"]}

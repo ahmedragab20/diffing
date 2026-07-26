@@ -85,5 +85,14 @@
     "typescript": "^6.0.2",
     "vite": "^8.0.3",
     "vitest": "^4.1.7"
+  },
+  "optionalDependencies": {
+    "@diffing/tui-darwin-arm64": "0.10.5",
+    "@diffing/tui-darwin-x64": "0.10.5",
+    "@diffing/tui-linux-arm64-gnu": "0.10.5",
+    "@diffing/tui-linux-arm64-musl": "0.10.5",
+    "@diffing/tui-linux-x64-gnu": "0.10.5",
+    "@diffing/tui-linux-x64-musl": "0.10.5",
+    "@diffing/tui-win32-x64-msvc": "0.10.5"
   }
 }
