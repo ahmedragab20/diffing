@@ -27,21 +27,24 @@ Launch it within any active git repository:
 ```bash
 diffing
 ```
-This instantly spins up a local server, establishes an active repository watcher, and opens your default browser to an interactive code review dashboard.
+With the initial web preference, this spins up a local server, establishes an active repository watcher, and opens your default browser to an interactive code review dashboard. Use `diffing mode tui` to make the native review TUI the interactive default instead.
 
 Prefer the terminal? After building or separately installing the native binary
-as described below, add `--tui` for the same review flow without a browser:
+as described below, use `view` for a focused read-only diff browser, or
+`--tui` for the full review flow without a browser:
 
 ```bash
+diffing view
 diffing --tui
+diffing mode tui     # Make the full TUI the interactive default
 ```
 
 > [!WARNING]
 > The TUI is **experimental**. The interface, keymap, and `server.json`
 > (`mode: "tui"`) on-disk format may change in a minor release. The web UI is
-> the supported path for production workflows. The v0.10.0 npm package does
-> **not** bundle a platform-specific `diffing-tui` executable; `--tui`
-> requires a source build or a separately installed binary on `PATH`. See
+> the supported path for production workflows. Native executables are
+> installed through optional platform packages, with source builds and
+> separately installed `$PATH` binaries available as fallbacks. See
 > [Native Terminal UI (TUI)](#native-terminal-ui-tui) for the full feature set,
 > keymap, and stability notes.
 
@@ -181,20 +184,53 @@ A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), 
 > The web review flow, plan review, and PR review are unaffected.
 
 > [!IMPORTANT]
-> **Distribution status in v0.10.0:** the npm package contains the Node CLI and
-> web UI, but not a platform-specific `diffing-tui` executable. Build the
-> binary from a source checkout or install it separately on `PATH`. diffing
-> does not compile Rust during npm installation. If no compatible binary is
-> found, `diffing --tui` prints a fallback notice and runs the normal terminal
-> diff instead.
+> Native binaries are published as optional, platform-specific npm packages
+> for macOS, Windows, and glibc/musl Linux. The main package never compiles Rust
+> during installation and never installs a binary for the wrong platform. A
+> source build and `$PATH` remain supported fallbacks.
 
-`diffing --tui` opens an **opt-in native-Rust terminal interface** that mirrors the local code-review workflow — no browser or Electron. The renderer and headless tools share one sparse diff index. A random-port loopback API is published through `server.json` with `mode: "tui"` and a per-session capability, so local agents can inspect a large diff without receiving the whole patch.
+`diffing --tui` opens an **opt-in native-Rust terminal interface** that mirrors the local code-review workflow — no browser or Electron. The renderer and headless tools share one sparse diff index. Review sessions publish a capability-scoped loopback API through `server.json`; read-only viewers deliberately do not claim that lock, so they can coexist with a web or TUI review for the same repository.
 
-Its diff-first **Gridline** design system uses a one-row command header, border-light file navigation, a dedicated review gutter, high-contrast semantic tokens, and keyboard-visible focus rails. Empty review drawers collapse automatically. Wide terminals can show files, diff, and review together; medium layouts place an active review below the diff; compact layouts show one focused workspace at a time. Press `,` for persisted Settings, including **Single file** versus virtualized **Continuous files**, split/unified layout, wrap, tab size, line numbers, review drawer, optional language intelligence, and theme.
+For everyday diff browsing, `diffing view` opens the same renderer as a
+smaller read-only experience: continuous virtualized changes, a compact file
+rail, change map, syntax highlighting, mouse/vim navigation, split/unified
+layout, wrapping, and themes. In both viewer and review modes, `/` opens the
+web UI's fff-powered `All`, `Files`, `Text`, and `Symbols` search with the same
+result totals, frecency, and
+syntax-highlighted preview; `f` opens directly in file search. The viewer
+hides comments, viewed state, and agent handoff. Search starts diff-local and
+`Ctrl-G` opts into the whole repository; language intelligence starts off and
+can be enabled on demand. This keeps the default experience focused and fast.
 
-The default `diffing` behaviour is **byte-identical** with and without `--tui` — the TUI is strictly opt-in. If the env cannot support a TUI (piped stdin, CI, no raw mode) or the binary is missing, you get a one-line stderr note and the normal `git diff` output. The web mode is also unaffected by the TUI build; the same `diffing` install serves either.
+Its diff-first **Gridline** design system derives a tonal canvas, quiet
+surfaces, diff fills, selection, gutters, and syntax roles from every web
+theme. A compact header always identifies the repository and whether the TUI
+is showing working-tree, staged, revision-range, or commit changes. The focused
+viewer removes review actions and the duplicate file banner; the review
+surface keeps a restrained command row for handoff.
+Changed paths render as a compact hierarchical tree, semantic backgrounds
+span the full row, and the bottom command strip gives keys more weight than
+their descriptions. Empty review drawers collapse automatically. Wide
+terminals can show files, diff, and review together; medium layouts place an
+active review below the diff; compact layouts show one focused workspace at a
+time. Press `,` for persisted Settings, including **Single file** versus
+virtualized **Continuous files**, split/unified layout, wrap, tab size, line
+numbers, mouse input, file-sidebar visibility and width, review drawer,
+optional language intelligence, and theme. Press `b` to toggle the sidebar
+without opening Settings. Disabling mouse input releases terminal mouse
+capture and removes hover, click, drag, and wheel handling until it is
+re-enabled from the keyboard.
+
+The [Gridline TUI design-system contract](docs/tui-design-system.md) documents
+the semantic tokens, density metrics, focus rules, component recipes, theme
+invariants, and contributor checklist used by the native renderer.
+
+The TUI is opt-in through `--tui` or the persistent `diffing mode tui` preference. If the environment cannot support a TUI (piped stdin, CI, no raw mode) or the binary is missing, you get a one-line stderr note and the normal `git diff` output. The same `diffing` install serves either web or TUI mode.
 
 ```bash
+diffing view                        # Focused read-only working-tree diff
+diffing view --staged               # Focused staged diff
+diffing view main..feature          # Focused branch comparison
 diffing --tui                       # Open the current working tree in the TUI
 diffing --tui --staged              # Review staged changes in the TUI
 diffing --tui HEAD~3                # Review working tree vs. 3 commits ago
@@ -202,14 +238,15 @@ diffing --tui main..feature         # Compare two branches in the TUI
 diffing --tui -- -- src/            # Limit a TUI review to a directory
 ```
 
-**Stack** — Rust 1.78+ workspace (`crates/diffing-core/` shared lib + `crates/diffing-tui/` binary), `ratatui` + `crossterm` for rendering, `syntect` for syntax highlighting, `notify-debouncer-full` for live updates.
+**Stack** — Rust 1.78+ workspace (`crates/diffing-core/` shared lib + `crates/diffing-tui/` binary), `ratatui` + `crossterm` for rendering, `syntect` with the `two-face` grammar catalog for syntax highlighting, and `notify-debouncer-full` for live updates.
 
 **Features**
 
 - **Disk-backed streaming index** — Git output is parsed as bytes into sparse file/hunk/checkpoint metadata. The first partial generation is usable during ingestion; neither the TUI nor an agent needs to retain the full patch in memory.
-- **Viewport-only rendering** — only visible rows are sought, decoded, theme-aware syntax-highlighted, and converted to terminal cells. Highlighting is available in both unified and split layouts, with token contrast corrected against semantic addition/deletion backgrounds. Single/continuous file display, horizontal scrolling, wrapping, binary markers, untracked files, and live working-tree refresh are supported.
-- **Optional local language intelligence** — Auto mode lazily discovers an existing `rust-analyzer`, `typescript-language-server`, `pyright-langserver`, `gopls`, or `clangd` on `PATH`; diffing never downloads a server or sends source off-machine. Diagnostics use lettered `E/W/I/H` gutter marks and appear in the status line, `gh` opens hover, `gd` follows definitions that are visible in the current diff, and `Alt-h/l` moves the symbol column. Turn the feature off from Settings.
-- **Vim-style file tree & keymap** — numeric counts plus `j/k`, `gg/G`, `Ctrl-d/u`, `J/K`, `]h/[h`, `]c/[c`, `zz`, `h/l`, `gh`, `gd`, `/`, `n/N`, `f`, `a`, `:`, `Tab`, `v`, `w`, `m`, `t`, `,`, and `?`. `Esc` cancels a mode; `q` or `Ctrl-C` quits. Single/continuous file display and language intelligence are changed from Settings.
+- **Retained, viewport-only rendering** — visible rows are sought into a bounded overscan window, decoded with per-line byte caps, theme-aware syntax-highlighted, and retained as terminal cells. Cursor, hover, and selection are cheap overlays; nearby scrolls reuse the same surface. Split mode pairs deletion/addition runs and highlights changed tokens within the pair. Terminal colors automatically degrade from truecolor to ANSI-256 or monochrome. Per-file tab widths follow nested `.editorconfig` files.
+- **Focused navigation** — `Enter`/`+` progressively expand Git context and `-` collapses it; live refresh restores the selected source line and its viewport position; the file rail shows compact `+N -N` stats. In viewer mode, `e` safely suspends the alternate screen, opens the focused line in `$VISUAL`/`$EDITOR`, then restores the TUI.
+- **Optional local language intelligence** — review mode keeps the persisted setting; viewer mode starts Off and enables it only on request. Auto mode lazily discovers an existing `rust-analyzer`, `typescript-language-server`, `pyright-langserver`, `gopls`, or `clangd`; diffing never downloads a server or sends source off-machine.
+- **Vim-style file tree & keymap** — numeric counts plus `j/k`, `gg/G`, `Ctrl-d/u`, `J/K`, `]h/[h`, `]c/[c`, `zz`, `h/l`, `gh`, `gd`, `/`, `n/N`, `f`, `a`, `:`, `Tab`, `v`, `b`, `w`, `m`, `t`, `,`, and `?`. `Esc` cancels a mode; `q` or `Ctrl-C` quits. Sidebar visibility and width, single/continuous file display, mouse input, and language intelligence are changed from Settings.
 - **Review-complete comments** — line, same-side range, and file-level threads share the web JSON schema, including severity. The drawer filters open/replied/resolved and blocking/question/nit/praise threads; the diff gutter distinguishes their states without relying on color alone.
 - **Multi-line `tui-textarea` form** with markdown rendering in the preview pane.
 - **Live updates** via `notify` watcher on `comments.json` and the repo working tree — write a comment in another window and it appears immediately.
@@ -217,7 +254,9 @@ diffing --tui -- -- src/            # Limit a TUI review to a directory
 - **Headless, token-bounded inspection** — `diffing inspect summary|files|hunks|slice|search` and the equivalent MCP tools page the same index with strict row/byte limits, generation checks, and compact JSON. Every request is loopback-only and requires the session capability.
 - **Cross-platform** — macOS, Linux, and Windows are all first-class. The TUI liveness probe uses `kill(pid, 0)` on Unix and `tasklist /NH /FO CSV` on Windows. Clipboard works on Wayland (`wl-copy`), X11 (`xclip` / `xsel`), macOS (`pbcopy`), and Windows (`clip.exe` / PowerShell `Set-Clipboard`).
 
-The synthetic one-million-line benchmark (50.8 MiB patch) currently reaches a usable partial snapshot in under 1 ms, completes indexing in 47–152 ms, serves viewport reads at 30 µs p95, and peaks at about 54 MiB RSS on the development machine. Run it with `DIFFING_BENCH_LINES=1000000 cargo bench -p diffing-core --bench diff_index`; results vary by machine and filesystem cache.
+The synthetic one-million-line index benchmark (50.8 MiB patch) currently reaches a usable partial snapshot in under 1 ms, completes indexing in about 50 ms, and serves viewport reads at 32 µs p95 on the development machine. Run it with `DIFFING_BENCH_LINES=1000000 cargo bench -p diffing-core --bench diff_index`.
+
+The production-renderer contract paints a 240×80 terminal over one million diff lines. On the same machine, warm redraw, cursor movement, and adjacent scrolling are about 0.10–0.11 ms p95; random jumps are about 2.4 ms p95. Repeated redraw, cursor, annotation, split, and wrap paths allocate zero bytes, while a cold wrapped 2 MiB source line remains bounded at about 2 ms and 1.3 MiB of allocation. Run it with `DIFFING_RENDER_BENCH_LINES=1000000 cargo bench -p diffing-tui --bench render_diff`; results vary by machine and filesystem cache.
 
 Headless examples:
 
@@ -236,11 +275,11 @@ pnpm build:tui               # release build → target/release/diffing-tui
 ```
 
 The CLI auto-discovers the binary in the following search order: sibling of
-`dist/cli.mjs`, `bin/`, `target/release/`, `target/debug/`, then `$PATH`. A
+`dist/cli.mjs`, the matching optional native npm package, `bin/`,
+`target/release/`, `target/debug/`, then `$PATH`. A
 `cargo build -p diffing-tui` debug workflow is supported out of the box; you
 do not need a release build just to use the TUI locally. The sibling and
-`bin/` locations are reserved for future packaged-binary distribution; they
-are not populated by the v0.10.0 npm package. A CLI run from this source
+`bin/` locations remain useful for manual installations. A CLI run from this source
 checkout discovers the binary under `target/`; to use the globally installed
 npm CLI from arbitrary repositories, copy or symlink the resulting executable
 into a directory on `PATH`.
@@ -675,8 +714,10 @@ diffing -- --cached -- src/      # Staged changes specifically in the src/ direc
 
 ### Intelligent Output Modes (TTY Auto-Detection)
 To integrate flawlessly with your existing developer shell workflows, build pipelines, and command scripts, `diffing` automatically resolves the optimal output mode based on how stdout is directed:
-- **Web Mode (Default for interactive TTY)**: When executed in an interactive terminal session, it boots the local Hono review server, registers the repository lockfile, and opens your default browser.
+- **Preferred interactive mode (Web by default)**: In an interactive terminal, `diffing` starts the saved `web` or `tui` mode. Use `diffing mode <web|tui>` to inspect or change the user-level preference.
 - **Terminal Mode (Default for pipes, redirects, or non-TTY)**: When output is piped (e.g. `diffing | grep "const"`) or redirected to a file, it falls back to behave **exactly like `git diff`**, streaming clean, standard unified diff patch text directly to standard output and exiting.
+
+Explicit `--web`, `--tui`, `--view`, and `--terminal` flags override the saved preference. The preference does not change the web default for GitHub PR reviews.
 
 > [!TIP]
 > Any standard output control or format-related flags (such as `--raw`, `--numstat`, `--stat`, `--exit-code`, `--quiet`, or `-o`) will automatically force Terminal Mode fallback.
@@ -706,6 +747,7 @@ diffing show HEAD~2..HEAD --terminal   # Stream `git show` to your terminal
 ## Integration & Configuration
 
 - **Persistent User Settings** — Settings saved to `~/.config/diffing/settings.json`, loaded on startup, synced to server via `PUT /api/settings`.
+- **Default Review Mode** — `diffing mode web` or `diffing mode tui` changes the interactive default without affecting pipes or explicit mode flags.
 - **Custom Host/Port** — `--host 0.0.0.0` exposes the review dashboard to the local network; `--port <port>` overrides random port selection.
 - **`--no-open` Flag** — Prevents auto-browser opening on server start.
 - **Git Config Alias** — Register `diffing` as `git review` via `~/.gitconfig`.

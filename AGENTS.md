@@ -9,7 +9,8 @@ Prefer the diffing MCP tools when the harness exposes them: call
 portable fallback:
 
 ```bash
-diffing                    # Start review server for current repo (all changes)
+diffing                    # Start the preferred review UI for current repo
+diffing mode <web|tui>     # Change the default interactive review mode
 diffing url                # Get server base URL (port-agnostic discovery)
 diffing plan submit PLAN.md --model "<model>"  # Submit plan for review
 diffing plan await         # Sync wait for verdict (prefer park after submit)
@@ -175,6 +176,7 @@ diffing comment delete <id>
 diffing progress --message "…" [--model] [--pct]
 diffing await-review [--timeout <sec>]
 diffing url
+diffing mode [web|tui]
 ```
 
 ### MCP (preferred when available)

@@ -18,12 +18,19 @@ graph TD
 
 ### Output Mode Auto-Detection
 The primary `diffing` command determines how to output diff results based on whether stdout is interactive (a TTY) or a pipe/redirect:
-- **Web Mode** (Default for interactive TTY): Launches a local review server, writes a discovery lockfile, and opens the browser with a high-fidelity PR-style review UI.
+- **Preferred interactive mode** (Default: Web): Uses the `web` or `tui` preference stored in `~/.config/diffing/settings.json`. Change it with `diffing mode <web|tui>`.
 - **Terminal Mode** (Default for pipes, redirects, or non-TTY outputs): Behaves exactly like `git diff`. The command outputs standard patch text directly to stdout and exits.
+- **Viewer Mode** (Explicit `view` / `--view`): Opens a focused, read-only native TUI for browsing an interactive diff. This mode is intended as the ergonomic replacement for an interactive `git diff`.
 
-You can explicitly force either mode using flags:
+You can explicitly select a mode using a command or flag:
 - `--web`: Forces the launching of the web review server.
 - `--terminal`: Forces standard `git diff` output to terminal.
+- `view` / `--view`: Opens the read-only native diff viewer.
+- `--tui`: Opens the full native review surface, including comments and handoff.
+
+Explicit mode flags override the saved preference. The preference does not
+change the web default for GitHub PR reviews, and output-format flags still
+force terminal mode.
 
 *Note: Any output format control flags (e.g. `--raw`, `--numstat`, `--stat`, `--exit-code`, `--quiet`, or `--output`) will implicitly force Terminal Mode.*
 
@@ -71,7 +78,7 @@ If the lock fails either check, it is treated as dead, and the client reports th
 
 ### `diffing` (Primary Command)
 
-Launches the review server or outputs terminal diffs. It serves as a drop-in replacement for `git diff` and accepts all standard git revisions, options, and pathspecs.
+Launches the preferred interactive review UI or outputs terminal diffs. It serves as a drop-in replacement for `git diff` and accepts all standard git revisions, options, and pathspecs.
 
 ```bash
 diffing [options] [<revision>...] [-- <path>...]
@@ -84,7 +91,8 @@ diffing [options] [<revision>...] [-- <path>...]
 - `--reuse-session`: If a review is already running for this repository, open that session (print URL / launch browser) and exit instead of failing or prompting.
 - `--replace-session`: If a review is already running for this repository, stop it and start a new review with the current arguments instead of failing or prompting.
 - `--gh-pr <ref>`: Open a GitHub PR review session instead of a working-tree diff. The `<ref>` accepts the same forms as `gh pr <ref>` (bare number, `owner/repo#N`, or full GitHub URL). Equivalent to the quoted form `diffing "gh pr <ref>"`. See [§4c. GitHub PR Review Subcommands](#4c-github-pr-review-subcommands) for the full flow.
-- `--tui`: Open the opt-in native-Rust terminal UI instead of the web server when a compatible `diffing-tui` executable has been built or installed. The same review flow (diff render, file tree, comments, agent handoff) runs in your terminal — no browser. Strictly opt-in; without `--tui`, `diffing` behaves byte-identically to previous releases. The v0.10.0 npm package does not bundle the native executable. See [§4d. TUI Subcommands (Native Terminal UI)](#4d-tui-subcommands-native-terminal-ui) for installation, fallback, and the full flow.
+- `--view`: Open the focused, read-only native diff viewer. Equivalent to `diffing view`.
+- `--tui`: Open the opt-in native-Rust terminal UI instead of the web server when a compatible `diffing-tui` executable has been installed or built. The same review flow (diff render, file tree, comments, agent handoff) runs in your terminal — no browser. You can also make it the interactive default with `diffing mode tui`. See [§4d. TUI Subcommands (Native Terminal UI)](#4d-tui-subcommands-native-terminal-ui) for installation, fallback, and the full flow.
 
 #### Existing session conflict (web mode)
 
@@ -125,7 +133,23 @@ A specialized suite of subcommands is integrated into the `diffing` binary to co
 | `gh …` | GitHub PR automation (see §4c) |
 | `mcp` | Stdio MCP server (see §5) |
 | `inspect …` | Bounded web, TUI, or PR diff reads (see below) |
+| `mode [web\|tui]` | Get or set the default interactive review mode |
 | `doctor` / `completion` / `update` | DX |
+
+### `mode`
+
+Gets or changes the user-level default for interactive reviews:
+
+```bash
+diffing mode        # Print the current preference
+diffing mode web    # Open the web UI by default
+diffing mode tui    # Open the native review TUI by default
+```
+
+The preference is stored as `defaultMode` in
+`~/.config/diffing/settings.json`. It only applies when stdin/stdout are
+interactive and no explicit `--web`, `--tui`, `--view`, or `--terminal` flag is
+present. Pipes and redirects continue to emit standard terminal diff output.
 
 ### `await-review`
 **Sync** wait: blocks until the user clicks **"Send to agent"**, then streams review comments as XML to `stdout`.
@@ -719,43 +743,124 @@ ephemeral and appears only for a submission completed in that page lifetime.
 > review are unaffected by the experimental status of the TUI.
 
 > [!IMPORTANT]
-> The v0.10.0 npm package ships the Node CLI and web client but does not bundle
-> a platform-specific `diffing-tui` executable or compile Rust at install
-> time. Use a source build or place a separately installed compatible binary
-> on `PATH`. Without one, `diffing --tui` falls back safely to the normal
-> terminal diff.
+> Native executables ship as optional platform packages for macOS, Windows,
+> and glibc/musl Linux. Installation never compiles Rust and cannot select a
+> binary for the wrong OS, CPU, or libc. Source builds and `$PATH` remain
+> supported fallbacks.
+
+### Focused viewer: `diffing view`
+
+`diffing view` is a deliberately smaller, read-only TUI for people who want
+an interactive replacement for `git diff`, not a review dashboard. It uses a
+continuous virtualized patch, a compact hierarchical changed-file rail,
+syntax-highlighted unified or split rows, a quiet viewport track, mouse
+scrolling, and vim-style motions. A compact two-line header identifies the
+repository and whether the content is a working-tree diff, staged changes,
+a revision comparison, or commit view. The review actions and duplicate
+active-file banner are omitted in continuous mode so the diff owns the
+terminal.
+Comment creation, viewed state, and agent handoff do not appear in this mode.
+Local diagnostics, hover (`gh`), and definition navigation (`gd`) remain
+available, but language intelligence defaults Off in viewer mode and is
+started only when enabled.
+
+The `/` palette uses the same `@ff-labs/fff-node` engine, watcher, and
+repository-scoped frecency databases as the web UI. `All`, `Files`, `Text`,
+and `Symbols` scopes are available with `Tab` / `Shift+Tab`. Results search
+the current diff by default and render beside a syntax-highlighted file
+preview; `Ctrl-G` opts into or out of whole-repository results,
+and `Ctrl-R` toggles regular expressions in Text scope. `Enter` jumps when the
+selected file or line is present in the diff and otherwise keeps its preview
+open. Arrow keys and `Ctrl-N/P/J/K` wrap through results; `Shift`/`Alt` +
+arrows and Page Up/Down scroll the preview. The Node launcher owns a
+random-port, capability-scoped loopback bridge while the Rust renderer is
+open. If fff cannot start, the TUI remains usable and falls back to literal
+changed-text search.
+
+```bash
+diffing view                        # Browse current working-tree changes
+diffing view --staged               # Browse staged changes
+diffing view HEAD~3                 # Browse working tree vs. HEAD~3
+diffing view main..feature          # Browse a branch comparison
+diffing view -- -- src/             # Limit the viewer to a directory
+diffing --view main...feature       # Flag form for scripts and aliases
+```
+
+Viewer keys are intentionally small: `j/k`, `gg/G`, `Ctrl-d/u`, `J/K`,
+`]h/[h`, `h/l`, and `zz` navigate; `Enter`/`+` and `-` expand/collapse context;
+`e` opens the focused line in `$VISUAL`/`$EDITOR`; `/` opens diff-local search; `f` opens file
+search; `n/N` traverses the active search results; the palette uses `Tab`,
+`Ctrl-G`, arrows, and `Enter` for scope, Changed-only filtering, selection,
+and navigation; `m`, `w`, and `t` control diff layout, wrapping, and theme;
+`Space e` (or `b`) toggles the file sidebar; `?` shows the complete in-app
+help.
 
 `diffing --tui` opens the opt-in **native-Rust terminal UI** — a leaf renderer
 in `crates/diffing-tui/` that reads the same `~/.diffing/<repo>/*` state on
-disk and writes `server.json` with `mode: "tui"`. The Node CLI remains the
+disk. Review mode writes `server.json` with `mode: "tui"`. The Node CLI remains the
 single source of truth for arg parsing, lockfile discovery, and agent
 handoff; the TUI binary is a self-contained `ratatui` + `crossterm`
 renderer that watches the same `comments.json` and writes back through the
-same atomic file APIs.
+same atomic file APIs. Read-only `diffing view` sessions neither publish nor
+replace `server.json`, allowing them to coexist with an active review.
 
-The terminal surface uses the diff-first **Gridline** design system: a
-one-row command header, border-light file navigation, one-cell separators, a
-dedicated review gutter, semantic diff colors, and keyboard-visible focus
-rails. Rounded borders are reserved for modal overlays. Empty review drawers
-collapse automatically. Layout adapts by terminal width: wide terminals can
-show files, diff, and active comments together; medium terminals move active
-comments below the diff; compact terminals show one focused workspace at a
-time so the diff remains usable instead of collapsing into narrow columns.
+The terminal surface uses the diff-first **Gridline** design system. Each web
+theme is converted into terminal-specific tonal roles: canvas, quiet surface,
+raised surface, rule, muted text, selection, semantic row fills, and code
+tokens. File navigation uses a compact hierarchy and one-cell separator;
+addition/deletion backgrounds span complete rows; the cursor uses a narrow
+caret instead of a large gutter block; and the bottom command strip gives key
+bindings more contrast than their descriptions. The full review experience
+keeps a restrained command header and dedicated review gutter. Every panel and
+overlay uses the same thin, square terminal rules. Empty review drawers
+collapse automatically.
+Layout adapts by terminal width: wide terminals can show files, diff, and
+active comments together; medium terminals move active comments below the
+diff; compact terminals show one focused workspace at a time so the diff
+remains usable instead of collapsing into narrow columns.
 
 Press `,` to open Settings. **File display** lives there and is persisted per
 repository: **Single file** keeps navigation focused on one patch, while
 **Continuous files** creates a bounded, virtualized review stream across all
 changed files. The renderer still decodes only visible index slices, so large
 patches do not have to be materialized in memory. Split/unified layout, wrap,
-tab size, line numbers, review-drawer visibility, optional language
-intelligence, and theme are configured in the same sheet.
+tab size, line numbers, mouse input, file-sidebar visibility and width,
+review-drawer visibility, optional language intelligence, and theme are
+configured in the same sheet. Sidebar visibility and width are persisted per
+repository; `Space e` (or `b`) toggles visibility without opening Settings. Turning
+mouse input off releases terminal mouse capture completely: hover, clicks,
+dragging, and wheel navigation are disabled, and the preference is restored
+on the next launch. Use keyboard navigation in Settings to turn it back on.
 
-Syntax highlighting is theme-aware in both unified and split layouts. Token
-colors are contrast-corrected against addition and deletion backgrounds so
-meaning is not conveyed by low-contrast color alone.
+Rendering work is bounded by terminal size, not total diff size. The TUI keeps
+a small overscanned terminal-cell surface, applies cursor/hover/selection as
+overlays, indexes comment and diagnostic decorations once per retained frame,
+and rasterizes the whole-diff change map once per snapshot and terminal height.
+Even individual multi-megabyte source lines are prefix-decoded only as far as
+the visible wrapped or horizontally scrolled cells require. The release-scale
+contract is:
 
-Language intelligence defaults to **Auto**. It lazily starts a compatible
-server already installed on `PATH` for the selected file:
+```bash
+DIFFING_RENDER_BENCH_LINES=1000000 cargo bench -p diffing-tui --bench render_diff
+```
+
+Search uses the same palette in review and viewer modes. `/` opens the shared
+fff-powered repository palette with All, Files, Text, and Symbols scopes,
+live results, frecency, Changed-only filtering, and a syntax-highlighted
+preview. Viewer mode begins Changed-only; `Ctrl-G` opts into the repository.
+`f` opens the same palette directly in Files scope.
+
+Syntax highlighting is theme-aware in both unified and split layouts. A stable
+syntax-role classifier projects keywords, strings, types, constants,
+functions, comments, and plain code into the selected web theme instead of
+reusing a generic dark or light syntax palette. Token colors are
+contrast-corrected against addition and deletion backgrounds so meaning is not
+conveyed by low-contrast color alone.
+
+Language intelligence defaults to **Auto** for review sessions and **Off** for
+the read-only viewer. When enabled, it lazily starts a compatible
+server from the repository's `node_modules/.bin` or `PATH` for the selected
+file:
 `rust-analyzer`, `typescript-language-server --stdio`,
 `pyright-langserver --stdio`, `gopls`, or `clangd`. diffing never downloads a
 server and all document traffic stays on the local stdio connection. The file
@@ -775,11 +880,12 @@ diffing --tui -- -- src/           # Limit to a directory
 
 ### TUI launch semantics
 
-- The default `diffing` behaviour is **byte-identical** with and without
-  `--tui`. The flag is strictly opt-in.
+- TUI review mode is opt-in through `--tui` or the persistent
+  `diffing mode tui` preference. Web remains the initial default.
 - If the env cannot support a TUI (piped stdin, CI, no raw mode) the CLI
-  prints one line to stderr (`diffing --tui requires a TTY; falling back
-  to git diff`) and runs the normal `git diff` output.
+  prints one line to stderr (`diffing --tui requires a TTY` or
+  `diffing view requires a TTY`, followed by `falling back to git diff`) and
+  runs the normal `git diff` output.
 - If the `diffing-tui` binary is missing or fails to start, the CLI prints
   one line to stderr (`diffing-tui binary not found; build it with
   pnpm build:tui; falling back to git diff`) and runs the normal `git diff`
@@ -792,26 +898,31 @@ The CLI searches for the `diffing-tui` binary in this order, anchoring on
 the bundled `dist/cli.mjs` directory:
 
 1. Sibling of the bundled CLI (`dist/diffing-tui[.exe]`)
-2. `bin/diffing-tui[.exe]` next to the package root
-3. `target/release/diffing-tui[.exe]` (release build)
-4. `target/debug/diffing-tui[.exe]` (debug build — a plain `cargo build`
+2. Matching optional npm package (`@diffing/tui-<platform>-<arch>-<libc>`)
+3. `bin/diffing-tui[.exe]` next to the package root
+4. `target/release/diffing-tui[.exe]` (release build)
+5. `target/debug/diffing-tui[.exe]` (debug build — a plain `cargo build`
    is enough to use the TUI; no `--release` required)
-5. `$PATH` lookup via `where` (Windows) / `which` (POSIX)
+6. `$PATH` lookup via `where` (Windows) / `which` (POSIX)
 
-The sibling and `bin/` locations make packaged native binaries discoverable,
-but the v0.10.0 npm tarball does not populate them. Shipping native binaries
-through npm requires platform-specific artifacts; the current release avoids
-install-time compilation and never places a binary for the wrong operating
-system or CPU in the cross-platform package.
+Viewer mode feature-probes candidates with `--help` and selects the first
+binary that advertises `--view-only`. This prevents a stale native binary from
+silently opening the full review TUI when the Node CLI has already been
+upgraded; normal `--tui` launches retain the search order above.
+
+Native artifacts are built and published independently for each target. The
+main package declares them as optional dependencies, avoiding install-time
+compilation and preventing a binary for the wrong platform from being used.
 
 ### Lockfile integration
 
-The TUI writes the same `server.json` lockfile the web server writes,
+Review TUI sessions write the same `server.json` lockfile the web server writes,
 with `mode: "tui"` instead of `mode: "web"`. The lockfile is therefore
 discoverable by every existing agent subcommand and MCP tool — the only
 visible difference is `mode: "tui"` in the JSON, which existing clients
 already accept (they treat it as "web-equivalent" for comment-store and
 harness purposes).
+Viewer sessions do not own a lockfile or agent API.
 
 Stale-lock detection uses `is_lock_alive`, which on Unix probes with
 `kill(pid, 0)` and on Windows probes with `tasklist /NH /FO CSV /FI
@@ -832,12 +943,14 @@ shows valid completions while a multi-key sequence is pending.
 | `Ctrl+d` / `Ctrl+u` | Half-page down / up |
 | `J` / `K` | Next / previous file |
 | `Tab` / `Shift+Tab` | Cycle files, diff, and review focus |
+| `Space e` / `b` | Toggle the file sidebar |
 | `w` | Toggle line wrap |
 | `t` | Open the theme picker |
 | `,` | Open Settings |
 | `m` | Toggle split / unified view |
-| `/` | Open text search palette |
-| `f` | Filter changed-file paths |
+| `Enter` / `+` / `-` | Expand / expand / collapse diff context |
+| `/` | Open the repository search palette |
+| `f` | Open the search palette in Files scope |
 | `a` | Cycle all / unviewed / commented files |
 | `?` | Open shortcuts help |
 | `c` | New comment on the current line |
@@ -1249,6 +1362,7 @@ User-specific preferences, layout options, editor choices, and themes are persis
 - **JSON Configuration Schema & Default Settings**:
 ```json
 {
+  "defaultMode": "web",            // Interactive review mode ("web" or "tui")
   "staged": true,                    // Include staged changes by default in web mode
   "untracked": true,                 // Include untracked files by default in web mode
   "diffStyle": "split",              // Layout presentation ("split" or "unified")
@@ -1259,6 +1373,7 @@ User-specific preferences, layout options, editor choices, and themes are persis
   "lineWrap": false,                 // Soft-wrap long source lines to fit page
   "diffIndicators": "classic",       // Margin line indicators ("classic" (+/-), "bars", "none")
   "showLineNumbers": true,           // Toggle gutter line numbers
+  "tuiMouseEnabled": true,           // Enable all TUI mouse capture and interaction
   "hunkSeparators": "line-info",     // visual style of dividers between hunks
   "lineHoverHighlight": "both",      // Highlight on hover ("both", "line", "number", "disabled")
   "fontSize": 13,                    // Base code editor font size (in pixels)
