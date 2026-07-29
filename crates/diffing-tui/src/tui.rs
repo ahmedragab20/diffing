@@ -10,7 +10,8 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, DisableLineWrap, EnableLineWrap,
+    EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
@@ -26,7 +27,9 @@ impl Drop for TerminalGuard {
         disable_raw_mode().ok();
         execute!(
             stdout(),
+            EndSynchronizedUpdate,
             DisableBracketedPaste,
+            EnableLineWrap,
             LeaveAlternateScreen,
             DisableMouseCapture
         )
@@ -38,8 +41,13 @@ pub fn run(_repo_root: &str, app: &mut App) -> Result<()> {
     let mut stdout = stdout();
     enable_raw_mode().context("enabling raw mode")?;
     let _guard = TerminalGuard;
-    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)
-        .context("entering alternate screen")?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        DisableLineWrap,
+        EnableBracketedPaste
+    )
+    .context("entering alternate screen")?;
     let mut mouse_capture_enabled = false;
     sync_mouse_capture(&mut stdout, &mut mouse_capture_enabled, app.mouse_enabled)
         .context("configuring mouse capture")?;
@@ -47,6 +55,7 @@ pub fn run(_repo_root: &str, app: &mut App) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("creating ratatui terminal")?;
     terminal.hide_cursor().ok();
+    terminal.clear().context("clearing terminal surface")?;
 
     let result = event_loop(&mut terminal, app, mouse_capture_enabled);
 
@@ -72,10 +81,23 @@ fn event_loop(
         if dirty {
             let size = terminal.size().context("reading terminal size")?;
             let rect = ratatui::layout::Rect::new(0, 0, size.width, size.height);
-            terminal.draw(|frame| {
-                app.render(rect, frame.buffer_mut());
-                sanitize_terminal_buffer(frame.buffer_mut());
-            })?;
+            // Commit the whole Ratatui diff atomically on terminals that
+            // support synchronized updates. Unsupported terminals safely
+            // ignore these control sequences, while supported terminals avoid
+            // exposing partially-painted wide and split diff frames.
+            execute!(terminal.backend_mut(), BeginSynchronizedUpdate)
+                .context("starting synchronized terminal update")?;
+            let draw_result = terminal
+                .draw(|frame| {
+                    app.render(rect, frame.buffer_mut());
+                    sanitize_terminal_buffer(frame.buffer_mut());
+                })
+                .map(|_| ())
+                .context("drawing terminal frame");
+            let end_result = execute!(terminal.backend_mut(), EndSynchronizedUpdate)
+                .context("finishing synchronized terminal update");
+            draw_result?;
+            end_result?;
             dirty = false;
         }
         if crossterm::event::poll(poll_interval).context("polling input")? {
@@ -159,7 +181,9 @@ fn open_editor(
     disable_raw_mode().context("leaving raw mode for editor")?;
     execute!(
         terminal.backend_mut(),
+        EndSynchronizedUpdate,
         DisableBracketedPaste,
+        EnableLineWrap,
         LeaveAlternateScreen,
         DisableMouseCapture
     )
@@ -171,6 +195,7 @@ fn open_editor(
     execute!(
         terminal.backend_mut(),
         EnterAlternateScreen,
+        DisableLineWrap,
         EnableBracketedPaste
     )
     .context("restoring diff viewer screen")?;

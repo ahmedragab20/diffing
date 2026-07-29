@@ -205,10 +205,13 @@ export async function searchFiles(query: string, opts: ContentOpts = {}): Promis
   if (!res.ok) return { scope: 'files', items: [], total: 0, indexing: isIndexing(f), error: res.error }
 
   const items: FileHit[] = []
+  let filteredTotal = 0
   const { items: raw, scores } = res.value
-  for (let i = 0; i < raw.length && items.length < limit; i++) {
+  for (let i = 0; i < raw.length; i++) {
     const it = raw[i]
     if (pathSet && !pathSet.has(it.relativePath)) continue
+    filteredTotal++
+    if (items.length >= limit) continue
     const score = scores[i]
     items.push({
       path: it.relativePath,
@@ -218,7 +221,12 @@ export async function searchFiles(query: string, opts: ContentOpts = {}): Promis
       exact: !!score?.exactMatch,
     })
   }
-  return { scope: 'files', items, total: res.value.totalMatched, indexing: isIndexing(f) }
+  return {
+    scope: 'files',
+    items,
+    total: pathSet ? filteredTotal : res.value.totalMatched,
+    indexing: isIndexing(f),
+  }
 }
 
 export async function searchContent(query: string, opts: ContentOpts = {}): Promise<ContentResponse> {
@@ -240,15 +248,17 @@ export async function searchContent(query: string, opts: ContentOpts = {}): Prom
   if (!res.ok) return { scope: 'text', items: [], total: 0, indexing: isIndexing(f), error: res.error }
 
   const items: ContentHit[] = []
+  let filteredTotal = 0
   for (const m of res.value.items) {
-    if (items.length >= limit) break
     if (pathSet && !pathSet.has(m.relativePath)) continue
+    filteredTotal++
+    if (items.length >= limit) continue
     items.push(toContentHit(m))
   }
   return {
     scope: 'text',
     items,
-    total: res.value.totalMatched,
+    total: pathSet ? filteredTotal : res.value.totalMatched,
     indexing: isIndexing(f),
     regexError: res.value.regexFallbackError || undefined,
   }
@@ -283,8 +293,8 @@ export async function searchSymbols(query: string, opts: SearchOpts = {}): Promi
   const items: SymbolHit[] = []
   const ql = query.toLowerCase()
   const seen = new Set<string>()
+  let total = 0
   for (const m of res.value.items) {
-    if (items.length >= limit) break
     if (pathSet && !pathSet.has(m.relativePath)) continue
     const sym = classifySymbolLine(m.lineContent)
     if (!sym) continue
@@ -292,6 +302,8 @@ export async function searchSymbols(query: string, opts: SearchOpts = {}): Promi
     const key = `${m.relativePath}:${m.lineNumber}:${sym.name}`
     if (seen.has(key)) continue
     seen.add(key)
+    total++
+    if (items.length >= limit) continue
     // Highlight the symbol name within the line rather than the raw grep range.
     const nameIdx = m.lineContent.indexOf(sym.name)
     const matchRanges: MatchRange[] =
@@ -307,7 +319,7 @@ export async function searchSymbols(query: string, opts: SearchOpts = {}): Promi
       gitStatus: m.gitStatus,
     })
   }
-  return { scope: 'symbols', items, total: items.length, indexing: isIndexing(f) }
+  return { scope: 'symbols', items, total, indexing: isIndexing(f) }
 }
 
 export async function searchAll(query: string, opts: ContentOpts = {}): Promise<AllResponse> {
@@ -318,30 +330,61 @@ export async function searchAll(query: string, opts: ContentOpts = {}): Promise<
     searchSymbols(query, { ...opts, limit }),
   ])
 
-  const items: (
+  return mergeSearchResponses(filesRes, contentRes, symbolsRes, limit)
+}
+
+/** Merge the three engines into the All scope without duplicating definition
+ * lines as both Symbol and Text rows. Exported to keep the result contract
+ * independently testable without loading the native fff addon. */
+export function mergeSearchResponses(
+  filesRes: FilesResponse,
+  contentRes: ContentResponse,
+  symbolsRes: SymbolsResponse,
+  limit = DEFAULT_LIMIT,
+): AllResponse {
+  const boundedLimit = clampLimit(limit)
+
+  type AllItem =
     | { kind: 'file'; hit: FileHit }
     | { kind: 'text'; hit: ContentHit }
     | { kind: 'symbol'; hit: SymbolHit }
-  )[] = []
-
-  for (const hit of filesRes.items) {
-    items.push({ kind: 'file', hit })
-  }
-  for (const hit of symbolsRes.items) {
-    items.push({ kind: 'symbol', hit })
-  }
+  const fileItems: AllItem[] = filesRes.items.map((hit) => ({ kind: 'file', hit }))
+  const symbolLocations = new Set<string>()
+  const symbolItems: AllItem[] = symbolsRes.items.map((hit) => {
+    symbolLocations.add(`${hit.path}:${hit.line}`)
+    return { kind: 'symbol', hit }
+  })
+  const textItems: AllItem[] = []
   for (const hit of contentRes.items) {
-    items.push({ kind: 'text', hit })
+    // Symbol results are enriched versions of grep results at the same line.
+    // Keep the richer row and do not render/count the definition twice.
+    if (symbolLocations.has(`${hit.path}:${hit.line}`)) continue
+    textItems.push({ kind: 'text', hit })
+  }
+  const items: AllItem[] = []
+  const groups = [fileItems, symbolItems, textItems]
+  for (let row = 0; items.length < boundedLimit; row++) {
+    let appended = false
+    for (const group of groups) {
+      const item = group[row]
+      if (!item) continue
+      items.push(item)
+      appended = true
+      if (items.length === boundedLimit) break
+    }
+    if (!appended) break
   }
 
-  const total = (filesRes.total || 0) + (contentRes.total || 0) + (symbolsRes.total || 0)
+  // Every symbol originates from the content result set, so the unique total
+  // is files + text; symbol rows replace their text counterparts above.
+  const total = (filesRes.total || 0) + (contentRes.total || 0)
   const indexing = filesRes.indexing || contentRes.indexing || symbolsRes.indexing
   const error = filesRes.error || contentRes.error || symbolsRes.error
   const regexError = contentRes.regexError
 
   return {
     scope: 'all',
-    items: items.slice(0, limit),
+    items,
     total,
     indexing,
     error,

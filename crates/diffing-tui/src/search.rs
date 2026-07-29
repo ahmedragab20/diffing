@@ -5,8 +5,10 @@
 //! second platform-specific ABI while this small loopback client keeps the
 //! Rust renderer self-contained.
 
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
+use std::path::{Component, Path};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -16,6 +18,8 @@ use serde_json::{json, Value};
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CAPABILITY_BYTES: usize = 256;
 const MAX_SEARCH_HITS: usize = 80;
+const MAX_PREVIEW_BYTES: usize = 2 * 1024 * 1024;
+const BINARY_SAMPLE_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -66,6 +70,7 @@ pub struct SearchResponse {
     pub total: usize,
     pub indexing: bool,
     pub error: Option<String>,
+    pub notice: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +80,12 @@ pub struct SearchPreview {
     pub missing: bool,
     pub binary: bool,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolDefinition {
+    pub name: String,
+    pub kind: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +224,11 @@ fn decode_response(value: Value, scope: SearchScope) -> Result<SearchResponse> {
         .get("error")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let notice = value
+        .get("regexError")
+        .and_then(Value::as_str)
+        .filter(|message| !message.is_empty())
+        .map(|message| format!("invalid regex; searched literally: {message}"));
     let mut hits = Vec::new();
     for item in value
         .get("items")
@@ -276,7 +292,10 @@ fn decode_response(value: Value, scope: SearchScope) -> Result<SearchResponse> {
                 .rsplit_once('/')
                 .map(|(directory, _)| format!("{directory}/"))
                 .unwrap_or_else(|| "./".to_string()),
-            (SearchHitKind::Symbol, Some(line)) => format!("{path}:{line} · {content}"),
+            (SearchHitKind::Symbol, Some(line)) => {
+                let symbol_kind = hit.get("kind").and_then(Value::as_str).unwrap_or("symbol");
+                format!("{symbol_kind} · {path}:{line}")
+            }
             (_, Some(line)) => format!("{path}:{line}"),
             _ => path.to_string(),
         };
@@ -294,7 +313,307 @@ fn decode_response(value: Value, scope: SearchScope) -> Result<SearchResponse> {
         total,
         indexing,
         error,
+        notice,
     })
+}
+
+/// Lightweight definition recognition shared by the TUI's changed-line
+/// fallback. Repository-wide symbol search remains owned by the fff bridge;
+/// this keeps Symbols useful while the query is empty or the bridge is absent.
+pub fn classify_symbol_line(line: &str) -> Option<SymbolDefinition> {
+    let line = line.trim_start();
+    if line.is_empty() || line.starts_with("//") || line.starts_with('#') {
+        return None;
+    }
+
+    let declaration = strip_declaration_modifiers(line);
+    let function = strip_function_modifiers(declaration);
+    for (keyword, kind) in [
+        ("function", "function"),
+        ("def", "function"),
+        ("fn", "function"),
+    ] {
+        if let Some(rest) = after_keyword(function, keyword) {
+            if let Some(name) = take_identifier(rest) {
+                return Some(SymbolDefinition {
+                    name: name.to_string(),
+                    kind,
+                });
+            }
+        }
+    }
+
+    // Go functions may place a receiver between `func` and the method name.
+    if let Some(mut rest) = after_keyword(function, "func") {
+        let is_method = rest.starts_with('(');
+        if is_method {
+            rest = rest.split_once(')')?.1.trim_start();
+        }
+        if let Some(name) = take_identifier(rest) {
+            return Some(SymbolDefinition {
+                name: name.to_string(),
+                kind: if is_method { "method" } else { "function" },
+            });
+        }
+    }
+
+    let method = strip_method_modifiers(declaration);
+    if let Some((prefix, suffix)) = method.split_once('(') {
+        let prefix = prefix.trim();
+        let name = prefix.split('<').next().unwrap_or(prefix).trim();
+        let tail = suffix.split_once(')').map(|(_, tail)| tail.trim_start());
+        let declaration_tail = tail.is_some_and(|tail| {
+            tail.starts_with('{')
+                || (tail.starts_with(':') && (tail.contains('{') || tail.ends_with(';')))
+        });
+        if declaration_tail
+            && take_identifier(name) == Some(name)
+            && !matches!(name, "if" | "for" | "while" | "switch" | "catch")
+        {
+            return Some(SymbolDefinition {
+                name: name.to_string(),
+                kind: "method",
+            });
+        }
+    }
+
+    for (keyword, kind) in [
+        ("class", "class"),
+        ("interface", "interface"),
+        ("struct", "struct"),
+        ("enum", "enum"),
+        ("trait", "trait"),
+        ("union", "union"),
+        ("type", "type"),
+        ("namespace", "namespace"),
+        ("module", "module"),
+        ("mod", "module"),
+    ] {
+        if let Some(rest) = after_keyword(declaration, keyword) {
+            if let Some(name) = take_identifier(rest) {
+                return Some(SymbolDefinition {
+                    name: name.to_string(),
+                    kind,
+                });
+            }
+        }
+    }
+
+    if let Some(rest) = declaration
+        .strip_prefix("impl")
+        .filter(|rest| rest.starts_with(char::is_whitespace) || rest.starts_with('<'))
+        .map(str::trim_start)
+    {
+        let rest = if rest.starts_with('<') {
+            rest.split_once('>')?.1.trim_start()
+        } else {
+            rest
+        };
+        let target = rest
+            .split_once(" for ")
+            .map(|(_, target)| target)
+            .unwrap_or(rest)
+            .trim_start();
+        let target = target
+            .split(|character: char| character.is_whitespace() || matches!(character, '<' | '{'))
+            .next()
+            .unwrap_or(target);
+        let name = target.rsplit("::").next().and_then(take_identifier);
+        if let Some(name) = name {
+            return Some(SymbolDefinition {
+                name: name.to_string(),
+                kind: "impl",
+            });
+        }
+    }
+
+    for keyword in ["const", "let", "var", "static"] {
+        if let Some(rest) = after_keyword(declaration, keyword) {
+            let name = take_identifier(rest)?;
+            let tail = rest[name.len()..].trim_start();
+            let function_like = tail
+                .strip_prefix('=')
+                .map(str::trim_start)
+                .is_some_and(|value| {
+                    value.starts_with("function")
+                        || value.starts_with("async function")
+                        || value.contains("=>")
+                });
+            return Some(SymbolDefinition {
+                name: name.to_string(),
+                kind: if function_like {
+                    "function"
+                } else {
+                    "variable"
+                },
+            });
+        }
+    }
+
+    None
+}
+
+/// Load a bounded preview when the native TUI is launched without the Node
+/// bridge. Paths are repository-relative and may not escape the repository.
+pub fn load_local_preview(repo_root: &Path, path: &str) -> Result<SearchPreview> {
+    let relative = Path::new(path);
+    if relative.as_os_str().is_empty()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        bail!("preview path must stay inside the repository");
+    }
+
+    let repo_root = repo_root
+        .canonicalize()
+        .context("resolving preview repository")?;
+    let candidate = repo_root.join(relative);
+    let resolved = match candidate.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(SearchPreview {
+                path: path.to_string(),
+                content: String::new(),
+                missing: true,
+                binary: false,
+                truncated: false,
+            });
+        }
+        Err(error) => return Err(error).context("resolving search preview"),
+    };
+    if !resolved.starts_with(&repo_root) {
+        bail!("preview path must stay inside the repository");
+    }
+    let mut file = File::open(resolved).context("opening search preview")?;
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take((MAX_PREVIEW_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .context("reading search preview")?;
+    let binary = bytes
+        .iter()
+        .take(BINARY_SAMPLE_BYTES)
+        .any(|byte| *byte == 0);
+    let truncated = bytes.len() > MAX_PREVIEW_BYTES;
+    bytes.truncate(MAX_PREVIEW_BYTES);
+    Ok(SearchPreview {
+        path: path.to_string(),
+        content: if binary {
+            String::new()
+        } else {
+            String::from_utf8_lossy(&bytes).into_owned()
+        },
+        missing: false,
+        binary,
+        truncated,
+    })
+}
+
+fn strip_declaration_modifiers(mut line: &str) -> &str {
+    loop {
+        let previous = line;
+        line = strip_rust_visibility(line);
+        for modifier in [
+            "export",
+            "default",
+            "declare",
+            "abstract",
+            "public",
+            "private",
+            "protected",
+            "internal",
+            "final",
+            "sealed",
+            "open",
+            "data",
+        ] {
+            if let Some(rest) = after_keyword(line, modifier) {
+                line = rest;
+                break;
+            }
+        }
+        if line == previous {
+            return line;
+        }
+    }
+}
+
+fn strip_function_modifiers(mut line: &str) -> &str {
+    loop {
+        let previous = line;
+        for modifier in ["async", "const", "unsafe"] {
+            if let Some(rest) = after_keyword(line, modifier) {
+                line = rest;
+                break;
+            }
+        }
+        if let Some(rest) = after_keyword(line, "extern") {
+            line = rest.trim_start_matches(|character: char| {
+                character == '"' || character.is_ascii_alphanumeric()
+            });
+            line = line.trim_start_matches('"').trim_start();
+        }
+        if line == previous {
+            return line;
+        }
+    }
+}
+
+fn strip_method_modifiers(mut line: &str) -> &str {
+    loop {
+        let previous = line;
+        for modifier in [
+            "static", "async", "abstract", "readonly", "override", "get", "set",
+        ] {
+            if let Some(rest) = after_keyword(line, modifier) {
+                line = rest;
+                break;
+            }
+        }
+        if line == previous {
+            return line;
+        }
+    }
+}
+
+fn strip_rust_visibility(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix("pub") else {
+        return line;
+    };
+    if let Some(rest) = rest.strip_prefix(char::is_whitespace) {
+        return rest.trim_start();
+    }
+    if let Some(rest) = rest.strip_prefix('(') {
+        if let Some((_, tail)) = rest.split_once(')') {
+            return tail.trim_start();
+        }
+    }
+    line
+}
+
+fn after_keyword<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
+    let rest = line.strip_prefix(keyword)?;
+    (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim_start())
+}
+
+fn take_identifier(value: &str) -> Option<&str> {
+    let end = value
+        .char_indices()
+        .take_while(|(index, character)| {
+            (*index == 0 && (character.is_alphabetic() || *character == '_' || *character == '$'))
+                || (*index > 0 && is_identifier_character(*character))
+        })
+        .map(|(index, character)| index + character.len_utf8())
+        .last()?;
+    Some(&value[..end])
+}
+
+fn is_identifier_character(character: char) -> bool {
+    character.is_alphanumeric() || character == '_' || character == '$'
 }
 
 fn decode_preview(value: Value, fallback_path: &str) -> SearchPreview {
@@ -390,6 +709,68 @@ mod tests {
     }
 
     #[test]
+    fn decodes_symbol_kind_as_compact_metadata() {
+        let response = decode_response(
+            json!({
+                "total": 1,
+                "items": [{
+                    "name": "render_search",
+                    "kind": "function",
+                    "path": "src/app.rs",
+                    "line": 42,
+                    "content": "pub fn render_search()"
+                }]
+            }),
+            SearchScope::Symbols,
+        )
+        .unwrap();
+        assert_eq!(response.hits[0].title, "render_search");
+        assert_eq!(response.hits[0].detail, "function · src/app.rs:42");
+    }
+
+    #[test]
+    fn classifies_common_language_definitions() {
+        let cases = [
+            (
+                "export const loadData = async (id: string) => {",
+                "loadData",
+                "function",
+            ),
+            (
+                "pub(crate) async fn render_search() {",
+                "render_search",
+                "function",
+            ),
+            ("impl<T> SearchService<T> {", "SearchService", "impl"),
+            ("async def fetch_user(user_id):", "fetch_user", "function"),
+            ("func (s *Server) Start() error {", "Start", "method"),
+            ("type SearchResult struct {", "SearchResult", "type"),
+            (
+                "export default class SearchPalette {",
+                "SearchPalette",
+                "class",
+            ),
+        ];
+        for (line, name, kind) in cases {
+            let symbol = classify_symbol_line(line)
+                .unwrap_or_else(|| panic!("expected symbol for {line:?}"));
+            assert_eq!(symbol.name, name);
+            assert_eq!(symbol.kind, kind);
+        }
+        assert_eq!(classify_symbol_line("render_search();"), None);
+    }
+
+    #[test]
+    fn local_preview_is_bounded_and_rejects_escaping_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("source.rs"), "fn main() {}\n").unwrap();
+        let preview = load_local_preview(directory.path(), "source.rs").unwrap();
+        assert_eq!(preview.content, "fn main() {}\n");
+        assert!(!preview.binary);
+        assert!(load_local_preview(directory.path(), "../secret").is_err());
+    }
+
+    #[test]
     fn decodes_preview_shape() {
         let preview = decode_preview(
             json!({
@@ -404,5 +785,24 @@ mod tests {
         assert_eq!(preview.path, "src/app.rs");
         assert_eq!(preview.content, "fn main() {}");
         assert!(preview.truncated);
+    }
+
+    #[test]
+    fn preserves_regex_fallback_as_a_non_fatal_notice() {
+        let response = decode_response(
+            json!({
+                "total": 1,
+                "regexError": "unclosed group",
+                "items": [{ "path": "src/app.rs", "line": 42, "content": "(" }]
+            }),
+            SearchScope::Text,
+        )
+        .unwrap();
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(
+            response.notice.as_deref(),
+            Some("invalid regex; searched literally: unclosed group")
+        );
+        assert_eq!(response.error, None);
     }
 }

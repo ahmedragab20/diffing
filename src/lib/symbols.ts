@@ -24,22 +24,37 @@ interface SymbolPattern {
 }
 
 export const SYMBOL_PATTERNS: SymbolPattern[] = [
-  { pattern: /^\s*(?:export\s+)?(?:async\s+)?function\s+(\w[\w$]*)\s*[<(]/i, kind: 'function', nameGroup: 1 },
-  { pattern: /^\s*(?:export\s+)?(?:const|let|var)\s+(\w[\w$]*)\s*=\s*(?:async\s*)?\(/i, kind: 'function', nameGroup: 1 },
+  // JavaScript / TypeScript
+  { pattern: /^\s*(?:(?:export|declare)\s+)*(?:default\s+)?(?:async\s+)?function\s+(\w[\w$]*)\s*[<(]/i, kind: 'function', nameGroup: 1 },
+  { pattern: /^\s*(?:export\s+)?(?:const|let|var)\s+(\w[\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|\w[\w$]*)\s*=>/i, kind: 'function', nameGroup: 1 },
   { pattern: /^\s*(?:export\s+)?(?:const|let|var)\s+(\w[\w$]*)\s*=\s*(?:async\s+)?function/i, kind: 'function', nameGroup: 1 },
-  { pattern: /^\s*(?:export\s+)?class\s+(\w[\w$]*)/i, kind: 'class', nameGroup: 1 },
-  { pattern: /^\s*(?:export\s+)?interface\s+(\w[\w$]*)/i, kind: 'interface', nameGroup: 1 },
-  { pattern: /^\s*(?:export\s+)?type\s+(\w[\w$]*)\s*=/i, kind: 'type', nameGroup: 1 },
-  { pattern: /^\s*(?:export\s+)?enum\s+(\w[\w$]*)/i, kind: 'enum', nameGroup: 1 },
+  { pattern: /^\s*(?:(?:export|declare)\s+)*(?:default\s+)?(?:abstract\s+)?class\s+(\w[\w$]*)/i, kind: 'class', nameGroup: 1 },
+  { pattern: /^\s*(?:(?:export|declare)\s+)*interface\s+(\w[\w$]*)/i, kind: 'interface', nameGroup: 1 },
+  { pattern: /^\s*(?:(?:export|declare)\s+)*type\s+(\w[\w$]*)\s*=/i, kind: 'type', nameGroup: 1 },
+  { pattern: /^\s*(?:(?:export|declare)\s+)*(?:const\s+)?enum\s+(\w[\w$]*)/i, kind: 'enum', nameGroup: 1 },
+  { pattern: /^\s*(?:(?:export|declare)\s+)*namespace\s+(\w[\w$]*)/i, kind: 'namespace', nameGroup: 1 },
   { pattern: /^\s*(?:export\s+)?(?:const|let|var)\s+(\w[\w$]*)\s*=/i, kind: 'variable', nameGroup: 1 },
-  { pattern: /^\s*def\s+(\w[\w$]*)\s*\(/i, kind: 'function', nameGroup: 1 },
-  { pattern: /^\s*(?:pub(?:\s*\(\w+\))?\s+)?fn\s+(\w[\w$]*)\s*[<(]/i, kind: 'function', nameGroup: 1 },
-  { pattern: /^\s*(?:pub(?:\s*\(\w+\))?\s+)?struct\s+(\w[\w$]*)/i, kind: 'struct', nameGroup: 1 },
-  { pattern: /^\s*(?:pub(?:\s*\(\w+\))?\s+)?enum\s+(\w[\w$]*)/i, kind: 'enum', nameGroup: 1 },
-  { pattern: /^\s*(?:pub(?:\s*\(\w+\))?\s+)?impl\s+(\w[\w$]*)/i, kind: 'impl', nameGroup: 1 },
-  { pattern: /^\s*(?:pub(?:\s*\(\w+\))?\s+)?trait\s+(\w[\w$]*)/i, kind: 'trait', nameGroup: 1 },
+  { pattern: /^\s*(?!(?:if|for|while|switch|catch)\b)(?:(?:public|private|protected|static|async|abstract|readonly|override|get|set)\s+)*(\w[\w$]*)\s*(?:<[^>]+>)?\s*\([^)]*\)\s*(?:\{|:[^={]+[;{])/i, kind: 'method', nameGroup: 1 },
+
+  // Python
+  { pattern: /^\s*(?:async\s+)?def\s+(\w[\w$]*)\s*\(/i, kind: 'function', nameGroup: 1 },
+  { pattern: /^\s*class\s+(\w[\w$]*)\s*(?:\(|:)/i, kind: 'class', nameGroup: 1 },
+
+  // Rust
+  { pattern: /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:(?:async|const|unsafe)\s+|extern(?:\s+"[^"]+")?\s+)*fn\s+(\w[\w$]*)\s*[<(]/i, kind: 'function', nameGroup: 1 },
+  { pattern: /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?struct\s+(\w[\w$]*)/i, kind: 'struct', nameGroup: 1 },
+  { pattern: /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?enum\s+(\w[\w$]*)/i, kind: 'enum', nameGroup: 1 },
+  { pattern: /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?trait\s+(\w[\w$]*)/i, kind: 'trait', nameGroup: 1 },
+  { pattern: /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:type|mod)\s+(\w[\w$]*)/i, kind: 'type', nameGroup: 1 },
+  { pattern: /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?impl(?:<[^>]+>)?\s+[^\s]+\s+for\s+(\w[\w$]*)/i, kind: 'impl', nameGroup: 1 },
+  { pattern: /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?impl(?:<[^>]+>)?\s+(\w[\w$]*)/i, kind: 'impl', nameGroup: 1 },
+  { pattern: /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:const|static)\s+(\w[\w$]*)\s*[:=]/i, kind: 'variable', nameGroup: 1 },
+
+  // Go
+  { pattern: /^\s*func\s+\([^)]*\)\s+(\w[\w$]*)\s*\(/i, kind: 'method', nameGroup: 1 },
   { pattern: /^\s*func\s+(\w[\w$]*)\s*\(/i, kind: 'function', nameGroup: 1 },
-  { pattern: /^\s*(?:func\s+)?\((\w[\w$]*)\s+\*?\w+\)\s+(\w[\w$]*)\s*\(/i, kind: 'method', nameGroup: 2 },
+  { pattern: /^\s*type\s+(\w[\w$]*)\s+(?:struct|interface|=)/i, kind: 'type', nameGroup: 1 },
+  { pattern: /^\s*(?:var|const)\s+(\w[\w$]*)\b/i, kind: 'variable', nameGroup: 1 },
 ]
 
 /**

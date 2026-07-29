@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, StatefulWidget};
+use unicode_width::UnicodeWidthStr;
 
 use crate::themes::Palette;
 use crate::ui::file_tree::{FileNodeKind, FileTree};
@@ -92,7 +93,7 @@ pub fn render_file_tree(
         .enumerate()
         .skip(scroll)
         .take(body_height)
-        .map(|(index, node)| build_item(node, index == tree.cursor, focused, palette))
+        .map(|(index, node)| build_item(node, index == tree.cursor, focused, inner.width, palette))
         .collect();
     let list = List::new(items).highlight_style(selected_row_style(true, palette));
     let mut state = ratatui::widgets::ListState::default();
@@ -113,12 +114,13 @@ pub fn content_area(area: Rect, minimal: bool) -> Rect {
     )
 }
 
-fn build_item<'a>(
-    node: &'a crate::ui::file_tree::FileNode,
+fn build_item(
+    node: &crate::ui::file_tree::FileNode,
     is_cursor: bool,
     focused: bool,
+    width: u16,
     palette: &Palette,
-) -> ListItem<'a> {
+) -> ListItem<'static> {
     let tokens = GridlineTokens::from(palette);
     let indent = "  ".repeat(node.depth);
     let (kind_str, kind_color) = match node.kind {
@@ -142,52 +144,166 @@ fn build_item<'a>(
             (format!("{} ", node.change_marker), marker_color)
         }
     };
-    let viewed_dot = if node.viewed { " ✓" } else { "" };
     let name_color = if node.kind == FileNodeKind::Dir && !is_cursor {
         tokens.muted
     } else {
         tokens.text
     };
 
-    let mut spans: Vec<Span<'a>> = vec![
+    let mut spans: Vec<Span<'static>> = vec![
         selection_marker(is_cursor, focused, palette),
         Span::raw(" "),
-        Span::raw(indent),
+        Span::raw(indent.clone()),
         Span::styled(kind_str, Style::default().fg(kind_color)),
-        Span::styled(
-            safe_terminal_text(&node.name),
-            Style::default().fg(name_color),
-        ),
     ];
-    if !viewed_dot.is_empty() {
-        spans.push(Span::styled(
-            viewed_dot.to_string(),
-            Style::default().fg(tokens.muted),
-        ));
-    }
-    if node.comment_count > 0 {
-        spans.push(Span::styled(
-            format!("  [{}]", node.comment_count),
-            Style::default().fg(tokens.info),
-        ));
-    }
-    if node.kind == FileNodeKind::File && (node.additions > 0 || node.deletions > 0) {
-        spans.push(Span::raw("  "));
+
+    let prefix_width = 4usize
+        .saturating_add(UnicodeWidthStr::width(indent.as_str()))
+        .min(width as usize);
+    let mut stats: Vec<Span<'static>> = Vec::new();
+    if node.kind == FileNodeKind::File {
+        if node.comment_count > 0 {
+            stats.push(Span::styled(
+                format!("  [{}]", node.comment_count),
+                Style::default().fg(tokens.info),
+            ));
+        }
         if node.additions > 0 {
-            spans.push(Span::styled(
-                format!("+{}", node.additions),
+            stats.push(Span::styled(
+                format!("  +{}", node.additions),
                 Style::default().fg(tokens.positive),
             ));
         }
-        if node.additions > 0 && node.deletions > 0 {
-            spans.push(Span::raw(" "));
-        }
         if node.deletions > 0 {
-            spans.push(Span::styled(
-                format!("-{}", node.deletions),
+            stats.push(Span::styled(
+                format!("  -{}", node.deletions),
                 Style::default().fg(tokens.negative),
             ));
         }
     }
+
+    let available = (width as usize).saturating_sub(prefix_width);
+    // On narrow rails, keep review state before diff counts; the active-file
+    // header still owns the complete count summary.
+    if spans_width(&stats).saturating_add(4) > available {
+        stats.retain(|span| span.content.contains('['));
+    }
+    if spans_width(&stats).saturating_add(4) > available {
+        stats.clear();
+    }
+
+    let stats_width = spans_width(&stats);
+    let gap_width = usize::from(!stats.is_empty());
+    let name_budget = available
+        .saturating_sub(stats_width)
+        .saturating_sub(gap_width);
+    let mut name = safe_terminal_text(&node.name);
+    if node.viewed {
+        name.push_str(" ✓");
+    }
+    let name = ellipsize(&name, name_budget);
+    let name_width = UnicodeWidthStr::width(name.as_str());
+    spans.push(Span::styled(name, Style::default().fg(name_color)));
+    if !stats.is_empty() {
+        let gap = available
+            .saturating_sub(name_width)
+            .saturating_sub(stats_width)
+            .max(1);
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.extend(stats);
+    }
     ListItem::new(Line::from(spans))
+}
+
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+fn ellipsize(value: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(value) <= max_width {
+        return value.to_string();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    let mut shortened = String::new();
+    let mut used = 0usize;
+    for character in value.chars() {
+        let character_width = unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
+        if used.saturating_add(character_width) > max_width.saturating_sub(1) {
+            break;
+        }
+        shortened.push(character);
+        used = used.saturating_add(character_width);
+    }
+    shortened.push('…');
+    shortened
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    use ratatui::widgets::Widget;
+
+    use crate::ui::file_tree::FileNode;
+
+    fn file_node() -> FileNode {
+        FileNode {
+            name: "long-renderer-name.rs".to_string(),
+            path: PathBuf::from("src/long-renderer-name.rs"),
+            depth: 1,
+            kind: FileNodeKind::File,
+            file_diff_idx: Some(0),
+            expanded: false,
+            viewed: false,
+            comment_count: 2,
+            change_marker: 'M',
+            additions: 12,
+            deletions: 3,
+        }
+    }
+
+    fn render_row(width: u16) -> String {
+        let area = Rect::new(0, 0, width, 1);
+        let mut buffer = Buffer::empty(area);
+        Widget::render(
+            List::new(vec![build_item(
+                &file_node(),
+                true,
+                true,
+                width,
+                &Palette::default(),
+            )]),
+            area,
+            &mut buffer,
+        );
+        (0..width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn file_rows_align_review_and_change_metadata_to_the_right() {
+        let rendered = render_row(40);
+        assert!(rendered.contains("long-renderer-name…"));
+        assert!(rendered.ends_with("[2]  +12  -3"));
+    }
+
+    #[test]
+    fn narrow_file_rows_preserve_name_and_review_count() {
+        let rendered = render_row(20);
+        assert!(rendered.contains("long-re…"));
+        assert!(rendered.ends_with("[2]"));
+        assert!(!rendered.contains("+12"));
+    }
+
+    #[test]
+    fn ellipsis_respects_wide_terminal_cells() {
+        assert!(UnicodeWidthStr::width(ellipsize("界面renderer", 7).as_str()) <= 7);
+    }
 }

@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use super::{ImageDiffData, ImageSide, RasterImage};
+use super::{ImageDiffData, RasterImage};
 
 const MAX_PREVIEW_DIMENSION: u32 = 2_048;
 
@@ -150,14 +148,18 @@ pub fn build_difference(before: &RasterImage, after: &RasterImage) -> (RasterIma
 mod tests {
     use super::*;
     use std::path::Path;
+    use std::sync::Arc;
 
     use crate::ui::image_diff::decode::{decode_raster, tests::rgba_png};
+    use crate::ui::image_diff::ImageSide;
 
     #[test]
     fn image_difference_reports_changed_pixels() {
-        let before =
-            decode_raster(&rgba_png(2, 1, &[[0, 0, 0, 255], [0, 0, 0, 255]]), Path::new("before.png"))
-                .unwrap();
+        let before = decode_raster(
+            &rgba_png(2, 1, &[[0, 0, 0, 255], [0, 0, 0, 255]]),
+            Path::new("before.png"),
+        )
+        .unwrap();
         let after = decode_raster(
             &rgba_png(2, 1, &[[255, 255, 255, 255], [0, 0, 0, 255]]),
             Path::new("after.png"),

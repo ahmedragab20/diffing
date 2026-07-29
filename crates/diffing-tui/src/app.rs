@@ -17,7 +17,7 @@ use diffing_core::index::{
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -33,7 +33,8 @@ use crate::lsp::{
 };
 use crate::persistence::FileDisplay;
 use crate::search::{
-    SearchClient, SearchHit, SearchHitKind, SearchPreview, SearchResponse, SearchScope,
+    classify_symbol_line, load_local_preview, SearchClient, SearchHit, SearchHitKind,
+    SearchPreview, SearchResponse, SearchScope,
 };
 use crate::themes::{Palette, ThemeName};
 use crate::ui::agent_activity_toast::{render_toast, Toast};
@@ -46,9 +47,9 @@ use crate::ui::file_tree_render::{
     content_area as file_tree_content_area, render_file_tree, FileTreeRenderOptions,
 };
 use crate::ui::gridline::{
-    chip_row, dim_buffer, fill, hint_line, horizontal_rule, overlay_block,
-    safe_terminal_character, safe_terminal_text, shortcut_help, shortcut_help_columns,
-    vertical_rule, GridlineTokens, GLYPHS, METRICS,
+    chip_row, dim_buffer, fill, hint_line, horizontal_rule, overlay_block, safe_terminal_character,
+    safe_terminal_text, shortcut_help, shortcut_help_columns, tail_ellipsize, vertical_rule,
+    GridlineTokens, GLYPHS, METRICS,
 };
 use crate::ui::image_diff::{
     default_compare_mode, is_image_path, render_image_diff, ImageCompareMode, ImageDiffData,
@@ -63,6 +64,7 @@ use crate::ui::vim_status_bar::{render_status_bar, StatusBarContext};
 const MAX_MODAL_INPUT_CHARACTERS: usize = 4_096;
 const MAX_PASTE_CHARACTERS: usize = 1_048_576;
 const MAX_TEXTAREA_CHARACTERS: usize = 1_048_576;
+const SEARCH_RESULT_LIMIT: usize = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -403,6 +405,7 @@ pub struct App {
     repo_search_indexing: bool,
     repo_search_loading: bool,
     repo_search_error: Option<String>,
+    repo_search_notice: Option<String>,
     repo_search_query: String,
     search_request_id: u64,
     search_request_tx: Option<Sender<SearchRequest>>,
@@ -665,6 +668,206 @@ fn diff_first_search_hits(hits: Vec<SearchHit>, changed_paths: &HashSet<String>)
     in_diff
 }
 
+fn indexed_git_status(kind: IndexedChangeKind) -> &'static str {
+    match kind {
+        IndexedChangeKind::Modified => "modified",
+        IndexedChangeKind::Added => "added",
+        IndexedChangeKind::Deleted => "deleted",
+        IndexedChangeKind::Renamed => "renamed",
+        IndexedChangeKind::Untracked => "untracked",
+        IndexedChangeKind::Binary => "binary",
+    }
+}
+
+fn fuzzy_path_score(path: &str, query: &str) -> Option<i64> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Some(0);
+    }
+    let path_lower = path.to_lowercase();
+    let path_chars: Vec<char> = path_lower.chars().collect();
+    let mut cursor = 0usize;
+    let mut previous = None;
+    let mut score = 0i64;
+    for needle in query.chars() {
+        let offset = path_chars
+            .get(cursor..)?
+            .iter()
+            .position(|character| *character == needle)?;
+        let index = cursor + offset;
+        score += 8;
+        if previous == Some(index.saturating_sub(1)) {
+            score += 12;
+        }
+        if index == 0 || matches!(path_chars[index - 1], '/' | '_' | '-' | '.') {
+            score += 16;
+        }
+        previous = Some(index);
+        cursor = index + 1;
+    }
+    if path_lower.contains(&query) {
+        score += 80;
+    }
+    let basename = path_lower.rsplit('/').next().unwrap_or(&path_lower);
+    if basename.starts_with(&query) {
+        score += 120;
+    }
+    Some(score - path_chars.len().min(i64::MAX as usize) as i64)
+}
+
+fn changed_file_search_hits(index: &DiffIndex, query: &str) -> (Vec<SearchHit>, usize) {
+    let mut ranked = index
+        .files
+        .iter()
+        .enumerate()
+        .filter_map(|(order, file)| {
+            let path = file.display_path().to_string_lossy().into_owned();
+            let score = fuzzy_path_score(&path, query)?;
+            let title = file
+                .display_path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&path)
+                .to_string();
+            let detail = file
+                .display_path()
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(|parent| format!("{}/", parent.to_string_lossy()))
+                .unwrap_or_else(|| "./".to_string());
+            Some((
+                score,
+                order,
+                SearchHit {
+                    kind: SearchHitKind::File,
+                    path,
+                    line: None,
+                    title,
+                    detail,
+                    git_status: indexed_git_status(file.kind).to_string(),
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    if !query.trim().is_empty() {
+        ranked.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+    }
+    let total = ranked.len();
+    let hits = ranked
+        .into_iter()
+        .take(SEARCH_RESULT_LIMIT)
+        .map(|(_, _, hit)| hit)
+        .collect();
+    (hits, total)
+}
+
+fn interleave_search_hits(groups: Vec<Vec<SearchHit>>, limit: usize) -> Vec<SearchHit> {
+    let mut groups = groups.into_iter().map(Vec::into_iter).collect::<Vec<_>>();
+    let mut hits = Vec::new();
+    while hits.len() < limit {
+        let mut appended = false;
+        for group in &mut groups {
+            if let Some(hit) = group.next() {
+                hits.push(hit);
+                appended = true;
+                if hits.len() == limit {
+                    break;
+                }
+            }
+        }
+        if !appended {
+            break;
+        }
+    }
+    hits
+}
+
+fn changed_symbol_search_hits(index: &DiffIndex, query: &str) -> Result<(Vec<SearchHit>, usize)> {
+    let needle = query.trim().to_lowercase();
+    let mut hits = Vec::new();
+    let mut total = 0usize;
+    'files: for (file_index, file) in index.files.iter().enumerate() {
+        let path = file.display_path().to_string_lossy().into_owned();
+        let mut row = 0u64;
+        while row < file.row_count {
+            let page = index.viewport(file_index, row, 512, 1024 * 1024)?;
+            if page.rows.is_empty() {
+                break;
+            }
+            for view_row in page.rows {
+                let ViewRow::Line {
+                    kind: IndexedLineKind::Add,
+                    new_lineno: Some(line),
+                    content,
+                    ..
+                } = view_row
+                else {
+                    continue;
+                };
+                let Some(symbol) = classify_symbol_line(&content) else {
+                    continue;
+                };
+                if !needle.is_empty() && !symbol.name.to_lowercase().contains(&needle) {
+                    continue;
+                }
+                total = total.saturating_add(1);
+                if total > SEARCH_RESULT_LIMIT {
+                    break 'files;
+                }
+                if hits.len() < SEARCH_RESULT_LIMIT {
+                    hits.push(SearchHit {
+                        kind: SearchHitKind::Symbol,
+                        path: path.clone(),
+                        line: Some(line),
+                        title: symbol.name,
+                        detail: format!("{} · {path}:{line}", symbol.kind),
+                        git_status: indexed_git_status(file.kind).to_string(),
+                    });
+                }
+            }
+            let Some(next) = page.next_row else {
+                break;
+            };
+            if next <= row {
+                break;
+            }
+            row = next;
+        }
+    }
+    Ok((hits, total))
+}
+
+fn changed_text_search_hits(index: &DiffIndex, query: &str) -> Result<(Vec<SearchHit>, usize)> {
+    if query.trim().is_empty() {
+        return Ok((Vec::new(), 0));
+    }
+    let page = index.search_literal(query, 0, 0, 512, 2 * 1024 * 1024)?;
+    let truncated = page.truncated;
+    let hits = page
+        .hits
+        .into_iter()
+        .filter_map(|hit| {
+            let line = hit.new_lineno.or(hit.old_lineno)?;
+            let git_status = index
+                .files
+                .get(hit.file_index)
+                .map(|file| indexed_git_status(file.kind))
+                .unwrap_or("")
+                .to_string();
+            Some(SearchHit {
+                kind: SearchHitKind::Text,
+                path: hit.path.clone(),
+                line: Some(line),
+                title: hit.preview.trim().to_string(),
+                detail: format!("{}:{line}", hit.path),
+                git_status,
+            })
+        })
+        .collect::<Vec<_>>();
+    let total = hits.len().saturating_add(usize::from(truncated));
+    Ok((hits, total))
+}
+
 fn spawn_index_worker(
     repo_root: PathBuf,
     git_diff_args: Vec<String>,
@@ -875,6 +1078,7 @@ impl App {
             repo_search_indexing: false,
             repo_search_loading: false,
             repo_search_error: None,
+            repo_search_notice: None,
             repo_search_query: String::new(),
             search_request_id: 0,
             search_request_tx: has_search_client.then_some(search_request_tx),
@@ -1107,6 +1311,7 @@ impl App {
                     self.repo_search_total = response.total;
                     self.repo_search_indexing = response.indexing;
                     self.repo_search_error = response.error;
+                    self.repo_search_notice = response.notice;
                     self.search_cursor = self
                         .search_cursor
                         .min(self.repo_search_hits.len().saturating_sub(1));
@@ -1116,6 +1321,7 @@ impl App {
                     self.repo_search_hits.clear();
                     self.repo_search_total = 0;
                     self.repo_search_error = Some(error);
+                    self.repo_search_notice = None;
                     self.clear_search_preview();
                 }
             }
@@ -2584,14 +2790,35 @@ impl App {
     }
 
     fn queue_repo_search(&mut self) {
+        self.search_request_id = self.search_request_id.saturating_add(1);
+        self.repo_search_query = self.modal_input.trim().to_string();
+
+        // A short symbol query is much more useful as a browse/filter over
+        // definitions in changed lines than as an enormous repository grep.
+        // This mirrors the web palette and also gives the standalone TUI a
+        // complete Symbols implementation without the Node bridge.
+        if self.search_scope == SearchScope::Symbols && self.repo_search_query.chars().count() < 2 {
+            if self.search_changed_only {
+                self.refresh_changed_search_fallback();
+            } else {
+                self.repo_search_hits.clear();
+                self.repo_search_total = 0;
+                self.repo_search_loading = false;
+                self.repo_search_indexing = self.indexing;
+                self.repo_search_error = None;
+                self.repo_search_notice = None;
+                self.clear_search_preview();
+            }
+            return;
+        }
+
         let Some(tx) = self.search_request_tx.clone() else {
             self.refresh_changed_search_fallback();
             return;
         };
-        self.search_request_id = self.search_request_id.saturating_add(1);
         self.repo_search_loading = true;
         self.repo_search_error = None;
-        self.repo_search_query = self.modal_input.trim().to_string();
+        self.repo_search_notice = None;
         self.repo_search_hits.clear();
         self.repo_search_total = 0;
         self.clear_search_preview();
@@ -2644,136 +2871,59 @@ impl App {
         self.repo_search_loading = false;
         self.repo_search_indexing = self.indexing;
         self.repo_search_error = None;
+        self.repo_search_notice = None;
         self.clear_search_preview();
 
-        if self.search_scope == SearchScope::Symbols {
-            self.repo_search_error =
-                Some("Symbol search requires the diffing Node launcher".to_string());
-            return;
-        }
         if self.search_regex {
             self.repo_search_error =
                 Some("Regex search requires the diffing Node launcher".to_string());
             return;
         }
-        if self.repo_search_query.is_empty() {
-            if matches!(self.search_scope, SearchScope::All | SearchScope::Files) {
-                self.repo_search_hits = self
-                    .index
-                    .files
-                    .iter()
-                    .map(|file| {
-                        let path = file.display_path().to_string_lossy().into_owned();
-                        let title = file
-                            .display_path()
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or(&path)
-                            .to_string();
-                        let detail = file
-                            .display_path()
-                            .parent()
-                            .filter(|parent| !parent.as_os_str().is_empty())
-                            .map(|parent| format!("{}/", parent.to_string_lossy()))
-                            .unwrap_or_else(|| "./".to_string());
-                        let git_status = match file.kind {
-                            IndexedChangeKind::Modified => "modified",
-                            IndexedChangeKind::Added => "added",
-                            IndexedChangeKind::Deleted => "deleted",
-                            IndexedChangeKind::Renamed => "renamed",
-                            IndexedChangeKind::Untracked => "untracked",
-                            IndexedChangeKind::Binary => "binary",
-                        }
-                        .to_string();
-                        SearchHit {
-                            kind: SearchHitKind::File,
-                            path,
-                            line: None,
-                            title,
-                            detail,
-                            git_status,
-                        }
-                    })
-                    .collect();
-                self.repo_search_total = self.repo_search_hits.len();
+        let result: Result<(Vec<SearchHit>, usize)> = (|| match self.search_scope {
+            SearchScope::Files => Ok(changed_file_search_hits(
+                &self.index,
+                &self.repo_search_query,
+            )),
+            SearchScope::Text => changed_text_search_hits(&self.index, &self.repo_search_query),
+            SearchScope::Symbols => {
+                changed_symbol_search_hits(&self.index, &self.repo_search_query)
             }
-            return;
-        }
-
-        match self
-            .index
-            .search_literal(&self.repo_search_query, 0, 0, 512, 2 * 1024 * 1024)
-        {
-            Ok(page) => {
-                let truncated = page.truncated;
-                self.repo_search_hits = page
-                    .hits
-                    .into_iter()
-                    .filter(|hit| match self.search_scope {
-                        SearchScope::Files => hit.old_lineno.is_none() && hit.new_lineno.is_none(),
-                        SearchScope::Text => hit.old_lineno.is_some() || hit.new_lineno.is_some(),
-                        SearchScope::All => true,
-                        SearchScope::Symbols => false,
-                    })
-                    .map(|hit| {
-                        let line = hit.new_lineno.or(hit.old_lineno);
-                        let kind = if line.is_some() {
-                            SearchHitKind::Text
-                        } else {
-                            SearchHitKind::File
-                        };
-                        let title = if line.is_some() {
-                            hit.preview.trim().to_string()
-                        } else {
-                            std::path::Path::new(&hit.path)
-                                .file_name()
-                                .and_then(|name| name.to_str())
-                                .unwrap_or(&hit.path)
-                                .to_string()
-                        };
-                        let detail = if let Some(line) = line {
-                            format!("{}:{line}", hit.path)
-                        } else {
-                            std::path::Path::new(&hit.path)
-                                .parent()
-                                .map(|parent| {
-                                    let value = parent.to_string_lossy();
-                                    if value.is_empty() {
-                                        "./".to_string()
-                                    } else {
-                                        format!("{value}/")
-                                    }
-                                })
-                                .unwrap_or_else(|| "./".to_string())
-                        };
-                        let git_status = self
-                            .index
-                            .files
-                            .get(hit.file_index)
-                            .map(|file| match file.kind {
-                                IndexedChangeKind::Modified => "modified",
-                                IndexedChangeKind::Added => "added",
-                                IndexedChangeKind::Deleted => "deleted",
-                                IndexedChangeKind::Renamed => "renamed",
-                                IndexedChangeKind::Untracked => "untracked",
-                                IndexedChangeKind::Binary => "binary",
-                            })
-                            .unwrap_or("")
-                            .to_string();
-                        SearchHit {
-                            kind,
-                            path: hit.path,
-                            line,
-                            title,
-                            detail,
-                            git_status,
-                        }
-                    })
-                    .collect();
-                self.repo_search_total = self.repo_search_hits.len() + usize::from(truncated);
+            SearchScope::All if self.repo_search_query.is_empty() => Ok(changed_file_search_hits(
+                &self.index,
+                &self.repo_search_query,
+            )),
+            SearchScope::All => {
+                let (files, file_total) =
+                    changed_file_search_hits(&self.index, &self.repo_search_query);
+                let (symbols, symbol_total) =
+                    changed_symbol_search_hits(&self.index, &self.repo_search_query)?;
+                let symbol_locations = symbols
+                    .iter()
+                    .filter_map(|hit| hit.line.map(|line| (hit.path.clone(), line)))
+                    .collect::<HashSet<_>>();
+                let (mut text, text_total) =
+                    changed_text_search_hits(&self.index, &self.repo_search_query)?;
+                let before_dedup = text.len();
+                text.retain(|hit| {
+                    !hit.line
+                        .is_some_and(|line| symbol_locations.contains(&(hit.path.clone(), line)))
+                });
+                let deduplicated = before_dedup.saturating_sub(text.len());
+                let total = file_total
+                    .saturating_add(symbol_total)
+                    .saturating_add(text_total.saturating_sub(deduplicated));
+                let hits = interleave_search_hits(vec![files, symbols, text], SEARCH_RESULT_LIMIT);
+                Ok((hits, total))
+            }
+        })();
+        match result {
+            Ok((hits, total)) => {
+                self.repo_search_hits = hits.into_iter().take(SEARCH_RESULT_LIMIT).collect();
+                self.repo_search_total = total;
                 self.search_cursor = self
                     .search_cursor
                     .min(self.repo_search_hits.len().saturating_sub(1));
+                self.queue_search_preview();
             }
             Err(error) => {
                 self.repo_search_error = Some(format!("search failed: {error}"));
@@ -2800,23 +2950,34 @@ impl App {
     }
 
     fn queue_search_preview(&mut self) {
-        let Some(hit) = self.repo_search_hits.get(self.search_cursor) else {
+        let Some(hit) = self.repo_search_hits.get(self.search_cursor).cloned() else {
             self.clear_search_preview();
             return;
         };
-        let Some(tx) = self.preview_request_tx.as_ref() else {
-            return;
-        };
         self.preview_request_id = self.preview_request_id.saturating_add(1);
-        self.search_preview_loading = true;
-        self.search_preview_error = None;
         self.search_preview_scroll = hit
             .line
             .map(|line| line.saturating_sub(4) as usize)
             .unwrap_or(0);
+        let Some(tx) = self.preview_request_tx.as_ref() else {
+            self.search_preview_loading = false;
+            match load_local_preview(&self.repo_root, &hit.path) {
+                Ok(preview) => {
+                    self.search_preview = Some(preview);
+                    self.search_preview_error = None;
+                }
+                Err(error) => {
+                    self.search_preview = None;
+                    self.search_preview_error = Some(error.to_string());
+                }
+            }
+            return;
+        };
+        self.search_preview_loading = true;
+        self.search_preview_error = None;
         let request = PreviewRequest {
             id: self.preview_request_id,
-            path: hit.path.clone(),
+            path: hit.path,
         };
         if tx.send(request).is_err() {
             self.search_preview_loading = false;
@@ -2952,9 +3113,7 @@ impl App {
     }
 
     fn image_focus_active(&self) -> bool {
-        self.mode == Mode::Normal
-            && self.focus == Focus::Diff
-            && self.selected_image().is_some()
+        self.mode == Mode::Normal && self.focus == Focus::Diff && self.selected_image().is_some()
     }
 
     fn cycle_image_mode(&mut self, delta: isize) {
@@ -4659,13 +4818,7 @@ impl App {
         let Some((path, data)) = self.prepare_selected_image() else {
             return;
         };
-        self.render_prepared_image(
-            &path,
-            data.as_ref(),
-            area,
-            ImagePresentation::Inline,
-            buf,
-        );
+        self.render_prepared_image(&path, data.as_ref(), area, ImagePresentation::Inline, buf);
     }
 
     fn render_image_preview(&mut self, area: Rect, buf: &mut Buffer) {
@@ -4684,9 +4837,7 @@ impl App {
         );
         if controls_height > 0 {
             let controls = Rect::new(popup.x, popup.y, popup.width, 1);
-            let data = prepared
-                .as_ref()
-                .and_then(|(_, data)| data.as_deref());
+            let data = prepared.as_ref().and_then(|(_, data)| data.as_deref());
             let mut labels = Vec::new();
             let mut mapped = Vec::new();
             for (label, mode, control) in [
@@ -4739,8 +4890,8 @@ impl App {
                 let mut offset = close_x + 1;
                 for span in line.spans {
                     buf.set_string(offset, controls.y, span.content.as_ref(), span.style);
-                    offset = offset
-                        .saturating_add(UnicodeWidthStr::width(span.content.as_ref()) as u16);
+                    offset =
+                        offset.saturating_add(UnicodeWidthStr::width(span.content.as_ref()) as u16);
                 }
                 self.regions
                     .image_controls
@@ -5104,12 +5255,9 @@ impl App {
             Mode::ThemePicker => "type to filter · ↑↓ preview · Enter apply · Esc restore",
             Mode::CommentForm => "Ctrl-S save · Esc cancel",
             Mode::SendReview => "Tab field · ←→ verdict · Ctrl-S send · Esc cancel",
-            Mode::Search if self.search_changed_only => {
-                "type/edit query · Tab scope · ^G whole repo · ↑↓/Pg select · ⇧↑↓ preview · Enter jump"
-            }
-            Mode::Search => {
-                "type/edit query · Tab scope · ^G changed only · ↑↓/Pg select · ⇧↑↓ preview · Enter jump"
-            }
+            // Search owns its keyboard reference inside the overlay. Keeping
+            // the dimmed application strip quiet avoids duplicate controls.
+            Mode::Search => "",
             Mode::Settings => "↑↓ select · ←→ change · Esc close",
             Mode::Hover => "j/k or wheel scroll · Esc close",
             Mode::ImagePreview => "Tab mode · +/- zoom · hjkl pan · 0 fit · Esc close",
@@ -5272,17 +5420,29 @@ impl App {
             }
         }
         let Some(idx) = self.file_tree.active_file_idx() else {
-            let message = if !self.index.files.is_empty() {
-                "Select a file · Enter or l expands directories"
+            let (marker, title, detail, tone) = if !self.index.files.is_empty() {
+                (
+                    "›",
+                    "Choose a file",
+                    "Select a change from the file rail",
+                    self.palette.accent,
+                )
             } else if self.index.complete {
-                "✓  Working tree is clean"
+                (
+                    "✓",
+                    "Working tree clean",
+                    "No changes to review",
+                    self.palette.added,
+                )
             } else {
-                "◌  Indexing changes…"
+                (
+                    "◌",
+                    "Indexing changes",
+                    "The first files will appear as they are ready",
+                    self.palette.comment,
+                )
             };
-            Paragraph::new(message)
-                .style(Style::default().fg(self.palette.dim).bg(self.palette.bg))
-                .centered()
-                .render(area, buf);
+            render_empty_diff_state(marker, title, detail, tone, area, &self.palette, buf);
             self.finish_pointer_mapping(area, hovered_target);
             return;
         };
@@ -5374,6 +5534,13 @@ impl App {
         }
         let tokens = GridlineTokens::from(&self.palette);
         fill_area(area, tokens.surface, buf);
+        if self.focus == Focus::Diff {
+            for y in area.y..area.y.saturating_add(area.height) {
+                buf[(area.x, y)]
+                    .set_symbol(GLYPHS.focus_rail)
+                    .set_style(Style::default().fg(tokens.focus).bg(tokens.surface));
+            }
+        }
         let Some(index) = self.file_tree.active_file_idx() else {
             buf.set_string(
                 area.x + 2,
@@ -5418,10 +5585,19 @@ impl App {
                 .bg(tokens.surface)
                 .add_modifier(Modifier::BOLD),
         );
+        let path_x = area.x + 5;
+        let path_width = area.width.saturating_sub(7) as usize;
+        let (directory, basename) = compact_path(&path, path_width);
         buf.set_string(
-            area.x + 5,
+            path_x,
             area.y,
-            ellipsize(&path, area.width.saturating_sub(7) as usize),
+            &directory,
+            Style::default().fg(tokens.muted).bg(tokens.surface),
+        );
+        buf.set_string(
+            path_x + UnicodeWidthStr::width(directory.as_str()) as u16,
+            area.y,
+            basename,
             Style::default()
                 .fg(tokens.text)
                 .bg(tokens.surface)
@@ -5709,11 +5885,12 @@ impl App {
     fn render_header(&mut self, area: Rect, buf: &mut Buffer) {
         let tokens = GridlineTokens::from(&self.palette);
         fill_area(area, self.palette.bg, buf);
-        let repo = self
-            .repo_root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("repository");
+        let repo = safe_terminal_text(
+            self.repo_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("repository"),
+        );
         let title = if repo == "diffing" {
             "diffing".to_string()
         } else {
@@ -5738,7 +5915,7 @@ impl App {
             buf.set_string(
                 area.x + 11,
                 area.y,
-                repo,
+                &repo,
                 Style::default().fg(tokens.text).bg(tokens.canvas),
             );
         }
@@ -5748,14 +5925,22 @@ impl App {
                 .as_ref()
                 .is_some_and(|api| api.waiter_count() > 0)
         {
-            "  agent"
+            "  ● agent"
         } else {
             ""
         };
-        let file_count = format!("{} files", self.files.len());
+        let file_count = format!(
+            "{} {}",
+            self.files.len(),
+            if self.files.len() == 1 {
+                "file"
+            } else {
+                "files"
+            }
+        );
         let additions = format!("+{}", self.index.additions);
         let deletions = format!("-{}", self.index.deletions);
-        let indexing = if self.indexing { "  indexing" } else { "" };
+        let indexing = if self.indexing { "  ◌ indexing" } else { "" };
         let summary_width: u16 = [
             file_count.as_str(),
             "  ",
@@ -5766,7 +5951,7 @@ impl App {
             indexing,
         ]
         .iter()
-        .map(|part| part.chars().count() as u16)
+        .map(|part| UnicodeWidthStr::width(*part) as u16)
         .sum();
         let summary_x = area
             .x
@@ -5782,7 +5967,7 @@ impl App {
                     .bg(tokens.canvas)
                     .add_modifier(Modifier::BOLD),
             );
-            x += file_count.chars().count() as u16 + 2;
+            x += UnicodeWidthStr::width(file_count.as_str()) as u16 + 2;
             x = render_change_counts(
                 x,
                 area.y,
@@ -5799,7 +5984,7 @@ impl App {
                     agent,
                     Style::default().fg(tokens.info).bg(tokens.canvas),
                 );
-                x += agent.chars().count() as u16;
+                x += UnicodeWidthStr::width(agent) as u16;
             }
             if !indexing.is_empty() {
                 buf.set_string(
@@ -6052,33 +6237,14 @@ impl App {
     fn render_search_palette(&mut self, area: Rect, buf: &mut Buffer) {
         let tokens = GridlineTokens::from(&self.palette);
         dim_buffer(area, buf);
-        let width = area.width.saturating_sub(METRICS.modal_margin_x).min(132);
-        let height = area
-            .height
-            .saturating_sub(METRICS.modal_margin_y)
-            .min(26)
-            .max(10.min(area.height));
-        let popup = Rect::new(
-            area.x + area.width.saturating_sub(width) / 2,
-            area.y + area.height.saturating_sub(height) / 2,
-            width,
-            height,
-        );
+        let popup = search_popup_rect(area);
         Clear.render(popup, buf);
-        fill_area(popup, self.palette.elevated, buf);
-        let state = if self.repo_search_loading {
-            " · loading"
-        } else if self.repo_search_indexing {
-            " · indexing"
-        } else {
-            ""
-        };
-        let title = format!(" Search · {}{state} ", self.search_scope.label());
+        fill_area(popup, tokens.raised, buf);
         let block = overlay_block(
             Span::styled(
-                title,
+                " Search ",
                 Style::default()
-                    .fg(self.palette.accent)
+                    .fg(tokens.text)
                     .add_modifier(Modifier::BOLD),
             ),
             &self.palette,
@@ -6086,6 +6252,34 @@ impl App {
         let inner = block.inner(popup);
         block.render(popup, buf);
 
+        // The query owns the first row: search is an editing task before it is
+        // a filtering task. A focus rail makes that clear without boxing the
+        // field inside the already-bordered overlay.
+        let input_y = inner.y;
+        let input = Rect::new(inner.x, input_y, inner.width, 1);
+        fill_area(input, tokens.element, buf);
+        buf[(input.x, input.y)]
+            .set_symbol(GLYPHS.focus_rail)
+            .set_style(Style::default().fg(tokens.focus).bg(tokens.element));
+        self.regions.modal_input = Some(Rect::new(
+            inner.x + 2,
+            input_y,
+            inner.width.saturating_sub(3),
+            1,
+        ));
+        buf.set_string(
+            inner.x + 2,
+            input_y,
+            modal_input_display(
+                "/ ",
+                &self.modal_input,
+                self.modal_cursor,
+                inner.width.saturating_sub(3) as usize,
+            ),
+            Style::default().fg(tokens.text).bg(tokens.element),
+        );
+
+        let controls_y = input_y.saturating_add(1);
         let scopes = [
             SearchScope::All,
             SearchScope::Files,
@@ -6093,33 +6287,43 @@ impl App {
             SearchScope::Symbols,
         ];
         let changed_label = if self.search_changed_only {
-            " ✓ Changed "
+            "^G changed"
         } else {
-            " Changed "
+            "^G repository"
         };
         let regex_label = if self.search_scope == SearchScope::Text {
-            if self.search_regex {
-                " .*✓ "
-            } else {
-                " .* "
-            }
+            Some("^R regex")
         } else {
-            ""
+            None
         };
-        let controls_width = changed_label.chars().count() as u16 + regex_label.len() as u16;
-        let controls_x =
-            (controls_width + 1 < inner.width).then(|| inner.x + inner.width - controls_width - 1);
+        let changed_width = UnicodeWidthStr::width(changed_label) as u16 + 2;
+        let regex_width = regex_label
+            .map(|label| UnicodeWidthStr::width(label) as u16 + 2)
+            .unwrap_or(0);
+        let controls_width = changed_width
+            .saturating_add(regex_width)
+            .saturating_add(u16::from(regex_label.is_some()));
+        let scopes_width = scopes
+            .iter()
+            .map(|scope| UnicodeWidthStr::width(format!(" {} ", scope.label()).as_str()) as u16 + 1)
+            .sum::<u16>();
+        let controls_fit = scopes_width
+            .saturating_add(controls_width)
+            .saturating_add(2)
+            < inner.width;
+        let controls_x = controls_fit.then(|| inner.x + inner.width - controls_width - 1);
         let scope_end = controls_x.unwrap_or_else(|| inner.x.saturating_add(inner.width));
         let mut x = inner.x + 1;
         for scope in scopes {
             let active = scope == self.search_scope;
             let label = format!(" {} ", scope.label());
-            if x + label.len() as u16 >= scope_end {
+            let label_width = UnicodeWidthStr::width(label.as_str()) as u16;
+            if x + label_width >= scope_end {
                 break;
             }
             buf.set_string(
                 x,
-                inner.y,
+                controls_y,
                 &label,
                 Style::default()
                     .fg(if active { tokens.text } else { tokens.muted })
@@ -6136,103 +6340,53 @@ impl App {
             );
             self.regions
                 .search_scopes
-                .push((Rect::new(x, inner.y, label.len() as u16, 1), scope));
-            x += label.len() as u16 + 1;
+                .push((Rect::new(x, controls_y, label_width, 1), scope));
+            x += label_width + 1;
         }
-        if let Some(controls_x) = controls_x {
-            if !regex_label.is_empty() {
-                self.regions.search_regex =
-                    Some(Rect::new(controls_x, inner.y, regex_label.len() as u16, 1));
-                buf.set_string(
-                    controls_x,
-                    inner.y,
+        if let Some(mut control_x) = controls_x {
+            if let Some(regex_label) = regex_label {
+                let region = render_chip(
+                    control_x,
+                    controls_y,
                     regex_label,
-                    Style::default()
-                        .fg(if self.search_regex {
-                            tokens.accent
-                        } else {
-                            tokens.muted
-                        })
-                        .bg(tokens.element),
+                    self.search_regex,
+                    self.mouse_position,
+                    &self.palette,
+                    buf,
                 );
+                self.regions.search_regex = Some(region);
+                control_x = control_x.saturating_add(region.width + 1);
             }
-            self.regions.search_changed = Some(Rect::new(
-                controls_x + regex_label.len() as u16,
-                inner.y,
-                changed_label.chars().count() as u16,
-                1,
-            ));
-            buf.set_string(
-                controls_x + regex_label.len() as u16,
-                inner.y,
+            let region = render_chip(
+                control_x,
+                controls_y,
                 changed_label,
-                Style::default()
-                    .fg(if self.search_changed_only {
-                        tokens.accent
-                    } else {
-                        tokens.muted
-                    })
-                    .bg(tokens.element),
+                self.search_changed_only,
+                self.mouse_position,
+                &self.palette,
+                buf,
             );
+            self.regions.search_changed = Some(region);
         }
 
-        let input_y = inner.y + 1 + METRICS.section_gap;
-        fill_area(
-            Rect::new(inner.x, input_y, inner.width, 1),
-            tokens.element,
+        let divider_y = controls_y.saturating_add(1);
+        horizontal_rule(
+            Rect::new(inner.x, divider_y, inner.width, 1),
+            &self.palette,
             buf,
         );
-        self.regions.modal_input = Some(Rect::new(
-            inner.x + 1,
-            input_y,
-            inner.width.saturating_sub(2),
-            1,
-        ));
-        buf.set_string(
-            inner.x + 1,
-            input_y,
-            modal_input_display(
-                "/ ",
-                &self.modal_input,
-                self.modal_cursor,
-                inner.width.saturating_sub(2) as usize,
-            ),
-            Style::default().fg(tokens.text).bg(tokens.element),
-        );
-
-        let result_y = input_y + 1 + METRICS.section_gap;
-        let result_height = inner
-            .y
-            .saturating_add(inner.height)
-            .saturating_sub(result_y + 2) as usize;
-        let body = Rect::new(
-            inner.x,
-            result_y,
-            inner.width,
-            result_height.min(u16::MAX as usize) as u16,
-        );
-        if inner.width >= 88 {
-            let list_width = inner.width.saturating_mul(43) / 100;
-            let list = Rect::new(body.x, body.y, list_width, body.height);
-            let divider_x = list.x + list.width;
-            for y in body.y..body.y.saturating_add(body.height) {
-                buf[(divider_x, y)].set_symbol("│").set_style(
-                    Style::default()
-                        .fg(self.palette.border)
-                        .bg(self.palette.elevated),
-                );
-            }
-            let preview = Rect::new(
-                divider_x.saturating_add(1),
-                body.y,
-                body.width.saturating_sub(list.width + 1),
-                body.height,
-            );
+        let result_y = divider_y.saturating_add(1);
+        let footer_y = inner.y.saturating_add(inner.height.saturating_sub(1));
+        let result_height = footer_y.saturating_sub(result_y);
+        let body = Rect::new(inner.x, result_y, inner.width, result_height);
+        let (list, divider, preview) = search_result_regions(body);
+        self.render_search_results(list, buf);
+        if let Some(divider) = divider {
+            vertical_rule(divider, &self.palette, tokens.raised, buf);
+        }
+        if let Some(preview) = preview {
             self.regions.search_preview = Some(preview);
-            self.render_search_results(list, buf);
             self.render_search_preview(preview, buf);
-        } else {
-            self.render_search_results(body, buf);
         }
 
         let shown = self.repo_search_hits.len();
@@ -6241,22 +6395,47 @@ impl App {
         } else {
             format!("{shown}")
         };
-        let repository_toggle = if self.search_changed_only {
-            "^G whole repo"
+        let (state, state_color) = if self.repo_search_loading {
+            ("  ◌ searching".to_string(), tokens.info)
+        } else if self.repo_search_indexing {
+            ("  ◌ indexing".to_string(), tokens.info)
+        } else if let Some(notice) = self.repo_search_notice.as_deref() {
+            (format!("  ⚠ {}", ellipsize(notice, 36)), tokens.warning)
         } else {
-            "^G changed only"
+            (String::new(), tokens.info)
         };
-        let footer = format!(
-            "{count} result{} · Tab scope · {repository_toggle} · ↑↓/Pg move · Enter jump · ⇧↑↓ preview · ^U clear · Esc",
-            if self.repo_search_total == 1 { "" } else { "s" }
-        );
-        buf.set_string(
-            inner.x + 1,
-            inner.y + inner.height.saturating_sub(1),
-            ellipsize(&footer, inner.width.saturating_sub(2) as usize),
-            Style::default()
-                .fg(self.palette.dim)
-                .bg(self.palette.elevated),
+        let mut footer = Line::from(vec![
+            Span::styled(
+                format!(
+                    " {count} result{}",
+                    if self.repo_search_total == 1 { "" } else { "s" }
+                ),
+                Style::default().fg(tokens.text_subtle).bg(tokens.raised),
+            ),
+            Span::styled(state, Style::default().fg(state_color).bg(tokens.raised)),
+            Span::styled("  ·  ", Style::default().fg(tokens.rule).bg(tokens.raised)),
+        ]);
+        let footer_hint = if inner.width >= 88 {
+            "Tab scope · ↑↓/Pg select · ⇧↑↓ preview · ^U clear · Enter open · Esc close".to_string()
+        } else {
+            let source = if self.search_changed_only {
+                "^G repository"
+            } else {
+                "^G changed"
+            };
+            let regex = if self.search_scope == SearchScope::Text {
+                " · ^R regex"
+            } else {
+                ""
+            };
+            format!("Tab scope · {source}{regex} · ↑↓ select · Enter open · Esc close")
+        };
+        footer
+            .spans
+            .extend(hint_line(&footer_hint, tokens.raised, &self.palette).spans);
+        Paragraph::new(footer).render(
+            Rect::new(inner.x, footer_y, inner.width, u16::from(inner.height > 0)),
+            buf,
         );
     }
 
@@ -6264,28 +6443,34 @@ impl App {
         if area.width == 0 || area.height == 0 {
             return;
         }
+        let tokens = GridlineTokens::from(&self.palette);
         if let Some(error) = self.repo_search_error.as_deref() {
             buf.set_string(
                 area.x + 1,
                 area.y,
                 ellipsize(error, area.width.saturating_sub(2) as usize),
-                Style::default()
-                    .fg(self.palette.comment)
-                    .bg(self.palette.elevated),
+                Style::default().fg(tokens.warning).bg(tokens.raised),
             );
         } else if self.repo_search_hits.is_empty() && !self.repo_search_loading {
+            let (primary, secondary) = search_empty_copy(
+                self.search_scope,
+                self.modal_input.trim(),
+                self.search_changed_only,
+            );
             buf.set_string(
                 area.x + 1,
                 area.y,
-                if self.modal_input.is_empty() {
-                    "Start typing to search the repository"
-                } else {
-                    "No matches"
-                },
-                Style::default()
-                    .fg(self.palette.dim)
-                    .bg(self.palette.elevated),
+                ellipsize(&primary, area.width.saturating_sub(2) as usize),
+                Style::default().fg(tokens.text_subtle).bg(tokens.raised),
             );
+            if area.height > 1 && !secondary.is_empty() {
+                buf.set_string(
+                    area.x + 1,
+                    area.y + 1,
+                    ellipsize(&secondary, area.width.saturating_sub(2) as usize),
+                    Style::default().fg(tokens.muted).bg(tokens.raised),
+                );
+            }
         } else {
             let scroll = self
                 .search_cursor
@@ -6302,21 +6487,21 @@ impl App {
                 self.regions.search_results.push((row, index));
                 let selected = index == self.search_cursor;
                 let background = if selected {
-                    self.palette.selection_bg
+                    tokens.selected
                 } else {
-                    self.palette.elevated
+                    tokens.raised
                 };
                 fill_area(row, background, buf);
                 let (icon, color) = match hit.kind {
-                    SearchHitKind::File => ("F", self.palette.accent),
-                    SearchHitKind::Text => ("T", self.palette.added),
-                    SearchHitKind::Symbol => ("S", self.palette.comment),
+                    SearchHitKind::File => ("F", tokens.accent),
+                    SearchHitKind::Text => ("T", tokens.positive),
+                    SearchHitKind::Symbol => ("S", tokens.info),
                 };
                 buf.set_string(
                     row.x + 1,
                     row.y,
-                    if selected { "›" } else { " " },
-                    Style::default().fg(self.palette.accent).bg(background),
+                    if selected { GLYPHS.focus_rail } else { " " },
+                    Style::default().fg(tokens.focus).bg(background),
                 );
                 buf.set_string(
                     row.x + 3,
@@ -6328,11 +6513,20 @@ impl App {
                         .add_modifier(Modifier::BOLD),
                 );
                 let title_width = row.width.saturating_mul(2) / 3;
-                buf.set_string(
+                let title = ellipsize(&hit.title, title_width.saturating_sub(6) as usize);
+                render_query_text(
                     row.x + 5,
                     row.y,
-                    ellipsize(&hit.title, title_width.saturating_sub(6) as usize),
-                    Style::default().fg(self.palette.fg).bg(background),
+                    &title,
+                    self.modal_input.trim(),
+                    title_width.saturating_sub(6),
+                    Style::default().fg(tokens.text).bg(background),
+                    Style::default()
+                        .fg(tokens.focus)
+                        .bg(background)
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                    true,
+                    buf,
                 );
                 let detail_x = row.x + title_width;
                 let in_diff = self
@@ -6358,14 +6552,23 @@ impl App {
                     .saturating_add(row.width)
                     .saturating_sub(badge_width + 1);
                 if detail_x < detail_end {
-                    buf.set_string(
+                    let detail = ellipsize(
+                        &hit.detail,
+                        detail_end.saturating_sub(detail_x + 1) as usize,
+                    );
+                    render_query_text(
                         detail_x,
                         row.y,
-                        ellipsize(
-                            &hit.detail,
-                            detail_end.saturating_sub(detail_x + 1) as usize,
-                        ),
-                        Style::default().fg(self.palette.dim).bg(background),
+                        &detail,
+                        self.modal_input.trim(),
+                        detail_end.saturating_sub(detail_x + 1),
+                        Style::default().fg(tokens.muted).bg(background),
+                        Style::default()
+                            .fg(tokens.focus)
+                            .bg(background)
+                            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                        true,
+                        buf,
                     );
                 }
                 if !badge.is_empty() {
@@ -6375,9 +6578,9 @@ impl App {
                         badge,
                         Style::default()
                             .fg(if in_diff {
-                                self.palette.accent
+                                tokens.accent
                             } else {
-                                self.palette.warning
+                                tokens.warning
                             })
                             .bg(background)
                             .add_modifier(Modifier::BOLD),
@@ -6391,7 +6594,8 @@ impl App {
         if area.width < 8 || area.height == 0 {
             return;
         }
-        fill_area(area, self.palette.panel, buf);
+        let tokens = GridlineTokens::from(&self.palette);
+        fill_area(area, tokens.surface, buf);
         let selected = self.repo_search_hits.get(self.search_cursor);
         let path = self
             .search_preview
@@ -6399,23 +6603,53 @@ impl App {
             .map(|preview| preview.path.as_str())
             .or_else(|| selected.map(|hit| hit.path.as_str()))
             .unwrap_or("Preview");
+        let target_line = selected.and_then(|hit| hit.line);
+        let preview_query = selected
+            .filter(|hit| hit.kind == SearchHitKind::Symbol)
+            .map(|hit| hit.title.clone())
+            .unwrap_or_else(|| self.modal_input.trim().to_string());
+        let location = target_line
+            .map(|line| format!(":{line}"))
+            .unwrap_or_default();
+        let path_width = area
+            .width
+            .saturating_sub(3 + UnicodeWidthStr::width(location.as_str()) as u16)
+            as usize;
+        let (directory, basename) = compact_path(path, path_width);
         buf.set_string(
             area.x + 1,
             area.y,
-            ellipsize(path, area.width.saturating_sub(2) as usize),
+            &directory,
+            Style::default().fg(tokens.muted).bg(tokens.surface),
+        );
+        let basename_x = area.x + 1 + UnicodeWidthStr::width(directory.as_str()) as u16;
+        buf.set_string(
+            basename_x,
+            area.y,
+            &basename,
             Style::default()
-                .fg(self.palette.accent)
-                .bg(self.palette.panel)
+                .fg(tokens.text)
+                .bg(tokens.surface)
                 .add_modifier(Modifier::BOLD),
         );
-        let content_y = area.y.saturating_add(2);
-        let content_height = area.height.saturating_sub(3);
+        if !location.is_empty() {
+            buf.set_string(
+                basename_x + UnicodeWidthStr::width(basename.as_str()) as u16,
+                area.y,
+                location,
+                Style::default()
+                    .fg(tokens.accent)
+                    .bg(tokens.surface)
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
+        let content_y = area.y.saturating_add(1);
         if self.search_preview_loading {
             buf.set_string(
                 area.x + 1,
                 content_y,
                 "Loading preview…",
-                Style::default().fg(self.palette.dim).bg(self.palette.panel),
+                Style::default().fg(tokens.muted).bg(tokens.surface),
             );
             return;
         }
@@ -6424,33 +6658,27 @@ impl App {
                 area.x + 1,
                 content_y,
                 ellipsize(error, area.width.saturating_sub(2) as usize),
-                Style::default()
-                    .fg(self.palette.comment)
-                    .bg(self.palette.panel),
+                Style::default().fg(tokens.warning).bg(tokens.surface),
             );
             return;
         }
-        let max_scroll = self
-            .search_preview
-            .as_ref()
-            .map(|preview| {
-                preview
-                    .content
-                    .lines()
-                    .count()
-                    .saturating_sub(content_height as usize)
-            })
-            .unwrap_or(0);
-        self.search_preview_scroll = self.search_preview_scroll.min(max_scroll);
         let Some(preview) = self.search_preview.as_ref() else {
             buf.set_string(
                 area.x + 1,
                 content_y,
                 "Select a result to preview",
-                Style::default().fg(self.palette.dim).bg(self.palette.panel),
+                Style::default().fg(tokens.muted).bg(tokens.surface),
             );
             return;
         };
+        let footer_height = u16::from(preview.truncated && area.height > 2);
+        let content_height = area.height.saturating_sub(1 + footer_height);
+        let max_scroll = preview
+            .content
+            .lines()
+            .count()
+            .saturating_sub(content_height as usize);
+        self.search_preview_scroll = self.search_preview_scroll.min(max_scroll);
         if preview.binary || preview.missing {
             let changed_image = preview.binary
                 && is_image_path(std::path::Path::new(path))
@@ -6470,12 +6698,11 @@ impl App {
                 area.x + 1,
                 content_y,
                 message,
-                Style::default().fg(self.palette.dim).bg(self.palette.panel),
+                Style::default().fg(tokens.muted).bg(tokens.surface),
             );
             return;
         }
 
-        let target_line = selected.and_then(|hit| hit.line);
         for (visible, (line_index, line)) in preview
             .content
             .lines()
@@ -6488,23 +6715,31 @@ impl App {
             let line_number = line_index + 1;
             let highlighted = target_line == Some(line_number as u32);
             let background = if highlighted {
-                self.palette.selection_bg
+                tokens.selected
             } else {
-                self.palette.panel
+                tokens.surface
             };
             fill_area(Rect::new(area.x, y, area.width, 1), background, buf);
+            if highlighted {
+                buf[(area.x, y)]
+                    .set_symbol(GLYPHS.focus_rail)
+                    .set_style(Style::default().fg(tokens.focus).bg(background));
+            }
             let gutter_width = 7u16.min(area.width);
             buf.set_string(
-                area.x,
+                area.x.saturating_add(1),
                 y,
-                format!("{line_number:>5} "),
-                Style::default().fg(self.palette.gutter).bg(background),
+                format!("{line_number:>4} "),
+                Style::default().fg(tokens.gutter).bg(background),
             );
             let mut x = area.x.saturating_add(gutter_width);
             let end = area.x.saturating_add(area.width);
+            let source_line = line.trim_end_matches('\r');
+            let ranges = literal_query_match_ranges(source_line, &preview_query);
+            let mut source_offset = 0usize;
             for span in highlight_line(
                 &preview.path,
-                line.trim_end_matches('\r'),
+                source_line,
                 self.theme,
                 &self.palette,
                 background,
@@ -6514,16 +6749,24 @@ impl App {
                 if x >= end {
                     break;
                 }
-                let remaining = end.saturating_sub(x) as usize;
-                let text = truncate_cells(&span.text, remaining);
-                let used = UnicodeWidthStr::width(text.as_str()) as u16;
-                if used > 0 {
-                    buf.set_string(x, y, text, span.style.bg(background));
-                    x = x.saturating_add(used);
-                }
+                x = render_preview_span(
+                    x,
+                    y,
+                    end,
+                    &span.text,
+                    source_offset,
+                    &ranges,
+                    span.style.bg(background),
+                    Style::default()
+                        .fg(tokens.canvas)
+                        .bg(tokens.focus)
+                        .add_modifier(Modifier::BOLD),
+                    buf,
+                );
+                source_offset = source_offset.saturating_add(span.text.len());
             }
         }
-        if preview.truncated && area.height > 1 {
+        if footer_height > 0 {
             let label = " preview truncated ";
             let width = label.len() as u16;
             if width + 1 < area.width {
@@ -6531,9 +6774,7 @@ impl App {
                     area.x + area.width - width - 1,
                     area.y + area.height - 1,
                     label,
-                    Style::default()
-                        .fg(self.palette.warning)
-                        .bg(self.palette.panel),
+                    Style::default().fg(tokens.warning).bg(tokens.surface),
                 );
             }
         }
@@ -6888,6 +7129,207 @@ fn panel_visibility(
     )
 }
 
+fn search_popup_rect(area: Rect) -> Rect {
+    let width = area.width.saturating_sub(METRICS.modal_margin_x).min(132);
+    let height = area
+        .height
+        .saturating_sub(METRICS.modal_margin_y)
+        .min(24)
+        .max(10.min(area.height));
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
+}
+
+fn search_result_regions(body: Rect) -> (Rect, Option<Rect>, Option<Rect>) {
+    if body.width < 88 {
+        return (body, None, None);
+    }
+    let list_width = body.width.saturating_mul(43) / 100;
+    let list = Rect::new(body.x, body.y, list_width, body.height);
+    let divider = Rect::new(list.x + list.width, body.y, 1, body.height);
+    let preview = Rect::new(
+        divider.x.saturating_add(1),
+        body.y,
+        body.width.saturating_sub(list.width + 1),
+        body.height,
+    );
+    (list, Some(divider), Some(preview))
+}
+
+fn search_empty_copy(scope: SearchScope, query: &str, changed_only: bool) -> (String, String) {
+    let source = if changed_only {
+        "changed files"
+    } else {
+        "the repository"
+    };
+    match scope {
+        SearchScope::All if query.is_empty() => (
+            format!("Nothing to browse in {source}"),
+            "Press ^G to change the search source".to_string(),
+        ),
+        SearchScope::All => (
+            format!("No files, text, or symbols match “{query}”"),
+            "Try another scope or press ^G to change the source".to_string(),
+        ),
+        SearchScope::Files if query.is_empty() => (
+            format!("No files to browse in {source}"),
+            "Press ^G to change the search source".to_string(),
+        ),
+        SearchScope::Files => (
+            format!("No files match “{query}”"),
+            "File matching is fuzzy; try fewer characters".to_string(),
+        ),
+        SearchScope::Text if query.is_empty() => (
+            "Type to search file contents".to_string(),
+            format!("Searching {source} · ^R toggles regex"),
+        ),
+        SearchScope::Text => (
+            format!("No text matches “{query}”"),
+            "Try ^R for regex or ^G to change the source".to_string(),
+        ),
+        SearchScope::Symbols if query.chars().count() < 2 && changed_only => (
+            "No definitions found in changed lines".to_string(),
+            "Type 2+ characters to search all changed files".to_string(),
+        ),
+        SearchScope::Symbols if query.chars().count() < 2 => (
+            "Type at least 2 characters to search symbols".to_string(),
+            "Press ^G to browse definitions in changed lines".to_string(),
+        ),
+        SearchScope::Symbols => (
+            format!("No symbols match “{query}”"),
+            "Symbols include functions, types, classes, and variables".to_string(),
+        ),
+    }
+}
+
+fn query_char_eq(left: char, right: char) -> bool {
+    left == right || (left.is_ascii() && right.is_ascii() && left.eq_ignore_ascii_case(&right))
+}
+
+fn literal_query_match_ranges(text: &str, query: &str) -> Vec<(usize, usize)> {
+    let text_chars: Vec<(usize, char)> = text.char_indices().collect();
+    let query_chars: Vec<char> = query.chars().collect();
+    if query_chars.is_empty() || query_chars.len() > text_chars.len() {
+        return Vec::new();
+    }
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    while start + query_chars.len() <= text_chars.len() {
+        let matches = query_chars
+            .iter()
+            .enumerate()
+            .all(|(offset, query)| query_char_eq(text_chars[start + offset].1, *query));
+        if matches {
+            let start_byte = text_chars[start].0;
+            let end_index = start + query_chars.len();
+            let end_byte = text_chars
+                .get(end_index)
+                .map(|(byte, _)| *byte)
+                .unwrap_or(text.len());
+            ranges.push((start_byte, end_byte));
+            start = end_index;
+        } else {
+            start += 1;
+        }
+    }
+    ranges
+}
+
+fn query_match_ranges(text: &str, query: &str, fuzzy: bool) -> Vec<(usize, usize)> {
+    let exact = literal_query_match_ranges(text, query);
+    if !exact.is_empty() || !fuzzy || query.is_empty() {
+        return exact;
+    }
+    let text_chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut cursor = 0usize;
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for query_character in query.chars() {
+        let Some(relative) = text_chars[cursor..]
+            .iter()
+            .position(|(_, character)| query_char_eq(*character, query_character))
+        else {
+            return Vec::new();
+        };
+        let index = cursor + relative;
+        let start = text_chars[index].0;
+        let end = text_chars
+            .get(index + 1)
+            .map(|(byte, _)| *byte)
+            .unwrap_or(text.len());
+        if let Some((_, previous_end)) = ranges.last_mut().filter(|(_, end)| *end == start) {
+            *previous_end = end;
+        } else {
+            ranges.push((start, end));
+        }
+        cursor = index + 1;
+    }
+    ranges
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_query_text(
+    x: u16,
+    y: u16,
+    text: &str,
+    query: &str,
+    max_width: u16,
+    base_style: Style,
+    match_style: Style,
+    fuzzy: bool,
+    buf: &mut Buffer,
+) {
+    let text = safe_terminal_text(text);
+    let ranges = query_match_ranges(&text, query, fuzzy);
+    let _ = render_preview_span(
+        x,
+        y,
+        x.saturating_add(max_width),
+        &text,
+        0,
+        &ranges,
+        base_style,
+        match_style,
+        buf,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_preview_span(
+    mut x: u16,
+    y: u16,
+    end: u16,
+    text: &str,
+    source_offset: usize,
+    ranges: &[(usize, usize)],
+    base_style: Style,
+    match_style: Style,
+    buf: &mut Buffer,
+) -> u16 {
+    for (byte, character) in text.char_indices() {
+        let character = safe_terminal_character(character);
+        let width = UnicodeWidthChar::width(character).unwrap_or(0) as u16;
+        if width == 0 {
+            continue;
+        }
+        if x.saturating_add(width) > end {
+            break;
+        }
+        let position = source_offset.saturating_add(byte);
+        let matched = ranges
+            .iter()
+            .any(|(start, end)| position >= *start && position < *end);
+        buf[(x, y)]
+            .set_char(character)
+            .set_style(if matched { match_style } else { base_style });
+        x = x.saturating_add(width);
+    }
+    x
+}
+
 fn truncate_cells(value: &str, max_width: usize) -> String {
     let mut output = String::new();
     let mut width = 0usize;
@@ -6913,6 +7355,64 @@ fn ellipsize(value: &str, max_width: usize) -> String {
     let mut shortened = truncate_cells(&value, max_width.saturating_sub(1));
     shortened.push('…');
     shortened
+}
+
+fn compact_path(value: &str, max_width: usize) -> (String, String) {
+    let value = safe_terminal_text(value);
+    if max_width == 0 {
+        return (String::new(), String::new());
+    }
+    let split = value
+        .rfind(|character| character == '/' || character == '\\')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let (directory, basename) = value.split_at(split);
+    if UnicodeWidthStr::width(basename) >= max_width {
+        return (String::new(), ellipsize(basename, max_width));
+    }
+    let basename_width = UnicodeWidthStr::width(basename);
+    let directory_budget = max_width.saturating_sub(basename_width);
+    let directory = tail_ellipsize(directory, directory_budget);
+    (directory, basename.to_string())
+}
+
+fn render_empty_diff_state(
+    marker: &str,
+    title: &str,
+    detail: &str,
+    tone: Color,
+    area: Rect,
+    palette: &Palette,
+    buf: &mut Buffer,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let tokens = GridlineTokens::from(palette);
+    let y = area.y.saturating_add(area.height.saturating_sub(2) / 2);
+    let height = area.height.min(2);
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{marker}  "),
+                Style::default().fg(tone).bg(tokens.canvas),
+            ),
+            Span::styled(
+                title.to_string(),
+                Style::default()
+                    .fg(tokens.text)
+                    .bg(tokens.canvas)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(Span::styled(
+            detail.to_string(),
+            Style::default().fg(tokens.muted).bg(tokens.canvas),
+        )),
+    ];
+    Paragraph::new(lines)
+        .centered()
+        .render(Rect::new(area.x, y, area.width, height), buf);
 }
 
 fn render_change_counts(
@@ -7332,6 +7832,106 @@ mod tests {
     }
 
     #[test]
+    fn search_layout_adds_preview_only_when_it_stays_readable() {
+        let popup = search_popup_rect(Rect::new(0, 0, 160, 40));
+        assert_eq!(popup, Rect::new(14, 8, 132, 24));
+
+        let wide = Rect::new(4, 6, 120, 16);
+        let (list, divider, preview) = search_result_regions(wide);
+        assert_eq!(list.width, 51);
+        assert_eq!(divider, Some(Rect::new(55, 6, 1, 16)));
+        assert_eq!(preview, Some(Rect::new(56, 6, 68, 16)));
+
+        let compact = Rect::new(4, 6, 72, 16);
+        assert_eq!(search_result_regions(compact), (compact, None, None));
+    }
+
+    #[test]
+    fn search_query_ranges_support_literal_and_fuzzy_emphasis() {
+        let text = "Result and result";
+        let ranges = literal_query_match_ranges(text, "result");
+        assert_eq!(
+            ranges
+                .iter()
+                .map(|(start, end)| &text[*start..*end])
+                .collect::<Vec<_>>(),
+            ["Result", "result"]
+        );
+        assert_eq!(
+            query_match_ranges("file_tree_render.rs", "ftr", true),
+            vec![(0, 1), (5, 7)]
+        );
+    }
+
+    #[test]
+    fn search_scope_empty_states_explain_the_next_keyboard_action() {
+        assert_eq!(
+            search_empty_copy(SearchScope::Text, "", true),
+            (
+                "Type to search file contents".to_string(),
+                "Searching changed files · ^R toggles regex".to_string(),
+            )
+        );
+        assert_eq!(
+            search_empty_copy(SearchScope::Symbols, "", false),
+            (
+                "Type at least 2 characters to search symbols".to_string(),
+                "Press ^G to browse definitions in changed lines".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn fallback_search_implements_files_text_and_symbols() {
+        use diffing_core::index::build_index_from_reader;
+        use std::io::Cursor;
+
+        let directory = tempfile::tempdir().unwrap();
+        let spool = directory.path().join("search.patch");
+        let patch = b"diff --git a/src/search.rs b/src/search.rs\nindex 1..2 100644\n--- a/src/search.rs\n+++ b/src/search.rs\n@@ -1 +1,3 @@\n context\n+pub fn render_search() {}\n+render_search();\n";
+        let index = build_index_from_reader(Cursor::new(patch), &spool, 1, |_| {}).unwrap();
+
+        let (files, file_total) = changed_file_search_hits(&index, "srs");
+        assert_eq!(file_total, 1);
+        assert_eq!(files[0].path, "src/search.rs");
+
+        let (symbols, symbol_total) = changed_symbol_search_hits(&index, "render").unwrap();
+        assert_eq!(symbol_total, 1);
+        assert_eq!(symbols[0].title, "render_search");
+        assert_eq!(symbols[0].line, Some(2));
+
+        let (text, text_total) = changed_text_search_hits(&index, "render_search").unwrap();
+        assert_eq!(text_total, 2);
+        assert_eq!(text.len(), 2);
+    }
+
+    #[test]
+    fn preview_query_matches_override_syntax_style() {
+        let area = Rect::new(0, 0, 24, 1);
+        let mut buffer = Buffer::empty(area);
+        let source = "let result = render();";
+        let ranges = literal_query_match_ranges(source, "result");
+        let base = Style::default().fg(Color::Blue).bg(Color::Black);
+        let matched = Style::default().fg(Color::Black).bg(Color::Yellow);
+        render_preview_span(
+            0,
+            0,
+            area.width,
+            source,
+            0,
+            &ranges,
+            base,
+            matched,
+            &mut buffer,
+        );
+        assert_eq!(buffer[(3, 0)].style().bg, Some(Color::Black));
+        for x in 4..10 {
+            assert_eq!(buffer[(x, 0)].style().bg, Some(Color::Yellow));
+        }
+        assert_eq!(buffer[(10, 0)].style().bg, Some(Color::Black));
+    }
+
+    #[test]
     fn pointer_geometry_clamps_sidebar_and_uses_half_open_rects() {
         let root = Rect::new(10, 0, 120, 40);
         assert_eq!(sidebar_width_for_pointer(root, 12), 22);
@@ -7455,6 +8055,21 @@ mod tests {
     }
 
     #[test]
+    fn active_file_paths_keep_the_filename_and_nearest_directory() {
+        assert_eq!(
+            compact_path("crates/diffing-tui/src/app.rs", 18),
+            ("…ng-tui/src/".to_string(), "app.rs".to_string())
+        );
+        assert_eq!(
+            compact_path("src/a-very-long-renderer.rs", 12),
+            (String::new(), "a-very-long…".to_string())
+        );
+        let (directory, basename) = compact_path("界面/renderer.rs", 12);
+        assert!(UnicodeWidthStr::width(format!("{directory}{basename}").as_str()) <= 12);
+        assert_eq!(basename, "renderer.rs");
+    }
+
+    #[test]
     fn change_counts_use_semantic_colors_and_generous_spacing() {
         let area = Rect::new(0, 0, 40, 1);
         let mut buffer = Buffer::empty(area);
@@ -7493,6 +8108,41 @@ mod tests {
                 .map(|hit| hit.path.as_str())
                 .collect::<Vec<_>>(),
             ["src/changed.rs", "src/outside-a.rs", "src/outside-b.rs"]
+        );
+    }
+
+    #[test]
+    fn all_scope_interleaves_result_kinds_without_starvation() {
+        let hit = |kind, title: &str| SearchHit {
+            kind,
+            path: format!("src/{title}"),
+            line: None,
+            title: title.to_string(),
+            detail: String::new(),
+            git_status: String::new(),
+        };
+        let hits = interleave_search_hits(
+            vec![
+                vec![
+                    hit(SearchHitKind::File, "file-a"),
+                    hit(SearchHitKind::File, "file-b"),
+                ],
+                vec![
+                    hit(SearchHitKind::Symbol, "symbol-a"),
+                    hit(SearchHitKind::Symbol, "symbol-b"),
+                ],
+                vec![
+                    hit(SearchHitKind::Text, "text-a"),
+                    hit(SearchHitKind::Text, "text-b"),
+                ],
+            ],
+            6,
+        );
+        assert_eq!(
+            hits.iter()
+                .map(|hit| hit.title.as_str())
+                .collect::<Vec<_>>(),
+            ["file-a", "symbol-a", "text-a", "file-b", "symbol-b", "text-b"]
         );
     }
 

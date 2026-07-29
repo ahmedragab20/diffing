@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use crate::themes::Palette;
-use crate::ui::gridline::{hint_line, safe_terminal_text, GridlineTokens};
+use crate::ui::gridline::{hint_line, safe_terminal_text, tail_ellipsize, GridlineTokens};
 
 pub struct StatusBarContext<'a> {
     pub mode: &'a str,
@@ -31,25 +31,23 @@ pub fn render_status_bar(
         cell.set_symbol(" ");
         cell.set_style(bg);
     }
-    let dim = Style::default().fg(tokens.muted).bg(tokens.canvas);
     let accent = Style::default()
         .fg(tokens.focus)
         .bg(tokens.selected)
         .add_modifier(Modifier::BOLD);
     let file_style = Style::default().fg(tokens.text_subtle);
-    let mut context_spans: Vec<Span<'static>> = Vec::new();
+    let mut mode_spans: Vec<Span<'static>> = Vec::new();
     if !context.mode.is_empty() {
-        context_spans.push(Span::styled(
+        mode_spans.push(Span::styled(
             format!(" {} ", context.mode.to_ascii_lowercase()),
             accent,
         ));
-        context_spans.push(Span::styled("  ".to_string(), bg));
     }
-    if let Some(file) = context.current_file {
-        context_spans.push(Span::styled(
-            safe_terminal_text(file),
-            file_style.bg(tokens.canvas),
-        ));
+    let mode_line = Line::from(mode_spans);
+    let mode_width = line_width(&mode_line);
+    let hint_line = styled_hint(context.hint, palette);
+    let hint_width = line_width(&hint_line);
+    let location = context.current_file.map(|file| {
         let position = if context.file_count == 0 {
             "0/0".to_string()
         } else {
@@ -59,35 +57,57 @@ pub fn render_status_bar(
                 context.file_count
             )
         };
-        context_spans.push(Span::styled(format!(" · {position}"), dim));
-    }
-    let context_line = Line::from(context_spans);
-    let context_width = context_line
-        .spans
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()) as u16)
-        .sum::<u16>();
-    let hint_line = styled_hint(context.hint, palette);
-    let hint_width = hint_line
-        .spans
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()) as u16)
-        .sum::<u16>();
+        format!("{} · {position}", safe_terminal_text(file))
+    });
 
     if context.mode.is_empty() {
-        write_line(area.x + 1, area, &hint_line, buf);
-        if context_width + hint_width + 4 < area.width {
-            write_line(
-                area.x + area.width - context_width - 1,
+        let content_width = area.width.saturating_sub(2);
+        let location_width = location.as_deref().map(UnicodeWidthStr::width).unwrap_or(0) as u16;
+        let show_full_location =
+            hint_width.saturating_add(location_width).saturating_add(2) <= content_width;
+        let location_budget = if location.is_some() && !show_full_location && content_width >= 28 {
+            (content_width / 3).max(10)
+        } else if show_full_location {
+            location_width
+        } else {
+            0
+        };
+        let hint_budget = content_width.saturating_sub(if location_budget > 0 {
+            location_budget.saturating_add(2)
+        } else {
+            0
+        });
+        write_line_clipped(area.x + 1, area, &hint_line, hint_budget, buf);
+        if let Some(location) = location.filter(|_| location_budget > 0) {
+            let location = tail_ellipsize(&location, location_budget as usize);
+            let line = Line::from(Span::styled(location, file_style.bg(tokens.canvas)));
+            let width = line_width(&line);
+            write_line_clipped(
+                area.x + area.width.saturating_sub(width + 1),
                 area,
-                &context_line,
+                &line,
+                location_budget,
                 buf,
             );
         }
     } else {
-        write_line(area.x, area, &context_line, buf);
-        if context_width + hint_width + 3 < area.width {
-            write_line(area.x + area.width - hint_width - 1, area, &hint_line, buf);
+        write_line_clipped(area.x, area, &mode_line, mode_width, buf);
+        let remaining = area.width.saturating_sub(mode_width.saturating_add(1));
+        let hint_budget = hint_width.min(remaining);
+        let hint_x = area.x + area.width.saturating_sub(hint_budget + 1);
+        write_line_clipped(hint_x, area, &hint_line, hint_budget, buf);
+
+        let location_x = area.x.saturating_add(mode_width).saturating_add(2);
+        let location_budget = hint_x.saturating_sub(location_x.saturating_add(2));
+        if let Some(location) = location.filter(|_| location_budget >= 8) {
+            let location = tail_ellipsize(&location, location_budget as usize);
+            write_line_clipped(
+                location_x,
+                area,
+                &Line::from(Span::styled(location, file_style.bg(tokens.canvas))),
+                location_budget,
+                buf,
+            );
         }
     }
 }
@@ -100,10 +120,22 @@ fn styled_hint(hint: &str, palette: &Palette) -> Line<'static> {
     )
 }
 
-fn write_line(x: u16, area: Rect, line: &Line<'_>, buf: &mut Buffer) {
+fn line_width(line: &Line<'_>) -> u16 {
+    line.spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()) as u16)
+        .sum()
+}
+
+fn write_line_clipped(x: u16, area: Rect, line: &Line<'_>, max_width: u16, buf: &mut Buffer) {
     let mut cursor = x;
+    let mut budget = max_width;
     for span in &line.spans {
-        let remaining = area.x.saturating_add(area.width).saturating_sub(cursor);
+        let remaining = area
+            .x
+            .saturating_add(area.width)
+            .saturating_sub(cursor)
+            .min(budget);
         if remaining == 0 {
             return;
         }
@@ -116,6 +148,7 @@ fn write_line(x: u16, area: Rect, line: &Line<'_>, buf: &mut Buffer) {
         );
         let used = UnicodeWidthStr::width(span.content.as_ref()).min(remaining as usize) as u16;
         cursor = cursor.saturating_add(used);
+        budget = budget.saturating_sub(used);
     }
 }
 
@@ -173,5 +206,38 @@ mod tests {
         );
         assert_eq!(buffer[(0, 0)].style().bg, Some(palette.selection_bg));
         assert_eq!(buffer[(1, 0)].style().fg, Some(palette.border_focused));
+    }
+
+    #[test]
+    fn review_strip_keeps_commands_visible_with_a_long_location() {
+        let area = Rect::new(0, 0, 52, 1);
+        let palette = Palette::default();
+        let mut buffer = Buffer::empty(area);
+        render_status_bar(
+            area,
+            StatusBarContext {
+                mode: "NORMAL",
+                current_file: Some("crates/diffing-tui/src/a-very-long-file-name.rs:128"),
+                file_idx: 8,
+                file_count: 12,
+                hint: "c comment · / search",
+            },
+            &palette,
+            &mut buffer,
+        );
+        let rendered = (0..area.width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>();
+        assert!(rendered.contains("c comment"));
+        assert!(rendered.contains("/ search"));
+    }
+
+    #[test]
+    fn tail_ellipsis_preserves_the_actionable_end_of_a_path() {
+        assert_eq!(
+            tail_ellipsize("crates/diffing-tui/src/app.rs:42", 14),
+            "…src/app.rs:42"
+        );
+        assert!(UnicodeWidthStr::width(tail_ellipsize("界面/renderer.rs", 8).as_str()) <= 8);
     }
 }

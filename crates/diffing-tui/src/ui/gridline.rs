@@ -159,6 +159,31 @@ pub fn safe_terminal_text(value: &str) -> String {
     value.chars().map(safe_terminal_character).collect()
 }
 
+/// Keep the actionable tail of a path or location within a terminal-cell
+/// budget. The leading ellipsis consumes one cell and untrusted controls are
+/// redacted before width is measured.
+pub fn tail_ellipsize(value: &str, max_width: usize) -> String {
+    let value = safe_terminal_text(value);
+    if UnicodeWidthStr::width(value.as_str()) <= max_width {
+        return value;
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    let mut suffix = Vec::new();
+    let mut width = 0usize;
+    for character in value.chars().rev() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width.saturating_add(character_width) > max_width.saturating_sub(1) {
+            break;
+        }
+        suffix.push(character);
+        width = width.saturating_add(character_width);
+    }
+    suffix.reverse();
+    format!("…{}", suffix.into_iter().collect::<String>())
+}
+
 pub fn square_block<'a>(title: impl Into<Line<'a>>, palette: &Palette, focused: bool) -> Block<'a> {
     let tokens = GridlineTokens::from(palette);
     Block::default()
@@ -393,12 +418,7 @@ pub fn vertical_rule(area: Rect, palette: &Palette, background: Color, buf: &mut
 
 /// A compact mouse target that mirrors a status-strip verb. Selected chips use
 /// accent on the key portion; idle chips stay muted.
-pub fn chip<'a>(
-    label: &'a str,
-    selected: bool,
-    hovered: bool,
-    palette: &Palette,
-) -> Line<'a> {
+pub fn chip<'a>(label: &'a str, selected: bool, hovered: bool, palette: &Palette) -> Line<'a> {
     let tokens = GridlineTokens::from(palette);
     let background = if hovered {
         tokens.selected

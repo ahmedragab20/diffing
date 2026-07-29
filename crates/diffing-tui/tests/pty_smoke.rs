@@ -18,14 +18,18 @@ fn viewer_starts_and_quits_cleanly_in_a_real_pty() {
         .status()
         .unwrap()
         .success());
-    std::fs::write(repo.path().join("sample.txt"), "before\n").unwrap();
+    std::fs::write(repo.path().join("sample.rs"), "fn before() {}\n").unwrap();
     assert!(Command::new("git")
-        .args(["add", "sample.txt"])
+        .args(["add", "sample.rs"])
         .current_dir(repo.path())
         .status()
         .unwrap()
         .success());
-    std::fs::write(repo.path().join("sample.txt"), "after\n").unwrap();
+    std::fs::write(
+        repo.path().join("sample.rs"),
+        "fn before() {}\npub fn render_search() {}\n",
+    )
+    .unwrap();
 
     let mut master = 0;
     let mut slave = 0;
@@ -74,15 +78,29 @@ fn viewer_starts_and_quits_cleanly_in_a_real_pty() {
     }
     let mut child = command.spawn().unwrap();
 
-    thread::sleep(Duration::from_millis(400));
-    drain(&mut master);
+    let _ = wait_for_output(&mut master, "sample.rs", Duration::from_secs(5));
+    for key in [b"/".as_slice(), b"\t", b"\t", b"\t"] {
+        master.write_all(key).unwrap();
+        thread::sleep(Duration::from_millis(100));
+    }
+    let search_frame = wait_for_output(&mut master, "render_search", Duration::from_secs(5));
+    assert!(
+        search_frame.contains("Symbols"),
+        "Symbols scope was not rendered"
+    );
+    assert!(
+        search_frame.contains("render_search"),
+        "changed-line symbol was not rendered"
+    );
+    master.write_all(b"\x1b").unwrap();
+    let _ = wait_for_output(&mut master, "Working-tree", Duration::from_secs(5));
     master.write_all(b"q").unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
         }
-        drain(&mut master);
+        let _ = drain(&mut master);
         if Instant::now() >= deadline {
             child.kill().ok();
             panic!("viewer did not restore the PTY and exit after q");
@@ -92,12 +110,31 @@ fn viewer_starts_and_quits_cleanly_in_a_real_pty() {
     assert!(status.success(), "viewer exited with {status}");
 }
 
-fn drain(master: &mut File) {
+fn drain(master: &mut File) -> Vec<u8> {
     let mut buffer = [0_u8; 8192];
+    let mut output = Vec::new();
     loop {
         match master.read(&mut buffer) {
             Ok(0) | Err(_) => break,
-            Ok(_) => {}
+            Ok(read) => output.extend_from_slice(&buffer[..read]),
         }
+    }
+    output
+}
+
+fn wait_for_output(master: &mut File, needle: &str, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    let mut output = Vec::new();
+    loop {
+        output.extend(drain(master));
+        let rendered = String::from_utf8_lossy(&output);
+        if rendered.contains(needle) {
+            return rendered.into_owned();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {needle:?} in PTY output"
+        );
+        thread::sleep(Duration::from_millis(25));
     }
 }
