@@ -147,6 +147,25 @@ describe('diffing MCP', () => {
       expect(lock).toMatchObject({
         host: '127.0.0.1', owner: 'mcp', diffArgs: ['--staged'], repoRoot,
       })
+
+      // A later human launch may become the repository-wide active pointer;
+      // this MCP connection must remain pinned to the session it started.
+      lock = {
+        port: 49999,
+        host: '127.0.0.1',
+        pid: process.pid,
+        repoRoot,
+        startedAt: 9999,
+        version: MCP_VERSION,
+        mode: 'tui',
+      }
+      const status = await session.client.callTool({ name: 'review_session_status', arguments: {} })
+      expect(status.structuredContent).toMatchObject({
+        mode: 'web',
+        managedBy: 'mcp',
+        url: 'http://127.0.0.1:43123',
+        diffArgs: ['--staged'],
+      })
     } finally {
       await session.close()
     }
