@@ -1,1 +1,17 @@
-{"name":"@diffing/tui-linux-arm64-gnu","version":"0.10.5","description":"diffing native TUI for Linux arm64 glibc","license":"MIT","os":["linux"],"cpu":["arm64"],"libc":["glibc"],"files":["bin"]}
+{
+  "name": "@diffing/tui-linux-arm64-gnu",
+  "version": "0.10.5",
+  "description": "diffing native TUI for Linux arm64 glibc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ahmedragab20/diffing.git"
+  },
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "libc": ["glibc"],
+  "files": ["bin"],
+  "publishConfig": {
+    "access": "public"
+  }
+}

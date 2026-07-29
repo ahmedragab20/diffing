@@ -1,4 +1,5 @@
 node_modules
+.pnpm-store/
 dist
 # .diffing is deliberately NOT here — nothing should ever be written into the consumer repo. If you see one, delete it.
 .playwright-mcp

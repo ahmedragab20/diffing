@@ -119,6 +119,17 @@ describe('findTuiBinary', () => {
     expect(findTuiBinary(FAKE_CLI_URL)).toMatch(/target\/release\/diffing-tui$/)
   })
 
+  it('prefers a source build over a stale bin artifact', async () => {
+    setPlatform('linux')
+    mockExistsSync.mockImplementation(
+      (p: string) =>
+        p.endsWith('/target/release/diffing-tui') ||
+        p.endsWith('/bin/diffing-tui'),
+    )
+    const { findTuiBinary } = await import('../lib/find-tui-binary.js')
+    expect(findTuiBinary(FAKE_CLI_URL)).toMatch(/target\/release\/diffing-tui$/)
+  })
+
   it('exposes every candidate so callers can feature-probe mixed versions', async () => {
     setPlatform('linux')
     mockExistsSync.mockImplementation(

@@ -26,10 +26,11 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsdown && vite build && pnpm run build:tui",
+    "build": "pnpm run build:ts && pnpm run build:tui && pnpm run package:tui",
     "build:ts": "tsdown && vite build",
     "build:tui": "cargo build --release --manifest-path crates/diffing-tui/Cargo.toml",
     "build:tui:debug": "cargo build --manifest-path crates/diffing-tui/Cargo.toml",
+    "package:tui": "node scripts/stage-tui-package.mjs",
     "changeset": "changeset",
     "dev:client": "vite",
     "dev:server": "tsx src/cli.ts --no-open --port 3433",
@@ -38,8 +39,8 @@
     "test:ts": "vitest run",
     "test:tui": "cargo test --manifest-path crates/diffing-tui/Cargo.toml",
     "test:watch": "vitest",
+    "verify:tui-packages": "vitest run src/__tests__/native-packages.test.ts src/__tests__/find-tui-binary.test.ts",
     "prepublishOnly": "pnpm run build",
-    "release": "pnpm run build && changeset publish",
     "version-packages": "changeset version"
   },
   "dependencies": {

@@ -28,13 +28,14 @@ export function tuiPackageName(
 /**
  * Locate the `diffing-tui` native binary. Looks, in order:
  *   1. Sibling of the calling module (`dist/diffing-tui[.exe]` after build).
- *   2. `bin/diffing-tui[.exe]` next to the package root.
- *   3. `target/release/diffing-tui[.exe]` next to the package root
+ *   2. `target/release/diffing-tui[.exe]` next to the package root
  *      (cargo release build).
- *   4. `target/debug/diffing-tui[.exe]` next to the package root
+ *   3. `target/debug/diffing-tui[.exe]` next to the package root
  *      (cargo debug build — the common case during development, especially
  *      on Windows where release builds are slow).
- *   5. `$PATH` lookup via `which` / `where`.
+ *   4. Matching optional npm package.
+ *   5. `bin/diffing-tui[.exe]` next to the package root.
+ *   6. `$PATH` lookup via `which` / `where`.
  *
  * Returns the absolute path of the first match, or `null` if none are found.
  *
@@ -48,12 +49,12 @@ export function findTuiBinaries(callerUrl: string): string[] {
   const packaged = packagedBinary(callerUrl, ext)
   const candidates: string[] = [
     resolve(here, `diffing-tui${ext}`),
-    ...(packaged ? [packaged] : []),
-    resolve(here, '..', 'bin', `diffing-tui${ext}`),
     resolve(here, '..', 'target', 'release', `diffing-tui${ext}`),
     resolve(here, '..', '..', 'target', 'release', `diffing-tui${ext}`),
     resolve(here, '..', 'target', 'debug', `diffing-tui${ext}`),
     resolve(here, '..', '..', 'target', 'debug', `diffing-tui${ext}`),
+    ...(packaged ? [packaged] : []),
+    resolve(here, '..', 'bin', `diffing-tui${ext}`),
   ]
   const found = candidates.filter(c => existsSync(c))
   // Final fallback: $PATH lookup.
