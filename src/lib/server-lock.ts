@@ -1,14 +1,24 @@
-import { writeFileSync, readFileSync, mkdirSync, rmSync, unlinkSync, renameSync, rmdirSync, statSync } from 'node:fs'
+import {
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  mkdirSync,
+  rmSync,
+  unlinkSync,
+  renameSync,
+  rmdirSync,
+  statSync,
+} from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { getProjectStorageDir, getRepoRoot } from './git.js'
 import type { DiffOptions } from './diff-options.js'
 
 /**
- * A tiny lockfile (`server.json`) written into the per-repo storage dir when a
- * diffing web server starts. It lets the `diffing` CLI subcommands and the MCP
- * server discover the running server's port with zero user input — they resolve
- * the same per-repo directory from the cwd and read this file. Stale locks (from
- * a crashed server) self-heal via `isLockAlive`.
+ * A discovery record shared by web, TUI, and PR sessions. Each live review has
+ * a file under `sessions/`; `server.json` mirrors the selected active record so
+ * older CLI/MCP clients can still discover one target with zero configuration.
  */
 export interface ServerLock {
   port: number
@@ -48,6 +58,9 @@ export interface ServerLock {
 
   /** Unique CLI/MCP connection which owns this web-server lock. */
   ownerId?: string
+
+  /** Stable public identifier used by the multi-session registry and CLI. */
+  sessionId?: string
 }
 
 interface StartupLeaseRecord {
@@ -90,10 +103,60 @@ export function lockPath(repoRoot?: string): string {
   return join(getProjectStorageDir(repoRoot), 'server.json')
 }
 
-export function writeServerLock(lock: ServerLock): void {
-  const path = lockPath(lock.repoRoot)
+export function sessionsPath(repoRoot?: string): string {
+  return join(getProjectStorageDir(repoRoot), 'sessions')
+}
+
+/** Stable identity for both current and pre-registry lock records. */
+export function serverSessionId(lock: ServerLock): string {
+  return lock.sessionId ?? lock.ownerId ?? `${lock.mode ?? 'web'}-${lock.pid}-${lock.startedAt}`
+}
+
+export function sameServerSession(left: ServerLock, right: ServerLock): boolean {
+  if (left.sessionId && right.sessionId) return left.sessionId === right.sessionId
+  return left.pid === right.pid && left.startedAt === right.startedAt && left.port === right.port
+}
+
+function sessionPath(lock: ServerLock): string {
+  return join(sessionsPath(lock.repoRoot), `${encodeURIComponent(serverSessionId(lock))}.json`)
+}
+
+function writeJsonAtomically(path: string, value: unknown): void {
   mkdirSync(join(path, '..'), { recursive: true })
-  writeFileSync(path, JSON.stringify(lock, null, 2), 'utf-8')
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`
+  writeFileSync(temporary, JSON.stringify(value, null, 2), 'utf-8')
+  renameSync(temporary, path)
+}
+
+function normalizedLock(lock: ServerLock): ServerLock {
+  return lock.sessionId ? lock : { ...lock, sessionId: serverSessionId(lock) }
+}
+
+function writeSessionRecord(lock: ServerLock): ServerLock {
+  const normalized = normalizedLock(lock)
+  writeJsonAtomically(sessionPath(normalized), normalized)
+  return normalized
+}
+
+/**
+ * Register a session and make it the active target for legacy clients. Before
+ * replacing server.json, adopt a live pre-registry lock so an upgrade never
+ * makes an already-running review disappear from the session manager.
+ */
+export function writeServerLock(lock: ServerLock): void {
+  const current = readServerLock(lock.repoRoot)
+  if (current && isLockAlive(current, lock.repoRoot) && !sameServerSession(current, lock)) {
+    writeSessionRecord(current)
+  }
+  const normalized = writeSessionRecord(lock)
+  try {
+    writeJsonAtomically(lockPath(lock.repoRoot), normalized)
+  } catch (error) {
+    // Publishing is transactional from the caller's perspective: never leave
+    // an unreachable registry entry when the active pointer could not move.
+    rmSync(sessionPath(normalized), { force: true })
+    throw error
+  }
 }
 
 export function readServerLock(repoRoot?: string): ServerLock | null {
@@ -105,6 +168,83 @@ export function readServerLock(repoRoot?: string): ServerLock | null {
   } catch {
     return null
   }
+}
+
+/** Return every live registered session, newest first, and prune stale entries. */
+export function listServerLocks(repoRoot?: string): ServerLock[] {
+  let expectedRepoRoot: string
+  try {
+    expectedRepoRoot = repoRoot ?? getRepoRoot()
+  } catch {
+    return []
+  }
+
+  const sessions = new Map<string, ServerLock>()
+  const addIfLive = (candidate: ServerLock, stalePath?: string) => {
+    if (candidate.repoRoot !== expectedRepoRoot || !isLockAlive(candidate, expectedRepoRoot)) {
+      if (stalePath) rmSync(stalePath, { force: true })
+      return
+    }
+    const normalized = normalizedLock(candidate)
+    sessions.set(serverSessionId(normalized), normalized)
+  }
+
+  const active = readServerLock(expectedRepoRoot)
+  if (active) addIfLive(active)
+
+  const directory = sessionsPath(expectedRepoRoot)
+  try {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+      const path = join(directory, entry.name)
+      try {
+        const candidate = JSON.parse(readFileSync(path, 'utf-8')) as ServerLock
+        if (typeof candidate.port !== 'number' || typeof candidate.pid !== 'number') {
+          rmSync(path, { force: true })
+          continue
+        }
+        addIfLive(candidate, path)
+      } catch {
+        rmSync(path, { force: true })
+      }
+    }
+  } catch {
+    // A repository with no registry yet simply has no sessions directory.
+  }
+
+  return [...sessions.values()].sort((left, right) => right.startedAt - left.startedAt)
+}
+
+/** Resolve the active session, electing the newest live fallback when needed. */
+export function resolveActiveServerLock(repoRoot?: string): ServerLock | null {
+  let expectedRepoRoot: string
+  try {
+    expectedRepoRoot = repoRoot ?? getRepoRoot()
+  } catch {
+    return null
+  }
+  const active = readServerLock(expectedRepoRoot)
+  if (active && isLockAlive(active, expectedRepoRoot)) {
+    const normalized = normalizedLock(active)
+    // Opportunistically migrate a legacy singleton into the registry.
+    if (!existsSync(sessionPath(normalized))) writeSessionRecord(normalized)
+    if (!active.sessionId) writeJsonAtomically(lockPath(expectedRepoRoot), normalized)
+    return normalized
+  }
+
+  const fallback = listServerLocks(expectedRepoRoot)[0]
+  if (!fallback) {
+    removeServerLock(expectedRepoRoot)
+    return null
+  }
+  return activateServerLock(fallback)
+}
+
+/** Make an existing registered session the default target for CLI/MCP clients. */
+export function activateServerLock(lock: ServerLock): ServerLock {
+  const normalized = writeSessionRecord(lock)
+  writeJsonAtomically(lockPath(lock.repoRoot), normalized)
+  return normalized
 }
 
 /**
@@ -132,14 +272,37 @@ export function removeServerLock(repoRoot?: string): void {
   }
 }
 
-/** Remove server.json only while holding the startup lease and only if exact ownership still matches. */
+/** Remove one registry entry and elect another live session if it was active. */
+export function removeServerSession(lock: ServerLock): void {
+  const normalized = normalizedLock(lock)
+  const path = sessionPath(normalized)
+  try {
+    const stored = JSON.parse(readFileSync(path, 'utf-8')) as ServerLock
+    if (sameServerSession(stored, normalized)) rmSync(path, { force: true })
+  } catch {
+    // Missing or malformed session records are already effectively removed.
+  }
+
+  const active = readServerLock(lock.repoRoot)
+  if (!active || !sameServerSession(active, normalized)) return
+
+  const fallback = listServerLocks(lock.repoRoot).find(
+    (candidate) => !sameServerSession(candidate, normalized),
+  )
+  if (fallback) activateServerLock(fallback)
+  else removeServerLock(lock.repoRoot)
+}
+
+/** Unregister live sessions owned by one exact CLI/MCP process identity. */
 export function removeServerLockIfOwned(repoRoot: string, pid: number, ownerId: string): boolean {
   const cleanupLease = acquireServerStartupLease(repoRoot, `cleanup-${ownerId}`)
   if (!cleanupLease) return false
   try {
-    const lock = readServerLock(repoRoot)
-    if (!lock || lock.pid !== pid || lock.ownerId !== ownerId) return false
-    removeServerLock(repoRoot)
+    const owned = listServerLocks(repoRoot).filter(
+      (lock) => lock.pid === pid && lock.ownerId === ownerId,
+    )
+    if (owned.length === 0) return false
+    for (const lock of owned) removeServerSession(lock)
     return true
   } finally {
     cleanupLease.release()

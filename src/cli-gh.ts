@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util'
-import { readServerLock, isLockAlive } from './lib/server-lock.js'
+import { resolveActiveServerLock } from './lib/server-lock.js'
 import { formatComments } from './lib/comment-format.js'
 import type { ReviewComment } from './lib/types.js'
 import type { PrSession } from './lib/pr-session.js'
@@ -26,8 +26,8 @@ const EXIT_NOT_FOUND = 4
 const EXIT_USAGE = 5
 
 function baseUrl(): string {
-  const lock = readServerLock()
-  if (!lock || !isLockAlive(lock)) {
+  const lock = resolveActiveServerLock()
+  if (!lock) {
     console.error('No diffing server running for this repo. Start one with `diffing "gh pr <ref>"`.')
     process.exit(EXIT_NO_SERVER)
   }

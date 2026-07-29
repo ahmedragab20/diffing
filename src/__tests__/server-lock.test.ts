@@ -46,7 +46,12 @@ describe('server-lock', () => {
     const { writeServerLock, readServerLock } = await loadModule()
     writeServerLock(makeLock({ port: 5050 }))
     const read = readServerLock()
-    expect(read).toMatchObject({ port: 5050, pid: process.pid, repoRoot: '/tmp/test-repo' })
+    expect(read).toMatchObject({
+      port: 5050,
+      pid: process.pid,
+      repoRoot: '/tmp/test-repo',
+      sessionId: `web-${process.pid}-1000`,
+    })
   })
 
   it('returns null when no lock exists', async () => {
@@ -134,5 +139,40 @@ describe('server-lock', () => {
     expect(readServerLock()).not.toBeNull()
     expect(removeServerLockIfOwned('/tmp/test-repo', process.pid, 'session-a')).toBe(true)
     expect(readServerLock()).toBeNull()
+  })
+
+  it('keeps concurrent sessions and elects a fallback when the active one exits', async () => {
+    const {
+      writeServerLock,
+      readServerLock,
+      listServerLocks,
+      removeServerSession,
+    } = await loadModule()
+    const first = makeLock({ sessionId: 'first', startedAt: 1_000, mode: 'web' })
+    const second = makeLock({ sessionId: 'second', startedAt: 2_000, mode: 'tui', port: 5051 })
+
+    writeServerLock(first)
+    writeServerLock(second)
+
+    expect(listServerLocks().map((lock) => lock.sessionId)).toEqual(['second', 'first'])
+    expect(readServerLock()?.sessionId).toBe('second')
+
+    removeServerSession(second)
+    expect(readServerLock()?.sessionId).toBe('first')
+    expect(listServerLocks().map((lock) => lock.sessionId)).toEqual(['first'])
+  })
+
+  it('prunes dead session records without hiding a live session', async () => {
+    const { writeServerLock, listServerLocks, sessionsPath } = await loadModule()
+    writeServerLock(makeLock({ sessionId: 'live' }))
+    const deadPath = join(sessionsPath(), 'dead.json')
+    writeFileSync(deadPath, JSON.stringify(makeLock({
+      sessionId: 'dead',
+      pid: 2147483646,
+      startedAt: 2_000,
+    })))
+
+    expect(listServerLocks().map((lock) => lock.sessionId)).toEqual(['live'])
+    expect(existsSync(deadPath)).toBe(false)
   })
 })

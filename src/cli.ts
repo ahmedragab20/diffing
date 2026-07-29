@@ -12,8 +12,7 @@ import { loadSettings } from './lib/settings.js'
 import {
   acquireServerStartupLease,
   diffScopeKey,
-  isLockAlive,
-  readServerLock,
+  resolveActiveServerLock,
   removeServerLockIfOwned,
   writeServerLock,
   type ServerStartupLease,
@@ -23,9 +22,7 @@ import { playStartupDisplay } from './lib/startup-display.js'
 import { buildTuiDiffContext } from './lib/tui-diff-context.js'
 import { finishTuiChild } from './lib/tui-child-lifecycle.js'
 import {
-  conflictFailMessage,
   openExistingSession,
-  resolveSessionConflictAction,
   stopLockOwner,
 } from './lib/session-conflict.js'
 import type { DiffOptions } from './lib/diff-options.js'
@@ -91,6 +88,7 @@ const SUBCOMMANDS = new Set([
   'progress',
   'inspect',
   'mode',
+  'sessions',
 ])
 if (SUBCOMMANDS.has(args[0])) {
   if (args[0] === 'mcp') {
@@ -180,6 +178,11 @@ if (args[0] === 'show') {
 const defaultInteractiveMode = prRef ? 'web' : loadSettings().defaultMode
 const opts = parseDiffOptions(args, defaultInteractiveMode)
 
+if (opts.reuseSession && opts.replaceSession) {
+  console.error('Cannot combine --reuse-session and --replace-session.')
+  process.exit(5)
+}
+
 // `--gh-pr <ref>` is parsed by parseDiffOptions; merge it with the quoted /
 // unquoted `gh pr <ref>` forms detected above so both entry points work.
 if (!prRef && opts.ghPr) {
@@ -267,62 +270,25 @@ if (!startupLease) {
   process.exit(3)
 }
 
-const existingLock = readServerLock(repoRoot)
-if (existingLock && isLockAlive(existingLock, repoRoot)) {
-  // Release while prompting — the user may take a while, and holding the
-  // startup lease would block other legitimate startups.
+const activeSession = (opts.reuseSession || opts.replaceSession)
+  ? resolveActiveServerLock(repoRoot)
+  : null
+if (activeSession && opts.reuseSession) {
   startupLease.release()
   startupLease = null
+  await openExistingSession(activeSession, { noOpen: opts.noOpen })
+  process.exit(0)
+}
 
-  if (opts.reuseSession && opts.replaceSession) {
-    console.error('Cannot combine --reuse-session and --replace-session.')
-    process.exit(5)
-  }
-
-  let action: 'open' | 'replace' | 'cancel'
+if (activeSession && opts.replaceSession) {
   try {
-    action = await resolveSessionConflictAction({
-      lock: existingLock,
-      reuseSession: opts.reuseSession,
-      replaceSession: opts.replaceSession,
-      canPrompt: Boolean(process.stdin.isTTY && process.stdout.isTTY),
-    })
+    console.error(`Stopping active diffing session (pid ${activeSession.pid})…`)
+    await stopLockOwner(activeSession)
   } catch (error) {
+    startupLease.release()
     const detail = error instanceof Error ? error.message : String(error)
     console.error(detail)
-    process.exit(5)
-  }
-
-  if (action === 'cancel') {
-    console.error(conflictFailMessage(existingLock))
-    process.exit(3)
-  }
-
-  if (action === 'open') {
-    const live = readServerLock(repoRoot)
-    const target = live && isLockAlive(live, repoRoot) ? live : existingLock
-    await openExistingSession(target, { noOpen: opts.noOpen })
-    process.exit(0)
-  }
-
-  // Replace: re-acquire the lease, stop the owner, then continue startup.
-  startupLease = acquireServerStartupLease(repoRoot, sessionOwnerId)
-  if (!startupLease) {
-    console.error('Another diffing process is starting a review for this repository. Retry in a moment.')
-    process.exit(3)
-  }
-
-  const afterLease = readServerLock(repoRoot)
-  if (afterLease && isLockAlive(afterLease, repoRoot)) {
-    try {
-      console.error(`Stopping existing diffing session (pid ${afterLease.pid})…`)
-      await stopLockOwner(afterLease)
-    } catch (error) {
-      startupLease.release()
-      const detail = error instanceof Error ? error.message : String(error)
-      console.error(detail)
-      process.exit(1)
-    }
+    process.exit(1)
   }
 }
 
@@ -349,6 +315,7 @@ try {
     prRef: prMode ? prRef ?? undefined : undefined,
     scope: diffScopeKey(opts),
     ownerId: sessionOwnerId,
+    sessionId: sessionOwnerId,
   })
 } catch (error) {
   startupLease?.release()
@@ -466,7 +433,7 @@ async function launchTui(args: string[], opts: DiffOptions): Promise<number> {
   // Gate 2 — binary present and executable.
   const bin = findTuiBinary(viewOnly)
   if (!bin) {
-    console.error(`${viewOnly ? 'compatible ' : ''}diffing-tui binary not found; build it with \`pnpm build:tui\`; falling back to git diff`)
+    console.error(`${viewOnly ? 'compatible ' : ''}diffing-tui binary not found; reinstall with \`npm i -g diffing@latest\` or build it with \`pnpm build:tui\`; falling back to git diff`)
     return runTerminalFallback(args)
   }
   // Strip --tui before forwarding so the TUI binary doesn't see it twice
@@ -481,6 +448,22 @@ async function launchTui(args: string[], opts: DiffOptions): Promise<number> {
   } catch {
     repoRoot = process.cwd()
   }
+  const activeSession = (opts.reuseSession || opts.replaceSession)
+    ? resolveActiveServerLock(repoRoot)
+    : null
+  if (activeSession && opts.reuseSession) {
+    await openExistingSession(activeSession, { noOpen: opts.noOpen })
+    return 0
+  }
+  if (activeSession && opts.replaceSession) {
+    try {
+      console.error(`Stopping active diffing session (pid ${activeSession.pid})…`)
+      await stopLockOwner(activeSession)
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
+      return 1
+    }
+  }
   // Terminal workflows are latency-sensitive: enter the alternate screen as
   // soon as the compatible native binary is known. The web-only decorative
   // startup animation must never sit on the critical path for `diffing view`
@@ -493,6 +476,7 @@ async function launchTui(args: string[], opts: DiffOptions): Promise<number> {
     console.error(`diffing: fff search unavailable in TUI: ${error?.message ?? error}`)
   }
   const diffContext = buildTuiDiffContext(opts, getBranchName())
+  const sessionId = randomUUID()
   return new Promise<number>((resolveP) => {
     // Place --repo BEFORE the forwarded args so the TUI's clap parser can
     // extract it before the trailing-vararg (which would otherwise swallow
@@ -507,6 +491,9 @@ async function launchTui(args: string[], opts: DiffOptions): Promise<number> {
       env: {
         ...process.env,
         DIFFING_TUI_DIFF_CONTEXT: JSON.stringify(diffContext),
+        DIFFING_TUI_SESSION_ID: sessionId,
+        DIFFING_TUI_SESSION_SCOPE: diffScopeKey(opts),
+        DIFFING_TUI_SESSION_ARGS: JSON.stringify(forwarded),
         ...(searchBridge
           ? {
               DIFFING_TUI_SEARCH_ENDPOINT: searchBridge.endpoint,

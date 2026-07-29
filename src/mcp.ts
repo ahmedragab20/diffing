@@ -20,7 +20,7 @@ import {
   diffScopeKey,
   acquireServerStartupLease,
   isLockAlive,
-  readServerLock,
+  resolveActiveServerLock,
   removeServerLock,
   removeServerLockIfOwned,
   writeServerLock,
@@ -416,7 +416,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
   const repoRoot = resolveMcpRepository(options.repoRoot, true)
   const startServerFn = options.startServerFn ?? startServer
   const now = options.now ?? Date.now
-  const readLock = options.readLock ?? readServerLock
+  const readLock = options.readLock ?? resolveActiveServerLock
   const writeLock = options.writeLock ?? writeServerLock
   const removeLock = options.removeLock ?? removeServerLock
   const lockIsAlive = options.lockIsAlive ?? isLockAlive
@@ -442,8 +442,14 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
   )
   let reviewCursor: { identity: string; round: number } | null = null
   let planCursor: { identity: string; round: number } | null = null
+  // Keep this MCP connection pinned after it starts or reuses a session. A
+  // later human launch may change the repository-wide active pointer, but it
+  // must not silently retarget in-flight MCP tools.
+  let selectedLock: ServerLock | null = null
 
   function liveLock(): ServerLock | null {
+    if (selectedLock && lockIsAlive(selectedLock, repoRoot)) return selectedLock
+    selectedLock = null
     const lock = readLock(repoRoot)
     return lock && lockIsAlive(lock, repoRoot) ? lock : null
   }
@@ -672,6 +678,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
         }
         const url = lockUrl(existing)
         if (!url) throw new Error('The active diffing web session has no safe loopback URL.')
+        selectedLock = existing
         return {
           status: 'reused', repository: repoRoot, url, mode: 'web',
           managedBy: existing.owner === 'mcp' ? 'mcp' : 'user',
@@ -715,6 +722,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
           diffArgs: [...diffArgs],
           owner: 'mcp',
           ownerId,
+          sessionId: ownerId,
         }
         try {
           writeLock(lock)
@@ -732,6 +740,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
             'No MCP session was claimed; retry after fixing lock storage. The unadvertised loopback listener will close when this MCP process exits.',
           )
         }
+        selectedLock = lock
         return {
           status: 'started', repository: repoRoot, url: lockUrl(lock)!, mode: 'web',
           managedBy: 'mcp', diffArgs: [...diffArgs],

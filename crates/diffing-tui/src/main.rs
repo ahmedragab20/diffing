@@ -3,9 +3,9 @@
 //! Invoked by the Node CLI when the user passes `--tui`. The Node CLI is the
 //! single source of truth for arg parsing, lockfile discovery, and agent
 //! handoff; this binary is a leaf renderer that reads `~/.diffing/<repo>/*`
-//! on disk and writes a `server.json` lockfile that the agent subcommands
-//! (`diffing await-review`, `diffing plan await`, `diffing mcp`) can
-//! discover.
+//! on disk and registers itself in the shared session registry. `server.json`
+//! points agent subcommands (`diffing await-review`, `diffing inspect`,
+//! `diffing mcp`) at the selected active session.
 //!
 //! The renderer consumes a disk-backed sparse diff index, while a
 //! capability-scoped loopback API exposes the same bounded views to headless
@@ -62,19 +62,6 @@ fn real_main() -> Result<()> {
         .context("--repo path is not valid UTF-8")?
         .to_string();
 
-    if !args.view_only {
-        if let Some(existing) = server_lock::read_server_lock(&repo_root_str) {
-            if server_lock::is_lock_alive(&existing) && existing.pid != std::process::id() {
-                anyhow::bail!(
-                    "another diffing {} session is already running for this repo (pid {})",
-                    existing.mode.as_deref().unwrap_or("web"),
-                    existing.pid
-                );
-            }
-            server_lock::remove_server_lock(&repo_root_str)?;
-        }
-    }
-
     // Indexing happens on a worker and publishes usable partial generations,
     // so even a million-line diff does not delay terminal startup.
     let experience = if args.view_only {
@@ -106,12 +93,27 @@ fn real_main() -> Result<()> {
             version: env!("CARGO_PKG_VERSION").to_string(),
             mode: Some("tui".to_string()),
             capability: Some(agent_api.capability.clone()),
+            session_id: Some(
+                std::env::var("DIFFING_TUI_SESSION_ID")
+                    .ok()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| {
+                        server_lock::new_session_id().expect("generating TUI session id")
+                    }),
+            ),
+            scope: std::env::var("DIFFING_TUI_SESSION_SCOPE").ok(),
+            diff_args: std::env::var("DIFFING_TUI_SESSION_ARGS")
+                .ok()
+                .and_then(|value| serde_json::from_str(&value).ok()),
+            pr_ref: None,
+            owner: None,
+            owner_id: None,
         }
     });
     if let Some(lock) = &lock {
         let lock_path = server_lock::write_server_lock(&repo_root_str, lock)
-            .with_context(|| format!("writing server.json for {}", repo_root_str))?;
-        tracing::info!(path = %lock_path.display(), port = lock.port, "wrote server.json (mode=tui)");
+            .with_context(|| format!("registering TUI session for {}", repo_root_str))?;
+        tracing::info!(path = %lock_path.display(), port = lock.port, "registered TUI session");
     }
 
     let tui_result = tui::run(&repo_root_str, &mut app);
@@ -121,9 +123,9 @@ fn real_main() -> Result<()> {
     }
     if let Some(lock) = &lock {
         if let Err(e) = server_lock::remove_server_lock_if_owned(&repo_root_str, lock) {
-            tracing::warn!(error = %e, "failed to remove server.json on exit");
+            tracing::warn!(error = %e, "failed to unregister TUI session on exit");
         } else {
-            tracing::info!("removed server.json");
+            tracing::info!("unregistered TUI session");
         }
     }
 

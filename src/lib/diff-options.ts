@@ -132,14 +132,12 @@ export interface DiffOptions {
   noOpen: boolean
 
   /**
-   * When another review already owns this repo, reuse it (print/open URL)
-   * instead of prompting or failing. Web mode only.
+   * Reuse the active review (print/open URL) instead of starting another.
    */
   reuseSession: boolean
 
   /**
-   * When another review already owns this repo, stop it and start a new one
-   * instead of prompting or failing. Web mode only.
+   * Stop the active review before starting a replacement.
    */
   replaceSession: boolean
 
@@ -377,8 +375,8 @@ Diffing Server Options:
   --host <host>        Host address to bind to (default: 127.0.0.1). Pass
                        0.0.0.0 to expose the server to the local network.
   --no-open            Don't open the browser automatically
-  --reuse-session      If a review is already running, open it instead of prompting
-  --replace-session    If a review is already running, stop it and start a new one
+  --reuse-session      Open the active review instead of starting another
+  --replace-session    Stop the active review and start a replacement
   --gh-pr <ref>        Open a GitHub PR review session (number, owner/repo#N, or URL)
                        Same as: diffing "gh pr <ref>"
 
@@ -406,6 +404,7 @@ Subcommands:
   comment edit|delete <id>
   progress --message … Live agent progress toast
   url                  Print the active review base URL
+  sessions             List, select, open, and stop running review sessions
   plan <submit|await|list|show|versions|reply|resolve>
   gh <status|overview|threads|reviews|pr-fetch|pr-list-comments|pr-review>
   mcp [--repo PATH]    Stdio MCP server for agents

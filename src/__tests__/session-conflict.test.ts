@@ -2,11 +2,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ServerLock } from '../lib/server-lock.js'
 import {
-  conflictFailMessage,
   existingSessionUrl,
-  formatExistingSession,
   openExistingSession,
-  resolveSessionConflictAction,
   stopLockOwner,
 } from '../lib/session-conflict.js'
 
@@ -23,7 +20,7 @@ function makeLock(overrides: Partial<ServerLock> = {}): ServerLock {
   }
 }
 
-describe('existingSessionUrl / formatExistingSession', () => {
+describe('existingSessionUrl', () => {
   it('builds a loopback URL for web sessions', () => {
     expect(existingSessionUrl(makeLock())).toBe('http://127.0.0.1:51835')
   })
@@ -38,83 +35,6 @@ describe('existingSessionUrl / formatExistingSession', () => {
     expect(existingSessionUrl(makeLock({ mode: 'tui', port: 0 }))).toBeNull()
   })
 
-  it('formats a human-readable conflict summary', () => {
-    const text = formatExistingSession(makeLock({ pid: 99 }))
-    expect(text).toContain('url:  http://127.0.0.1:51835')
-    expect(text).toContain('mode: web')
-    expect(text).toContain('pid:  99')
-  })
-
-  it('keeps the legacy fail message shape', () => {
-    expect(conflictFailMessage(makeLock())).toBe(
-      'A diffing review is already running for this repository at http://127.0.0.1:51835. End it before starting another scope.',
-    )
-    expect(conflictFailMessage(makeLock({ mode: 'tui', port: 0 }))).toContain('a TUI session')
-  })
-})
-
-describe('resolveSessionConflictAction', () => {
-  it('honors --reuse-session and --replace-session without prompting', async () => {
-    const prompt = vi.fn(async () => 'cancel' as const)
-    await expect(
-      resolveSessionConflictAction({
-        lock: makeLock(),
-        reuseSession: true,
-        replaceSession: false,
-        canPrompt: true,
-        prompt,
-      }),
-    ).resolves.toBe('open')
-    await expect(
-      resolveSessionConflictAction({
-        lock: makeLock(),
-        reuseSession: false,
-        replaceSession: true,
-        canPrompt: true,
-        prompt,
-      }),
-    ).resolves.toBe('replace')
-    expect(prompt).not.toHaveBeenCalled()
-  })
-
-  it('rejects combining both flags', async () => {
-    await expect(
-      resolveSessionConflictAction({
-        lock: makeLock(),
-        reuseSession: true,
-        replaceSession: true,
-        canPrompt: true,
-      }),
-    ).rejects.toThrow(/Cannot combine/)
-  })
-
-  it('returns cancel when non-interactive and no flag is set', async () => {
-    const prompt = vi.fn(async () => 'open' as const)
-    await expect(
-      resolveSessionConflictAction({
-        lock: makeLock(),
-        reuseSession: false,
-        replaceSession: false,
-        canPrompt: false,
-        prompt,
-      }),
-    ).resolves.toBe('cancel')
-    expect(prompt).not.toHaveBeenCalled()
-  })
-
-  it('prompts when interactive and no flag is set', async () => {
-    const prompt = vi.fn(async () => 'replace' as const)
-    await expect(
-      resolveSessionConflictAction({
-        lock: makeLock(),
-        reuseSession: false,
-        replaceSession: false,
-        canPrompt: true,
-        prompt,
-      }),
-    ).resolves.toBe('replace')
-    expect(prompt).toHaveBeenCalledOnce()
-  })
 })
 
 describe('stopLockOwner', () => {

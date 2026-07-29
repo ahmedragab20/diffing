@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util'
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { readServerLock, isLockAlive } from './lib/server-lock.js'
+import { resolveActiveServerLock } from './lib/server-lock.js'
 import { getProjectStorageDir } from './lib/git.js'
 import { formatComments } from './lib/comment-format.js'
 import {
@@ -37,8 +37,8 @@ let activeCapability: string | undefined
 
 /** Resolve the running server's base URL from the lockfile, or exit cleanly. */
 function baseUrl(): string {
-  const lock = readServerLock()
-  if (!lock || !isLockAlive(lock)) {
+  const lock = resolveActiveServerLock()
+  if (!lock) {
     console.error('No diffing server running for this repo. Start one with `diffing`.')
     process.exit(EXIT_NO_SERVER)
   }
@@ -918,6 +918,9 @@ export async function runSubcommand(name: string, args: string[]): Promise<numbe
       return inspect(args)
     case 'mode':
       return mode(args)
+    case 'sessions':
+      const { runSessionsCommand } = await import('./lib/session-manager.js')
+      return runSessionsCommand(args)
     default:
       console.error(`Unknown subcommand: ${name}`)
       return EXIT_USAGE

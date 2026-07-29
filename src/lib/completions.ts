@@ -21,6 +21,7 @@ const SUBCOMMANDS = [
   'progress',
   'inspect',
   'mode',
+  'sessions',
 ]
 
 const PLAN_ACTIONS = ['submit', 'await', 'list', 'show', 'versions', 'reply', 'resolve']
@@ -34,6 +35,7 @@ const GH_ACTIONS = [
   'pr-list-comments',
 ]
 const INSPECT_ACTIONS = ['summary', 'files', 'hunks', 'slice', 'search']
+const SESSION_ACTIONS = ['list', 'use', 'open', 'stop', 'kill']
 const GLOBAL_FLAGS = [
   '--help',
   '--version',
@@ -60,6 +62,7 @@ _diffing() {
     plan) COMPREPLY=( $(compgen -W "${PLAN_ACTIONS.join(' ')}" -- "$cur") ) ;;
     gh) COMPREPLY=( $(compgen -W "${GH_ACTIONS.join(' ')}" -- "$cur") ) ;;
     inspect) COMPREPLY=( $(compgen -W "${INSPECT_ACTIONS.join(' ')}" -- "$cur") ) ;;
+    sessions) COMPREPLY=( $(compgen -W "${SESSION_ACTIONS.join(' ')}" -- "$cur") ) ;;
     mode) COMPREPLY=( $(compgen -W "web tui" -- "$cur") ) ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ) ;;
     comments) COMPREPLY=( $(compgen -W "--open --json --format" -- "$cur") ) ;;
@@ -96,6 +99,7 @@ _diffing() {
     'completion:Print shell completions'
     'inspect:Read bounded diff data'
     'mode:Get or set the default interactive mode'
+    'sessions:Manage running review sessions'
   )
   _arguments -C \\
     '1: :->cmd' \\
@@ -107,6 +111,7 @@ _diffing() {
         plan) _values 'plan action' ${PLAN_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
         gh) _values 'gh action' ${GH_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
         inspect) _values 'inspect action' ${INSPECT_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
+        sessions) _values 'session action' ${SESSION_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
         mode) _values 'mode' web tui ;;
         completion) _values 'shell' bash zsh fish ;;
       esac
@@ -135,6 +140,9 @@ export function fishCompletion(): string {
     ),
     ...INSPECT_ACTIONS.map(
       (a) => `complete -c diffing -n "__fish_seen_subcommand_from inspect" -a ${a}`,
+    ),
+    ...SESSION_ACTIONS.map(
+      (a) => `complete -c diffing -n "__fish_seen_subcommand_from sessions" -a ${a}`,
     ),
     'complete -c diffing -n "__fish_seen_subcommand_from mode" -a "web tui"',
     'complete -c diffing -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"',

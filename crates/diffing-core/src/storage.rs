@@ -17,6 +17,11 @@ pub fn lock_path(repo_root: &str) -> PathBuf {
     project_storage_dir(repo_root).join("server.json")
 }
 
+/// Directory containing one discovery record per live review session.
+pub fn sessions_dir(repo_root: &str) -> PathBuf {
+    project_storage_dir(repo_root).join("sessions")
+}
+
 /// Create the parent dir of `path` if it does not exist. Mirrors the
 /// `mkdirSync(join(path, '..'), { recursive: true })` call in the Node CLI.
 pub fn ensure_dir(path: &Path) -> Result<()> {
@@ -35,6 +40,12 @@ mod tests {
     fn lock_path_ends_in_server_json() {
         let p = lock_path("/Users/me/projects/diffing");
         assert_eq!(p.file_name().unwrap().to_str().unwrap(), "server.json");
+    }
+
+    #[test]
+    fn sessions_dir_ends_in_sessions() {
+        let p = sessions_dir("/Users/me/projects/diffing");
+        assert_eq!(p.file_name().unwrap().to_str().unwrap(), "sessions");
     }
 
     #[test]
