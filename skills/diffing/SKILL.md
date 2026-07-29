@@ -14,14 +14,16 @@ Authoritative reference: repository `docs/cli.md`, root `AGENTS.md`, and the cur
 1. Identify the target Git repository; never infer it from an unrelated current directory.
 2. Prefer `review_session_status`. Read `repository`, `serverState`, `mode`, `diffArgs`, and `nextAction` before calling another diffing tool.
 3. Select the focused workflow from **Route by intent** below.
-4. Reuse a compatible session. Never stop or replace a user-owned session; report a scope/mode conflict instead.
+4. Reuse a compatible active session. If several sessions exist, inspect them
+   with `diffing sessions --json` and select one only when the user's intent is
+   clear. Never stop or replace a user-owned session without explicit approval.
 
 ## Detect capabilities first
 
 Use the strongest available integration without asking the user to choose plumbing:
 
 1. **Native diffing MCP tools**: call `review_session_status` first and follow its `mode` / `nextAction`. Call `start_review_session` only when no compatible session exists; it starts a loopback web session, not the TUI.
-2. **Shell CLI**: run `diffing` commands from the target repository; commands discover the active port via the lockfile.
+2. **Shell CLI**: run `diffing` commands from the target repository; commands discover the active port via `server.json`. Use `diffing sessions` to manage concurrent web/TUI/PR sessions.
 3. **Loopback HTTP**: use the URL from `diffing url` only when the needed operation has no MCP/CLI mirror. Keep TUI capabilities secret.
 4. **Offline handoff**: act on pasted `<code-review-comments>` or `<plan-review>` XML when live tools are unavailable.
 
@@ -87,7 +89,7 @@ MCP also advertises workflow prompts `review_local_changes` and `submit_plan_for
 | Plan gate | `diffing plan submit|await|list|show|versions|reply|resolve` |
 | GitHub PR | `diffing "gh pr <ref>"`; `diffing gh status|overview|threads|reviews|pr-fetch|pr-list-comments|pr-review` |
 | Bounded diff reads | `diffing inspect summary|files|hunks|slice|search` |
-| Discovery/DX | `diffing url`; `mode [web|tui]`; `doctor`; `completion bash|zsh|fish`; `update` |
+| Discovery/DX | `diffing url`; `sessions [list|use|open|stop|kill]`; `mode [web|tui]`; `doctor`; `completion bash|zsh|fish`; `update` |
 
 Use `diffing --help` and `docs/cli.md` for the full git-compatible option set and exact exit codes. Prefer stdin for long Markdown bodies/replies. `comment delete`, `delete_comment`, `delete_reply`, and GitHub publication are destructive or externally visible; use them only when the request clearly authorizes them.
 

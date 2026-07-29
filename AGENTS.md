@@ -11,6 +11,7 @@ portable fallback:
 ```bash
 diffing                    # Start the preferred review UI for current repo
 diffing mode <web|tui>     # Change the default interactive review mode
+diffing sessions           # List/select/stop concurrent review sessions
 diffing url                # Get server base URL (port-agnostic discovery)
 diffing plan submit PLAN.md --model "<model>"  # Submit plan for review
 diffing plan await         # Sync wait for verdict (prefer park after submit)
@@ -177,6 +178,7 @@ diffing progress --message "…" [--model] [--pct]
 diffing await-review [--timeout <sec>]
 diffing url
 diffing mode [web|tui]
+diffing sessions [list|use|open|stop|kill]
 ```
 
 ### MCP (preferred when available)

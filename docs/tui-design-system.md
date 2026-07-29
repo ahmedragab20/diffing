@@ -82,6 +82,9 @@ border; one boundary should occupy one cell.
 - Prefix it with `selection_marker`.
 - Keep primary text readable; use `muted` only for metadata.
 - Show semantic state in its own marker, not in the focus rail.
+- In the file rail, right-align comment and change counts so filenames form a
+  stable scan column. At narrow widths, drop change counts before review state
+  and preserve a useful filename prefix.
 
 ### Overlay and field
 
@@ -140,6 +143,39 @@ border; one boundary should occupy one cell.
 - Keys are primary and bold; descriptions are muted; separators are rules.
 - Keep the persistent strip contextual. The help overlay is the complete
   reference.
+- Treat commands as higher priority than paths. When the strip is constrained,
+  retain command hints, elide the leading path, and preserve the actionable
+  filename/line-number tail.
+
+### Search overlay
+
+- Put the editable query first, followed by one compact row for scope and
+  optional toggles. Do not repeat the active scope in the modal title.
+- Keep keyboard bindings visible in the controls or the single modal footer;
+  the dimmed application status strip stays quiet while search is active.
+- Use one subtle rule between controls and results. Wide layouts split results
+  and preview with one vertical rule; compact layouts give the full width to
+  results.
+- Preserve syntax colors in the preview, mark the selected result line with the
+  shared focus rail, and render exact query spans with a high-contrast match
+  style. Result names and paths may use fuzzy character emphasis.
+- Give every scope a distinct empty state and result contract: All merges
+  deduplicated file/symbol/text rows, Files is fuzzy, Text is literal or regex,
+  and Symbols browses definitions from changed lines until a two-character
+  query enables repository search. A symbol preview highlights the full
+  definition name, even while browsing with an empty query.
+- Keep the standalone renderer useful without its Node search bridge: changed
+  files, text, symbols, and bounded working-tree previews must still work.
+
+### Frame delivery
+
+- Clear the alternate screen once on entry and disable terminal line wrapping
+  while the TUI owns the screen. Restore both settings on every exit path.
+- Wrap each dirty Ratatui draw in a synchronized terminal update. This keeps
+  wide, split, and image frames atomic on supporting terminals and degrades to
+  ordinary output where the protocol is unsupported.
+- Redraw only for input or changed background state; never add a timer-driven
+  animation loop to make static chrome feel active.
 
 ### Feedback and review state
 

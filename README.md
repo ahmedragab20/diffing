@@ -29,9 +29,9 @@ diffing
 ```
 With the initial web preference, this spins up a local server, establishes an active repository watcher, and opens your default browser to an interactive code review dashboard. Use `diffing mode tui` to make the native review TUI the interactive default instead.
 
-Prefer the terminal? After building or separately installing the native binary
-as described below, use `view` for a focused read-only diff browser, or
-`--tui` for the full review flow without a browser:
+Prefer the terminal? The global npm install includes the native binary for the
+current platform. Use `view` for a focused read-only diff browser, or `--tui`
+for the full review flow without a browser:
 
 ```bash
 diffing view
@@ -189,7 +189,7 @@ A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), 
 > during installation and never installs a binary for the wrong platform. A
 > source build and `$PATH` remain supported fallbacks.
 
-`diffing --tui` opens an **opt-in native-Rust terminal interface** that mirrors the local code-review workflow — no browser or Electron. The renderer and headless tools share one sparse diff index. Review sessions publish a capability-scoped loopback API through `server.json`; read-only viewers deliberately do not claim that lock, so they can coexist with a web or TUI review for the same repository.
+`diffing --tui` opens an **opt-in native-Rust terminal interface** that mirrors the local code-review workflow — no browser or Electron. The renderer and headless tools share one sparse diff index. Review sessions publish a capability-scoped loopback API through the per-repository session registry; web and TUI reviews can run concurrently, while `server.json` points agent commands at the selected active session. Read-only viewers do not register a review session.
 
 For everyday diff browsing, `diffing view` opens the same renderer as a
 smaller read-only experience: continuous virtualized changes, a compact file
@@ -276,14 +276,13 @@ pnpm build:tui               # release build → target/release/diffing-tui
 ```
 
 The CLI auto-discovers the binary in the following search order: sibling of
-`dist/cli.mjs`, the matching optional native npm package, `bin/`,
-`target/release/`, `target/debug/`, then `$PATH`. A
+`dist/cli.mjs`, `target/release/`, `target/debug/`, the matching optional
+native npm package, `bin/`, then `$PATH`. A
 `cargo build -p diffing-tui` debug workflow is supported out of the box; you
 do not need a release build just to use the TUI locally. The sibling and
 `bin/` locations remain useful for manual installations. A CLI run from this source
-checkout discovers the binary under `target/`; to use the globally installed
-npm CLI from arbitrary repositories, copy or symlink the resulting executable
-into a directory on `PATH`.
+checkout discovers the binary under `target/`; `npm install -g diffing`
+automatically installs and resolves the matching native package for global use.
 
 ---
 
@@ -366,6 +365,9 @@ diffing comment edit <id> --body "..."
 diffing comment delete <id>
 diffing progress --message "…" [--pct 40] [--model M]   # Live progress toast
 diffing url                          # Active server base URL
+diffing sessions                    # List every live web/TUI/PR session
+diffing sessions use <id>           # Retarget agent commands
+diffing sessions stop <id>|active|all
 
 # Plan review (before any code is written)
 diffing plan submit <file> [--title T] [--model M] [--id <id>] [--wait] [--save-source]
@@ -456,7 +458,7 @@ waiting agent. Agent waiting state shows as a green dot on the button.
 **Copy comments** serializes the thread set to the agent XML spec.
 
 ### Port-Agnostic Discovery
-A per-repo lockfile (`server.json`) in `~/.diffing/<repo-hash>/` enables all subcommands and MCP tools to discover the server's port with zero configuration. Stale or crashed server locks are automatically detected and treated as dead via `process.kill(pid, 0)`.
+A per-repo registry in `~/.diffing/<repo-hash>/sessions/` tracks every live review. `server.json` points subcommands and MCP tools at the active session with zero port configuration; stale records are pruned and another live session is elected automatically.
 
 ### Monotonic Round Sequencing
 A `ReviewSession` class with a monotonic `round` counter and race-guard logic ensures that if a "Send to agent" lands between polling intervals, the cached payload is delivered immediately. Multiple agents can block on the same review session simultaneously—all are released together on send.

@@ -36,16 +36,24 @@ force terminal mode.
 
 ---
 
-## 2. Port-Agnostic Server Discovery
+## 2. Multi-Session Discovery
 
-When a `diffing` web server starts, it automatically registers itself by writing a lightweight lockfile (`server.json`) to a unique, repository-specific storage folder. 
+Every web, TUI, or GitHub PR review registers a lightweight record under a
+repository-specific `sessions/` directory. `server.json` remains a
+backward-compatible pointer to the **active** session: existing agent commands
+still discover one port without hardcoding it, while multiple review surfaces
+can run concurrently.
 
-This enables all agent subcommands, custom scripts, and the MCP server to find and communicate with the active web server without requiring the port to be hardcoded or passed manually.
+The newest launch becomes active. Use `diffing sessions use <id>` to retarget
+`url`, `comments`, `inspect`, plan commands, and MCP discovery to another live
+session.
 
 ### The Lockfile Location
 The storage directory is computed by hashing the absolute path of the repository root:
 ```text
-~/.diffing/<repo-name>-<sha256(repo-root-path).slice(0, 8)>/server.json
+~/.diffing/<repo-name>-<sha256(repo-root-path).slice(0, 8)>/
+├── server.json                 # active-session pointer
+└── sessions/<session-id>.json  # one record per live session
 ```
 
 ### Lockfile Schema
@@ -57,12 +65,15 @@ The storage directory is computed by hashing the absolute path of the repository
   "repoRoot": "/Users/developer/projects/my-app",
   "startedAt": 1782782782782,
   "version": "0.1.0",
+  "sessionId": "7739b322-3a30-4bb1-8448-8f550627ad04",
   "mode": "web" | "tui" | "gh-pr",
   "prRef": "https://github.com/ahmedragab20/diffing/pull/1234"
 }
 ```
 
 - `mode` — `"web"` (default, local diff review), `"tui"` (Rust terminal UI), or `"gh-pr"` (GitHub PR review). Lets client subcommands detect a PR session without a port round-trip.
+- `sessionId` — public lifecycle identifier used by `diffing sessions`; it is
+  separate from the TUI's private API capability.
 - `prRef` — present only when `mode === "gh-pr"`. The original `gh pr <ref>` input as the user typed it, for diagnostic round-trips.
 
 ### Self-Healing & Validation
@@ -70,7 +81,8 @@ To ensure stale lockfiles from terminated or crashed server processes do not blo
 1. It probes the process using `process.kill(pid, 0)` (which checks for process existence without sending a termination signal).
 2. It validates that the repository path registered in the lockfile matches the repository context of the executing CLI process.
 
-If the lock fails either check, it is treated as dead, and the client reports that no server is running.
+Stale registry records are pruned automatically. If the active session exits,
+the newest remaining live session is elected and written to `server.json`.
 
 ---
 
@@ -88,19 +100,24 @@ diffing [options] [<revision>...] [-- <path>...]
 - `--port <port>`: The port to bind the server to. If omitted, it automatically requests a random available port.
 - `--host <host>`: Host address to bind the server to (default: `127.0.0.1`). Pass `0.0.0.0` to expose the review dashboard to your local network.
 - `--no-open`: Prevents the CLI from automatically launching your browser when the server starts.
-- `--reuse-session`: If a review is already running for this repository, open that session (print URL / launch browser) and exit instead of failing or prompting.
-- `--replace-session`: If a review is already running for this repository, stop it and start a new review with the current arguments instead of failing or prompting.
+- `--reuse-session`: Open the active session (print URL / launch browser) instead of starting another.
+- `--replace-session`: Stop the active session and start a replacement with the current arguments.
 - `--gh-pr <ref>`: Open a GitHub PR review session instead of a working-tree diff. The `<ref>` accepts the same forms as `gh pr <ref>` (bare number, `owner/repo#N`, or full GitHub URL). Equivalent to the quoted form `diffing "gh pr <ref>"`. See [§4c. GitHub PR Review Subcommands](#4c-github-pr-review-subcommands) for the full flow.
 - `--view`: Open the focused, read-only native diff viewer. Equivalent to `diffing view`.
 - `--tui`: Open the opt-in native-Rust terminal UI instead of the web server when a compatible `diffing-tui` executable has been installed or built. The same review flow (diff render, file tree, comments, agent handoff) runs in your terminal — no browser. You can also make it the interactive default with `diffing mode tui`. See [§4d. TUI Subcommands (Native Terminal UI)](#4d-tui-subcommands-native-terminal-ui) for installation, fallback, and the full flow.
 
-#### Existing session conflict (web mode)
+#### Concurrent session lifecycle
 
-Only one review session may own a repository at a time (via `server.json`). When you start `diffing` in web mode and a live session already exists:
+Starting `diffing`, `diffing --web`, `diffing --tui`, or a GitHub PR review no
+longer conflicts with an existing review. Each launch receives its own port and
+registry record, becomes active, and leaves older sessions running. Web and TUI
+sessions can therefore coexist for the same repository.
 
-- **Interactive TTY**: the CLI prompts you to **open** the existing session, **replace** it (stop the old process, start a new one), or **cancel**.
-- **Non-interactive** (pipes/CI/scripts): the CLI exits with code 3 and the legacy “already running” message, unless you pass `--reuse-session` or `--replace-session`.
-- **MCP `start_review_session`**: never stops or replaces a user-owned session; it only reuses a compatible web session or reports a conflict.
+- Pass `--reuse-session` to open the active review and exit.
+- Pass `--replace-session` to stop only the active review before launching.
+- Use `diffing sessions` to list, select, open, or stop a specific session.
+- MCP `start_review_session` remains conservative: it never stops or replaces
+  a user-owned session and reports incompatible active scope/mode conflicts.
 
 `--reuse-session` and `--replace-session` are mutually exclusive.
 
@@ -129,12 +146,31 @@ A specialized suite of subcommands is integrated into the `diffing` binary to co
 | `comment edit` / `comment delete` | Mutate a thread body or delete it |
 | `progress` | Live agent progress toast |
 | `url` | Active server base URL |
+| `sessions …` | List, select, open, and stop live sessions |
 | `plan …` | Plan-review loop (see §4b) |
 | `gh …` | GitHub PR automation (see §4c) |
 | `mcp` | Stdio MCP server (see §5) |
 | `inspect …` | Bounded web, TUI, or PR diff reads (see below) |
 | `mode [web\|tui]` | Get or set the default interactive review mode |
 | `doctor` / `completion` / `update` | DX |
+
+### `sessions`
+
+Repository-local task manager for live web, TUI, and GitHub PR reviews:
+
+```bash
+diffing sessions                       # Table; * marks the active target
+diffing sessions --json                # Script-safe summaries (no capabilities)
+diffing sessions use <id>              # Make a session active for agent commands
+diffing sessions open [<id>|active]    # Select and open/print a session
+diffing sessions stop <id>|active|all  # Graceful stop, then force if necessary
+diffing sessions kill <id>|active|all  # Alias for stop
+```
+
+The first eight characters shown in the table are accepted when they uniquely
+identify a live session. Stopping the active session automatically elects the
+newest remaining session. `--replace-session` is the launch-time shorthand for
+stopping `active` and starting a new review.
 
 ### `mode`
 
@@ -776,8 +812,11 @@ the result list; `Shift`/`Alt` + arrows or Page Up/Down scroll the preview.
 Left/Right, Home/End, `Ctrl-W`, bracketed paste, and `Ctrl-U` provide normal
 query editing. The Node launcher owns a
 random-port, capability-scoped loopback bridge while the Rust renderer is
-open. If fff cannot start, the TUI remains usable and falls back to literal
-changed-text search.
+open. Symbols immediately browse definitions added by the current diff; type
+at least two characters to run the wider file-level/repository symbol search.
+If fff cannot start, the TUI remains usable with fuzzy changed-file search,
+literal changed-text search, changed-line symbol search, and bounded local
+previews.
 
 ```bash
 diffing view                        # Browse current working-tree changes
@@ -907,10 +946,11 @@ diffing --tui -- -- src/           # Limit to a directory
   `diffing view requires a TTY`, followed by `falling back to git diff`) and
   runs the normal `git diff` output.
 - If the `diffing-tui` binary is missing or fails to start, the CLI prints
-  one line to stderr (`diffing-tui binary not found; build it with
-  pnpm build:tui; falling back to git diff`) and runs the normal `git diff`
-  output. That build command applies to a source checkout. The web mode is
-  unaffected by the TUI build — the same `diffing` install serves either.
+  one line to stderr (`diffing-tui binary not found; reinstall with npm i -g
+  diffing@latest or build it with pnpm build:tui; falling back to git diff`)
+  and runs the normal `git diff` output. The build command applies to a source
+  checkout; npm installs receive a prebuilt platform package. The web mode is
+  unaffected — the same `diffing` install serves either.
 
 ### Binary discovery
 
@@ -918,12 +958,15 @@ The CLI searches for the `diffing-tui` binary in this order, anchoring on
 the bundled `dist/cli.mjs` directory:
 
 1. Sibling of the bundled CLI (`dist/diffing-tui[.exe]`)
-2. Matching optional npm package (`@diffing/tui-<platform>-<arch>-<libc>`)
-3. `bin/diffing-tui[.exe]` next to the package root
-4. `target/release/diffing-tui[.exe]` (release build)
-5. `target/debug/diffing-tui[.exe]` (debug build — a plain `cargo build`
+2. `target/release/diffing-tui[.exe]` (source-checkout release build)
+3. `target/debug/diffing-tui[.exe]` (source-checkout debug build — a plain `cargo build`
    is enough to use the TUI; no `--release` required)
+4. Matching optional npm package (`@diffing/tui-<platform>-<arch>-<libc>`)
+5. `bin/diffing-tui[.exe]` next to the package root
 6. `$PATH` lookup via `where` (Windows) / `which` (POSIX)
+
+Source builds intentionally precede installed artifacts so contributors do not
+launch a stale packaged TUI while iterating locally.
 
 Viewer mode feature-probes candidates with `--help` and selects the first
 binary that advertises `--view-only`. This prevents a stale native binary from
@@ -934,20 +977,20 @@ Native artifacts are built and published independently for each target. The
 main package declares them as optional dependencies, avoiding install-time
 compilation and preventing a binary for the wrong platform from being used.
 
-### Lockfile integration
+### Session-registry integration
 
-Review TUI sessions write the same `server.json` lockfile the web server writes,
-with `mode: "tui"` instead of `mode: "web"`. The lockfile is therefore
-discoverable by every existing agent subcommand and MCP tool — the only
-visible difference is `mode: "tui"` in the JSON, which existing clients
-already accept (they treat it as "web-equivalent" for comment-store and
-harness purposes).
-Viewer sessions do not own a lockfile or agent API.
+Review TUI sessions write their own registry record with `mode: "tui"`, the
+embedded API's loopback port, a public `sessionId`, and a private random
+capability. The newest launch is also copied to `server.json` as the active
+pointer, so existing agent subcommands and MCP tools continue to discover one
+target. Cleanup removes only the matching record and elects another live
+session when needed; an exiting TUI cannot erase or hide a concurrent web/TUI
+review. Viewer sessions do not register a review session or agent API.
 
 Stale-lock detection uses `is_lock_alive`, which on Unix probes with
 `kill(pid, 0)` and on Windows probes with `tasklist /NH /FO CSV /FI
 "PID eq N"`. There is no platform-specific caveat for the user — a stale
-lock is detected and replaced on every supported host.
+record is detected and pruned on every supported host.
 
 ### Keymap (vim-style)
 
@@ -1067,9 +1110,11 @@ pnpm build:tui               # release → target/release/diffing-tui
 The `crates/diffing-tui/` crate is a member of the workspace at
 `Cargo.toml`. `cargo fmt` + `cargo clippy --all-targets -- -D warnings` +
 106 cargo tests pass before the v0.10.0 release. A CLI run from the source
-checkout discovers either build under `target/` automatically. To use an npm-global
-`diffing` command from arbitrary repositories, copy or symlink the resulting
-executable into a directory on `PATH`; on Windows, use `diffing-tui.exe`.
+checkout discovers either build under `target/` automatically. `pnpm build`
+also stages the current platform package under `target/npm/` for packaging
+checks. Tagged releases build every supported target and publish those native
+packages before the root `diffing` package, so `npm install -g diffing`
+receives the right executable without compiling Rust during installation.
 
 ---
 
