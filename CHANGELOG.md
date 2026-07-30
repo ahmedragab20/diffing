@@ -20,6 +20,10 @@
   cookie for browseable review/plan URLs, keep `x-diffing-token` for CLI/MCP,
   and close related supply-chain gaps around lock probes, textconv, and
   AppleScript path quoting.
+- Improve plan review on narrow viewports: show the comments map as a bottom
+  sheet on tablet/mobile, coerce Split to the last single pane when space is
+  tight, default the comments rail closed on tablet, and tighten layout and
+  touch targets so the surface stays usable.
 
 ## 0.11.0
 
