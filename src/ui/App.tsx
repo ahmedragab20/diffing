@@ -796,26 +796,25 @@ export function App() {
         setSidebarCollapsed((c) => !c);
     }, []);
 
+    // Walk the same filtered+sorted list DiffViewer renders. Using raw
+    // `files` (patch order) made J stop mid-list whenever the current file
+    // was last in patch order but not last on screen.
     const navigateFile = useCallback((direction: 'next' | 'prev') => {
-        if (files.length === 0) return;
-        let nextIndex = 0;
-        if (activeFile) {
-            const currentIndex = files.findIndex(f => f.name === activeFile);
-            if (currentIndex !== -1) {
-                if (direction === 'next') {
-                    nextIndex = Math.min(currentIndex + 1, files.length - 1);
-                } else {
-                    nextIndex = Math.max(currentIndex - 1, 0);
-                }
-            }
-        }
-        const nextFile = files[nextIndex].name;
+        if (sortedFiles.length === 0) return;
+        const currentIndex = activeFile
+            ? sortedFiles.findIndex((f) => f.name === activeFile)
+            : -1;
+        const nextIndex = direction === 'next'
+            ? Math.min(currentIndex + 1, sortedFiles.length - 1)
+            : Math.max(currentIndex - 1, 0);
+        const nextFile = sortedFiles[Math.max(0, nextIndex)]?.name;
+        if (!nextFile) return;
         setActiveFile(nextFile);
         const el = document.getElementById(`file-${nextFile}`);
         if (el) {
             el.scrollIntoView({ block: 'start' });
         }
-    }, [files, activeFile, setActiveFile]);
+    }, [sortedFiles, activeFile, setActiveFile]);
 
     /** Prev/next commit in `diffing show` multi-commit mode (`[` / `]`). */
     const navigateCommit = useCallback((direction: 'next' | 'prev') => {

@@ -66,10 +66,10 @@ const emptyAnnotations: DiffLineAnnotation<ReviewComment>[] = []
 
 /**
  * Shared file-name comparator used by `<DiffViewer>` and by App.tsx when
- * it pre-sorts the file list for `useScrollToNextFile`. Exposed so the
- * "scroll to next file" hook and the rendered card list always walk the
- * same order — a divergence here would let the hook pick a different
- * "next" than what the user can see on screen.
+ * it pre-sorts the file list for `useScrollToNextFile` / J·K navigate.
+ * Exposed so those navigators and the rendered card list always walk the
+ * same order — a divergence here would let them pick a different "next"
+ * than what the user can see on screen.
  *
  * Sort rules (unchanged from the previous inline implementation):
  *   - Compare path components left-to-right.
