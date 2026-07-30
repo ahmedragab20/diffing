@@ -949,7 +949,7 @@ diffing --tui -- -- src/           # Limit to a directory
   one line to stderr (`diffing-tui binary not found; reinstall with npm i -g
   diffing@latest or build it with pnpm build:tui; falling back to git diff`)
   and runs the normal `git diff` output. The build command applies to a source
-  checkout; npm installs receive a prebuilt platform package. The web mode is
+  checkout; npm installs receive prebuilt binaries in the main package. The web mode is
   unaffected — the same `diffing` install serves either.
 
 ### Binary discovery
@@ -961,7 +961,7 @@ the bundled `dist/cli.mjs` directory:
 2. `target/release/diffing-tui[.exe]` (source-checkout release build)
 3. `target/debug/diffing-tui[.exe]` (source-checkout debug build — a plain `cargo build`
    is enough to use the TUI; no `--release` required)
-4. Matching optional npm package (`@diffing/tui-<platform>-<arch>-<libc>`)
+4. Matching bundled binary (`dist/native/tui-<platform>-<arch>-<libc>/diffing-tui[.exe]`)
 5. `bin/diffing-tui[.exe]` next to the package root
 6. `$PATH` lookup via `where` (Windows) / `which` (POSIX)
 
@@ -973,9 +973,9 @@ binary that advertises `--view-only`. This prevents a stale native binary from
 silently opening the full review TUI when the Node CLI has already been
 upgraded; normal `--tui` launches retain the search order above.
 
-Native artifacts are built and published independently for each target. The
-main package declares them as optional dependencies, avoiding install-time
-compilation and preventing a binary for the wrong platform from being used.
+Native artifacts are built independently for each target, then bundled into
+the single published `diffing` package. Installation remains `npm i -g diffing`
+without install-time compilation or additional platform packages.
 
 ### Session-registry integration
 

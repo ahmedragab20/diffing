@@ -20,11 +20,11 @@ vi.mock('node:child_process', async (importOriginal) => {
 const FAKE_CLI_URL = 'file:///fake/repo/dist/cli.mjs'
 
 describe('findTuiBinary', () => {
-  it('maps every supported runtime to its native package name', async () => {
-    const { tuiPackageName } = await import('../lib/find-tui-binary.js')
-    expect(tuiPackageName('darwin', 'arm64', null)).toBe('@diffing/tui-darwin-arm64')
-    expect(tuiPackageName('linux', 'x64', 'musl')).toBe('@diffing/tui-linux-x64-musl')
-    expect(tuiPackageName('win32', 'x64', 'msvc')).toBe('@diffing/tui-win32-x64-msvc')
+  it('maps every supported runtime to its bundled binary target', async () => {
+    const { tuiBinaryTarget } = await import('../lib/find-tui-binary.js')
+    expect(tuiBinaryTarget('darwin', 'arm64', null)).toBe('tui-darwin-arm64')
+    expect(tuiBinaryTarget('linux', 'x64', 'musl')).toBe('tui-linux-x64-musl')
+    expect(tuiBinaryTarget('win32', 'x64', 'msvc')).toBe('tui-win32-x64-msvc')
   })
   // The candidate list is order-sensitive: development builds should win
   // over a stale `bin/` artefact, and a PATH lookup is a last-resort fallback.
@@ -33,6 +33,7 @@ describe('findTuiBinary', () => {
   // contributor's Windows machine and a confusing "TUI binary not found".
 
   const originalPlatform = process.platform
+  const originalArch = process.arch
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -50,10 +51,18 @@ describe('findTuiBinary', () => {
       value: originalPlatform,
       configurable: true,
     })
+    Object.defineProperty(process, 'arch', {
+      value: originalArch,
+      configurable: true,
+    })
   })
 
   function setPlatform(p: NodeJS.Platform) {
     Object.defineProperty(process, 'platform', { value: p, configurable: true })
+  }
+
+  function setArch(arch: string) {
+    Object.defineProperty(process, 'arch', { value: arch, configurable: true })
   }
 
   it('finds the production sibling `dist/diffing-tui` on POSIX', async () => {
@@ -106,6 +115,17 @@ describe('findTuiBinary', () => {
     )
     const { findTuiBinary } = await import('../lib/find-tui-binary.js')
     expect(findTuiBinary(FAKE_CLI_URL)).toMatch(/diffing-tui\.exe$/)
+  })
+
+  it('finds the matching binary bundled in the root npm package', async () => {
+    setPlatform('darwin')
+    setArch('arm64')
+    mockExistsSync.mockImplementation((p: string) =>
+      p === '/fake/repo/dist/native/tui-darwin-arm64/diffing-tui',
+    )
+    const { findTuiBinary } = await import('../lib/find-tui-binary.js')
+    expect(findTuiBinary(FAKE_CLI_URL))
+      .toBe('/fake/repo/dist/native/tui-darwin-arm64/diffing-tui')
   })
 
   it('prefers release over debug when both are present', async () => {

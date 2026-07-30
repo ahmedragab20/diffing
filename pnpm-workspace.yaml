@@ -1,6 +1,5 @@
 packages:
   - .
-  - npm/*
 
 allowBuilds:
   esbuild: true

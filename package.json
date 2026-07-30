@@ -26,11 +26,11 @@
     "dist"
   ],
   "scripts": {
-    "build": "pnpm run build:ts && pnpm run build:tui && pnpm run package:tui",
+    "build": "pnpm run build:ts && pnpm run build:tui && pnpm run bundle:tui",
     "build:ts": "tsdown && vite build",
     "build:tui": "cargo build --release --manifest-path crates/diffing-tui/Cargo.toml",
     "build:tui:debug": "cargo build --manifest-path crates/diffing-tui/Cargo.toml",
-    "package:tui": "node scripts/stage-tui-package.mjs",
+    "bundle:tui": "node scripts/stage-tui-binary.mjs",
     "changeset": "changeset",
     "dev:client": "vite",
     "dev:server": "tsx src/cli.ts --no-open --port 3433",
@@ -39,8 +39,9 @@
     "test:ts": "vitest run",
     "test:tui": "cargo test --manifest-path crates/diffing-tui/Cargo.toml",
     "test:watch": "vitest",
-    "verify:tui-packages": "vitest run src/__tests__/native-packages.test.ts src/__tests__/find-tui-binary.test.ts",
-    "prepublishOnly": "pnpm run build",
+    "verify:tui-bundle": "vitest run src/__tests__/native-bundle.test.ts src/__tests__/find-tui-binary.test.ts",
+    "verify:release-bundle": "node scripts/verify-tui-bundle.mjs",
+    "prepublishOnly": "pnpm run verify:release-bundle",
     "version-packages": "changeset version"
   },
   "dependencies": {
@@ -86,14 +87,5 @@
     "typescript": "^6.0.2",
     "vite": "^8.0.3",
     "vitest": "^4.1.7"
-  },
-  "optionalDependencies": {
-    "@diffing/tui-darwin-arm64": "0.11.0",
-    "@diffing/tui-darwin-x64": "0.11.0",
-    "@diffing/tui-linux-arm64-gnu": "0.11.0",
-    "@diffing/tui-linux-arm64-musl": "0.11.0",
-    "@diffing/tui-linux-x64-gnu": "0.11.0",
-    "@diffing/tui-linux-x64-musl": "0.11.0",
-    "@diffing/tui-win32-x64-msvc": "0.11.0"
   }
 }

@@ -2,27 +2,22 @@ import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
 
-function packagedBinary(callerUrl: string, ext: string): string | null {
+function bundledBinary(callerUrl: string, ext: string): string {
   const report = process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined
   const runtime = process.platform === 'linux'
     ? report?.header?.glibcVersionRuntime ? 'gnu' : 'musl'
     : process.platform === 'win32' ? 'msvc' : null
-  const packageName = tuiPackageName(process.platform, process.arch, runtime)
-  try {
-    return createRequire(callerUrl).resolve(`${packageName}/bin/diffing-tui${ext}`)
-  } catch {
-    return null
-  }
+  const target = tuiBinaryTarget(process.platform, process.arch, runtime)
+  return resolve(dirname(fileURLToPath(callerUrl)), 'native', target, `diffing-tui${ext}`)
 }
 
-export function tuiPackageName(
+export function tuiBinaryTarget(
   platform: NodeJS.Platform,
   arch: string,
   runtime: 'gnu' | 'musl' | 'msvc' | null,
 ): string {
-  return `@diffing/tui-${[platform, arch, runtime].filter(Boolean).join('-')}`
+  return `tui-${[platform, arch, runtime].filter(Boolean).join('-')}`
 }
 
 /**
@@ -33,7 +28,7 @@ export function tuiPackageName(
  *   3. `target/debug/diffing-tui[.exe]` next to the package root
  *      (cargo debug build — the common case during development, especially
  *      on Windows where release builds are slow).
- *   4. Matching optional npm package.
+ *   4. Matching binary bundled inside the root npm package.
  *   5. `bin/diffing-tui[.exe]` next to the package root.
  *   6. `$PATH` lookup via `which` / `where`.
  *
@@ -46,14 +41,14 @@ export function tuiPackageName(
 export function findTuiBinaries(callerUrl: string): string[] {
   const ext = process.platform === 'win32' ? '.exe' : ''
   const here = dirname(fileURLToPath(callerUrl))
-  const packaged = packagedBinary(callerUrl, ext)
+  const bundled = bundledBinary(callerUrl, ext)
   const candidates: string[] = [
     resolve(here, `diffing-tui${ext}`),
     resolve(here, '..', 'target', 'release', `diffing-tui${ext}`),
     resolve(here, '..', '..', 'target', 'release', `diffing-tui${ext}`),
     resolve(here, '..', 'target', 'debug', `diffing-tui${ext}`),
     resolve(here, '..', '..', 'target', 'debug', `diffing-tui${ext}`),
-    ...(packaged ? [packaged] : []),
+    bundled,
     resolve(here, '..', 'bin', `diffing-tui${ext}`),
   ]
   const found = candidates.filter(c => existsSync(c))

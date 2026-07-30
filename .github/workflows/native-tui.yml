@@ -1,17 +1,17 @@
-name: Native TUI packages
+name: Native TUI bundle
 
 on:
   pull_request:
     paths:
       - "crates/**"
       - "Cargo.*"
-      - "npm/**"
-      - "scripts/stage-tui-package.mjs"
+      - "scripts/stage-tui-binary.mjs"
+      - "scripts/verify-tui-bundle.mjs"
       - "src/lib/find-tui-binary.ts"
-      - "src/__tests__/native-packages.test.ts"
+      - "src/__tests__/native-bundle.test.ts"
+      - "src/__tests__/find-tui-binary.test.ts"
       - "package.json"
       - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
       - ".github/workflows/native-tui.yml"
   push:
     tags: ["v*"]
@@ -19,44 +19,44 @@ on:
 
 jobs:
   build-native:
-    name: Build ${{ matrix.package }}
+    name: Build ${{ matrix.target_name }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-15
-            target: aarch64-apple-darwin
-            package: tui-darwin-arm64
+            rust_target: aarch64-apple-darwin
+            target_name: tui-darwin-arm64
             binary: diffing-tui
             zig: false
           - os: macos-15-intel
-            target: x86_64-apple-darwin
-            package: tui-darwin-x64
+            rust_target: x86_64-apple-darwin
+            target_name: tui-darwin-x64
             binary: diffing-tui
             zig: false
           - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            package: tui-linux-x64-gnu
+            rust_target: x86_64-unknown-linux-gnu
+            target_name: tui-linux-x64-gnu
             binary: diffing-tui
             zig: false
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            package: tui-linux-arm64-gnu
+            rust_target: aarch64-unknown-linux-gnu
+            target_name: tui-linux-arm64-gnu
             binary: diffing-tui
             zig: false
           - os: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-            package: tui-linux-x64-musl
+            rust_target: x86_64-unknown-linux-musl
+            target_name: tui-linux-x64-musl
             binary: diffing-tui
             zig: true
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-            package: tui-linux-arm64-musl
+            rust_target: aarch64-unknown-linux-musl
+            target_name: tui-linux-arm64-musl
             binary: diffing-tui
             zig: true
           - os: windows-2025
-            target: x86_64-pc-windows-msvc
-            package: tui-win32-x64-msvc
+            rust_target: x86_64-pc-windows-msvc
+            target_name: tui-win32-x64-msvc
             binary: diffing-tui.exe
             zig: false
     runs-on: ${{ matrix.os }}
@@ -67,7 +67,7 @@ jobs:
           node-version: 24
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rust_target }}
       - uses: goto-bus-stop/setup-zig@v2
         if: matrix.zig
       - name: Install cargo-zigbuild
@@ -75,31 +75,30 @@ jobs:
         run: cargo install cargo-zigbuild --locked
       - name: Build native binary
         if: ${{ !matrix.zig }}
-        run: cargo build --locked --release --target ${{ matrix.target }} -p diffing-tui
+        run: cargo build --locked --release --target ${{ matrix.rust_target }} -p diffing-tui
       - name: Build static musl binary
         if: matrix.zig
-        run: cargo zigbuild --locked --release --target ${{ matrix.target }} -p diffing-tui
-      - name: Stage and pack native package
+        run: cargo zigbuild --locked --release --target ${{ matrix.rust_target }} -p diffing-tui
+      - name: Stage native binary
         shell: bash
         run: |
           set -euo pipefail
-          binary="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          binary="target/${{ matrix.rust_target }}/release/${{ matrix.binary }}"
           "$binary" --version
-          node scripts/stage-tui-package.mjs \
-            --package "${{ matrix.package }}" \
-            --binary "$binary"
-          mkdir -p target/native-tarballs
-          npm pack "target/npm/${{ matrix.package }}" \
-            --pack-destination target/native-tarballs
+          node scripts/stage-tui-binary.mjs \
+            --target "${{ matrix.target_name }}" \
+            --binary "$binary" \
+            --output-root target/native-binaries
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}
-          path: target/native-tarballs/*.tgz
+          name: ${{ matrix.target_name }}
+          path: target/native-binaries/*/*
           if-no-files-found: error
           retention-days: 7
 
   build-root:
-    name: Build root npm package
+    name: Build bundled npm package
+    needs: build-native
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -109,14 +108,28 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run verify:tui-packages
+      - run: pnpm run verify:tui-bundle
       - run: pnpm run build:ts
       - name: Verify release tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
-      - name: Pack root package
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tui-*
+          path: dist/native
+          merge-multiple: true
+      - name: Verify bundled native binaries
+        shell: bash
         run: |
+          set -euo pipefail
+          find dist/native -type f -name 'diffing-tui' -exec chmod 755 {} +
+          node scripts/verify-tui-bundle.mjs
+          dist/native/tui-linux-x64-gnu/diffing-tui --version
+      - name: Pack root package
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p target/root-tarball
           npm pack . --pack-destination target/root-tarball
       - uses: actions/upload-artifact@v4
@@ -127,8 +140,8 @@ jobs:
           retention-days: 7
 
   verify-install:
-    name: Verify global install
-    needs: [build-native, build-root]
+    name: Verify single-package install
+    needs: build-root
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -136,105 +149,36 @@ jobs:
         with:
           name: diffing-root
           path: target/root-tarball
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: tui-*
-          path: target/native-tarballs
-          merge-multiple: true
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Inspect release artifacts
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(find target/native-tarballs -name '*.tgz' | wc -l | tr -d ' ')" = 7
-          test "$(find target/root-tarball -name '*.tgz' | wc -l | tr -d ' ')" = 1
-          for archive in target/native-tarballs/*.tgz; do
-            tar -tzf "$archive" | grep -E '^package/bin/diffing-tui(\.exe)?$' >/dev/null
-          done
-          tar -tzf target/root-tarball/*.tgz | grep -E '^package/dist/cli.mjs$' >/dev/null
-      - name: Verify root and native package integration
+      - name: Inspect release artifact
         shell: bash
         run: |
           set -euo pipefail
           root_archive=$(find target/root-tarball -name '*.tgz' -print -quit)
-          native_archive=$(find target/native-tarballs -name '*linux-x64-gnu*.tgz' -print -quit)
+          test -n "$root_archive"
+          unpacked="$RUNNER_TEMP/diffing-package"
+          mkdir -p "$unpacked"
+          tar -xzf "$root_archive" -C "$unpacked"
+          test -f "$unpacked/package/dist/cli.mjs"
+          node scripts/verify-tui-bundle.mjs "$unpacked/package/dist/native"
+      - name: Install only diffing
+        shell: bash
+        run: |
+          set -euo pipefail
+          root_archive=$(find target/root-tarball -name '*.tgz' -print -quit)
           install_prefix="$RUNNER_TEMP/diffing-global"
-          npm install --global --prefix "$install_prefix" "$root_archive" "$native_archive"
-          "$install_prefix/bin/diffing-tui" --version
+          npm install --global --prefix "$install_prefix" "$root_archive"
+          native_binary="$install_prefix/lib/node_modules/diffing/dist/native/tui-linux-x64-gnu/diffing-tui"
+          "$native_binary" --version
           NO_COLOR=1 "$install_prefix/bin/diffing" doctor | tee "$RUNNER_TEMP/diffing-doctor.txt"
-          grep -Eq '/@diffing/tui-linux-x64-gnu/bin/diffing-tui$' "$RUNNER_TEMP/diffing-doctor.txt"
-
-  publish-native:
-    name: Publish ${{ matrix.package }}
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: verify-install
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        package:
-          - tui-darwin-arm64
-          - tui-darwin-x64
-          - tui-linux-arm64-gnu
-          - tui-linux-arm64-musl
-          - tui-linux-x64-gnu
-          - tui-linux-x64-musl
-          - tui-win32-x64-msvc
-    steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-      - uses: actions/download-artifact@v4
-        with:
-          name: ${{ matrix.package }}
-          path: target/native-tarball
-      - run: npm publish target/native-tarball/*.tgz --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  verify-published-native:
-    name: Verify registry install
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: publish-native
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: diffing-root
-          path: target/root-tarball
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Install root tarball with its registry dependency
-        shell: bash
-        run: |
-          set -euo pipefail
-          root_archive=$(find target/root-tarball -name '*.tgz' -print -quit)
-          for attempt in 1 2 3; do
-            install_prefix="$RUNNER_TEMP/diffing-registry-$attempt"
-            if npm install --global --prefer-online \
-                --prefix "$install_prefix" "$root_archive" \
-              && NO_COLOR=1 "$install_prefix/bin/diffing" doctor \
-                | tee "$RUNNER_TEMP/diffing-registry-doctor.txt" \
-              && grep -Eq '/@diffing/tui-linux-x64-gnu/bin/diffing-tui$' \
-                "$RUNNER_TEMP/diffing-registry-doctor.txt"; then
-              exit 0
-            fi
-            sleep 10
-          done
-          exit 1
+          grep -Eq '/diffing/dist/native/tui-linux-x64-gnu/diffing-tui$' "$RUNNER_TEMP/diffing-doctor.txt"
 
   publish-root:
     name: Publish diffing
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: verify-published-native
+    needs: verify-install
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -251,3 +195,33 @@ jobs:
       - run: npm publish target/root-tarball/*.tgz --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  verify-published:
+    name: Verify npm install
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish-root
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install published diffing package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in 1 2 3 4 5; do
+            install_prefix="$RUNNER_TEMP/diffing-registry-$attempt"
+            native_binary="$install_prefix/lib/node_modules/diffing/dist/native/tui-linux-x64-gnu/diffing-tui"
+            if npm install --global --prefer-online \
+                --prefix "$install_prefix" "diffing@$version" \
+              && "$native_binary" --version \
+              && NO_COLOR=1 "$install_prefix/bin/diffing" doctor \
+                | tee "$RUNNER_TEMP/diffing-registry-doctor.txt" \
+              && grep -Eq '/diffing/dist/native/tui-linux-x64-gnu/diffing-tui$' \
+                "$RUNNER_TEMP/diffing-registry-doctor.txt"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
