@@ -20,7 +20,8 @@ import { HapticsProvider } from '../hooks/useHaptics'
 import { usePlanReviewKeymaps } from '../hooks/usePlanReviewKeymaps'
 import { getUiStateItem, setUiStateItem } from '../utils/uiState'
 import { PlanReview, type PlanViewMode } from './PlanReview'
-import { PLAN_UI, readBoolUi } from '../lib/planUiState'
+import { PLAN_UI, readBoolUi, getEffectivePlanViewMode, readLastSingleViewMode, readDefaultCommentsRailOpen, type PlanSingleViewMode } from '../lib/planUiState'
+import { usePlanNarrowSplit } from '../hooks/usePlanLayoutMedia'
 import { PlanList } from './PlanList'
 import { ThemeModal } from './ThemeModal'
 import { AgentActivityToast } from './AgentActivityToast'
@@ -101,12 +102,33 @@ export function PlanReviewApp() {
     return 'source'
   })
 
+  const [lastSingleViewMode, setLastSingleViewMode] = useState<PlanSingleViewMode>(() =>
+    readLastSingleViewMode('rendered'),
+  )
+
   const handleViewModeChange = useCallback((mode: PlanViewMode) => {
+    if (mode === 'source' || mode === 'rendered') {
+      setLastSingleViewMode(mode)
+      try {
+        setUiStateItem(PLAN_UI.lastSingleViewMode, mode)
+      } catch {}
+    } else if (viewMode === 'source' || viewMode === 'rendered') {
+      setLastSingleViewMode(viewMode)
+      try {
+        setUiStateItem(PLAN_UI.lastSingleViewMode, viewMode)
+      } catch {}
+    }
     setViewMode(mode)
     try {
       setUiStateItem(PLAN_UI.viewMode, mode)
     } catch {}
-  }, [])
+  }, [viewMode])
+
+  const isNarrowSplit = usePlanNarrowSplit()
+  const effectiveViewMode = useMemo(
+    () => getEffectivePlanViewMode(viewMode, isNarrowSplit, lastSingleViewMode),
+    [viewMode, isNarrowSplit, lastSingleViewMode],
+  )
 
   // Immersive full-width Read (zen) — owned here so `z` can switch to Read + zen.
   const [zenMode, setZenModeState] = useState(() => readBoolUi(PLAN_UI.zenMode, false))
@@ -141,7 +163,7 @@ export function PlanReviewApp() {
       if (v === 'false') return false
       if (v === 'true') return true
     } catch {}
-    return true
+    return readDefaultCommentsRailOpen()
   })
   const handleTocOpenChange = useCallback((open: boolean) => {
     setTocOpen(open)
@@ -237,6 +259,7 @@ export function PlanReviewApp() {
   const sidebarWidthRef = useRef(sidebarWidth)
   sidebarWidthRef.current = sidebarWidth
   const appRef = useRef<HTMLDivElement>(null)
+  const toolbarRef = useRef<HTMLDivElement>(null)
   const sidebarRef = useRef<HTMLElement>(null)
   const sidebarGuideRef = useRef<HTMLDivElement>(null)
 
@@ -288,6 +311,25 @@ export function PlanReviewApp() {
     document.body.style.userSelect = 'none'
   }, [])
 
+  // Measured toolbar height — plan chrome can wrap to two rows on narrow viewports.
+  useEffect(() => {
+    const app = appRef.current
+    const toolbar = toolbarRef.current
+    if (!app || !toolbar) return
+
+    const setOffset = () => {
+      const h = toolbar.getBoundingClientRect().height
+      app.style.setProperty('--plan-toolbar-offset', `${h}px`)
+    }
+
+    setOffset()
+    if (typeof ResizeObserver === 'undefined') return
+
+    const ro = new ResizeObserver(setOffset)
+    ro.observe(toolbar)
+    return () => ro.disconnect()
+  }, [loaded, isLoading])
+
   // Vim keyboard shortcuts
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((c) => !c)
@@ -334,6 +376,16 @@ export function PlanReviewApp() {
       navigate(`/plan/${nextPlan.id}`)
     },
     [plans, activePlan],
+  )
+
+  const handlePlanSelect = useCallback(
+    (id: string) => {
+      navigate(`/plan/${id}`)
+      if (typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches) {
+        setSidebarCollapsed(true)
+      }
+    },
+    [],
   )
 
   const planKeymapActions = useMemo(
@@ -439,7 +491,7 @@ export function PlanReviewApp() {
       >
         <div className="sidebar-resize-guide" ref={sidebarGuideRef} aria-hidden="true" />
 
-        <div className="toolbar plan-app-toolbar">
+        <div className="toolbar plan-app-toolbar" ref={toolbarRef}>
           <div className="toolbar-left">
             <button
               className="toolbar-mobile-toggle"
@@ -498,12 +550,18 @@ export function PlanReviewApp() {
                   tip: 'Split — source + rendered (drag the divider to resize)',
                 },
               ] as const
-            ).map(({ id, label, icon: Icon, tip }) => (
-              <Tooltip key={id} content={`${tip} · m to cycle`} side="bottom">
+            ).map(({ id, label, icon: Icon, tip }) => {
+              const isActive = effectiveViewMode === id
+              const splitNarrowHint =
+                id === 'split' && isNarrowSplit && viewMode === 'split'
+                  ? ' — opens when the window is wider'
+                  : ''
+              return (
+              <Tooltip key={id} content={`${tip} · m to cycle${splitNarrowHint}`} side="bottom">
                 <button
                   type="button"
-                  className={`plan-view-toggle-btn ${viewMode === id ? 'is-active' : ''}`}
-                  aria-pressed={viewMode === id}
+                  className={`plan-view-toggle-btn ${isActive ? 'is-active' : ''}`}
+                  aria-pressed={isActive}
                   aria-label={tip}
                   onClick={() => handleViewModeChange(id)}
                 >
@@ -511,7 +569,8 @@ export function PlanReviewApp() {
                   <span>{label}</span>
                 </button>
               </Tooltip>
-            ))}
+              )
+            })}
           </div>
 
           <div className="toolbar-right">
@@ -649,7 +708,7 @@ export function PlanReviewApp() {
               <PlanList
                 plans={plans}
                 activeId={activePlan?.id ?? null}
-                onSelect={(id) => navigate(`/plan/${id}`)}
+                onSelect={handlePlanSelect}
                 onDelete={(id) => {
                   removePlan(id)
                   if (activePlan?.id === id) navigate('/plan')
@@ -682,7 +741,7 @@ export function PlanReviewApp() {
                 lineWrap={settings.lineWrap}
                 showLineNumbers={settings.showLineNumbers}
                 lineHoverHighlight={settings.lineHoverHighlight}
-                viewMode={viewMode}
+                viewMode={effectiveViewMode}
                 onViewModeChange={handleViewModeChange}
                 editorIDE={settings.editorIDE}
                 tocOpen={tocOpen}
