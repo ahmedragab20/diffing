@@ -59,7 +59,8 @@ import {
   type PendingLineComment,
 } from '../lib/commentSelection'
 import { setUiStateItem } from '../utils/uiState'
-import { PLAN_UI, readBoolUi, readSplitRatioUi, clampSplitRatio } from '../lib/planUiState'
+import { PLAN_UI, readBoolUi, readSplitRatioUi, clampSplitRatio, readDefaultCommentsRailOpen } from '../lib/planUiState'
+import { usePlanCommentsSheet } from '../hooks/usePlanLayoutMedia'
 import {
   PlanFloatComposers,
   clampToWindow,
@@ -207,10 +208,11 @@ export function PlanReview({
   // Local fallbacks when parent doesn't control these (still persisted).
   const [tocOpenLocal, setTocOpenLocal] = useState(() => readBoolUi(PLAN_UI.tocOpen, true))
   const [commentsRailLocal, setCommentsRailLocal] = useState(() =>
-    readBoolUi(PLAN_UI.commentsRail, true),
+    readBoolUi(PLAN_UI.commentsRail, readDefaultCommentsRailOpen()),
   )
   const tocOpen = tocOpenProp ?? tocOpenLocal
   const commentsRailOpen = commentsRailOpenProp ?? commentsRailLocal
+  const commentsRailSheet = usePlanCommentsSheet()
   const setTocOpen = useCallback(
     (next: boolean | ((prev: boolean) => boolean)) => {
       const value = typeof next === 'function' ? next(tocOpen) : next
@@ -1119,6 +1121,25 @@ export function PlanReview({
     [scrollToPlanElement],
   )
 
+  const jumpToCommentFromRail = useCallback(
+    (commentId: string, lineNumber: number) => {
+      jumpToComment(commentId, lineNumber)
+      if (commentsRailSheet) setCommentsRailOpen(false)
+    },
+    [jumpToComment, commentsRailSheet, setCommentsRailOpen],
+  )
+
+  useEffect(() => {
+    if (!commentsRailSheet || !commentsRailOpen) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      setCommentsRailOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [commentsRailSheet, commentsRailOpen, setCommentsRailOpen])
+
   /**
    * Evaluate the current selection and show/hide the Add-comment chip.
    * Direction-agnostic: works LTR, RTL, and when the drag starts/ends
@@ -1564,6 +1585,64 @@ export function PlanReview({
           : saveStatus === 'error'
             ? saveError || 'Save failed'
             : null
+
+  const showCommentsRail = !zenActive && commentsRailOpen && comments.length > 0
+  const showCommentsRailInline = showCommentsRail && !commentsRailSheet
+
+  const commentsMapPanel = showCommentsRail ? (
+    <aside
+      className={`plan-comments-rail ${commentsRailSheet ? 'plan-comments-sheet' : ''}`}
+      aria-label="Comments map"
+      {...(commentsRailSheet ? { role: 'dialog', 'aria-modal': true as const } : {})}
+    >
+      <div className="plan-comments-rail-head">
+        <MessagesSquare size={12} aria-hidden="true" />
+        <span>Comments</span>
+        <span className="plan-comments-rail-count">
+          {openCount > 0 ? `${openCount} open` : `${comments.length}`}
+        </span>
+        {commentsRailSheet && (
+          <button
+            type="button"
+            className="plan-comments-sheet-close"
+            onClick={() => setCommentsRailOpen(false)}
+            aria-label="Close comments map"
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        )}
+      </div>
+      <ul className="plan-comments-rail-list">
+        {[...comments]
+          .sort((a, b) => {
+            if (a.status !== b.status) return a.status === 'open' ? -1 : 1
+            return a.lineNumber - b.lineNumber
+          })
+          .map((c) => (
+            <li key={c.id}>
+              <button
+                type="button"
+                className={`plan-comments-rail-item ${c.status === 'resolved' ? 'is-resolved' : ''}`}
+                onClick={() => jumpToCommentFromRail(c.id, c.lineNumber)}
+                title={c.body.slice(0, 200)}
+              >
+                <span className="plan-comments-rail-line">{planCommentLineLabel(c)}</span>
+                <span className="plan-comments-rail-preview">
+                  {c.sectionTitle ? `${c.sectionTitle} · ` : ''}
+                  {c.body.replace(/\s+/g, ' ').slice(0, 80)}
+                  {c.body.length > 80 ? '…' : ''}
+                </span>
+                <span
+                  className={`plan-comments-rail-status plan-comments-rail-status-${c.status}`}
+                >
+                  {c.status}
+                </span>
+              </button>
+            </li>
+          ))}
+      </ul>
+    </aside>
+  ) : null
 
   return (
     <div
@@ -2056,7 +2135,7 @@ export function PlanReview({
 
       <div
         className={`plan-review-body ${
-          !zenActive && commentsRailOpen && comments.length > 0 ? 'plan-review-body-with-rail' : ''
+          showCommentsRailInline ? 'plan-review-body-with-rail' : ''
         }`}
       >
         <div
@@ -2107,47 +2186,19 @@ export function PlanReview({
           {showRendered && renderedPanel}
         </div>
 
-        {!zenActive && commentsRailOpen && comments.length > 0 && (
-          <aside className="plan-comments-rail" aria-label="Comments map">
-            <div className="plan-comments-rail-head">
-              <MessagesSquare size={12} aria-hidden="true" />
-              <span>Comments</span>
-              <span className="plan-comments-rail-count">
-                {openCount > 0 ? `${openCount} open` : `${comments.length}`}
-              </span>
-            </div>
-            <ul className="plan-comments-rail-list">
-              {[...comments]
-                .sort((a, b) => {
-                  if (a.status !== b.status) return a.status === 'open' ? -1 : 1
-                  return a.lineNumber - b.lineNumber
-                })
-                .map((c) => (
-                  <li key={c.id}>
-                    <button
-                      type="button"
-                      className={`plan-comments-rail-item ${c.status === 'resolved' ? 'is-resolved' : ''}`}
-                      onClick={() => jumpToComment(c.id, c.lineNumber)}
-                      title={c.body.slice(0, 200)}
-                    >
-                      <span className="plan-comments-rail-line">{planCommentLineLabel(c)}</span>
-                      <span className="plan-comments-rail-preview">
-                        {c.sectionTitle ? `${c.sectionTitle} · ` : ''}
-                        {c.body.replace(/\s+/g, ' ').slice(0, 80)}
-                        {c.body.length > 80 ? '…' : ''}
-                      </span>
-                      <span
-                        className={`plan-comments-rail-status plan-comments-rail-status-${c.status}`}
-                      >
-                        {c.status}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-            </ul>
-          </aside>
-        )}
+        {showCommentsRailInline && commentsMapPanel}
       </div>
+
+      {showCommentsRail && commentsRailSheet && (
+        <>
+          <div
+            className="plan-comments-sheet-backdrop"
+            onClick={() => setCommentsRailOpen(false)}
+            aria-hidden="true"
+          />
+          {commentsMapPanel}
+        </>
+      )}
 
       {selectionPopup && !editMode && (
         <button

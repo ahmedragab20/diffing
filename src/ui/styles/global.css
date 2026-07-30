@@ -9312,6 +9312,9 @@ button.toolbar-last-send-btn:hover {
 }
 
 /* Plan app shell — quiet, reading-first review surface */
+.plan-app {
+    --plan-toolbar-offset: var(--toolbar-height);
+}
 .toolbar.plan-app-toolbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -9421,6 +9424,31 @@ button.toolbar-last-send-btn:hover {
     overflow: hidden;
     display: flex;
     flex-direction: column;
+}
+.plan-app .sidebar {
+    top: var(--plan-toolbar-offset, var(--toolbar-height));
+    height: calc(100vh - var(--plan-toolbar-offset, var(--toolbar-height)));
+}
+.plan-app .sidebar-resize-handle {
+    top: var(--plan-toolbar-offset, var(--toolbar-height));
+    height: calc(100vh - var(--plan-toolbar-offset, var(--toolbar-height)));
+}
+.plan-app .sidebar-resize-guide {
+    top: var(--plan-toolbar-offset, var(--toolbar-height));
+}
+.plan-app .app-body {
+    flex: 1;
+    min-height: 0;
+}
+.plan-app .plan-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.plan-app .plan-review {
+    flex: 1;
+    min-height: 0;
 }
 
 /* Plan list (sidebar) */
@@ -9604,6 +9632,27 @@ button.toolbar-last-send-btn:hover {
     color: var(--primary);
     background: var(--accent-subtle);
 }
+@media (hover: none) {
+    .plan-list-delete,
+    .plan-list-copy-path {
+        opacity: 1;
+        min-width: 36px;
+        min-height: 36px;
+        padding: 8px;
+    }
+    .plan-list-filter {
+        height: 32px;
+        padding: 0 12px;
+    }
+    .plan-icon-btn {
+        width: 40px;
+        height: 40px;
+    }
+    .plan-view-toggle-btn {
+        height: 36px;
+        min-width: 40px;
+    }
+}
 .plan-list-item-sub {
     display: flex;
     align-items: center;
@@ -9703,7 +9752,7 @@ button.toolbar-last-send-btn:hover {
 }
 .plan-review-head {
     position: sticky;
-    top: var(--toolbar-height);
+    top: var(--plan-toolbar-offset, var(--toolbar-height));
     z-index: 5;
     display: flex;
     align-items: flex-start;
@@ -10216,7 +10265,8 @@ button.toolbar-last-send-btn:hover {
 .plan-content-split .plan-rendered-layout {
     margin: 0;
     border-radius: 0;
-    min-height: calc(100vh - var(--toolbar-height) - 100px);
+    min-height: 0;
+    flex: 1;
     min-width: 180px;
     overflow: auto;
 }
@@ -10329,6 +10379,27 @@ button.toolbar-last-send-btn:hover {
         padding-right: 28px;
     }
 }
+@media (max-width: 1099px) {
+    .plan-rendered-layout.has-toc,
+    .plan-rendered-layout-solo.has-toc {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+    }
+    .plan-toc {
+        position: relative;
+        top: auto;
+        max-height: none;
+        margin: 0 0 12px;
+        padding: 8px 12px;
+        border: 1px solid var(--border-weak);
+        border-radius: var(--radius-md);
+        background: var(--bg-secondary);
+    }
+    .plan-toc-list {
+        max-height: min(220px, 40vh);
+        overflow: auto;
+    }
+}
 
 /* Zen reading — immersive full-width document */
 .plan-review-zen .plan-review-meta,
@@ -10411,8 +10482,8 @@ button.toolbar-last-send-btn:hover {
 }
 .plan-toc {
     position: sticky;
-    top: calc(var(--toolbar-height) + 64px);
-    max-height: calc(100vh - var(--toolbar-height) - 88px);
+    top: calc(var(--plan-toolbar-offset, var(--toolbar-height)) + 64px);
+    max-height: calc(100vh - var(--plan-toolbar-offset, var(--toolbar-height)) - 88px);
     overflow: auto;
     padding: 4px 0;
     border: none;
@@ -10423,7 +10494,7 @@ button.toolbar-last-send-btn:hover {
 /* Offset outline / hash jumps below sticky toolbar + plan header */
 .plan-rendered .md-heading,
 .plan-rendered .plan-read-segment[data-plan-segment]:not([data-plan-segment='preamble']) {
-    scroll-margin-top: calc(var(--toolbar-height) + 88px);
+    scroll-margin-top: calc(var(--plan-toolbar-offset, var(--toolbar-height)) + 88px);
 }
 .plan-toc-head {
     display: flex;
@@ -11049,9 +11120,9 @@ button.toolbar-last-send-btn:hover {
     background: var(--bg-secondary);
     display: flex;
     flex-direction: column;
-    max-height: calc(100vh - var(--toolbar-height));
+    max-height: calc(100vh - var(--plan-toolbar-offset, var(--toolbar-height)));
     position: sticky;
-    top: var(--toolbar-height);
+    top: var(--plan-toolbar-offset, var(--toolbar-height));
     overflow: hidden;
 }
 .plan-comments-rail-head {
@@ -11129,17 +11200,61 @@ button.toolbar-last-send-btn:hover {
 .plan-comments-rail-status-open {
     color: var(--feedback-warning-text);
 }
+
+/* Comments map sheet (tablet / mobile) */
+.plan-comments-sheet-backdrop {
+    display: none;
+}
+.plan-comments-sheet-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-left: 4px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.plan-comments-sheet-close:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+@media (max-width: 1024px) {
+    .plan-comments-sheet-backdrop {
+        display: block;
+        position: fixed;
+        inset: var(--plan-toolbar-offset, var(--toolbar-height)) 0 0 0;
+        background: rgba(0, 0, 0, 0.45);
+        z-index: 118;
+    }
+    .plan-comments-rail.plan-comments-sheet {
+        position: fixed;
+        top: auto;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        max-height: min(85vh, calc(100vh - var(--plan-toolbar-offset, var(--toolbar-height)) - 24px));
+        z-index: 120;
+        border-left: none;
+        border-top: 1px solid var(--border-weak);
+        border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+        box-shadow: var(--shadow-overlay);
+    }
+}
+
 .plan-comment-flash {
     animation: plan-comment-flash 1.2s ease;
 }
 @keyframes plan-comment-flash {
     0%, 100% { box-shadow: none; }
     30% { box-shadow: 0 0 0 3px var(--accent-subtle); }
-}
-@media (max-width: 900px) {
-    .plan-comments-rail {
-        display: none;
-    }
 }
 
 /* Markdown code blocks + heading anchors */
@@ -11312,9 +11427,8 @@ button.toolbar-last-send-btn:hover {
 .plan-review-editing .plan-content-split {
     flex: 1;
     min-height: 0;
-    /* Fallback height when flex chain is loose; still works with sticky head. */
-    height: calc(100vh - var(--toolbar-height) - 9.5rem);
-    max-height: calc(100vh - var(--toolbar-height) - 9.5rem);
+    height: auto;
+    max-height: none;
     overflow: hidden;
     align-items: stretch;
 }
@@ -11441,6 +11555,25 @@ button.toolbar-last-send-btn:hover {
     }
     .plan-view-toggle-btn span {
         display: none;
+    }
+
+    .plan-review-head {
+        flex-wrap: wrap;
+    }
+    .plan-review-head-actions {
+        flex-wrap: wrap;
+        max-width: 100%;
+    }
+    .plan-review-historical-banner,
+    .plan-review-edit-banner,
+    .plan-decision-banner {
+        flex-wrap: wrap;
+    }
+    .plan-review-historical-banner > span,
+    .plan-review-edit-banner > span,
+    .plan-decision-banner-text {
+        flex-basis: 100%;
+        min-width: 0;
     }
 }
 
@@ -11604,6 +11737,10 @@ button.toolbar-last-send-btn:hover {
         width: min(var(--sidebar-width, 280px), 35vw);
         min-width: min(var(--sidebar-width, 280px), 35vw);
     }
+    .plan-app .sidebar:not(.sidebar-collapsed) {
+        width: min(var(--sidebar-width, 280px), 35vw);
+        min-width: min(var(--sidebar-width, 280px), 35vw);
+    }
 }
 
 /* Mobile adjustments */
@@ -11612,7 +11749,7 @@ button.toolbar-last-send-btn:hover {
     .sidebar-mobile-backdrop {
         display: block;
         position: fixed;
-        inset: var(--toolbar-height) 0 0 0;
+        inset: var(--plan-toolbar-offset, var(--toolbar-height)) 0 0 0;
         background: rgba(0, 0, 0, 0.45);
         z-index: 140;
     }
@@ -11678,7 +11815,7 @@ button.toolbar-last-send-btn:hover {
     /* Sidebar overlay behavior */
     .sidebar {
         position: fixed;
-        top: var(--toolbar-height);
+        top: var(--plan-toolbar-offset, var(--toolbar-height));
         left: 0;
         bottom: 0;
         height: auto;
@@ -11687,6 +11824,10 @@ button.toolbar-last-send-btn:hover {
         box-shadow: var(--shadow-overlay);
         transform: translateX(0);
         transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .plan-app .sidebar:not(.sidebar-collapsed) {
+        width: min(100vw - 24px, 320px);
+        min-width: min(100vw - 24px, 320px);
     }
     .sidebar-collapsed {
         transform: translateX(-100%);
@@ -11789,6 +11930,27 @@ button.toolbar-last-send-btn:hover {
     }
     .plan-list-item {
         min-height: 44px;
+    }
+    .plan-list-delete,
+    .plan-list-copy-path {
+        opacity: 1;
+        min-width: 36px;
+        min-height: 36px;
+        padding: 8px;
+    }
+    .plan-list-filter {
+        height: 32px;
+        padding: 0 12px;
+        font-size: 12px;
+    }
+    .plan-icon-btn {
+        width: 40px;
+        height: 40px;
+    }
+    .plan-view-toggle-btn {
+        height: 36px;
+        min-width: 40px;
+        padding: 0 12px;
     }
     .cmt-card {
         padding: 12px;
