@@ -35,6 +35,15 @@ afterEach(() => {
 })
 
 describe('native TUI npm packages', () => {
+  it('keeps the native binary version locked to the root package', () => {
+    const cargoManifest = readFileSync(resolve(repoRoot, 'Cargo.toml'), 'utf8')
+    const cargoVersion = cargoManifest.match(
+      /\[workspace\.package\][\s\S]*?\nversion\s*=\s*"([^"]+)"/,
+    )?.[1]
+
+    expect(cargoVersion).toBe(rootPackage.version)
+  })
+
   it.each(targets)(
     'keeps %s installable and version-locked to the root package',
     (slug, os, cpu, libc) => {

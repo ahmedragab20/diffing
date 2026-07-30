@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.11.0
+
+### Minor Changes
+
+- 69fd10d: Allow concurrent web, TUI, and GitHub PR reviews for one repository. Add the
+  `diffing sessions` task manager for listing, selecting, opening, and stopping
+  live sessions while preserving `server.json` as the active-session pointer.
+
+- 6fb772a: Expand the native TUI and focused viewer into a faster, more complete
+  review surface.
+
+  - Add retained, viewport-bounded rendering with overscan reuse, bounded long-line
+    handling, token-level split diffs, nested EditorConfig tab widths, and graceful
+    truecolor, ANSI-256, and monochrome output.
+  - Add progressive Git context expansion, stable cursor restoration after live
+    refresh, editor launching, a configurable file sidebar, improved text entry,
+    and full-thread comment actions.
+  - Add terminal-native image review with before, after, side-by-side, and pixel
+    difference modes plus fit, zoom, and pan controls.
+
+- 1f97a92: Add symbol-aware TUI search across TypeScript, JavaScript, Python,
+  Rust, and Go. All-scope results now deduplicate definition lines and fairly
+  interleave files, symbols, and text matches.
+
+### Patch Changes
+
+- 699157e: Add `diffing mode <web|tui>` to persist the default interactive review mode.
+
+  Explicit mode flags still take precedence, while pipes and redirects continue
+  to use terminal diff output.
+
+- 26dcca9: Ship the native TUI through version-matched platform packages so a global
+  `diffing` install can launch `diffing --tui` without a local Rust build.
+
+- b470c80: Unify web review surfaces around the Gridline design system. Replace native
+  browser prompts with accessible application dialogs, strengthen Rosé Pine and
+  diff semantics, contain long comment content across diff, plan, tracker, and PR
+  views, and guard embedded diffs from malformed persisted comment anchors.
+
 ## 0.10.5
 
 ### Patch Changes

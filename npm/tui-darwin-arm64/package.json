@@ -1,15 +1,21 @@
 {
   "name": "@diffing/tui-darwin-arm64",
-  "version": "0.10.5",
+  "version": "0.11.0",
   "description": "diffing native TUI for macOS arm64",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ahmedragab20/diffing.git"
   },
-  "os": ["darwin"],
-  "cpu": ["arm64"],
-  "files": ["bin"],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin"
+  ],
   "publishConfig": {
     "access": "public"
   }

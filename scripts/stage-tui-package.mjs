@@ -48,11 +48,20 @@ if (!existsSync(manifestSource)) {
 
 const manifest = JSON.parse(readFileSync(manifestSource, 'utf8'))
 const rootManifest = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'))
+const cargoManifest = readFileSync(resolve(repoRoot, 'Cargo.toml'), 'utf8')
+const cargoVersion = cargoManifest.match(
+  /\[workspace\.package\][\s\S]*?\nversion\s*=\s*"([^"]+)"/,
+)?.[1]
 const expectedVersion = rootManifest.optionalDependencies?.[manifest.name]
-if (manifest.version !== rootManifest.version || expectedVersion !== rootManifest.version) {
+if (
+  manifest.version !== rootManifest.version ||
+  expectedVersion !== rootManifest.version ||
+  cargoVersion !== rootManifest.version
+) {
   throw new Error(
     `${manifest.name} must match diffing@${rootManifest.version}; ` +
-      `found package=${manifest.version}, optionalDependency=${expectedVersion ?? 'missing'}`,
+      `found package=${manifest.version}, optionalDependency=${expectedVersion ?? 'missing'}, ` +
+      `cargo=${cargoVersion ?? 'missing'}`,
   )
 }
 

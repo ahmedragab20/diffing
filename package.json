@@ -1,6 +1,6 @@
 {
   "name": "diffing",
-  "version": "0.10.5",
+  "version": "0.11.0",
   "description": "local-first CLI for reviewing, navigating, and discussing git diffs with AI",
   "type": "module",
   "license": "MIT",
@@ -88,12 +88,12 @@
     "vitest": "^4.1.7"
   },
   "optionalDependencies": {
-    "@diffing/tui-darwin-arm64": "0.10.5",
-    "@diffing/tui-darwin-x64": "0.10.5",
-    "@diffing/tui-linux-arm64-gnu": "0.10.5",
-    "@diffing/tui-linux-arm64-musl": "0.10.5",
-    "@diffing/tui-linux-x64-gnu": "0.10.5",
-    "@diffing/tui-linux-x64-musl": "0.10.5",
-    "@diffing/tui-win32-x64-msvc": "0.10.5"
+    "@diffing/tui-darwin-arm64": "0.11.0",
+    "@diffing/tui-darwin-x64": "0.11.0",
+    "@diffing/tui-linux-arm64-gnu": "0.11.0",
+    "@diffing/tui-linux-arm64-musl": "0.11.0",
+    "@diffing/tui-linux-x64-gnu": "0.11.0",
+    "@diffing/tui-linux-x64-musl": "0.11.0",
+    "@diffing/tui-win32-x64-msvc": "0.11.0"
   }
 }
