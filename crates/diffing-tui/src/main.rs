@@ -93,6 +93,7 @@ fn real_main() -> Result<()> {
             version: env!("CARGO_PKG_VERSION").to_string(),
             mode: Some("tui".to_string()),
             capability: Some(agent_api.capability.clone()),
+            auth_token: None,
             session_id: Some(
                 std::env::var("DIFFING_TUI_SESSION_ID")
                     .ok()

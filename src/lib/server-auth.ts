@@ -58,6 +58,19 @@ export function readSessionToken(c: Context): string | null {
   return query || null
 }
 
+/** Escape a session token for embedding in a double-quoted JS string literal. */
+function escapeTokenForJsString(token: string): string {
+  return token.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+/** Inject `window.__DIFFING_SESSION_TOKEN__` into served HTML so deep links work without `?token=`. */
+export function injectSessionTokenIntoHtml(html: string, authToken: string | null): string {
+  if (!authToken) return html
+  const script = `<script>window.__DIFFING_SESSION_TOKEN__="${escapeTokenForJsString(authToken)}";</script>`
+  if (html.includes('</head>')) return html.replace('</head>', `${script}</head>`)
+  return `${script}${html}`
+}
+
 export function createServerAuthMiddleware(config: ServerAuthConfig) {
   return async (c: Context, next: Next) => {
     if (!c.req.path.startsWith('/api/')) {

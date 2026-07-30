@@ -8,6 +8,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMcpServer, MCP_VERSION } from '../mcp.js'
 import { buildGitDiffArgs } from '../lib/diff-options.js'
+import { SESSION_TOKEN_HEADER } from '../lib/server-auth.js'
 import type { ServerLock } from '../lib/server-lock.js'
 
 describe('diffing MCP', () => {
@@ -225,6 +226,47 @@ describe('diffing MCP', () => {
         status: 'created', comment: { id: 'comment-1', filePath: 'a.ts' },
       })
       expect(requests).toEqual([expect.objectContaining({ body: 'Please cover this branch.' })])
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('joins API URLs correctly and sends auth header when authToken is set', async () => {
+    const fetchCalls: Array<{ url: string; headers: Headers }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input)
+      const headers = new Headers(input instanceof Request ? input.headers : init?.headers)
+      fetchCalls.push({ url, headers })
+      if (url.endsWith('/api/diff/summary')) {
+        return new Response(JSON.stringify({
+          generation: 1, fileCount: 0, files: [], stats: { additions: 0, deletions: 0 },
+        }), { headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
+    }))
+    const lock: ServerLock = {
+      port: 43125,
+      host: '127.0.0.1',
+      pid: process.pid,
+      repoRoot,
+      startedAt: Date.now(),
+      version: MCP_VERSION,
+      mode: 'web',
+      authToken: 'session-secret',
+    }
+    const session = await connect({
+      repoRoot,
+      readLock: () => lock,
+      lockIsAlive: () => true,
+    })
+    try {
+      const status = await session.client.callTool({ name: 'review_session_status', arguments: {} })
+      expect(String(status.structuredContent?.url)).toBe('http://127.0.0.1:43125/?token=session-secret')
+
+      await session.client.callTool({ name: 'diff_summary', arguments: {} })
+      expect(fetchCalls).toHaveLength(1)
+      expect(fetchCalls[0]?.url).toBe('http://127.0.0.1:43125/api/diff/summary')
+      expect(fetchCalls[0]?.headers.get(SESSION_TOKEN_HEADER)).toBe('session-secret')
     } finally {
       await session.close()
     }

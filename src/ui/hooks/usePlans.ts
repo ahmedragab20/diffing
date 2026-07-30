@@ -7,7 +7,9 @@ const PLANS_KEY = ['plans']
 
 async function fetchPlans(): Promise<Plan[]> {
   const res = await fetch('/api/plans')
-  return res.json()
+  if (!res.ok) return []
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
 }
 
 interface PlanAgentStatus {

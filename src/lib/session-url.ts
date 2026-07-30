@@ -23,3 +23,10 @@ export function reviewSessionUrl(lock: ServerLock): string | null {
   if (!base) return null
   return appendSessionToken(base, lock.authToken)
 }
+
+/** Join an API path to a session base URL, stripping any `?token=` query first. */
+export function joinSessionApiUrl(base: string, path: string): string {
+  const origin = new URL(base).origin
+  const normalized = path.startsWith('/') ? path : `/${path}`
+  return `${origin}${normalized}`
+}

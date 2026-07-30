@@ -72,6 +72,7 @@ import { PlanSourceEditor } from './PlanSourceEditor'
 import { faceReadToSourceLine } from '../lib/planLineSync'
 import { ConfirmDialog } from '../primitives/ConfirmDialog'
 import { PlanDiscardEditsDialog, type PlanDiscardChoice } from './PlanDiscardEditsDialog'
+import { withSessionTokenPath } from '../session-auth'
 
 type PlanTextSnapshot = { body: string; title: string }
 
@@ -1294,8 +1295,10 @@ export function PlanReview({
 
   const reviewUrl =
     typeof window !== 'undefined'
-      ? `${window.location.origin}${window.location.pathname.startsWith('/plan') ? window.location.pathname : `/plan/${plan.id}`}`
-      : `/plan/${plan.id}`
+      ? `${window.location.origin}${withSessionTokenPath(
+          window.location.pathname.startsWith('/plan') ? window.location.pathname : `/plan/${plan.id}`,
+        )}`
+      : withSessionTokenPath(`/plan/${plan.id}`)
 
   /**
    * Drag the split divider: update a CSS var live (no React re-render per

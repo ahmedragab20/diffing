@@ -60,6 +60,9 @@ pub struct ServerLock {
     /// Random bearer capability required by the TUI's loopback API.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub capability: Option<String>,
+    /// Per-session token required by the web review server's `/api/*` routes.
+    #[serde(rename = "authToken", skip_serializing_if = "Option::is_none", default)]
+    pub auth_token: Option<String>,
     /// Public identifier for selecting this session. It is not a capability.
     #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none", default)]
     pub session_id: Option<String>,
@@ -328,6 +331,9 @@ fn probe_lock_server(lock: &ServerLock) -> bool {
     if let Some(capability) = &lock.capability {
         request.push_str(&format!("X-Diffing-Capability: {}\r\n", capability));
     }
+    if let Some(auth_token) = &lock.auth_token {
+        request.push_str(&format!("x-diffing-token: {}\r\n", auth_token));
+    }
     request.push_str("Connection: close\r\n\r\n");
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
@@ -421,6 +427,7 @@ mod tests {
             version: "0.1.0".to_string(),
             mode: Some("tui".to_string()),
             capability: Some("test-capability".to_string()),
+            auth_token: None,
             session_id: Some("test-session".to_string()),
             scope: None,
             diff_args: None,

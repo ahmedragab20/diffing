@@ -26,7 +26,7 @@ import type { PlanDecision, PlanMode } from './lib/plan-types.js'
 import { executeDiffWithMeta } from './lib/diff-engine.js'
 import type { DiffOptions } from './lib/diff-options.js'
 import { DEFAULTS } from './lib/diff-options.js'
-import { createServerAuthMiddleware, type ServerAuthConfig } from './lib/server-auth.js'
+import { createServerAuthMiddleware, injectSessionTokenIntoHtml, type ServerAuthConfig } from './lib/server-auth.js'
 import { FilePrSessionStore, InMemoryPrSessionStore } from './lib/pr-session.js'
 import type { PrSessionStore, PrDecision, PrExistingReview, PrSession, PrExistingComment, PrExistingReply } from './lib/pr-session.js'
 import { buildPrOverview } from './lib/diff-overview.js'
@@ -2049,12 +2049,17 @@ export function createApp(
       const content = await readFile(fullPath)
       const ext = extname(fullPath)
       const contentType = MIME_TYPES[ext] || 'application/octet-stream'
+      if (contentType === 'text/html' && security.authToken) {
+        const html = injectSessionTokenIntoHtml(content.toString('utf-8'), security.authToken)
+        return new Response(html, { headers: { 'Content-Type': contentType } })
+      }
       return new Response(content, {
         headers: { 'Content-Type': contentType },
       })
     } catch {
       const indexContent = await readFile(join(clientDir, 'index.html'))
-      return new Response(indexContent, {
+      const html = injectSessionTokenIntoHtml(indexContent.toString('utf-8'), security.authToken)
+      return new Response(html, {
         headers: { 'Content-Type': 'text/html' },
       })
     }

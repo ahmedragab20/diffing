@@ -13,6 +13,7 @@ import { detectGhCli, readGithubToken } from './github.js'
 import { getSearchStatus } from './search.js'
 import { findTuiBinary } from './find-tui-binary.js'
 import { loadSettings } from './settings.js'
+import { reviewSessionUrl } from './session-url.js'
 
 export type DoctorLevel = 'ok' | 'warn' | 'error'
 
@@ -83,8 +84,8 @@ export async function runDoctor(options: {
         detail: `Stale lock for pid ${lock.pid} — will be replaced on next start`,
       })
     } else {
-      const url =
-        lock.port > 0 ? `http://${lock.host}:${lock.port}` : `mode=${lock.mode ?? 'web'}`
+      const url = reviewSessionUrl(lock)
+        ?? (lock.port > 0 ? `http://${lock.host}:${lock.port}` : `mode=${lock.mode ?? 'web'}`)
       checks.push({
         id: 'server',
         label: 'Review server',

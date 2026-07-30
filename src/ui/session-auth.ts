@@ -1,11 +1,43 @@
 import { SESSION_TOKEN_HEADER, SESSION_TOKEN_QUERY } from '../lib/server-auth.js'
 
+const SESSION_STORAGE_KEY = 'diffing-session-token'
+
+declare global {
+  interface Window {
+    __DIFFING_SESSION_TOKEN__?: string
+  }
+}
+
 let sessionToken: string | null = null
 let installed = false
 
 function readTokenFromLocation(): string | null {
   if (typeof window === 'undefined') return null
   return new URLSearchParams(window.location.search).get(SESSION_TOKEN_QUERY)
+}
+
+function readTokenFromSessionStorage(): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return sessionStorage.getItem(SESSION_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function resolveSessionToken(): string | null {
+  return readTokenFromLocation()
+    ?? (typeof window !== 'undefined' ? window.__DIFFING_SESSION_TOKEN__ ?? null : null)
+    ?? readTokenFromSessionStorage()
+}
+
+function persistSessionToken(token: string): void {
+  sessionToken = token
+  try {
+    sessionStorage.setItem(SESSION_STORAGE_KEY, token)
+  } catch {
+    /* ignore quota / private mode */
+  }
 }
 
 function withTokenQuery(url: string): string {
@@ -22,11 +54,32 @@ function withTokenQuery(url: string): string {
   }
 }
 
-/** Attach the review session token from the page URL to fetch and EventSource. */
+/** `?token=…` suffix when a session token is available (empty string otherwise). */
+export function sessionTokenQuerySuffix(): string {
+  if (!sessionToken) return ''
+  return `?${SESSION_TOKEN_QUERY}=${encodeURIComponent(sessionToken)}`
+}
+
+/** Append the session token query param to a client route path when missing. */
+export function withSessionTokenPath(path: string): string {
+  if (!sessionToken) return path
+  try {
+    const parsed = new URL(path, window.location.origin)
+    if (!parsed.searchParams.has(SESSION_TOKEN_QUERY)) {
+      parsed.searchParams.set(SESSION_TOKEN_QUERY, sessionToken)
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`
+  } catch {
+    return path
+  }
+}
+
+/** Attach the review session token to fetch and EventSource. */
 export function installSessionAuth(): void {
   if (installed || typeof window === 'undefined') return
   installed = true
-  sessionToken = readTokenFromLocation()
+  const resolved = resolveSessionToken()
+  if (resolved) persistSessionToken(resolved)
   if (!sessionToken) return
 
   const originalFetch = window.fetch.bind(window)

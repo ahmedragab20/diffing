@@ -5,10 +5,11 @@ import {
   SESSION_TOKEN_HEADER,
   SESSION_TOKEN_QUERY,
   createServerAuthMiddleware,
+  injectSessionTokenIntoHtml,
   isAllowedRequestHost,
   isLoopbackHost,
 } from '../lib/server-auth.js'
-import { appendSessionToken, reviewSessionUrl } from '../lib/session-url.js'
+import { appendSessionToken, joinSessionApiUrl, reviewSessionUrl } from '../lib/session-url.js'
 import type { ServerLock } from '../lib/server-lock.js'
 
 describe('server-auth', () => {
@@ -41,6 +42,20 @@ describe('server-auth', () => {
   })
 })
 
+describe('injectSessionTokenIntoHtml', () => {
+  it('injects a global token script before </head>', () => {
+    const html = '<html><head><title>x</title></head><body></body></html>'
+    const out = injectSessionTokenIntoHtml(html, 'abc"123\\token')
+    expect(out).toContain('window.__DIFFING_SESSION_TOKEN__="abc\\"123\\\\token"')
+    expect(out.indexOf('<script>window.__DIFFING_SESSION_TOKEN__')).toBeLessThan(out.indexOf('</head>'))
+  })
+
+  it('returns html unchanged when no token is configured', () => {
+    const html = '<html><head></head></html>'
+    expect(injectSessionTokenIntoHtml(html, null)).toBe(html)
+  })
+})
+
 describe('session-url', () => {
   it('appends auth tokens to review URLs', () => {
     const lock: ServerLock = {
@@ -55,5 +70,12 @@ describe('session-url', () => {
     expect(reviewSessionUrl(lock)).toBe('http://127.0.0.1:4321/?token=abc123')
     expect(appendSessionToken('http://127.0.0.1:4321/gh/pr', 'abc123'))
       .toBe('http://127.0.0.1:4321/gh/pr?token=abc123')
+  })
+
+  it('joins API paths without inserting path after query params', () => {
+    expect(joinSessionApiUrl('http://127.0.0.1:4321/?token=abc123', '/api/ping'))
+      .toBe('http://127.0.0.1:4321/api/ping')
+    expect(joinSessionApiUrl('http://127.0.0.1:4321/gh/pr?token=abc123', '/api/diff'))
+      .toBe('http://127.0.0.1:4321/api/diff')
   })
 })

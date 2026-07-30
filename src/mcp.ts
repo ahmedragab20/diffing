@@ -29,7 +29,7 @@ import {
 } from './lib/server-lock.js'
 import { startServer } from './server.js'
 import { generateSessionToken, isLoopbackHost, SESSION_TOKEN_HEADER } from './lib/server-auth.js'
-import { reviewSessionUrl } from './lib/session-url.js'
+import { appendSessionToken, joinSessionApiUrl, reviewSessionBaseUrl, reviewSessionUrl } from './lib/session-url.js'
 import type { Plan } from './lib/plan-types.js'
 import type { ReviewComment } from './lib/types.js'
 
@@ -164,7 +164,7 @@ async function requestJson<T>(base: string, path: string, init?: RequestInit, au
   try {
     const headers = new Headers(init?.headers)
     if (authToken) headers.set(SESSION_TOKEN_HEADER, authToken)
-    response = await fetch(`${base}${path}`, { ...init, headers })
+    response = await fetch(joinSessionApiUrl(base, path), { ...init, headers })
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error(`Request to ${path} was cancelled. Retry the MCP tool when ready.`)
@@ -459,7 +459,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     }
   }
 
-  type LiveSession = { lock: ServerLock; url: string; identity: string }
+  type LiveSession = { lock: ServerLock; apiOrigin: string; identity: string }
 
   function requireAnySession(): LiveSession {
     const lock = liveLock()
@@ -470,13 +470,13 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
       )
     }
     ensureReusableLock(lock)
-    const url = lockUrl(lock)
-    if (!url) {
+    const apiOrigin = reviewSessionBaseUrl(lock)
+    if (!apiOrigin) {
       throw new Error('The active diffing session does not expose a reachable loopback API.')
     }
     return {
       lock,
-      url,
+      apiOrigin,
       identity: `${lock.pid}:${lock.startedAt}:${lock.port}:${lock.ownerId ?? ''}`,
     }
   }
@@ -515,7 +515,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     } else if (session.lock.authToken) {
       headers.set(SESSION_TOKEN_HEADER, session.lock.authToken)
     }
-    return requestJson<T>(session.url, path, { ...init, headers }, session.lock.authToken)
+    return requestJson<T>(session.apiOrigin, path, { ...init, headers }, session.lock.authToken)
   }
 
   function requestBaseJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -949,7 +949,9 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     if (author) params.set('author', author)
     if (fullBody) params.set('fullBody', 'true')
     if (format === 'xml') {
-      const res = await fetch(`${session.url}/api/gh/threads?${params}`)
+      const headers = new Headers()
+      if (session.lock.authToken) headers.set(SESSION_TOKEN_HEADER, session.lock.authToken)
+      const res = await fetch(joinSessionApiUrl(session.apiOrigin, `/api/gh/threads?${params}`), { headers })
       const text = await res.text()
       if (!res.ok) throw new Error(text || res.statusText)
       return textResult(text, { result: { format: 'xml', xml: text } })
@@ -990,7 +992,9 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     if (fullBody) params.set('fullBody', 'true')
     if (state) params.set('state', state)
     if (format === 'xml') {
-      const res = await fetch(`${session.url}/api/gh/reviews?${params}`)
+      const headers = new Headers()
+      if (session.lock.authToken) headers.set(SESSION_TOKEN_HEADER, session.lock.authToken)
+      const res = await fetch(joinSessionApiUrl(session.apiOrigin, `/api/gh/reviews?${params}`), { headers })
       const text = await res.text()
       if (!res.ok) throw new Error(text || res.statusText)
       return textResult(text, { result: { format: 'xml', xml: text } })
@@ -1448,7 +1452,6 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     annotations: MUTATING,
   }, async ({ title, body, source, model, planId }) => {
     const session = requireWebSession()
-    const base = session.url
     // Capture the current round before POST. A human can decide immediately
     // after submission; await_plan_review must still ask from this pre-submit
     // cursor instead of reseeding past that fast verdict.
@@ -1457,7 +1460,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: planId, title, body, source, model }),
     })
-    const url = `${base}/plan/${plan.id}`
+    const url = appendSessionToken(`${session.apiOrigin}/plan/${plan.id}`, session.lock.authToken)
     return textResult(
       `Submitted plan ${plan.id} (v${plan.version}) at ${url}. ${PLAN_SUBMIT_NEXT_ACTION}`,
       {

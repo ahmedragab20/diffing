@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util'
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveActiveServerLock } from './lib/server-lock.js'
-import { reviewSessionUrl } from './lib/session-url.js'
+import { appendSessionToken, reviewSessionUrl } from './lib/session-url.js'
 import { SESSION_TOKEN_HEADER } from './lib/server-auth.js'
 import { getProjectStorageDir } from './lib/git.js'
 import { formatComments } from './lib/comment-format.js'
@@ -561,7 +561,7 @@ async function planSubmit(args: string[]): Promise<number> {
     return 1
   }
   const plan = (await submitRes.json()) as Plan
-  console.error(`Submitted plan ${plan.id} (v${plan.version}) — review at ${base}/plan/${plan.id}`)
+  console.error(`Submitted plan ${plan.id} (v${plan.version}) — review at ${appendSessionToken(`${base}/plan/${plan.id}`, activeAuthToken)}`)
   if (plan.sourcePath) {
     console.error(`Source path: ${plan.sourcePath}`)
   }

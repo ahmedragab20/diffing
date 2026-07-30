@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { withSessionTokenPath } from './session-auth'
 
 /**
  * Minimal client-side router. diffing is a single-page app with exactly two
@@ -15,12 +16,13 @@ function emit(): void {
 }
 
 export function navigate(to: string, opts: { replace?: boolean } = {}): void {
+  const target = withSessionTokenPath(to)
   const current = window.location.pathname + window.location.search
-  if (to === current) return
+  if (target === current) return
   if (opts.replace) {
-    window.history.replaceState(null, '', to)
+    window.history.replaceState(null, '', target)
   } else {
-    window.history.pushState(null, '', to)
+    window.history.pushState(null, '', target)
   }
   emit()
 }
