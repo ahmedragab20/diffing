@@ -132,7 +132,7 @@ describe('diffing MCP', () => {
       expect(first.structuredContent).toMatchObject({
         status: 'started', managedBy: 'mcp',
       })
-      expect(String(first.structuredContent?.url)).toMatch(/^http:\/\/127\.0\.0\.1:43123\/\?token=/)
+      expect(String(first.structuredContent?.url)).toBe('http://127.0.0.1:43123')
       expect(second.structuredContent).toMatchObject({ status: 'reused' })
       expect(startServerFn).toHaveBeenCalledTimes(1)
       expect(startServerFn).toHaveBeenCalledWith(expect.objectContaining({
@@ -172,7 +172,7 @@ describe('diffing MCP', () => {
         managedBy: 'mcp',
         diffArgs: ['--staged'],
       })
-      expect(String(status.structuredContent?.url)).toMatch(/^http:\/\/127\.0\.0\.1:43123\/\?token=/)
+      expect(String(status.structuredContent?.url)).toBe('http://127.0.0.1:43123')
     } finally {
       await session.close()
     }
@@ -261,7 +261,7 @@ describe('diffing MCP', () => {
     })
     try {
       const status = await session.client.callTool({ name: 'review_session_status', arguments: {} })
-      expect(String(status.structuredContent?.url)).toBe('http://127.0.0.1:43125/?token=session-secret')
+      expect(String(status.structuredContent?.url)).toBe('http://127.0.0.1:43125')
 
       await session.client.callTool({ name: 'diff_summary', arguments: {} })
       expect(fetchCalls).toHaveLength(1)

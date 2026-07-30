@@ -98,7 +98,7 @@ diffing [options] [<revision>...] [-- <path>...]
 
 #### Diffing Server Options
 - `--port <port>`: The port to bind the server to. If omitted, it automatically requests a random available port.
-- `--host <host>`: Host address to bind the server to (default: `127.0.0.1`). Loopback binds generate a per-session API token (printed in the review URL). To expose the dashboard on your LAN, pass `0.0.0.0` together with `--insecure-no-auth` (disables API authentication).
+- `--host <host>`: Host address to bind the server to (default: `127.0.0.1`). Loopback binds generate a per-session API token stored in the server lockfile; the web UI authenticates via an HttpOnly cookie (set when HTML is served) and optional `x-diffing-token` header on fetch. CLI and MCP read the token from the lockfile and send the header. Browseable URLs never include `?token=`. To expose the dashboard on your LAN, pass `0.0.0.0` together with `--insecure-no-auth` (disables API authentication).
 - `--insecure-no-auth`: Required when binding to `0.0.0.0` or `::`. Allows LAN clients to reach the API without a token. Ignored on loopback binds.
 - `--no-open`: Prevents the CLI from automatically launching your browser when the server starts.
 - `--reuse-session`: Open the active session (print URL / launch browser) instead of starting another.

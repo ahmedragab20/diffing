@@ -26,7 +26,12 @@ import type { PlanDecision, PlanMode } from './lib/plan-types.js'
 import { executeDiffWithMeta } from './lib/diff-engine.js'
 import type { DiffOptions } from './lib/diff-options.js'
 import { DEFAULTS } from './lib/diff-options.js'
-import { createServerAuthMiddleware, injectSessionTokenIntoHtml, type ServerAuthConfig } from './lib/server-auth.js'
+import {
+  buildSessionTokenSetCookieValue,
+  createServerAuthMiddleware,
+  injectSessionTokenIntoHtml,
+  type ServerAuthConfig,
+} from './lib/server-auth.js'
 import { FilePrSessionStore, InMemoryPrSessionStore } from './lib/pr-session.js'
 import type { PrSessionStore, PrDecision, PrExistingReview, PrSession, PrExistingComment, PrExistingReply } from './lib/pr-session.js'
 import { buildPrOverview } from './lib/diff-overview.js'
@@ -2051,7 +2056,12 @@ export function createApp(
       const contentType = MIME_TYPES[ext] || 'application/octet-stream'
       if (contentType === 'text/html' && security.authToken) {
         const html = injectSessionTokenIntoHtml(content.toString('utf-8'), security.authToken)
-        return new Response(html, { headers: { 'Content-Type': contentType } })
+        return new Response(html, {
+          headers: {
+            'Content-Type': contentType,
+            'Set-Cookie': buildSessionTokenSetCookieValue(security.authToken),
+          },
+        })
       }
       return new Response(content, {
         headers: { 'Content-Type': contentType },
@@ -2059,9 +2069,11 @@ export function createApp(
     } catch {
       const indexContent = await readFile(join(clientDir, 'index.html'))
       const html = injectSessionTokenIntoHtml(indexContent.toString('utf-8'), security.authToken)
-      return new Response(html, {
-        headers: { 'Content-Type': 'text/html' },
-      })
+      const spaHeaders: Record<string, string> = { 'Content-Type': 'text/html' }
+      if (security.authToken) {
+        spaHeaders['Set-Cookie'] = buildSessionTokenSetCookieValue(security.authToken)
+      }
+      return new Response(html, { headers: spaHeaders })
     }
   })
 

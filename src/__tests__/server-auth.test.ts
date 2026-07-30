@@ -2,8 +2,10 @@
 import { describe, it, expect } from 'vitest'
 import { Hono } from 'hono'
 import {
+  SESSION_TOKEN_COOKIE,
   SESSION_TOKEN_HEADER,
   SESSION_TOKEN_QUERY,
+  buildSessionTokenSetCookieValue,
   createServerAuthMiddleware,
   injectSessionTokenIntoHtml,
   isAllowedRequestHost,
@@ -38,7 +40,16 @@ describe('server-auth', () => {
     const withHeader = new Request('http://127.0.0.1/api/ping')
     withHeader.headers.set(SESSION_TOKEN_HEADER, 'secret-token')
     expect((await app.fetch(withHeader)).status).toBe(200)
+    const withCookie = new Request('http://127.0.0.1/api/ping')
+    withCookie.headers.set('Cookie', `${SESSION_TOKEN_COOKIE}=secret-token`)
+    expect((await app.fetch(withCookie)).status).toBe(200)
     expect((await app.fetch(new Request('http://127.0.0.1/index.html'))).status).toBe(200)
+  })
+
+  it('builds a loopback-safe session cookie', () => {
+    expect(buildSessionTokenSetCookieValue('abc123')).toBe(
+      `${SESSION_TOKEN_COOKIE}=abc123; Path=/; SameSite=Strict; HttpOnly`,
+    )
   })
 })
 
@@ -57,7 +68,7 @@ describe('injectSessionTokenIntoHtml', () => {
 })
 
 describe('session-url', () => {
-  it('appends auth tokens to review URLs', () => {
+  it('returns clean browseable URLs without auth query params', () => {
     const lock: ServerLock = {
       port: 4321,
       host: '127.0.0.1',
@@ -67,9 +78,11 @@ describe('session-url', () => {
       version: 'test',
       authToken: 'abc123',
     }
-    expect(reviewSessionUrl(lock)).toBe('http://127.0.0.1:4321/?token=abc123')
+    expect(reviewSessionUrl(lock)).toBe('http://127.0.0.1:4321')
     expect(appendSessionToken('http://127.0.0.1:4321/gh/pr', 'abc123'))
-      .toBe('http://127.0.0.1:4321/gh/pr?token=abc123')
+      .toBe('http://127.0.0.1:4321/gh/pr')
+    expect(appendSessionToken('http://127.0.0.1:4321/?token=legacy', 'abc123'))
+      .toBe('http://127.0.0.1:4321/')
   })
 
   it('joins API paths without inserting path after query params', () => {

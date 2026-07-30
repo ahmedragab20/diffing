@@ -1,9 +1,11 @@
 import { randomBytes } from 'node:crypto'
 import type { Context, Next } from 'hono'
+import { getCookie } from 'hono/cookie'
 
-/** Header or query param carrying the per-session review API token. */
+/** Header, HttpOnly cookie, or legacy query param carrying the per-session review API token. */
 export const SESSION_TOKEN_HEADER = 'x-diffing-token'
 export const SESSION_TOKEN_QUERY = 'token'
+export const SESSION_TOKEN_COOKIE = 'diffing-token'
 
 export interface ServerAuthConfig {
   bindHost: string
@@ -54,8 +56,15 @@ export function isAllowedRequestHost(hostHeader: string | undefined, bindHost: s
 export function readSessionToken(c: Context): string | null {
   const header = c.req.header(SESSION_TOKEN_HEADER)
   if (header) return header
+  const cookie = getCookie(c, SESSION_TOKEN_COOKIE)
+  if (cookie) return cookie
   const query = c.req.query(SESSION_TOKEN_QUERY)
   return query || null
+}
+
+/** `Set-Cookie` value for the review session token (loopback http — no Secure). */
+export function buildSessionTokenSetCookieValue(token: string): string {
+  return `${SESSION_TOKEN_COOKIE}=${encodeURIComponent(token)}; Path=/; SameSite=Strict; HttpOnly`
 }
 
 /** Escape a session token for embedding in a double-quoted JS string literal. */

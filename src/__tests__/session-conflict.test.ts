@@ -25,9 +25,9 @@ describe('existingSessionUrl', () => {
     expect(existingSessionUrl(makeLock())).toBe('http://127.0.0.1:51835')
   })
 
-  it('appends the session token when auth is configured', () => {
+  it('returns clean URLs when auth is configured', () => {
     expect(existingSessionUrl(makeLock({ authToken: 'secret' })))
-      .toBe('http://127.0.0.1:51835/?token=secret')
+      .toBe('http://127.0.0.1:51835')
   })
 
   it('rewrites 0.0.0.0 to 127.0.0.1 and appends /gh/pr for PR mode', () => {
@@ -36,10 +36,10 @@ describe('existingSessionUrl', () => {
     ).toBe('http://127.0.0.1:51835/gh/pr')
   })
 
-  it('appends token on gh-pr URLs when auth is configured', () => {
+  it('returns clean gh-pr URLs when auth is configured', () => {
     expect(
       existingSessionUrl(makeLock({ host: '0.0.0.0', mode: 'gh-pr', authToken: 'tok' })),
-    ).toBe('http://127.0.0.1:51835/gh/pr?token=tok')
+    ).toBe('http://127.0.0.1:51835/gh/pr')
   })
 
   it('returns null for TUI sessions', () => {
@@ -149,11 +149,11 @@ describe('openExistingSession', () => {
     log.mockRestore()
   })
 
-  it('opens the browser URL with token when auth is configured', async () => {
+  it('opens a clean browser URL when auth is configured', async () => {
     const openUrl = vi.fn(async () => {})
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     await openExistingSession(makeLock({ authToken: 'secret' }), { noOpen: false, openUrl })
-    expect(openUrl).toHaveBeenCalledWith('http://127.0.0.1:51835/?token=secret')
+    expect(openUrl).toHaveBeenCalledWith('http://127.0.0.1:51835')
     log.mockRestore()
   })
 
