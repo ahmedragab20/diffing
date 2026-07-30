@@ -176,18 +176,8 @@ A vim-style status bar at the bottom displays the current mode (NORMAL/INSERT), 
 
 ## Native Terminal UI (TUI) — *Experimental*
 
-> [!WARNING]
-> The TUI is **experimental**. The interface, keymap, and on-disk format of
-> `server.json` (`mode: "tui"`) may change in a minor release before
-> stabilisation. The web UI is the supported path for production workflows;
-> please open an issue before depending on the TUI for CI / agent automation.
-> The web review flow, plan review, and PR review are unaffected.
+<img width="1624" height="1061" alt="image" src="https://github.com/user-attachments/assets/2756dbe5-6329-4d70-a8c0-ca61600c2154" />
 
-> [!IMPORTANT]
-> Native binaries are published as optional, platform-specific npm packages
-> for macOS, Windows, and glibc/musl Linux. The main package never compiles Rust
-> during installation and never installs a binary for the wrong platform. A
-> source build and `$PATH` remain supported fallbacks.
 
 `diffing --tui` opens an **opt-in native-Rust terminal interface** that mirrors the local code-review workflow — no browser or Electron. The renderer and headless tools share one sparse diff index. Review sessions publish a capability-scoped loopback API through the per-repository session registry; web and TUI reviews can run concurrently, while `server.json` points agent commands at the selected active session. Read-only viewers do not register a review session.
 
