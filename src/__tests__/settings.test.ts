@@ -5,6 +5,7 @@ const mockHomedir = vi.fn()
 const mockReadFileSync = vi.fn()
 const mockWriteFileSync = vi.fn()
 const mockMkdirSync = vi.fn()
+const mockRenameSync = vi.fn()
 
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>()
@@ -13,7 +14,13 @@ vi.mock('node:os', async (importOriginal) => {
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
-  return { ...actual, readFileSync: mockReadFileSync, writeFileSync: mockWriteFileSync, mkdirSync: mockMkdirSync }
+  return {
+    ...actual,
+    readFileSync: mockReadFileSync,
+    writeFileSync: mockWriteFileSync,
+    mkdirSync: mockMkdirSync,
+    renameSync: mockRenameSync,
+  }
 })
 
 const DEFAULTS = {

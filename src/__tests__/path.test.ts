@@ -74,6 +74,10 @@ describe('isSafePath', () => {
       expect(toSafeRelativePath('/etc/passwd', baseDir)).toBeNull()
     })
 
+    it('allows a path containing .. in the filename', () => {
+      expect(toSafeRelativePath('src/foo..bar.ts', baseDir)).toBe('src/foo..bar.ts')
+    })
+
     it('returns null for parent directory traversal', () => {
       expect(toSafeRelativePath('../etc/passwd', baseDir)).toBeNull()
     })

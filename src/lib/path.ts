@@ -14,7 +14,7 @@ function decodeAndNormalize(p: string): string {
 
 export function toSafeRelativePath(filePath: string, baseDir: string): string | null {
   const normalized = decodeAndNormalize(filePath)
-  if (normalized.includes('..') || normalized.includes('\0')) {
+  if (normalized.includes('\0')) {
     return null
   }
   const resolved = resolve(baseDir, normalized)

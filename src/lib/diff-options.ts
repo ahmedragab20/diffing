@@ -80,6 +80,8 @@ export interface DiffOptions {
   patchWithRaw: boolean
   patchWithStat: boolean
   compactSummary: boolean
+  /** Width/params for `--stat[=…]` when set via `=`. */
+  statParam?: string
   dirstat?: string
   dirstatByFile?: string
   cumulative: boolean
@@ -130,6 +132,9 @@ export interface DiffOptions {
 
   /** Skip auto browser-open (web mode) */
   noOpen: boolean
+
+  /** Disable API authentication when binding to all interfaces (LAN exposure). */
+  insecureNoAuth: boolean
 
   /**
    * Reuse the active review (print/open URL) instead of starting another.
@@ -216,6 +221,7 @@ export const DEFAULTS: DiffOptions = {
   outputMode: 'auto',
   host: '127.0.0.1',
   noOpen: false,
+  insecureNoAuth: false,
   reuseSession: false,
   replaceSession: false,
   help: false,
@@ -335,6 +341,7 @@ export const DIFFING_OPTIONS = {
   port: { type: 'string' as const },
   host: { type: 'string' as const },
   'no-open': { type: 'boolean' as const, default: false },
+  'insecure-no-auth': { type: 'boolean' as const, default: false },
   'reuse-session': { type: 'boolean' as const, default: false },
   'replace-session': { type: 'boolean' as const, default: false },
   web: { type: 'boolean' as const, default: false },
@@ -372,8 +379,12 @@ Git Diff Options (drop-in replacement for git diff):`)
   console.log(`
 Diffing Server Options:
   --port <port>        Port to run the server on (default: random available port)
-  --host <host>        Host address to bind to (default: 127.0.0.1). Pass
-                       0.0.0.0 to expose the server to the local network.
+  --host <host>        Host address to bind to (default: 127.0.0.1). Loopback
+                       binds require a per-session API token. To expose the
+                       review UI on your LAN, pass 0.0.0.0 together with
+                       --insecure-no-auth (disables API authentication).
+  --insecure-no-auth   Allow binding to 0.0.0.0 without API tokens (unsafe on
+                       shared networks). Ignored on loopback binds.
   --no-open            Don't open the browser automatically
   --reuse-session      Open the active review instead of starting another
   --replace-session    Stop the active review and start a replacement
@@ -431,7 +442,8 @@ Examples:
   diffing -U10                   Diff with 10 context lines
   diffing --word-diff=color      Word-level diff in color
   diffing -b -w                  Ignore whitespace changes
-  diffing --host 0.0.0.0         Allow other machines on the LAN to review
+  diffing --host 0.0.0.0 --insecure-no-auth
+                       Expose the review UI on the LAN without API tokens
   diffing view                   Browse the working-tree diff in the TUI
   diffing view --staged          Browse staged changes
   diffing --view main..feature   Browse a branch comparison
@@ -575,6 +587,15 @@ function preprocessOptionalValueArgs(rawArgs: string[]): string[] {
     B: { long: 'break-rewrites', def: '50/60' },
   }
   const LONGS = new Set(['find-copies', 'find-renames', 'break-rewrites'])
+  /** Git accepts values only as `--flag=value` for these; never `--flag value`. */
+  const ATTACHED_ONLY_LONGS = new Set([
+    'stat',
+    'dirstat',
+    'relative',
+    'word-diff',
+    'color-moved',
+    'submodule',
+  ])
 
   const startsWithDigit = (s: string | undefined): boolean =>
     typeof s === 'string' && /^[0-9]/.test(s)
@@ -612,6 +633,18 @@ function preprocessOptionalValueArgs(rawArgs: string[]): string[] {
       } else {
         const def = name === 'find-copies' ? '40' : name === 'find-renames' ? '50' : '50/60'
         out.push(`--${name}=${def}`)
+      }
+      continue
+    }
+
+    // Attached-value-only long flags: `--stat main` must not consume `main` as the width.
+    const attachedOnlyMatch = /^--(stat|dirstat|relative|word-diff|color-moved|submodule)$/.exec(arg)
+    if (attachedOnlyMatch) {
+      const name = attachedOnlyMatch[1]!
+      if (ATTACHED_ONLY_LONGS.has(name)) {
+        out.push(`--${name}=`)
+      } else {
+        out.push(arg)
       }
       continue
     }
@@ -664,6 +697,7 @@ export function parseDiffOptions(
   if (values.port) opts.port = parseInt(values.port as string, 10)
   if (values.host) opts.host = values.host as string
   if (values['no-open']) opts.noOpen = true
+  if (values['insecure-no-auth']) opts.insecureNoAuth = true
   if (values['reuse-session']) opts.reuseSession = true
   if (values['replace-session']) opts.replaceSession = true
   if (values['gh-pr']) opts.ghPr = String(values['gh-pr'])
@@ -740,7 +774,11 @@ export function parseDiffOptions(
   if (values.raw) opts.outputFormat = 'raw'
   if (values.numstat) opts.outputFormat = 'numstat'
   if (values.shortstat) opts.outputFormat = 'shortstat'
-  if (values.stat !== undefined) opts.outputFormat = 'stat'
+  if (values.stat !== undefined) {
+    opts.outputFormat = 'stat'
+    const statVal = values.stat as string
+    if (statVal) opts.statParam = statVal
+  }
   if (values.summary) opts.outputFormat = 'summary'
   if (values['name-only']) opts.outputFormat = 'name-only'
   if (values['name-status']) opts.outputFormat = 'name-status'
@@ -802,18 +840,17 @@ export function parseDiffOptions(
   }
 
   // ── Revisions: any positional args are revisions ──
-  // When a `--` separator is present, args before it are revisions,
-  // args after are pathspecs.
+  // When a `--` separator is present, args after it are pathspecs.
+  // Revisions come from parseArgs positionals (not a raw pre-`--` scan) so
+  // option values like `--port 8080` are never mistaken for revisions.
   const dashDashIdx = rawArgs.indexOf('--')
   if (dashDashIdx >= 0) {
-    // Everything before -- (that isn't a known flag) is a revision
-    // Everything after -- is a pathspec
-    for (let i = 0; i < dashDashIdx; i++) {
-      const arg = rawArgs[i]
-      if (!arg.startsWith('-')) opts.revisions.push(arg)
-    }
     for (let i = dashDashIdx + 1; i < rawArgs.length; i++) {
       opts.pathspecs.push(rawArgs[i])
+    }
+    const pathspecSet = new Set(opts.pathspecs)
+    for (const p of positionals) {
+      if (!pathspecSet.has(p)) opts.revisions.push(p)
     }
   } else {
     // No -- separator → positional args are revisions
@@ -933,7 +970,9 @@ export function buildGitDiffArgs(opts: DiffOptions): string[] {
   if (opts.outputFormat === 'raw') args.push('--raw')
   if (opts.outputFormat === 'numstat') args.push('--numstat')
   if (opts.outputFormat === 'shortstat') args.push('--shortstat')
-  if (opts.outputFormat === 'stat') args.push('--stat')
+  if (opts.outputFormat === 'stat') {
+    args.push(opts.statParam ? `--stat=${opts.statParam}` : '--stat')
+  }
   if (opts.outputFormat === 'summary') args.push('--summary')
   if (opts.outputFormat === 'name-only') args.push('--name-only')
   if (opts.outputFormat === 'name-status') args.push('--name-status')

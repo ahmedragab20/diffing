@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { buildTuiGitDiffArgs, DEFAULTS, intoShowMode, parseDiffOptions } from '../lib/diff-options.js'
+import { buildTuiGitDiffArgs, DEFAULTS, intoShowMode, parseDiffOptions, buildGitDiffArgs } from '../lib/diff-options.js'
 
 function withStdoutTty<T>(isTTY: boolean, run: () => T): T {
   const descriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
@@ -116,6 +116,44 @@ describe('native view mode', () => {
       '--',
       'src/',
     ])
+  })
+})
+
+describe('parseDiffOptions -- separator revisions', () => {
+  it('does not treat option values before -- as revisions', () => {
+    const opts = parseDiffOptions(['--port', '8080', 'main', '--', 'src/'])
+    expect(opts.port).toBe(8080)
+    expect(opts.revisions).toEqual(['main'])
+    expect(opts.pathspecs).toEqual(['src/'])
+  })
+})
+
+describe('attached-value-only git flags', () => {
+  it('parses --stat=width without swallowing the next revision', () => {
+    const opts = parseDiffOptions(['--stat=32', 'main..feature'])
+    expect(opts.outputFormat).toBe('stat')
+    expect(opts.statParam).toBe('32')
+    expect(opts.revisions).toEqual(['main..feature'])
+    expect(buildTuiGitDiffArgs(opts)).toContain('--stat=32')
+  })
+
+  it('parses standalone --stat without consuming the following revision', () => {
+    const opts = parseDiffOptions(['--stat', 'main..feature'])
+    expect(opts.outputFormat).toBe('stat')
+    expect(opts.statParam).toBeUndefined()
+    expect(opts.revisions).toEqual(['main..feature'])
+  })
+
+  it('parses --word-diff=plain without consuming revision', () => {
+    const opts = parseDiffOptions(['--word-diff=plain', 'HEAD'])
+    expect(opts.wordDiff).toBe('plain')
+    expect(opts.revisions).toEqual(['HEAD'])
+  })
+
+  it('parses standalone --submodule without consuming revision', () => {
+    const opts = parseDiffOptions(['--submodule', 'main..feature'])
+    expect(opts.submodule).toBeUndefined()
+    expect(opts.revisions).toEqual(['main..feature'])
   })
 })
 

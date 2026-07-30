@@ -1,16 +1,16 @@
 import { execFileSync } from 'node:child_process'
 import type { DiffOptions } from './diff-options.js'
 import { buildGitDiffArgs } from './diff-options.js'
+import { parseGitDiffHeaderPaths } from './git-path.js'
 import {
   isGitRepo,
-  getRepoName,
-  getBranchName,
+  getRepoMetadataAsync,
   getGitDiff,
   getCustomGitDiff,
   getGitDiffAsync,
   getCustomGitDiffAsync,
   getUntrackedFilePathsAsync,
-  getTabSizeForFiles,
+  getTabSizeForFilesAsync,
   getShowDiff,
   getCommitSeriesSummary,
   type CommitInfo,
@@ -22,8 +22,6 @@ import {
   buildCommitOverview,
   type DiffOverview,
 } from './diff-overview.js'
-
-const MAX_BUFFER = 50 * 1024 * 1024
 
 export interface DiffResult {
   patch: string
@@ -68,8 +66,8 @@ function isCustomMode(opts: DiffOptions): boolean {
 function parseFilePaths(patch: string): string[] {
   const paths = new Set<string>()
   for (const line of patch.split('\n')) {
-    const match = line.match(/^diff --git a\/.+ b\/(.+)$/)
-    if (match) paths.add(match[1])
+    const parsed = parseGitDiffHeaderPaths(line)
+    if (parsed) paths.add(parsed[1])
   }
   return [...paths]
 }
@@ -83,9 +81,9 @@ function parseBinaryFiles(patch: string, untrackedFiles?: Set<string>): BinaryFi
 
     let filePath = ''
     for (let j = i - 1; j >= 0; j--) {
-      const match = lines[j].match(/^diff --git a\/.+ b\/(.+)$/)
-      if (match) {
-        filePath = match[1]
+      const parsed = parseGitDiffHeaderPaths(lines[j])
+      if (parsed) {
+        filePath = parsed[1]
         break
       }
     }
@@ -169,16 +167,17 @@ export async function executeDiffAsync(opts: DiffOptions): Promise<{
 export async function executeDiffWithMeta(opts: DiffOptions): Promise<DiffResult & DiffMeta> {
   const { patch, commits, truncated } = await executeDiffAsync(opts)
 
-  const repoName = getRepoName()
-  const branch = getBranchName()
-  const untrackedFiles = opts.includeUntracked && !opts.showMode
-    ? await getUntrackedFilePathsAsync()
-    : []
+  const [{ repoName, branch }, untrackedFiles] = await Promise.all([
+    getRepoMetadataAsync(),
+    opts.includeUntracked && !opts.showMode
+      ? getUntrackedFilePathsAsync()
+      : Promise.resolve([] as string[]),
+  ])
 
   const untrackedSet = new Set(untrackedFiles)
   const binaryFiles = parseBinaryFiles(patch, untrackedSet)
   const filePaths = parseFilePaths(patch)
-  const tabSizeMap = getTabSizeForFiles(filePaths)
+  const tabSizeMap = await getTabSizeForFilesAsync(filePaths)
 
   // ── Diff overview banner ───────────────────────────────────────────
   // PR mode is short-circuited in server.ts, so we don't need a pr kind
@@ -286,11 +285,7 @@ export function runTerminalDiff(opts: DiffOptions): number {
   finalArgs.push(...args)
 
   try {
-    const result = execFileSync(
-      'git',
-      ['diff', ...finalArgs],
-      { encoding: 'utf-8', maxBuffer: MAX_BUFFER, stdio: 'inherit' },
-    )
+    execFileSync('git', ['diff', ...finalArgs], { stdio: 'inherit' })
     return 0
   } catch (err: any) {
     // --exit-code causes git diff to exit with 1 if diffs exist
@@ -314,7 +309,7 @@ function runTerminalShow(opts: DiffOptions): number {
     args.push('--', ...opts.pathspecs)
   }
   try {
-    execFileSync('git', args, { encoding: 'utf-8', maxBuffer: MAX_BUFFER, stdio: 'inherit' })
+    execFileSync('git', args, { stdio: 'inherit' })
     return 0
   } catch (err: any) {
     return err.status ?? 1

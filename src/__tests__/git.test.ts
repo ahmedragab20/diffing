@@ -98,7 +98,13 @@ describe('git', () => {
     })
 
     it('returns empty string on error', async () => {
-      mockExecFileSync.mockImplementation(() => { throw new Error('error') })
+      mockReadFileSync.mockImplementation(() => { throw new Error('no head') })
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (args?.[0] === 'rev-parse' && args?.[1] === '--show-toplevel') {
+          return '/home/user/project\n'
+        }
+        throw new Error('error')
+      })
       const { getBranchName } = await import('../lib/git.js')
       expect(getBranchName()).toBe('')
     })

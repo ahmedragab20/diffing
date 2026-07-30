@@ -48,6 +48,7 @@ const GLOBAL_FLAGS = [
   '--replace-session',
   '--port',
   '--host',
+  '--insecure-no-auth',
   '--staged',
   '--cached',
   '--gh-pr',

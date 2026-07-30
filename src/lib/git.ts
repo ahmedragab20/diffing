@@ -65,10 +65,24 @@ export function getFileContent(filePath: string, version: 'old' | 'new'): Buffer
 
 let cachedRepoRoot: string | null = null
 const editorConfigCache = new Map<string, ProcessedFileConfig>()
+type RepoMetadata = { repoName: string; branch: string; headToken: string }
+let cachedRepoMetadata: RepoMetadata | null = null
+let tabSizeCache: { key: string; map: Record<string, number> } | null = null
+
+function gitHeadToken(): string {
+  try {
+    const root = getRepoRoot()
+    return readFileSync(join(root, '.git', 'HEAD'), 'utf-8').trim()
+  } catch {
+    return ''
+  }
+}
 
 export function _resetRepoRootCache(): void {
   cachedRepoRoot = null
   editorConfigCache.clear()
+  cachedRepoMetadata = null
+  tabSizeCache = null
 }
 
 export function isGitRepo(): boolean {
@@ -89,15 +103,47 @@ export function getRepoRoot(): string {
 }
 
 export function getRepoName(): string {
-  return basename(getRepoRoot())
+  return getRepoMetadata().repoName
 }
 
 export function getBranchName(): string {
-  try {
-    return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { stdio: 'pipe', encoding: 'utf-8' }).trim()
-  } catch {
-    return ''
+  return getRepoMetadata().branch
+}
+
+export function getRepoMetadata(): { repoName: string; branch: string } {
+  const headToken = gitHeadToken()
+  if (cachedRepoMetadata && cachedRepoMetadata.headToken === headToken) {
+    return {
+      repoName: cachedRepoMetadata.repoName,
+      branch: cachedRepoMetadata.branch,
+    }
   }
+  const repoName = basename(getRepoRoot())
+  let branch = ''
+  try {
+    branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      stdio: 'pipe',
+      encoding: 'utf-8',
+    }).trim()
+  } catch {
+    branch = ''
+  }
+  cachedRepoMetadata = { repoName, branch, headToken }
+  return { repoName, branch }
+}
+
+export async function getRepoMetadataAsync(): Promise<{ repoName: string; branch: string }> {
+  const headToken = gitHeadToken()
+  if (cachedRepoMetadata && cachedRepoMetadata.headToken === headToken) {
+    return {
+      repoName: cachedRepoMetadata.repoName,
+      branch: cachedRepoMetadata.branch,
+    }
+  }
+  const repoName = basename(await getRepoRootAsync())
+  const branch = await getBranchNameAsync()
+  cachedRepoMetadata = { repoName, branch, headToken }
+  return { repoName, branch }
 }
 
 // Force standard unified diff regardless of user's git config
@@ -133,6 +179,10 @@ export function getGitDiff(options: { staged?: boolean; untracked?: boolean } = 
 }
 
 export function getTabSizeForFiles(filePaths: string[]): Record<string, number> {
+  const key = [...filePaths].sort().join('\0')
+  if (tabSizeCache?.key === key) {
+    return tabSizeCache.map
+  }
   const root = getRepoRoot()
   const result: Record<string, number> = {}
   for (const filePath of filePaths) {
@@ -147,7 +197,12 @@ export function getTabSizeForFiles(filePaths: string[]): Record<string, number> 
       // skip files that fail to resolve
     }
   }
+  tabSizeCache = { key, map: result }
   return result
+}
+
+export async function getTabSizeForFilesAsync(filePaths: string[]): Promise<Record<string, number>> {
+  return getTabSizeForFiles(filePaths)
 }
 
 export function getUntrackedFilePaths(): string[] {

@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { writeJsonAtomically } from './json-atomic.js'
 
 const CONFIG_DIR = join(homedir(), '.config', 'diffing')
 const SETTINGS_FILE = join(CONFIG_DIR, 'settings.json')
@@ -127,7 +128,6 @@ export function loadSettings(): Settings {
 export function saveSettings(settings: Partial<Settings>): Settings {
   const current = loadSettings()
   const merged = { ...current, ...settings }
-  mkdirSync(CONFIG_DIR, { recursive: true })
-  writeFileSync(SETTINGS_FILE, JSON.stringify(merged, null, 2))
+  writeJsonAtomically(SETTINGS_FILE, merged)
   return merged
 }

@@ -1,7 +1,11 @@
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
+const VIEWER_PROBE_TIMEOUT_MS = 1_500
 
 function bundledBinary(callerUrl: string, ext: string): string {
   const report = process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined
@@ -18,6 +22,38 @@ export function tuiBinaryTarget(
   runtime: 'gnu' | 'musl' | 'msvc' | null,
 ): string {
   return `tui-${[platform, arch, runtime].filter(Boolean).join('-')}`
+}
+
+function localTuiCandidates(callerUrl: string): string[] {
+  const ext = process.platform === 'win32' ? '.exe' : ''
+  const here = dirname(fileURLToPath(callerUrl))
+  const bundled = bundledBinary(callerUrl, ext)
+  return [
+    resolve(here, `diffing-tui${ext}`),
+    resolve(here, '..', 'target', 'release', `diffing-tui${ext}`),
+    resolve(here, '..', '..', 'target', 'release', `diffing-tui${ext}`),
+    resolve(here, '..', 'target', 'debug', `diffing-tui${ext}`),
+    resolve(here, '..', '..', 'target', 'debug', `diffing-tui${ext}`),
+    bundled,
+    resolve(here, '..', 'bin', `diffing-tui${ext}`),
+  ]
+}
+
+function pathLookupCandidates(): string[] {
+  try {
+    const which = process.platform === 'win32' ? 'where' : 'which'
+    const out = execFileSync(which, ['diffing-tui'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    if (!out) return []
+    return out
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(candidate => candidate && isAbsolute(candidate))
+  } catch {
+    return []
+  }
 }
 
 /**
@@ -39,38 +75,38 @@ export function tuiBinaryTarget(
  * root to a known location instead of depending on the test runner's CWD.
  */
 export function findTuiBinaries(callerUrl: string): string[] {
-  const ext = process.platform === 'win32' ? '.exe' : ''
-  const here = dirname(fileURLToPath(callerUrl))
-  const bundled = bundledBinary(callerUrl, ext)
-  const candidates: string[] = [
-    resolve(here, `diffing-tui${ext}`),
-    resolve(here, '..', 'target', 'release', `diffing-tui${ext}`),
-    resolve(here, '..', '..', 'target', 'release', `diffing-tui${ext}`),
-    resolve(here, '..', 'target', 'debug', `diffing-tui${ext}`),
-    resolve(here, '..', '..', 'target', 'debug', `diffing-tui${ext}`),
-    bundled,
-    resolve(here, '..', 'bin', `diffing-tui${ext}`),
-  ]
-  const found = candidates.filter(c => existsSync(c))
-  // Final fallback: $PATH lookup.
-  try {
-    const which = process.platform === 'win32' ? 'where' : 'which'
-    const out = execFileSync(which, ['diffing-tui'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
-    if (out) {
-      for (const line of out.split(/\r?\n/)) {
-        const candidate = line.trim()
-        if (candidate && isAbsolute(candidate)) found.push(candidate)
-      }
-    }
-  } catch {
-    // not on $PATH — fall through
+  const found = localTuiCandidates(callerUrl).filter(candidate => existsSync(candidate))
+  for (const candidate of pathLookupCandidates()) {
+    if (!found.includes(candidate)) found.push(candidate)
   }
   return [...new Set(found)]
 }
 
 export function findTuiBinary(callerUrl: string): string | null {
-  return findTuiBinaries(callerUrl)[0] ?? null
+  for (const candidate of localTuiCandidates(callerUrl)) {
+    if (existsSync(candidate)) return candidate
+  }
+  for (const candidate of pathLookupCandidates()) {
+    return candidate
+  }
+  return null
+}
+
+async function probeViewerBinary(candidate: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(candidate, ['--help'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: VIEWER_PROBE_TIMEOUT_MS,
+    })
+    return stdout.includes('--view-only') ? candidate : null
+  } catch {
+    return null
+  }
+}
+
+export async function findViewerTuiBinary(callerUrl: string): Promise<string | null> {
+  const candidates = findTuiBinaries(callerUrl)
+  const matches = await Promise.all(candidates.map(candidate => probeViewerBinary(candidate)))
+  return matches.find((candidate): candidate is string => candidate !== null) ?? null
 }

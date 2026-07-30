@@ -104,7 +104,7 @@ const QUOTES: Quote[] = [
     author: "Unknown",
   },
   {
-    text: "A QA engineer walks into a coffie shop. Orders 0 cups. Orders 999999 cups. Orders NULL cups. Walks in through the window.",
+    text: "A QA engineer walks into a coffee shop. Orders 0 cups. Orders 999999 cups. Orders NULL cups. Walks in through the window.",
     author: "Unknown",
   },
   {
@@ -402,6 +402,14 @@ const ANIMS: Anim[] = [
 export function playStartupDisplay(): Promise<void> {
   if (!stdout.isTTY) return Promise.resolve();
   return (async () => {
+    const onInterrupt = () => {
+      try {
+        stdout.write(SHOW);
+      } catch {
+        /* */
+      }
+    };
+    process.once("SIGINT", onInterrupt);
     try {
       const quote = QUOTES[Math.floor(Math.random() * QUOTES.length)];
       const pal = PALETTES[Math.floor(Math.random() * PALETTES.length)];
@@ -411,11 +419,9 @@ export function playStartupDisplay(): Promise<void> {
       await anim(b);
       stdout.write(SHOW);
     } catch {
-      try {
-        stdout.write(SHOW);
-      } catch {
-        /* */
-      }
+      onInterrupt();
+    } finally {
+      process.off("SIGINT", onInterrupt);
     }
   })();
 }

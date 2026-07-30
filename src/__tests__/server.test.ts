@@ -10,6 +10,7 @@ const mockGetRepoName = vi.fn()
 const mockGetBranchName = vi.fn()
 const mockGetFileContent = vi.fn()
 const mockGetTabSizeForFiles = vi.fn()
+const mockGetTabSizeForFilesAsync = vi.fn()
 const mockGetUntrackedFilePaths = vi.fn()
 const mockLoadSettings = vi.fn()
 const mockSaveSettings = vi.fn()
@@ -22,6 +23,7 @@ const mockGetGitDiffAsync = vi.fn()
 const mockGetCustomGitDiffAsync = vi.fn()
 const mockGetRepoRootAsync = vi.fn()
 const mockGetBranchNameAsync = vi.fn()
+const mockGetRepoMetadataAsync = vi.fn()
 const mockGetUntrackedFilePathsAsync = vi.fn()
 const mockGetShowDiff = vi.fn()
 const mockGetCommitSeriesSummary = vi.fn()
@@ -33,11 +35,13 @@ vi.mock('../lib/git.js', () => ({
   getBranchName: mockGetBranchName,
   getFileContent: mockGetFileContent,
   getTabSizeForFiles: mockGetTabSizeForFiles,
+  getTabSizeForFilesAsync: mockGetTabSizeForFilesAsync,
   getUntrackedFilePaths: mockGetUntrackedFilePaths,
   getGitDiffAsync: mockGetGitDiffAsync,
   getCustomGitDiffAsync: mockGetCustomGitDiffAsync,
   getRepoRootAsync: mockGetRepoRootAsync,
   getBranchNameAsync: mockGetBranchNameAsync,
+  getRepoMetadataAsync: mockGetRepoMetadataAsync,
   getUntrackedFilePathsAsync: mockGetUntrackedFilePathsAsync,
   getRepoRoot: mockGetRepoRoot,
   getProjectStorageDir: mockGetProjectStorageDir,
@@ -146,6 +150,7 @@ describe('server', () => {
     mockLoadSettings.mockReturnValue(defaultSettings)
     mockSaveSettings.mockImplementation((s: any) => ({ ...defaultSettings, ...s }))
     mockGetTabSizeForFiles.mockReturnValue({})
+    mockGetTabSizeForFilesAsync.mockResolvedValue({})
     mockGetUntrackedFilePaths.mockReturnValue([])
     mockIsSafePath.mockReturnValue(true)
     mockGetProjectStorageDir.mockReturnValue('/tmp/test-project-storage')
@@ -154,6 +159,7 @@ describe('server', () => {
 
     mockGetRepoRootAsync.mockResolvedValue('/tmp/test-repo')
     mockGetBranchNameAsync.mockResolvedValue('main')
+    mockGetRepoMetadataAsync.mockResolvedValue({ repoName: 'test-repo', branch: 'main' })
     mockGetUntrackedFilePathsAsync.mockResolvedValue([])
     mockGetGitDiffAsync.mockResolvedValue('diff --git a/src/index.ts b/src/index.ts\n@@ -1 +1 @@\n-old\n+new\n')
     mockGetCustomGitDiffAsync.mockResolvedValue('custom')
