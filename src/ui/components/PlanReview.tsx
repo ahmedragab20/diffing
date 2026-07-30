@@ -1030,25 +1030,79 @@ export function PlanReview({
   }, [copyablePath, editorIDE])
 
   /**
-   * Scroll a heading/comment into view, accounting for the sticky toolbar +
-   * plan header so the target lands just below them (not under or past them).
+   * Scroll a heading/comment into view. Prefer `scrollIntoView` so nested
+   * scrollers (Split panes with `overflow: auto`) move correctly — plain
+   * `window.scrollTo` is a no-op when the document itself is not the scroller.
+   * Sticky toolbar offset comes from CSS `scroll-margin-top` on headings /
+   * `.plan-read-segment`.
    */
   const scrollToPlanElement = useCallback(
     (el: HTMLElement, align: 'start' | 'center' = 'start') => {
-      if (align === 'center') {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        return
-      }
-      const toolbar =
-        document.querySelector<HTMLElement>('.plan-app-toolbar') ??
-        document.querySelector<HTMLElement>('.toolbar')
-      const head = headRef.current
-      const sticky = (toolbar?.offsetHeight ?? 60) + (head?.offsetHeight ?? 0) + 12
-      const top = el.getBoundingClientRect().top + window.scrollY - sticky
-      window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+      el.scrollIntoView({
+        behavior: 'smooth',
+        block: align === 'center' ? 'center' : 'start',
+      })
     },
     [],
   )
+
+  /** Resolve an outline section: segment wrapper first, then heading id. */
+  const findOutlineTarget = useCallback((sectionId: string): HTMLElement | null => {
+    if (!sectionId || typeof document === 'undefined') return null
+    const root = renderedRef.current
+    const scope = root ?? document
+    try {
+      const segment = scope.querySelector<HTMLElement>(
+        `[data-plan-segment="${CSS.escape(sectionId)}"]`,
+      )
+      if (segment) return segment
+    } catch {
+      /* CSS.escape may throw on odd ids — fall through */
+    }
+    return (
+      root?.querySelector<HTMLElement>(`#${CSS.escape(sectionId)}`) ??
+      document.getElementById(sectionId)
+    )
+  }, [])
+
+  const jumpToOutlineSection = useCallback(
+    (sectionId: string) => {
+      const target = findOutlineTarget(sectionId)
+      if (target) scrollToPlanElement(target, 'start')
+      if (typeof history !== 'undefined' && typeof window !== 'undefined') {
+        const next = `${window.location.pathname}${window.location.search}#${sectionId}`
+        if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
+          history.replaceState(null, '', next)
+        }
+      }
+    },
+    [findOutlineTarget, scrollToPlanElement],
+  )
+
+  // Deep-link / outline hash: scroll when the URL hash matches a section, and
+  // when the rendered body becomes available (mode switch, plan load).
+  useEffect(() => {
+    if (!showRendered || editMode) return
+    const raw = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '') : ''
+    if (!raw) return
+    let cancelled = false
+    const run = () => {
+      if (cancelled) return
+      const target = findOutlineTarget(decodeURIComponent(raw))
+      if (target) scrollToPlanElement(target, 'start')
+    }
+    // Double rAF: wait for Markdown segments to commit to the DOM.
+    const outer = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(run)
+    })
+    const onHash = () => run()
+    window.addEventListener('hashchange', onHash)
+    return () => {
+      cancelled = true
+      window.cancelAnimationFrame(outer)
+      window.removeEventListener('hashchange', onHash)
+    }
+  }, [showRendered, editMode, displayBody, viewMode, findOutlineTarget, scrollToPlanElement])
 
   const jumpToComment = useCallback(
     (commentId: string, lineNumber: number) => {
@@ -1448,11 +1502,7 @@ export function PlanReview({
                   href={`#${item.id}`}
                   onClick={(e) => {
                     e.preventDefault()
-                    const target = document.getElementById(item.id)
-                    if (target) scrollToPlanElement(target, 'start')
-                    if (typeof history !== 'undefined') {
-                      history.replaceState(null, '', `#${item.id}`)
-                    }
+                    jumpToOutlineSection(item.id)
                   }}
                 >
                   {item.text}

@@ -10420,6 +10420,11 @@ button.toolbar-last-send-btn:hover {
     background: transparent;
     order: -1;
 }
+/* Offset outline / hash jumps below sticky toolbar + plan header */
+.plan-rendered .md-heading,
+.plan-rendered .plan-read-segment[data-plan-segment]:not([data-plan-segment='preamble']) {
+    scroll-margin-top: calc(var(--toolbar-height) + 88px);
+}
 .plan-toc-head {
     display: flex;
     align-items: center;
