@@ -11,15 +11,19 @@ Use diffing as a real implementation gate: submit clean markdown, wait for the h
 
 Prefer MCP when available:
 
-1. `review_session_status`, then `start_review_session` only for `mode: none`. Reuse `mode: web`. Plan tools do not run against the native TUI or GitHub PR API, and MCP will not replace those user-owned sessions; ask the human to end the incompatible session before retrying.
-2. `submit_plan` with complete markdown body, title, and model/source when known.
-3. **Async handoff (default):** share the plan URL from `submit_plan`, tell the human to review, and **end your turn**. Call `await_plan_review` only when they are reviewing now or explicitly asked you to wait.
-4. On `await_plan_review` timeout (`disposition=park`): park again — do **not** silent-loop. At most one extra await if they asked you to keep waiting. When they say a verdict is ready, call `await_plan_review` once (or `get_plan` / `list_plans`).
+1. Call `review_session_status`. Plan tools require `mode: web`. If another mode is active, use `diffing sessions --json` to select a compatible web session, or start `diffing --web --no-open` as a concurrent session; do not end the TUI/PR review merely to submit a plan. Reconnect MCP after `sessions use` so the new connection discovers the selected web session.
+2. Call `start_review_session` only for `mode: none` or to idempotently reuse/pin a matching web scope. It never creates a plan-specific session and never launches, stops, or replaces TUI/PR sessions.
+3. `submit_plan` with complete markdown body, title, and model/source when known.
+4. **Async handoff (default):** share the plan URL returned by `submit_plan`, tell the human to review, and **end your turn**. Do not call status or fetch the plan just to rediscover that URL. Call `await_plan_review` only when they are reviewing now or explicitly asked you to wait.
+5. On `await_plan_review` timeout (`disposition=park`): park again — do **not** silent-loop. At most one extra await if they asked you to keep waiting. When they say a verdict is ready, call `await_plan_review` once (or `get_plan` / `list_plans`).
 
 CLI fallback:
 
 ```bash
-diffing --web --no-open
+diffing sessions --json
+diffing sessions use <web-session-id>       # reuse a compatible web session
+# Or, when none matches:
+diffing --web --no-open                     # starts a concurrent active session
 diffing plan submit [<plan.md>|-] [--title T] [--source S] [--model M] [--id ID] [--save-source]
 # default: prints URL and parks — do not add --wait unless sync
 diffing plan submit [<plan.md>|-] --wait [--timeout N]   # sync only

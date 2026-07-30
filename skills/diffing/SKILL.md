@@ -1,22 +1,20 @@
 ---
 name: diffing
-description: Use diffing for a native human-AI review loop over local code changes, GitHub pull requests, or implementation plans. Route requests to start the UI, inspect and review diffs, submit plans for approval, wait for feedback, address inline comments, or operate any diffing CLI, MCP, or loopback HTTP capability.
+description: Use diffing for a native human-AI review loop over local code changes, GitHub pull requests, or implementation plans. Route requests to start the UI, list/select/open/stop concurrent sessions, inspect and review diffs, submit plans for approval, wait for feedback, address inline comments, or operate any diffing CLI, MCP, or loopback HTTP capability.
 ---
 
 # diffing workflow router
 
-diffing is a local-first review bridge: an agent exposes a diff or plan, a human reviews it in a browser UI (or experimental `--tui`), and both sides exchange structured comments and verdicts in real time.
+diffing is a local-first review bridge: an agent exposes a diff or plan, a human reviews it in the web UI or native TUI, and both sides exchange structured comments and verdicts in real time.
 
 Authoritative reference: repository `docs/cli.md`, root `AGENTS.md`, and the current MCP tool schemas.
 
 ## First 60 seconds
 
 1. Identify the target Git repository; never infer it from an unrelated current directory.
-2. Prefer `review_session_status`. Read `repository`, `serverState`, `mode`, `diffArgs`, and `nextAction` before calling another diffing tool.
+2. Prefer `review_session_status`. Read `repository`, `serverState`, `mode`, `diffArgs`, and `nextAction` before calling another MCP tool. When the active mode or scope does not match the request, inspect `diffing sessions --json` before starting or stopping anything.
 3. Select the focused workflow from **Route by intent** below.
-4. Reuse a compatible active session. If several sessions exist, inspect them
-   with `diffing sessions --json` and select one only when the user's intent is
-   clear. Never stop or replace a user-owned session without explicit approval.
+4. Reuse a compatible session. Treat "active" as the routing target for agent commands, not as the only allowed session. Select by mode and scope only when the user's intent is clear; never stop or replace a user-owned session without explicit approval.
 
 ## Detect capabilities first
 
@@ -29,6 +27,23 @@ Use the strongest available integration without asking the user to choose plumbi
 
 Never guess the repository or hard-code a port. For global MCP clients, bind the server explicitly with `diffing mcp --repo <absolute-path>`.
 
+## Select the correct concurrent session
+
+Web, TUI, and GitHub PR reviews can coexist for one repository. Every new CLI launch gets a session ID, becomes active, and leaves older sessions running.
+
+```bash
+diffing sessions --json                 # safe summaries: id, active, mode, scope, URL
+diffing sessions use <id-prefix>        # retarget agent CLI commands
+diffing sessions open <id>|active       # select and open/print the human UI
+diffing sessions stop <id>|active|all   # explicit lifecycle action
+```
+
+- Match both **mode** and **scope**. For PRs, confirm identity with `gh_overview`; for local reviews, compare `diffArgs` / the session `scope`.
+- Use a unique session ID prefix (the displayed first eight characters normally suffice). Never select solely because a session is newest.
+- `use` retargets `url`, `comments`, `inspect`, plan commands, and newly attached MCP discovery without stopping another review. `open` also selects the target. Stopping the active session elects the newest remaining live session.
+- MCP does not expose session-list/use/stop tools. Use the CLI manager when selection is needed, then attach a fresh repository-bound MCP connection. Once an MCP connection starts or reuses a web session, treat it as pinned: a later `sessions use` must not silently retarget that in-flight workflow; reconnect intentionally to switch.
+- Prefer coexistence. Use `--reuse-session` only to open the active review and `--replace-session` only when replacement was explicitly intended.
+
 ## Branch on session mode
 
 | Mode | Valid agent path |
@@ -37,6 +52,13 @@ Never guess the repository or hard-code a port. For global MCP clients, bind the
 | `web` | Prefer bounded `diff_*` inspection; all local comment, handoff, history, progress, suggestion, and plan tools are available. |
 | `tui` | Use bounded `diff_*` inspection. Available review operations are create/list/edit/delete comment, reply, resolve/unresolve, and await. No browser UI, plan API, progress/history, bulk resolve, suggestion apply, or reply edit/delete. |
 | `gh-pr` | Use `gh_overview`, bounded `diff_*`, and `gh_list_threads` / `gh_list_reviews`. Local handoff/plan workflows do not apply. Publishing or mutating GitHub requires explicit user authorization. |
+
+## Use MCP efficiently
+
+- Call `review_session_status` once at workflow entry and again only after a real lifecycle change or connection recovery. Consume `structuredContent`; do not parse the readable text when typed fields are available.
+- If `start_review_session` returns `started` or `reused`, use its URL/scope directly. Do not call status or `diffing url` again just to rediscover the same session. The tool starts/reuses only a matching local **web** session; launch/select TUI and PR sessions with the CLI.
+- Prefer one purpose-built mutation over an HTTP round trip. Do not fetch comments again immediately after `await_review`, or fetch a plan again immediately after `await_plan_review`; released payloads already contain the actionable state.
+- Do not poll status, comments, or plans. Use async park/resume by default and one `await_*` only for an explicitly synchronous wait.
 
 ## Minimize tokens while preserving coverage
 
@@ -48,7 +70,7 @@ Choose inspection tools from the active session mode:
 - **`mode: web`**: use repository-local reads/search for surrounding source. Keep `get_diff` as an escape hatch when a consumer needs the complete patch.
 - **`mode: gh-pr`**: call `gh_overview` first, then bounded diff tools. Fetch published discussion with `gh_list_threads` (prefer `unresolvedOnly`) and `gh_list_reviews`; avoid the fat `/api/gh/session` payload.
 
-The CLI mirror works in web, TUI, and PR sessions: `diffing inspect summary|files|hunks|slice|search`. Its compact JSON default is best for agents; use `--pretty` only for human debugging. `start_review_session` cannot create a TUI session.
+The CLI mirror works in web, TUI, and PR sessions: `diffing inspect summary|files|hunks|slice|search`. Its compact JSON default is best for agents; use `--pretty` only for human debugging. Select the intended session first. `start_review_session` cannot create a TUI or PR session.
 
 ## Route by intent
 
@@ -89,7 +111,7 @@ MCP also advertises workflow prompts `review_local_changes` and `submit_plan_for
 | Plan gate | `diffing plan submit|await|list|show|versions|reply|resolve` |
 | GitHub PR | `diffing "gh pr <ref>"`; `diffing gh status|overview|threads|reviews|pr-fetch|pr-list-comments|pr-review` |
 | Bounded diff reads | `diffing inspect summary|files|hunks|slice|search` |
-| Discovery/DX | `diffing url`; `sessions [list|use|open|stop|kill]`; `mode [web|tui]`; `doctor`; `completion bash|zsh|fish`; `update` |
+| Discovery/DX | `diffing url`; `sessions [list] [--json]`; `sessions use <id>`; `sessions open [<id>|active]`; `sessions stop|kill <id>|active|all`; `mode [web|tui]`; `doctor`; `completion bash|zsh|fish`; `update` |
 
 Use `diffing --help` and `docs/cli.md` for the full git-compatible option set and exact exit codes. Prefer stdin for long Markdown bodies/replies. `comment delete`, `delete_comment`, `delete_reply`, and GitHub publication are destructive or externally visible; use them only when the request clearly authorizes them.
 

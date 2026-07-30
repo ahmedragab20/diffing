@@ -11,13 +11,13 @@ Perform a review rather than implementing: inspect the complete diff, account fo
 
 When MCP tools are available:
 
-1. Call `review_session_status` and branch on `mode`. Use `start_review_session` only for `none`; it creates a web session and never replaces a user-owned TUI or GitHub PR session. If the mode is `gh-pr`, use the separate workflow below.
+1. Call `review_session_status` and verify repository, mode, and scope. If they do not match, inspect `diffing sessions --json`, select the intended session with `diffing sessions use <id>`, and reconnect MCP before reading. If no matching local session exists, start a concurrent one. Use `start_review_session` only for `none` or to idempotently reuse/pin a matching web scope; it cannot create TUI or PR sessions. If the selected mode is `gh-pr`, use the separate workflow below.
 2. Inspect with the cheapest complete path for that mode:
    - **Web or TUI**: call `diff_summary` until `complete` is true → page all `diff_files` via `nextCursor` → inspect each changed file with `diff_hunks` and bounded `diff_slice` pages. Continue slices with `nextRow`.
    - Carry the summary `generation` into hunks, slices, and searches. On a stale-generation error, rerun the summary and restart traversal. Continue search with both `nextFile` and `nextRow`.
    - Use `diff_search` only to target literal, case-insensitive matches in changed paths/content; it does not prove full review coverage.
    - Use `get_diff` only as an escape hatch. Check binary/untracked metadata and use the exact status `diffArgs` plus local repository reads/git inspection for omitted or surrounding context.
-3. `list_comments` with `openOnly: true` so you do not duplicate active feedback. Fetch resolved history only when it is relevant.
+3. `list_comments` with `openOnly: true` so you do not duplicate active feedback. Fetch resolved history only when it is relevant. Consume `structuredContent` and returned pagination fields instead of reissuing status/summary calls between pages.
 4. For each real finding, `create_comment` with:
    - exact repo-relative path
    - diff **side** (`additions` | `deletions`)
@@ -64,7 +64,10 @@ Human-created comments use the same field. On handoff, open comments appear as `
 ## CLI / HTTP fallback
 
 ```bash
-diffing --web --no-open
+diffing sessions --json
+diffing sessions use <matching-session-id>  # reuse when present
+# Or, when none matches:
+diffing --web --no-open                     # starts a concurrent active session
 diffing url
 diffing comments --json
 # Bounded reads (web, TUI, or PR session):

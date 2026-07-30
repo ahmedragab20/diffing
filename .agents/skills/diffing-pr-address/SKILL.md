@@ -9,7 +9,7 @@ Use token-efficient PR reads to understand feedback, then switch to the normal l
 
 ## 1. Gather only actionable PR context
 
-1. Call `review_session_status`; reuse the session only when `mode: gh-pr` and its ref matches the requested PR. Never replace a user-owned incompatible session.
+1. Run `diffing sessions --json` when available and select the matching `gh-pr` session with `diffing sessions use <id>`. If none exists, start the requested PR session; concurrent local/TUI/other PR sessions may remain running. Attach or reconnect MCP after selection, call `review_session_status`, and verify normalized identity with `gh_overview`.
 2. Read identity and counts with MCP `gh_overview` or CLI `diffing gh overview --json`.
 3. Page unresolved published threads with `gh_list_threads` (`unresolvedOnly: true`) or `diffing gh threads --unresolved`. Read full bodies only for threads being acted on.
 4. Page reviews with `gh_list_reviews` or `diffing gh reviews --format json`; include `CHANGES_REQUESTED` review bodies that add requirements beyond inline threads.
@@ -21,10 +21,13 @@ Classify each item as a concrete change, question, already-addressed/outdated re
 
 Write the plan under `~/.diffing/<repo>/plan-sources/`; never place scratch files in the repository. Cover requested changes, tests, feedback that needs clarification, and explicit non-goals.
 
-Plan APIs are web-only. Before switching modes, retain the compact PR overview and actionable thread list. End an agent-owned PR session when safe; if the PR session is user-owned, ask the user to end it rather than replacing it. Start or reuse a web session, then follow `diffing-plan-review`:
+Plan APIs are web-only. Before selecting another mode, retain the compact PR overview, actionable thread list, and PR session ID. Do **not** end the PR review. Select an existing web session with `diffing sessions use <id>` or start a concurrent one, reconnect MCP to the selected web session, then follow `diffing-plan-review`:
 
 ```bash
-diffing --web --no-open
+diffing sessions --json
+diffing sessions use <web-session-id>   # reuse when present
+# Or, when none matches:
+diffing --web --no-open                 # starts a concurrent active session
 diffing plan submit <plan-file> --model "<model>" --save-source
 diffing plan await
 ```
@@ -43,7 +46,7 @@ Do not reply to published comments, resolve/reopen threads, submit reviews, push
 
 When publication is authorized:
 
-1. Refresh the matching PR session if needed.
+1. Reselect the saved PR session with `diffing sessions use <pr-session-id>`, reconnect MCP if used, and confirm it with `gh_overview` before refreshing.
 2. Dry-run review submission first (`gh_submit_review` with `dryRun: true` or `diffing gh pr-review ... --dry-run`).
 3. Publish only the authorized replies/verdict and report what changed remotely.
 

@@ -9,11 +9,10 @@ Prefer diffing’s slim PR overview and bounded diff inspect over `gh pr view`, 
 
 ## Setup
 
-1. Target the correct repository. Prefer MCP `review_session_status` when available.
-2. Ensure a PR session:
-   - Reuse when `mode: gh-pr` and the ref matches.
-   - Otherwise start: `diffing --gh-pr <ref> --no-open` (or `diffing "gh pr <ref>" --no-open`).
-3. Do not replace a user-owned session bound to a different PR or local mode — report the conflict.
+1. Target the correct repository. List `diffing sessions --json` when a shell is available; reuse a `gh-pr` entry only when its scope matches the requested PR.
+2. Select the match with `diffing sessions use <id>`. If none exists, start `diffing --gh-pr <ref> --no-open` (or `diffing "gh pr <ref>" --no-open`); it coexists with local and other PR reviews and becomes active.
+3. Attach or reconnect MCP after selection, call `review_session_status`, then confirm normalized PR identity with `gh_overview`. `start_review_session` is for local web diffs and must not be used for PR mode.
+4. Do not replace or stop another session just to read this PR. If the shell/session manager is unavailable and MCP is pinned to a different session, report that selection is required rather than reading the wrong PR.
 
 `<ref>` may be a number, `owner/repo#N`, or a full PR URL.
 
@@ -35,6 +34,7 @@ Never load the full patch or full session JSON by default.
 ### Rules
 
 - Carry `generation` from `diff_summary` into hunks/slice/search. On stale generation (HTTP 409), re-run summary and restart that file’s traversal.
+- Consume MCP `structuredContent` and returned cursors directly. Do not call `review_session_status`, `gh_overview`, or the same page repeatedly when nothing changed.
 - Keep default or smaller line/byte budgets; raise only when necessary.
 - Continue slices with `nextRow` and file lists with `nextCursor`. Continue search with `nextFile` + `nextRow`.
 - Prefer `gh_list_threads` with `unresolvedOnly: true` and truncated bodies. Use `fullBody` / `--full-body` only for threads you will act on.
@@ -48,7 +48,10 @@ This skill is **read-first**. To post draft review comments on the PR session, f
 ## CLI sketch
 
 ```bash
-diffing --gh-pr 1234 --no-open
+diffing sessions --json
+diffing sessions use <matching-pr-session-id>  # reuse when present
+# Or, when none matches:
+diffing --gh-pr 1234 --no-open                  # starts a concurrent active session
 diffing gh overview --json
 diffing inspect summary
 diffing inspect files --limit 50
@@ -63,4 +66,4 @@ diffing gh reviews --format json
 - Dumping `gh pr diff` or the entire unified patch into context.
 - Calling `GET /api/gh/session` for “status” when `gh overview` exists.
 - Loading every resolved historical thread body when only unresolved feedback matters.
-- Starting a second PR server for the same ref when a compatible session is already live.
+- Starting a duplicate PR session when a compatible one can be selected by ID.

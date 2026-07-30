@@ -9,7 +9,9 @@ Wait for the human handoff, act only on open comments, and synchronize every res
 
 ## Receive the handoff
 
-Call `review_session_status` first when MCP is available. `web` and `tui` support the local handoff/comment tools; `gh-pr` does not have **Send to agent**, so route that mode to `diffing-review`'s GitHub workflow.
+Identify the session that the human handed off before waiting or reading comments. When several reviews are live, run `diffing sessions --json`, match mode and scope, and select it with `diffing sessions use <id>`. Then attach/reconnect MCP and call `review_session_status`; do not assume the newest or currently active session is the one the human reviewed. Once an MCP connection starts/reuses a web session or begins a wait, keep that workflow pinned rather than retargeting it mid-round.
+
+`web` and `tui` support the local handoff/comment tools; `gh-pr` does not have **Send to agent**, so route that mode to `diffing-review`'s GitHub workflow. If no shell/session manager is available and MCP points at a different session, ask for the intended session to be selected rather than consuming unrelated comments.
 
 In TUI mode, limit native operations to await, list/create/edit/delete comment, reply, and resolve/unresolve. TUI does not expose progress/history, bulk resolve, suggestion application, or reply edit/delete endpoints; use scoped working-tree edits and ordinary reply/resolve instead.
 
@@ -22,6 +24,8 @@ diffing await-review [--timeout <sec>] [--model <name>] [--label <text>] [--agen
 A timeout (MCP `status: timeout` + `disposition: park`; CLI exit `2`) means **park** — end the turn. Call await again only if the human asked you to keep waiting (at most once more unless they repeat that ask). Do not silent-loop. CLI identity flags let the UI distinguish multiple waiting agents; reuse the same `--agent-id` for that agent. If blocking tools are unavailable, use `list_comments` or:
 
 ```bash
+diffing sessions --json
+diffing sessions use <reviewed-session-id>
 diffing comments --open
 diffing comments --format md    # optional markdown export
 ```

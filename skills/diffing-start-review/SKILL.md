@@ -9,9 +9,10 @@ Start the local review UI for the repository in scope and make its URL available
 
 ## Choose the available integration
 
-1. If MCP tools are available, call **`review_session_status`** first and follow its mode-specific `nextAction`. Verify the returned repository and `diffArgs`; for `gh-pr`, verify PR identity with `diffing gh status` or `GET /api/gh/session`. Reuse only a matching session; report a scope/PR mismatch instead of trying to switch it. An active TUI is the human's terminal UI, not a browser URL; do not expose its capability-bearing agent API URL. Call **`start_review_session`** only when `mode: none`. It always starts a loopback web session and never launches or replaces the TUI or GitHub PR mode. Pass `diffArgs` only when the user requested a specific scope.
-2. Otherwise, if a shell is available, start the requested mode as a **persistent** process from the repository: `diffing --web --no-open [scope…]` for local review, or `diffing --no-open --gh-pr <ref>` for a PR. New CLI launches may coexist with older web/TUI/PR sessions and become active; inspect `diffing sessions --json` before changing that target when multiple sessions matter. Use `diffing url` to recover the active URL. A foreground command that dies when the tool call ends is not sufficient; the interactive TUI belongs in the human's terminal, not an agent background process.
-3. If neither MCP nor a persistent shell is available, explain that the host must start `diffing` in the repository.
+1. If MCP tools are available, call **`review_session_status`** first. Verify the repository, mode, and `diffArgs`. If they do not match, inspect `diffing sessions --json`: select an existing match with `diffing sessions use <id>`, then reconnect MCP so the new connection discovers it. For `gh-pr`, confirm identity with `gh_overview`; do not use the full `/api/gh/session` payload merely for status. An active TUI is the human's terminal UI, not a browser URL; never expose its capability-bearing agent API URL.
+2. Call **`start_review_session`** only to start or pin a matching local web session. It is idempotent, accepts structured `diffArgs`, and never launches, stops, or replaces TUI/PR sessions. If the desired web scope has no session and an incompatible session is active, start `diffing --web --no-open [scope…]` through the CLI; it safely coexists and becomes active, after which a fresh MCP connection can attach.
+3. If a shell is the available integration, first reuse a matching entry from `diffing sessions --json`; otherwise start the requested mode as a **persistent** process from the repository: `diffing --web --no-open [scope…]` for local review, or `diffing --no-open --gh-pr <ref>` for a PR. Every new launch coexists and becomes active. Use `diffing sessions open <id> --no-open` to select and print a specific web/PR URL. A foreground command that dies when the tool call ends is not sufficient; the interactive TUI belongs in the human's terminal, not an agent background process.
+4. If neither MCP nor a persistent shell is available, explain that the host must start `diffing` in the repository.
 
 Never guess a repository. Bind MCP with `diffing mcp --repo <absolute-path>` when the harness does not launch it from the workspace.
 
@@ -28,7 +29,7 @@ Optional health check: `diffing doctor`.
 | Path filter | paths after `--` |
 | GitHub PR | `diffing --no-open --gh-pr 1234` or `diffing "gh pr 1234" --no-open` |
 | Commit series (show mode) | `diffing show <revspec>...` |
-| Native TUI | `diffing --tui` (experimental; requires a separately built or installed `diffing-tui` binary) |
+| Native TUI | `diffing --tui` (bundled by the normal `npm i -g diffing` install) |
 
 Use structured argument arrays with `start_review_session`; do not compose a shell string from untrusted user input.
 
@@ -38,7 +39,7 @@ If the human starts the native TUI, agents can inspect its diff without full-pat
 
 ## Hand-off to the human
 
-For web mode, return the verified base review URL; append `/plan` or `/plan/<id>` for plans and `/gh/pr` for a PR session. Do not invent a URL from a guessed port. For TUI mode, report that the review is already open in the human's terminal and do not return the agent API URL.
+For web mode, return the selected session's verified base review URL; append `/plan` or `/plan/<id>` for plans and `/gh/pr` for a PR session. Do not use `diffing url` before selecting the intended session, and never invent a URL from a guessed port. For TUI mode, report that the review is already open in the human's terminal and do not return the agent API URL.
 
 Set the correct expectation: local code review uses **Send to agent**, plan review uses **Submit review**, and GitHub PR mode uses local drafts followed by an explicitly authorized **Submit to GitHub**; PR mode has no Send-to-agent handoff.
 
