@@ -37,6 +37,7 @@ import { PlanCommentBubble } from './PlanCommentBubble'
 import { PlanReadInlineComments } from './PlanReadInlineComments'
 import { FilePreviewModal } from './FilePreviewModal'
 import { planCommentLineLabel } from '../lib/planCommentAnchors'
+import { EMBEDDED_COMMENT_STYLES } from '../lib/embeddedCommentStyles'
 import { Select } from '../primitives/Select'
 import { Tooltip } from '../primitives/Tooltip'
 import { buildPlanOutline } from '../lib/planOutline'
@@ -70,10 +71,7 @@ import {
 import { PlanSourceEditor } from './PlanSourceEditor'
 import { faceReadToSourceLine } from '../lib/planLineSync'
 import { ConfirmDialog } from '../primitives/ConfirmDialog'
-import {
-  PlanDiscardEditsDialog,
-  type PlanDiscardChoice,
-} from './PlanDiscardEditsDialog'
+import { PlanDiscardEditsDialog, type PlanDiscardChoice } from './PlanDiscardEditsDialog'
 
 type PlanTextSnapshot = { body: string; title: string }
 
@@ -134,12 +132,31 @@ function linePendingToPlan(p: PendingLineComment): PendingComment {
 
 type PlanAnnotationMeta = PlanComment | { _pending: true }
 
-const DECISION_META: Record<PlanDecision, { label: string; className: string; icon: typeof Check }> = {
-  pending: { label: 'Pending review', className: 'plan-badge-pending', icon: Clock },
-  approved: { label: 'Approved', className: 'plan-badge-approved', icon: Check },
-  'changes-requested': { label: 'Changes requested', className: 'plan-badge-changes', icon: MessageSquareWarning },
+const DECISION_META: Record<
+  PlanDecision,
+  { label: string; className: string; icon: typeof Check }
+> = {
+  pending: {
+    label: 'Pending review',
+    className: 'plan-badge-pending',
+    icon: Clock,
+  },
+  approved: {
+    label: 'Approved',
+    className: 'plan-badge-approved',
+    icon: Check,
+  },
+  'changes-requested': {
+    label: 'Changes requested',
+    className: 'plan-badge-changes',
+    icon: MessageSquareWarning,
+  },
   rejected: { label: 'Rejected', className: 'plan-badge-rejected', icon: X },
-  'comment-only': { label: 'Comment only', className: 'plan-badge-comment-only', icon: MessageSquare },
+  'comment-only': {
+    label: 'Comment only',
+    className: 'plan-badge-comment-only',
+    icon: MessageSquare,
+  },
 }
 
 export function PlanReview({
@@ -232,7 +249,11 @@ export function PlanReview({
   const [activeEditLine, setActiveEditLine] = useState(1)
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Last successfully saved (autosave) snapshot — used for dirty detection. */
-  const editBaselineRef = useRef<{ body: string; title: string; version: number }>({
+  const editBaselineRef = useRef<{
+    body: string
+    title: string
+    version: number
+  }>({
     body: plan.body,
     title: plan.title,
     version: plan.version,
@@ -279,16 +300,18 @@ export function PlanReview({
   const isReadOnly = viewMode === 'rendered'
   const zenActive = isReadOnly && zenMode
 
-  const setZen = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
-    const value = typeof next === 'function' ? next(zenMode) : next
-    if (onZenModeChange) {
-      onZenModeChange(value)
-    } else {
-      setZenModeLocal(value)
-      setUiStateItem(PLAN_UI.zenMode, String(value))
-    }
-  }, [zenMode, onZenModeChange])
-
+  const setZen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      const value = typeof next === 'function' ? next(zenMode) : next
+      if (onZenModeChange) {
+        onZenModeChange(value)
+      } else {
+        setZenModeLocal(value)
+        setUiStateItem(PLAN_UI.zenMode, String(value))
+      }
+    },
+    [zenMode, onZenModeChange],
+  )
 
   // Version switcher: `viewingVersion` is the body the user is reading right
   // now. Defaults to the plan's current version. The user can pick any prior
@@ -332,7 +355,11 @@ export function PlanReview({
       // Accept server body into the draft (agent resubmit while idle in editor).
       setDraftBody(plan.body)
       setDraftTitle(plan.title)
-      editBaselineRef.current = { body: plan.body, title: plan.title, version: plan.version }
+      editBaselineRef.current = {
+        body: plan.body,
+        title: plan.title,
+        version: plan.version,
+      }
       setSessionOrigin({ body: plan.body, title: plan.title })
       setVersionOriginal(null)
       setSaveStatus('idle')
@@ -444,7 +471,10 @@ export function PlanReview({
   }
 
   const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP['rose-pine']
-  const unsafeCSS = useMemo(() => buildPlanCSS(defaultTabSize, fontSize, monoFontFamily), [defaultTabSize, fontSize, monoFontFamily])
+  const unsafeCSS = useMemo(
+    () => buildPlanCSS(defaultTabSize, fontSize, monoFontFamily),
+    [defaultTabSize, fontSize, monoFontFamily],
+  )
 
   // Comments are filtered to those anchored to the version being viewed. A
   // comment's `createdAtPlanVersion` is set at write time by the server.
@@ -458,7 +488,8 @@ export function PlanReview({
   const openCount = comments.filter((c) => c.status === 'open').length
   const totalCommentCount = allComments.length
 
-  const lineRange = (start: number | undefined, end: number) => extractPlanLines(displayBody, start ?? end, end)
+  const lineRange = (start: number | undefined, end: number) =>
+    extractPlanLines(displayBody, start ?? end, end)
 
   const openSourcePending = useCallback((next: PendingComment) => {
     const normalized = linePendingToPlan(planToLinePending(next))
@@ -551,7 +582,10 @@ export function PlanReview({
       metadata: c,
     }))
     if (pending) {
-      list.push({ lineNumber: pending.lineNumber, metadata: { _pending: true } })
+      list.push({
+        lineNumber: pending.lineNumber,
+        metadata: { _pending: true },
+      })
     }
     return list
   }, [lineComments, pending])
@@ -645,7 +679,11 @@ export function PlanReview({
     const snap: PlanTextSnapshot = { body: plan.body, title: plan.title }
     setDraftBody(snap.body)
     setDraftTitle(snap.title)
-    editBaselineRef.current = { body: snap.body, title: snap.title, version: plan.version }
+    editBaselineRef.current = {
+      body: snap.body,
+      title: snap.title,
+      version: plan.version,
+    }
     setSessionOrigin(snap)
     // First enter for this plan version pins the “original” for rollback.
     setVersionOriginal((prev) => prev ?? snap)
@@ -661,7 +699,16 @@ export function PlanReview({
     setSelectionPopup(null)
     if (zenMode) setZen(false)
     if (viewMode !== 'split') onViewModeChange?.('split')
-  }, [viewingVersion, plan.version, plan.body, plan.title, zenMode, setZen, viewMode, onViewModeChange])
+  }, [
+    viewingVersion,
+    plan.version,
+    plan.body,
+    plan.title,
+    zenMode,
+    setZen,
+    viewMode,
+    onViewModeChange,
+  ])
 
   const exitEditMode = useCallback(async () => {
     const sessionHadChanges =
@@ -691,7 +738,11 @@ export function PlanReview({
   const discardConflictAndLoad = useCallback(() => {
     setDraftBody(plan.body)
     setDraftTitle(plan.title)
-    editBaselineRef.current = { body: plan.body, title: plan.title, version: plan.version }
+    editBaselineRef.current = {
+      body: plan.body,
+      title: plan.title,
+      version: plan.version,
+    }
     setSessionOrigin({ body: plan.body, title: plan.title })
     setVersionOriginal(null)
     setConflictVersion(null)
@@ -860,7 +911,10 @@ export function PlanReview({
         source: plan.source,
         model: plan.model,
       })
-      const snap: PlanTextSnapshot = { body: updated.body, title: updated.title }
+      const snap: PlanTextSnapshot = {
+        body: updated.body,
+        title: updated.title,
+      }
       editBaselineRef.current = {
         body: snap.body,
         title: snap.title,
@@ -916,10 +970,7 @@ export function PlanReview({
       const target = e.target as HTMLElement | null
       const tag = target?.tagName?.toLowerCase()
       const inField =
-        tag === 'input' ||
-        tag === 'textarea' ||
-        tag === 'select' ||
-        !!target?.isContentEditable
+        tag === 'input' || tag === 'textarea' || tag === 'select' || !!target?.isContentEditable
 
       if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
         if (!editMode) return
@@ -981,31 +1032,37 @@ export function PlanReview({
    * Scroll a heading/comment into view, accounting for the sticky toolbar +
    * plan header so the target lands just below them (not under or past them).
    */
-  const scrollToPlanElement = useCallback((el: HTMLElement, align: 'start' | 'center' = 'start') => {
-    if (align === 'center') {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      return
-    }
-    const toolbar =
-      document.querySelector<HTMLElement>('.plan-app-toolbar') ??
-      document.querySelector<HTMLElement>('.toolbar')
-    const head = headRef.current
-    const sticky = (toolbar?.offsetHeight ?? 60) + (head?.offsetHeight ?? 0) + 12
-    const top = el.getBoundingClientRect().top + window.scrollY - sticky
-    window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
-  }, [])
+  const scrollToPlanElement = useCallback(
+    (el: HTMLElement, align: 'start' | 'center' = 'start') => {
+      if (align === 'center') {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        return
+      }
+      const toolbar =
+        document.querySelector<HTMLElement>('.plan-app-toolbar') ??
+        document.querySelector<HTMLElement>('.toolbar')
+      const head = headRef.current
+      const sticky = (toolbar?.offsetHeight ?? 60) + (head?.offsetHeight ?? 0) + 12
+      const top = el.getBoundingClientRect().top + window.scrollY - sticky
+      window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+    },
+    [],
+  )
 
-  const jumpToComment = useCallback((commentId: string, lineNumber: number) => {
-    const el = document.getElementById(`plan-comment-${commentId}`)
-    if (el) {
-      scrollToPlanElement(el, 'center')
-      el.classList.add('plan-comment-flash')
-      window.setTimeout(() => el.classList.remove('plan-comment-flash'), 1400)
-      return
-    }
-    const lineEl = document.querySelector(`[data-plan-line="${lineNumber}"]`)
-    if (lineEl instanceof HTMLElement) scrollToPlanElement(lineEl, 'center')
-  }, [scrollToPlanElement])
+  const jumpToComment = useCallback(
+    (commentId: string, lineNumber: number) => {
+      const el = document.getElementById(`plan-comment-${commentId}`)
+      if (el) {
+        scrollToPlanElement(el, 'center')
+        el.classList.add('plan-comment-flash')
+        window.setTimeout(() => el.classList.remove('plan-comment-flash'), 1400)
+        return
+      }
+      const lineEl = document.querySelector(`[data-plan-line="${lineNumber}"]`)
+      if (lineEl instanceof HTMLElement) scrollToPlanElement(lineEl, 'center')
+    },
+    [scrollToPlanElement],
+  )
 
   /**
    * Evaluate the current selection and show/hide the Add-comment chip.
@@ -1016,75 +1073,78 @@ export function PlanReview({
    *   (used by selectionchange so collapsing the selection on chip click
    *   does not yank the chip away). `sync` — full sync, may clear the chip.
    */
-  const evaluateRenderedSelection = useCallback((mode: 'update' | 'sync' = 'sync') => {
-    if (isHistorical || editMode) {
-      if (mode === 'sync') setSelectionPopup(null)
-      return
-    }
-    const root = renderedRef.current
-    const sel = window.getSelection()
-    if (!root || !sel || sel.isCollapsed || !sel.rangeCount) {
-      if (mode === 'sync') setSelectionPopup(null)
-      return
-    }
-    if (!selectionIntersectsRoot(sel, root)) {
-      if (mode === 'sync') setSelectionPopup(null)
-      return
-    }
+  const evaluateRenderedSelection = useCallback(
+    (mode: 'update' | 'sync' = 'sync') => {
+      if (isHistorical || editMode) {
+        if (mode === 'sync') setSelectionPopup(null)
+        return
+      }
+      const root = renderedRef.current
+      const sel = window.getSelection()
+      if (!root || !sel || sel.isCollapsed || !sel.rangeCount) {
+        if (mode === 'sync') setSelectionPopup(null)
+        return
+      }
+      if (!selectionIntersectsRoot(sel, root)) {
+        if (mode === 'sync') setSelectionPopup(null)
+        return
+      }
 
-    const range = selectionRangeInRoot(sel, root) ?? sel.getRangeAt(0)
-    const text = range.toString()
-    if (!text.trim()) {
-      if (mode === 'sync') setSelectionPopup(null)
-      return
-    }
+      const range = selectionRangeInRoot(sel, root) ?? sel.getRangeAt(0)
+      const text = range.toString()
+      if (!text.trim()) {
+        if (mode === 'sync') setSelectionPopup(null)
+        return
+      }
 
-    // Prefer mapped source lines; if mapping fails, still show the chip
-    // so highlight → Add comment always has a path forward.
-    const mapped =
-      mapSelectionToLines(displayBody, text) ??
-      ({
-        text: text.replace(/\s+/g, ' ').trim(),
-        startLine: 1,
-        endLine: 1,
-      } as const)
+      // Prefer mapped source lines; if mapping fails, still show the chip
+      // so highlight → Add comment always has a path forward.
+      const mapped =
+        mapSelectionToLines(displayBody, text) ??
+        ({
+          text: text.replace(/\s+/g, ' ').trim(),
+          startLine: 1,
+          endLine: 1,
+        } as const)
 
-    const rects = range.getClientRects()
-    // first/last non-empty rects are visual top→bottom regardless of direction.
-    let first: DOMRect | null = null
-    let last: DOMRect | null = null
-    for (let i = 0; i < rects.length; i++) {
-      const r = rects[i]
-      if (r.width === 0 && r.height === 0) continue
-      if (!first) first = r
-      last = r
-    }
-    const box = first && last ? null : range.getBoundingClientRect()
-    const topRect = first ?? box
-    const bottomRect = last ?? box
-    if (!topRect || !bottomRect || (topRect.width === 0 && topRect.height === 0)) {
-      if (mode === 'sync') setSelectionPopup(null)
-      return
-    }
+      const rects = range.getClientRects()
+      // first/last non-empty rects are visual top→bottom regardless of direction.
+      let first: DOMRect | null = null
+      let last: DOMRect | null = null
+      for (let i = 0; i < rects.length; i++) {
+        const r = rects[i]
+        if (r.width === 0 && r.height === 0) continue
+        if (!first) first = r
+        last = r
+      }
+      const box = first && last ? null : range.getBoundingClientRect()
+      const topRect = first ?? box
+      const bottomRect = last ?? box
+      if (!topRect || !bottomRect || (topRect.width === 0 && topRect.height === 0)) {
+        if (mode === 'sync') setSelectionPopup(null)
+        return
+      }
 
-    const popupH = 36
-    const gap = 10
-    const spaceBelow = window.innerHeight - bottomRect.bottom
-    const placement: 'above' | 'below' =
-      spaceBelow < popupH + gap + 8 && topRect.top > popupH + gap + 8 ? 'above' : 'below'
-    const midX = (bottomRect.left + bottomRect.right) / 2
-    const x = Math.min(Math.max(72, midX), window.innerWidth - 72)
-    const y = placement === 'below' ? bottomRect.bottom + gap : topRect.top - gap
+      const popupH = 36
+      const gap = 10
+      const spaceBelow = window.innerHeight - bottomRect.bottom
+      const placement: 'above' | 'below' =
+        spaceBelow < popupH + gap + 8 && topRect.top > popupH + gap + 8 ? 'above' : 'below'
+      const midX = (bottomRect.left + bottomRect.right) / 2
+      const x = Math.min(Math.max(72, midX), window.innerWidth - 72)
+      const y = placement === 'below' ? bottomRect.bottom + gap : topRect.top - gap
 
-    setSelectionPopup({
-      x,
-      y,
-      placement,
-      startLine: mapped.startLine,
-      endLine: mapped.endLine,
-      text: mapped.text,
-    })
-  }, [displayBody, isHistorical, editMode])
+      setSelectionPopup({
+        x,
+        y,
+        placement,
+        startLine: mapped.startLine,
+        endLine: mapped.endLine,
+        text: mapped.text,
+      })
+    },
+    [displayBody, isHistorical, editMode],
+  )
 
   // Document-level listeners so we never miss reverse selections, releases
   // outside the pane, or keyboard Shift+Arrow selections.
@@ -1102,7 +1162,11 @@ export function PlanReview({
     const onMouseUp = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null
       // Keep chip alive when pressing Add comment or interacting with floats.
-      if (t?.closest?.('.plan-selection-popup, .plan-selection-comment, .plan-float-tray, .confirm-dialog')) {
+      if (
+        t?.closest?.(
+          '.plan-selection-popup, .plan-selection-comment, .plan-float-tray, .confirm-dialog',
+        )
+      ) {
         return
       }
       schedule('sync')
@@ -1221,7 +1285,10 @@ export function PlanReview({
   useEffect(() => {
     if (!selectionPopup) return
     const dismiss = () => setSelectionPopup(null)
-    window.addEventListener('scroll', dismiss, { passive: true, capture: true })
+    window.addEventListener('scroll', dismiss, {
+      passive: true,
+      capture: true,
+    })
     return () => window.removeEventListener('scroll', dismiss, true)
   }, [selectionPopup])
 
@@ -1296,7 +1363,11 @@ export function PlanReview({
   ) : (
     <div className="plan-file">
       <DiffsFile<PlanAnnotationMeta>
-        file={{ name: plan.sourcePath?.split(/[/\\]/).pop() || 'PLAN.md', contents: displayBody, lang: 'markdown' }}
+        file={{
+          name: plan.sourcePath?.split(/[/\\]/).pop() || 'PLAN.md',
+          contents: displayBody,
+          lang: 'markdown',
+        }}
         options={{
           disableFileHeader: true,
           enableGutterUtility: true,
@@ -1388,11 +1459,7 @@ export function PlanReview({
           </ul>
         </nav>
       )}
-      <div
-        ref={renderedRef}
-        className="markdown-body plan-rendered"
-        onClick={handleMarkdownClick}
-      >
+      <div ref={renderedRef} className="markdown-body plan-rendered" onClick={handleMarkdownClick}>
         {/* React-owned sections + comments (no DOM injection — survives mode switches). */}
         <PlanReadInlineComments
           body={displayBody}
@@ -1403,7 +1470,9 @@ export function PlanReview({
           onDelete={(id) => removePlanComment(plan.id, id)}
           onEdit={(id, body) => editPlanComment(plan.id, id, body)}
           onReply={(id, body) => addPlanReply(plan.id, id, body)}
-          onEditReply={(commentId, replyId, body) => editPlanReply(plan.id, commentId, replyId, body)}
+          onEditReply={(commentId, replyId, body) =>
+            editPlanReply(plan.id, commentId, replyId, body)
+          }
           onDeleteReply={(commentId, replyId) => removePlanReply(plan.id, commentId, replyId)}
         />
       </div>
@@ -1484,7 +1553,9 @@ export function PlanReview({
                 role="status"
                 title={saveError ?? undefined}
               >
-                {saveStatus === 'saving' && <Loader2 size={11} className="spin" aria-hidden="true" />}
+                {saveStatus === 'saving' && (
+                  <Loader2 size={11} className="spin" aria-hidden="true" />
+                )}
                 {saveStatusLabel}
               </span>
             )}
@@ -1494,8 +1565,14 @@ export function PlanReview({
             {versions.length <= 1 ? (
               <span className="plan-review-chip">v{viewingVersion}</span>
             ) : (
-              <div className={`plan-review-version-switcher ${isHistorical ? 'is-historical' : ''}`}>
-                <History size={12} aria-hidden="true" className="plan-review-version-switcher-icon" />
+              <div
+                className={`plan-review-version-switcher ${isHistorical ? 'is-historical' : ''}`}
+              >
+                <History
+                  size={12}
+                  aria-hidden="true"
+                  className="plan-review-version-switcher-icon"
+                />
                 <Select
                   value={String(viewingVersion)}
                   onValueChange={(v) => {
@@ -1536,11 +1613,12 @@ export function PlanReview({
               title={`${lineCount} lines · ${wordCount} words · updated ${timeAgo(plan.updatedAt)}`}
             >
               {lineCount}L · {wordCount}W
-              {openCount > 0 && (
-                <span className="plan-review-meta-open"> · {openCount} open</span>
-              )}
+              {openCount > 0 && <span className="plan-review-meta-open"> · {openCount} open</span>}
               {comments.length > 0 && openCount === 0 && (
-                <span> · {comments.length} comment{comments.length === 1 ? '' : 's'}</span>
+                <span>
+                  {' '}
+                  · {comments.length} comment{comments.length === 1 ? '' : 's'}
+                </span>
               )}
               {isHistorical && totalCommentCount !== comments.length && (
                 <span className="plan-review-chip-sub"> of {totalCommentCount}</span>
@@ -1613,16 +1691,18 @@ export function PlanReview({
                 disabled={openingEditor}
                 aria-label="Open plan source in editor"
               >
-                {openingEditor ? <Loader2 size={14} className="spin" /> : <ExternalLink size={14} />}
+                {openingEditor ? (
+                  <Loader2 size={14} className="spin" />
+                ) : (
+                  <ExternalLink size={14} />
+                )}
               </button>
             </Tooltip>
           )}
           {canEdit && (
             <Tooltip
               content={
-                editMode
-                  ? 'Done editing (e) — autosave flushes on exit'
-                  : 'Edit plan live (e)'
+                editMode ? 'Done editing (e) — autosave flushes on exit' : 'Edit plan live (e)'
               }
               side="bottom"
             >
@@ -1659,7 +1739,10 @@ export function PlanReview({
                   <Save size={14} />
                 </button>
               </Tooltip>
-              <Tooltip content="Save as new version — bumps version and reopens review" side="bottom">
+              <Tooltip
+                content="Save as new version — bumps version and reopens review"
+                side="bottom"
+              >
                 <button
                   type="button"
                   className="plan-icon-btn"
@@ -1710,9 +1793,7 @@ export function PlanReview({
           {isReadOnly && (
             <Tooltip
               content={
-                zenActive
-                  ? 'Exit zen reading (z / Esc)'
-                  : 'Zen mode — full-width focus reading (z)'
+                zenActive ? 'Exit zen reading (z / Esc)' : 'Zen mode — full-width focus reading (z)'
               }
               side="bottom"
             >
@@ -1728,10 +1809,7 @@ export function PlanReview({
             </Tooltip>
           )}
           {showRendered && outline.length > 0 && !zenActive && (
-            <Tooltip
-              content={tocOpen ? 'Hide outline (o)' : 'Show outline (o)'}
-              side="bottom"
-            >
+            <Tooltip content={tocOpen ? 'Hide outline (o)' : 'Show outline (o)'} side="bottom">
               <button
                 type="button"
                 className={`plan-icon-btn ${tocOpen ? 'is-active' : ''}`}
@@ -1779,11 +1857,7 @@ export function PlanReview({
         <div className="plan-zen-bar" role="status">
           <span className="plan-zen-bar-label">Zen reading</span>
           <span className="plan-zen-bar-hint">Esc or button to exit</span>
-          <button
-            type="button"
-            className="plan-zen-bar-exit"
-            onClick={() => setZen(false)}
-          >
+          <button type="button" className="plan-zen-bar-exit" onClick={() => setZen(false)}>
             <Minimize2 size={13} aria-hidden="true" />
             Exit zen
           </button>
@@ -1850,8 +1924,8 @@ export function PlanReview({
           <Save size={14} aria-hidden="true" />
           <span>
             <strong>Edits saved</strong> to this version. They are now the starting point the next
-            time you press Edit. Use <strong>Discard</strong> after re-entering edit to roll back
-            to the plan as it was before you started editing this version.
+            time you press Edit. Use <strong>Discard</strong> after re-entering edit to roll back to
+            the plan as it was before you started editing this version.
           </span>
           <button
             type="button"
@@ -1868,8 +1942,8 @@ export function PlanReview({
         <div className="plan-review-conflict-banner" role="alert">
           <MessageSquareWarning size={14} aria-hidden="true" />
           <span>
-            Agent submitted <strong>v{conflictVersion}</strong> while you have unsaved edits.
-            Keep your draft, or discard and load the new version.
+            Agent submitted <strong>v{conflictVersion}</strong> while you have unsaved edits. Keep
+            your draft, or discard and load the new version.
           </span>
           <button
             type="button"
@@ -1939,7 +2013,9 @@ export function PlanReview({
           } ${isReadOnly ? 'plan-content-read' : ''} ${zenActive ? 'plan-content-zen' : ''}`}
           style={
             isSplit
-              ? ({ '--plan-split-pct': `${splitRatio}%` } as React.CSSProperties)
+              ? ({
+                  '--plan-split-pct': `${splitRatio}%`,
+                } as React.CSSProperties)
               : undefined
           }
         >
@@ -2001,9 +2077,7 @@ export function PlanReview({
                       onClick={() => jumpToComment(c.id, c.lineNumber)}
                       title={c.body.slice(0, 200)}
                     >
-                      <span className="plan-comments-rail-line">
-                        {planCommentLineLabel(c)}
-                      </span>
+                      <span className="plan-comments-rail-line">{planCommentLineLabel(c)}</span>
                       <span className="plan-comments-rail-preview">
                         {c.sectionTitle ? `${c.sectionTitle} · ` : ''}
                         {c.body.replace(/\s+/g, ' ').slice(0, 80)}
@@ -2082,8 +2156,8 @@ function buildPlanCSS(tabSize: number, fontSize: number, fontFamily: string): st
       --diffs-tab-size: ${tabSize} !important;
       --diffs-font-family: ${fontFamily} !important;
       --diffs-font-size: ${fontSize}px !important;
-      --diffs-border: var(--border-normal) !important;
-      --diffs-bg: var(--bg-secondary) !important;
+      --diffs-border: var(--gl-rule) !important;
+      --diffs-bg: var(--gl-canvas) !important;
       --diffs-line-height: ${Math.round(fontSize * 1.7)}px !important;
     }
     [data-column-number], [data-line], [data-line] * {
@@ -2093,42 +2167,30 @@ function buildPlanCSS(tabSize: number, fontSize: number, fontFamily: string): st
       font-feature-settings: "liga" on, "calt" on !important;
     }
     [data-column-number] {
-      color: var(--text-muted) !important;
-      opacity: 0.65 !important;
+      color: var(--gl-gutter) !important;
+      opacity: 1 !important;
       user-select: none !important;
       padding-right: 12px !important;
     }
     [data-line]:hover [data-column-number] {
       opacity: 1 !important;
-      color: var(--primary) !important;
+      color: var(--gl-accent) !important;
+    }
+    [data-line][data-line-type="addition"] {
+      background-color: var(--gl-added-surface) !important;
+      box-shadow: inset 2px 0 var(--gl-positive) !important;
+    }
+    [data-line][data-line-type="deletion"] {
+      background-color: var(--gl-removed-surface) !important;
+      box-shadow: inset 2px 0 var(--gl-negative) !important;
     }
     [data-line].selected-line {
-      background-color: var(--accent-subtle) !important;
+      outline: 1px solid var(--gl-focus) !important;
+      outline-offset: -1px !important;
     }
-    .comment-bubble-canvas {
-      width: calc(100% - 40px) !important;
-      max-width: min(720px, calc(100% - 40px)) !important;
-      margin: 14px 20px !important;
-      min-width: 0 !important;
-      box-sizing: border-box !important;
+    [data-line].selected-line:not([data-line-type="addition"]):not([data-line-type="deletion"]) {
+      background-color: var(--gl-selected) !important;
     }
-    .comment-replies {
-      min-width: 0 !important;
-    }
-    .comment-node {
-      min-width: 0 !important;
-    }
-    .comment-content-col {
-      min-width: 0 !important;
-    }
-    .comment-node-header {
-      flex-wrap: wrap !important;
-      min-width: 0 !important;
-    }
-    .comment-node-body {
-      word-break: break-word !important;
-      overflow-wrap: break-word !important;
-      min-width: 0 !important;
-    }
+    ${EMBEDDED_COMMENT_STYLES}
   `
 }

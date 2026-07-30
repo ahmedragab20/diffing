@@ -82,6 +82,7 @@ export class InMemoryCommentStore implements CommentStore {
 export class FileCommentStore implements CommentStore {
   private dirPath: string
   private filePath: string
+  private mutationQueue: Promise<void> = Promise.resolve()
 
   /**
    * @param storageDir Absolute directory to persist `comments.json` in.
@@ -119,79 +120,102 @@ export class FileCommentStore implements CommentStore {
     }
   }
 
+  /** Serialize each read-modify-write cycle so concurrent API calls cannot overwrite one another. */
+  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutationQueue.then(operation, operation)
+    this.mutationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
   async add(comment: ReviewComment): Promise<ReviewComment> {
-    const comments = await this.getAll()
-    comments.push(comment)
-    await this.save(comments)
-    return comment
+    return this.enqueueMutation(async () => {
+      const comments = await this.getAll()
+      comments.push(comment)
+      await this.save(comments)
+      return comment
+    })
   }
 
   async update(id: string, fields: { body?: string; status?: ReviewComment['status'] }): Promise<ReviewComment | null> {
-    const comments = await this.getAll()
-    const index = comments.findIndex((c) => c.id === id)
-    if (index === -1) return null
-    const comment = comments[index]
-    if (fields.body !== undefined) comment.body = fields.body
-    if (fields.status !== undefined) comment.status = fields.status
-    await this.save(comments)
-    return comment
+    return this.enqueueMutation(async () => {
+      const comments = await this.getAll()
+      const index = comments.findIndex((c) => c.id === id)
+      if (index === -1) return null
+      const comment = comments[index]
+      if (fields.body !== undefined) comment.body = fields.body
+      if (fields.status !== undefined) comment.status = fields.status
+      await this.save(comments)
+      return comment
+    })
   }
 
   async resolveAllOpen(): Promise<number> {
-    const comments = await this.getAll()
-    let n = 0
-    for (const c of comments) {
-      if (c.status === 'open') {
-        c.status = 'resolved'
-        n++
+    return this.enqueueMutation(async () => {
+      const comments = await this.getAll()
+      let n = 0
+      for (const c of comments) {
+        if (c.status === 'open') {
+          c.status = 'resolved'
+          n++
+        }
       }
-    }
-    if (n > 0) await this.save(comments)
-    return n
+      if (n > 0) await this.save(comments)
+      return n
+    })
   }
 
   async remove(id: string): Promise<boolean> {
-    const comments = await this.getAll()
-    const index = comments.findIndex((c) => c.id === id)
-    if (index === -1) return false
-    comments.splice(index, 1)
-    await this.save(comments)
-    return true
+    return this.enqueueMutation(async () => {
+      const comments = await this.getAll()
+      const index = comments.findIndex((c) => c.id === id)
+      if (index === -1) return false
+      comments.splice(index, 1)
+      await this.save(comments)
+      return true
+    })
   }
 
   async addReply(commentId: string, reply: CommentReply): Promise<ReviewComment | null> {
-    const comments = await this.getAll()
-    const index = comments.findIndex((c) => c.id === commentId)
-    if (index === -1) return null
-    const comment = comments[index]
-    if (!comment.replies) comment.replies = []
-    comment.replies.push(reply)
-    await this.save(comments)
-    return comment
+    return this.enqueueMutation(async () => {
+      const comments = await this.getAll()
+      const index = comments.findIndex((c) => c.id === commentId)
+      if (index === -1) return null
+      const comment = comments[index]
+      if (!comment.replies) comment.replies = []
+      comment.replies.push(reply)
+      await this.save(comments)
+      return comment
+    })
   }
 
   async removeReply(commentId: string, replyId: string): Promise<ReviewComment | null> {
-    const comments = await this.getAll()
-    const index = comments.findIndex((c) => c.id === commentId)
-    if (index === -1) return null
-    const comment = comments[index]
-    const replyIndex = comment.replies.findIndex((r) => r.id === replyId)
-    if (replyIndex === -1) return null
-    comment.replies.splice(replyIndex, 1)
-    await this.save(comments)
-    return comment
+    return this.enqueueMutation(async () => {
+      const comments = await this.getAll()
+      const index = comments.findIndex((c) => c.id === commentId)
+      if (index === -1) return null
+      const comment = comments[index]
+      const replyIndex = comment.replies.findIndex((r) => r.id === replyId)
+      if (replyIndex === -1) return null
+      comment.replies.splice(replyIndex, 1)
+      await this.save(comments)
+      return comment
+    })
   }
 
   async updateReply(commentId: string, replyId: string, body: string): Promise<ReviewComment | null> {
-    const comments = await this.getAll()
-    const index = comments.findIndex((c) => c.id === commentId)
-    if (index === -1) return null
-    const comment = comments[index]
-    const reply = comment.replies.find((r) => r.id === replyId)
-    if (!reply) return null
-    reply.body = body
-    await this.save(comments)
-    return comment
+    return this.enqueueMutation(async () => {
+      const comments = await this.getAll()
+      const index = comments.findIndex((c) => c.id === commentId)
+      if (index === -1) return null
+      const comment = comments[index]
+      const reply = comment.replies.find((r) => r.id === replyId)
+      if (!reply) return null
+      reply.body = body
+      await this.save(comments)
+      return comment
+    })
   }
 }
-

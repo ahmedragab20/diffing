@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { MessageCircle, AlertTriangle, CheckCircle2, CornerUpLeft, Pencil, RotateCcw, Trash2 } from 'lucide-react'
 import type { PrExistingComment, PrExistingReply } from '../../lib/pr-session'
 import { Markdown } from './Markdown'
+import { ConfirmDialog } from '../primitives/ConfirmDialog'
 
 interface ExistingPrCommentBubbleProps {
   comment: PrExistingComment
@@ -26,6 +27,7 @@ export function ExistingPrCommentBubble({ comment, lineContent, onReply, onEdit,
   const [editing, setEditing] = useState(false)
   const [editBody, setEditBody] = useState(comment.body)
   const [busy, setBusy] = useState(false)
+  const [deleteConfirming, setDeleteConfirming] = useState(false)
 
   useEffect(() => {
     if (!editing) setEditBody(comment.body)
@@ -148,8 +150,8 @@ export function ExistingPrCommentBubble({ comment, lineContent, onReply, onEdit,
               className="file-diff-icon-btn danger"
               disabled={busy}
               onClick={() => {
-                if (!window.confirm('Delete this published comment from GitHub?')) return
-                void run(() => onDelete(comment.id)).catch(() => undefined)
+                setError(null)
+                setDeleteConfirming(true)
               }}
               title="Delete from GitHub"
               aria-label="Delete GitHub comment"
@@ -259,6 +261,30 @@ export function ExistingPrCommentBubble({ comment, lineContent, onReply, onEdit,
         </div>
       )}
       {error && !replying && <p className="pr-existing-reply-error" role="alert">{error}</p>}
+      <ConfirmDialog
+        open={deleteConfirming}
+        title="Delete published GitHub comment?"
+        description="This removes the comment from GitHub for everyone and cannot be undone."
+        detail={comment.body}
+        confirmLabel="Delete comment"
+        busyLabel="Deleting…"
+        variant="danger"
+        busy={busy}
+        error={error}
+        onConfirm={async () => {
+          if (!onDelete) return
+          try {
+            await run(() => onDelete(comment.id))
+            setDeleteConfirming(false)
+          } catch {
+            // Keep the dialog open with the rendered GitHub error.
+          }
+        }}
+        onCancel={() => {
+          setDeleteConfirming(false)
+          setError(null)
+        }}
+      />
     </div>
   )
 }
@@ -285,6 +311,7 @@ function ExistingReplyRow({
   const [body, setBody] = useState(reply.body)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [deleteConfirming, setDeleteConfirming] = useState(false)
 
   useEffect(() => {
     if (!editing) setBody(reply.body)
@@ -305,13 +332,15 @@ function ExistingReplyRow({
   }
 
   const remove = async () => {
-    if (!onDelete || !window.confirm('Delete this published reply from GitHub?')) return
+    if (!onDelete) return
     setBusy(true)
     setError(null)
     try {
       await onDelete(reply.id)
+      setDeleteConfirming(false)
     } catch (err: any) {
       setError(err?.message ?? 'Failed to delete reply')
+    } finally {
       setBusy(false)
     }
   }
@@ -323,7 +352,7 @@ function ExistingReplyRow({
         <span className="pr-existing-bubble-date">{new Date(reply.createdAt).toLocaleString()}</span>
         <span className="pr-existing-bubble-actions">
           {onEdit && reply.viewerDidAuthor !== false && <button type="button" className="file-diff-icon-btn" disabled={busy} onClick={() => setEditing(true)} aria-label="Edit GitHub reply"><Pencil size={11} /></button>}
-          {onDelete && reply.viewerDidAuthor !== false && <button type="button" className="file-diff-icon-btn danger" disabled={busy} onClick={() => { void remove() }} aria-label="Delete GitHub reply"><Trash2 size={11} /></button>}
+          {onDelete && reply.viewerDidAuthor !== false && <button type="button" className="file-diff-icon-btn danger" disabled={busy} onClick={() => { setError(null); setDeleteConfirming(true) }} aria-label="Delete GitHub reply"><Trash2 size={11} /></button>}
         </span>
       </div>
       {editing ? (
@@ -336,6 +365,22 @@ function ExistingReplyRow({
         </div>
       ) : <p>{reply.body}</p>}
       {error && <p className="pr-existing-reply-error" role="alert">{error}</p>}
+      <ConfirmDialog
+        open={deleteConfirming}
+        title="Delete published GitHub reply?"
+        description="This removes the reply from GitHub for everyone and cannot be undone."
+        detail={reply.body}
+        confirmLabel="Delete reply"
+        busyLabel="Deleting…"
+        variant="danger"
+        busy={busy}
+        error={error}
+        onConfirm={remove}
+        onCancel={() => {
+          setDeleteConfirming(false)
+          setError(null)
+        }}
+      />
     </li>
   )
 }

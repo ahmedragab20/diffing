@@ -102,6 +102,20 @@ for (const suite of suites) {
         const all = await store.getAll()
         expect(all).toHaveLength(2)
       })
+
+      it('preserves every concurrent addition', async () => {
+        const comments = Array.from({ length: 20 }, (_, index) =>
+          makeComment({ id: `c${index}`, lineNumber: index + 1 }),
+        )
+
+        await Promise.all(comments.map((comment) => store.add(comment)))
+
+        const all = await store.getAll()
+        expect(all).toHaveLength(comments.length)
+        expect(new Set(all.map((comment) => comment.id))).toEqual(
+          new Set(comments.map((comment) => comment.id)),
+        )
+      })
     })
 
     describe('update', () => {

@@ -1,25 +1,25 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-vi.mock('../hooks/useHaptics', () => ({
+vi.mock('../../hooks/useHaptics', () => ({
   useFeedback: () => ({ haptic: vi.fn(), sound: vi.fn() }),
 }))
 
 const { mockUpdateSettings } = vi.hoisted(() => ({ mockUpdateSettings: vi.fn() }))
-vi.mock('../hooks/useSettings', () => ({
+vi.mock('../../hooks/useSettings', () => ({
   useSettings: () => ({ settings: { savedReplies: [] }, updateSettings: mockUpdateSettings }),
 }))
 
-vi.mock('../drafts', () => ({
+vi.mock('../../drafts', () => ({
   getDraft: () => null,
   setDraft: vi.fn(),
   clearDraft: vi.fn(),
 }))
 
-vi.mock('./Markdown', () => ({
+vi.mock('../Markdown', () => ({
   Markdown: ({ content }: { content: string }) => <div data-testid="md">{content}</div>,
 }))
 
@@ -74,12 +74,40 @@ describe('CommentForm — @-mention dropdown offset parent', () => {
     expect(dropdown).not.toBeNull()
     expect(dropdown.querySelectorAll('[role="option"]').length).toBeGreaterThan(0)
 
-    // The dropdown's DOM parent must be the position:relative wrapper that holds
-    // ONLY the textarea + dropdown — NOT the suggest-row. This is the structural
-    // guarantee that decouples the dropdown's anchor from the toolbar reflow.
+    // The dropdown's DOM parent must be the dedicated positioning wrapper that
+    // holds ONLY the textarea + dropdown — NOT the suggest-row. CSS owns the
+    // positioning; this test owns the structural contract.
     const offsetWrapper = dropdown.parentElement as HTMLElement
-    expect(getComputedStyle(offsetWrapper).position).toBe('relative')
+    expect(offsetWrapper.classList.contains('comment-form-editor')).toBe(true)
     expect(offsetWrapper.contains(suggestRow)).toBe(false)
     expect(offsetWrapper.querySelector('textarea')).not.toBeNull()
+  })
+
+  it('uses the design-system input dialog when saving a reply template', async () => {
+    const user = userEvent.setup()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CommentForm showSeverity={false} onSubmit={vi.fn()} onCancel={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
+    await user.type(screen.getByLabelText('Comment body'), 'Please add regression coverage')
+    await user.click(screen.getByRole('button', { name: 'Save template' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Save reply template' })
+    expect(dialog).toBeInTheDocument()
+    const title = within(dialog).getByRole('textbox', { name: 'Template name' })
+    await user.clear(title)
+    await user.type(title, 'Regression coverage')
+    await user.click(within(dialog).getByRole('button', { name: 'Save template' }))
+
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      savedReplies: [
+        expect.objectContaining({
+          title: 'Regression coverage',
+          body: 'Please add regression coverage',
+        }),
+      ],
+    })
   })
 })

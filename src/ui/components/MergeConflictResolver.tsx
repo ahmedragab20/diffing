@@ -199,6 +199,8 @@ export const MergeConflictResolver = memo(function MergeConflictResolver({
               --diffs-tab-size: ${tabSize} !important;
               --diffs-font-family: ${monoFontFamily} !important;
               --diffs-font-size: ${fontSize}px !important;
+              --diffs-border: var(--gl-rule) !important;
+              --diffs-bg: var(--gl-canvas) !important;
               --diffs-line-height: ${Math.round(fontSize * 1.7)}px !important;
             }
             [data-column-number], [data-line], [data-line] * {
@@ -206,6 +208,10 @@ export const MergeConflictResolver = memo(function MergeConflictResolver({
               font-size: ${fontSize}px !important;
               font-variant-ligatures: common-ligatures !important;
               font-feature-settings: "liga" on, "calt" on !important;
+            }
+            [data-column-number] {
+              color: var(--gl-gutter) !important;
+              opacity: 1 !important;
             }
           `,
         }}

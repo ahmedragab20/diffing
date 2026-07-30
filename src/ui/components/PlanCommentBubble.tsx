@@ -29,13 +29,13 @@ interface PlanCommentBubbleProps {
 function AvatarIcon({ role, size = 16 }: { role: 'user' | 'agent'; size?: number }) {
   if (role === 'agent') {
     return (
-      <div className="comment-avatar-circle comment-avatar-agent" style={{ width: `${size * 2}px`, height: `${size * 2}px` }}>
+      <div className={`comment-avatar-circle comment-avatar-agent comment-avatar-size-${size}`}>
         <Bot size={size} aria-hidden="true" />
       </div>
     )
   }
   return (
-    <div className="comment-avatar-circle comment-avatar-user" style={{ width: `${size * 2}px`, height: `${size * 2}px` }}>
+    <div className={`comment-avatar-circle comment-avatar-user comment-avatar-size-${size}`}>
       <User size={size} aria-hidden="true" />
     </div>
   )
@@ -68,40 +68,26 @@ export function PlanCommentBubble({
   const [editingReplyId, setEditingReplyId] = useState<string | null>(null)
 
   const deleteConfirmControls = (
-    <div className="comment-delete-confirm" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+    <div className="comment-delete-confirm">
       <button
         type="button"
-        className="comment-node-btn comment-node-btn-delete"
+        className="comment-node-btn comment-node-btn-delete comment-delete-confirm-yes"
         onClick={() => {
           setDeleteConfirming(false)
           onDelete()
         }}
         title="Confirm delete"
         aria-label="Confirm delete comment"
-        style={{
-          color: 'var(--danger)',
-          background: 'var(--feedback-danger-bg)',
-          fontWeight: 600,
-          fontSize: '11px',
-          border: '1px solid var(--feedback-danger-border)',
-          padding: '2px 6px',
-          width: 'auto',
-          height: 'auto',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '2px',
-        }}
       >
         <AlertTriangle size={11} />
         Delete?
       </button>
       <button
         type="button"
-        className="comment-node-btn"
+        className="comment-node-btn comment-delete-confirm-cancel"
         onClick={() => setDeleteConfirming(false)}
         title="Cancel delete"
         aria-label="Cancel delete"
-        style={{ fontSize: '11px', padding: '2px 6px', width: 'auto', height: 'auto' }}
       >
         Cancel
       </button>
@@ -123,16 +109,13 @@ export function PlanCommentBubble({
   const replyCount = comment.replies?.length ?? 0
 
   const contextSource =
-    comment.lineContent &&
-    comment.lineContent.trim() !== comment.selectedQuote?.trim()
+    comment.lineContent && comment.lineContent.trim() !== comment.selectedQuote?.trim()
       ? comment.lineContent
       : ''
   const hasContextPreview = !!(comment.selectedQuote || contextSource)
   const contextLineCount = Math.max(
     1,
-    (contextSource || comment.selectedQuote || '')
-      .split('\n')
-      .filter((l) => l.length > 0).length,
+    (contextSource || comment.selectedQuote || '').split('\n').filter((l) => l.length > 0).length,
   )
   // Multi-line source previews start collapsed so the card stays compact.
   const [contextOpen, setContextOpen] = useState(contextLineCount <= 1)
@@ -178,13 +161,15 @@ export function PlanCommentBubble({
         </button>
         <div className="comment-collapsed-main">
           {isResolved ? (
-            <CheckCircle2 size={14} className="comment-collapsed-resolved-icon" aria-hidden="true" />
+            <CheckCircle2
+              size={14}
+              className="comment-collapsed-resolved-icon"
+              aria-hidden="true"
+            />
           ) : (
             <AvatarIcon role="user" size={11} />
           )}
-          <span className="comment-collapsed-label">
-            {isResolved ? 'Resolved' : 'User'}
-          </span>
+          <span className="comment-collapsed-label">{isResolved ? 'Resolved' : 'User'}</span>
           {locationChips}
           <span className="comment-collapsed-preview" title={comment.body}>
             {bodyPreview}
@@ -244,12 +229,12 @@ export function PlanCommentBubble({
             </button>
             <span className="comment-node-author">User</span>
             <span className="comment-node-badge comment-node-badge-user">User</span>
-            <span className="comment-node-time" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span className="comment-node-time comment-node-meta">
               {timeAgo(comment.createdAt)}
               {locationChips}
             </span>
             {isResolved && (
-              <span className="comment-canvas-resolved-banner" style={{ marginLeft: '8px' }}>
+              <span className="comment-canvas-resolved-banner comment-resolved-inline">
                 <CheckCircle2 size={13} />
                 Resolved
               </span>
@@ -326,7 +311,7 @@ export function PlanCommentBubble({
           )}
 
           {isEditing ? (
-            <div style={{ marginTop: '8px' }}>
+            <div className="comment-edit-form-wrap">
               <CommentForm
                 draftKey={`plan-edit:${comment.id}`}
                 initialBody={comment.body}
@@ -369,13 +354,13 @@ export function PlanCommentBubble({
                 <div className="comment-content-col">
                   <div className="comment-node-header">
                     <span className="comment-node-author">{isAgent ? 'Agent' : 'User'}</span>
-                    <span className={`comment-node-badge ${isAgent ? 'comment-node-badge-agent' : 'comment-node-badge-user'}`}>
+                    <span
+                      className={`comment-node-badge ${isAgent ? 'comment-node-badge-agent' : 'comment-node-badge-user'}`}
+                    >
                       {isAgent ? 'Agent' : 'User'}
                     </span>
                     {isAgent && reply.model && (
-                      <span style={{ fontSize: '10px', fontWeight: 600, padding: '1px 5px', borderRadius: '4px', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
-                        {reply.model}
-                      </span>
+                      <span className="comment-model-chip">{reply.model}</span>
                     )}
                     <span className="comment-node-time">{timeAgo(reply.createdAt)}</span>
                     <div className="comment-node-actions">
@@ -391,40 +376,26 @@ export function PlanCommentBubble({
                         </button>
                       )}
                       {deleteReplyId === reply.id ? (
-                        <div className="comment-delete-confirm" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <div className="comment-delete-confirm">
                           <button
                             type="button"
-                            className="comment-node-btn comment-node-btn-delete"
+                            className="comment-node-btn comment-node-btn-delete comment-delete-confirm-yes"
                             onClick={() => {
                               setDeleteReplyId(null)
                               onDeleteReply(reply.id)
                             }}
                             title="Confirm delete reply"
                             aria-label="Confirm delete reply"
-                            style={{
-                              color: 'var(--danger)',
-                              background: 'var(--feedback-danger-bg)',
-                              fontWeight: 600,
-                              fontSize: '11px',
-                              border: '1px solid var(--feedback-danger-border)',
-                              padding: '2px 6px',
-                              width: 'auto',
-                              height: 'auto',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '2px',
-                            }}
                           >
                             <AlertTriangle size={11} />
                             Delete?
                           </button>
                           <button
                             type="button"
-                            className="comment-node-btn"
+                            className="comment-node-btn comment-delete-confirm-cancel"
                             onClick={() => setDeleteReplyId(null)}
                             title="Cancel delete"
                             aria-label="Cancel delete reply"
-                            style={{ fontSize: '11px', padding: '2px 6px', width: 'auto', height: 'auto' }}
                           >
                             Cancel
                           </button>
@@ -443,7 +414,7 @@ export function PlanCommentBubble({
                     </div>
                   </div>
                   {isEditingThis ? (
-                    <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginTop: '6px' }}>
+                    <div className="comment-reply-editor">
                       <CommentForm
                         draftKey={`plan-reply-edit:${comment.id}:${reply.id}`}
                         initialBody={reply.body}
@@ -466,29 +437,29 @@ export function PlanCommentBubble({
 
       <div className="comment-canvas-footer">
         {!isReplying && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <button onClick={() => setIsReplying(true)} className="comment-reply-trigger" style={{ width: '100%', maxWidth: '320px' }}>
+          <div className="comment-canvas-footer-row">
+            <button onClick={() => setIsReplying(true)} className="comment-reply-trigger">
               <Reply size={14} aria-hidden="true" />
               Reply...
             </button>
             {isResolved ? (
-              <div style={{ display: 'flex', gap: '6px', marginLeft: '12px' }}>
-                <button className="btn btn-secondary btn-sm" onClick={() => setCollapsed(true)} style={{ fontSize: '12px', padding: '4px 10px' }}>
+              <div className="comment-canvas-footer-actions">
+                <button className="btn btn-secondary btn-sm" onClick={() => setCollapsed(true)}>
                   Hide
                 </button>
-                <button className="btn btn-secondary btn-sm" onClick={onUnresolve} style={{ fontSize: '12px', padding: '4px 10px' }}>
+                <button className="btn btn-secondary btn-sm" onClick={onUnresolve}>
                   Unresolve
                 </button>
               </div>
             ) : (
-              <button className="btn btn-secondary btn-sm" onClick={onResolve} style={{ fontSize: '12px', padding: '4px 10px', marginLeft: '12px' }}>
+              <button className="btn btn-secondary btn-sm" onClick={onResolve}>
                 Resolve
               </button>
             )}
           </div>
         )}
         {isReplying && (
-          <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginTop: '4px' }}>
+          <div className="comment-reply-composer">
             <CommentForm
               draftKey={`plan-reply:${comment.id}`}
               onSubmit={(body) => {

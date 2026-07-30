@@ -10,6 +10,7 @@ import { searchFiles, searchContent, searchSymbols, searchAll, getSearchStatus, 
 import { loadSettings, saveSettings } from './lib/settings.js'
 import { InMemoryCommentStore, FileCommentStore } from './lib/comments.js'
 import type { CommentStore } from './lib/comments.js'
+import { isReviewCommentSide } from './lib/types.js'
 import type { ReviewComment, ReviewDecision, ReviewMode } from './lib/types.js'
 import { FilePlanStore } from './lib/plans.js'
 import type { PlanStore } from './lib/plans.js'
@@ -877,6 +878,9 @@ export function createApp(
 
   app.post('/api/comments', async (c) => {
     const body = await c.req.json()
+    if (!isReviewCommentSide(body.side)) {
+      return c.json({ error: 'side must be additions or deletions' }, 400)
+    }
     const severityRaw = body.severity
     const severity =
       severityRaw === 'blocking' ||

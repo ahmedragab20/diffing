@@ -12,6 +12,10 @@ interface ModalProps {
   initialFocus?: React.RefObject<HTMLElement | null>
   /** Key handler on the popup (e.g. command-palette arrow / enter nav). */
   onKeyDown?: React.KeyboardEventHandler<HTMLDivElement>
+  /** Use alertdialog for decisions that need an explicit acknowledgement. */
+  role?: 'dialog' | 'alertdialog'
+  /** Announces an in-progress operation without replacing the dialog content. */
+  ariaBusy?: boolean
   children: ReactNode
 }
 
@@ -21,7 +25,17 @@ interface ModalProps {
  * body markup inside. This replaces the hand-rolled overlay + stopPropagation +
  * manual Escape listener pattern that each modal used to duplicate.
  */
-export function Modal({ open, onClose, className, ariaLabel, initialFocus, onKeyDown, children }: ModalProps) {
+export function Modal({
+  open,
+  onClose,
+  className,
+  ariaLabel,
+  initialFocus,
+  onKeyDown,
+  role = 'dialog',
+  ariaBusy,
+  children,
+}: ModalProps) {
   return (
     <Dialog.Root
       open={open}
@@ -36,6 +50,8 @@ export function Modal({ open, onClose, className, ariaLabel, initialFocus, onKey
           aria-label={ariaLabel}
           initialFocus={initialFocus}
           onKeyDown={onKeyDown}
+          role={role}
+          aria-busy={ariaBusy || undefined}
         >
           {children}
         </Dialog.Popup>

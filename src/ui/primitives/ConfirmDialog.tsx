@@ -1,4 +1,5 @@
-import { AlertTriangle } from 'lucide-react'
+import { useRef, type ReactNode } from 'react'
+import { AlertTriangle, Loader2 } from 'lucide-react'
 import { Modal } from './Modal'
 
 export interface ConfirmDialogProps {
@@ -9,12 +10,16 @@ export interface ConfirmDialogProps {
   detail?: string
   confirmLabel?: string
   cancelLabel?: string
+  busyLabel?: string
   /**
    * Visual weight of the confirm action.
-   * `danger` for discard/delete, `primary` for generic continues.
+   * `danger` for discard/delete, `warning` for bypasses, `primary` otherwise.
    */
-  variant?: 'danger' | 'primary'
-  onConfirm: () => void
+  variant?: 'danger' | 'primary' | 'warning'
+  icon?: ReactNode
+  busy?: boolean
+  error?: string | null
+  onConfirm: () => void | Promise<void>
   onCancel: () => void
 }
 
@@ -29,15 +34,31 @@ export function ConfirmDialog({
   detail,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
+  busyLabel = 'Working…',
   variant = 'danger',
+  icon,
+  busy = false,
+  error,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const cancelRef = useRef<HTMLButtonElement>(null)
+
   return (
-    <Modal open={open} onClose={onCancel} className="confirm-dialog" ariaLabel={title}>
+    <Modal
+      open={open}
+      onClose={() => {
+        if (!busy) onCancel()
+      }}
+      className="confirm-dialog"
+      ariaLabel={title}
+      initialFocus={cancelRef}
+      role="alertdialog"
+      ariaBusy={busy}
+    >
       <div className="confirm-dialog-header">
         <span className={`confirm-dialog-icon confirm-dialog-icon-${variant}`} aria-hidden="true">
-          <AlertTriangle size={18} />
+          {icon ?? <AlertTriangle size={18} />}
         </span>
         <h2 className="confirm-dialog-title">{title}</h2>
       </div>
@@ -47,17 +68,29 @@ export function ConfirmDialog({
           {detail.trim()}
         </blockquote>
       )}
+      {error && (
+        <p className="confirm-dialog-error" role="alert">
+          {error}
+        </p>
+      )}
       <div className="confirm-dialog-footer">
-        <button type="button" className="btn btn-sm confirm-dialog-cancel" onClick={onCancel}>
+        <button
+          ref={cancelRef}
+          type="button"
+          className="btn btn-sm confirm-dialog-cancel"
+          onClick={onCancel}
+          disabled={busy}
+        >
           {cancelLabel}
         </button>
         <button
           type="button"
           className={`btn btn-sm confirm-dialog-confirm confirm-dialog-confirm-${variant}`}
-          onClick={onConfirm}
-          autoFocus
+          onClick={() => void onConfirm()}
+          disabled={busy}
         >
-          {confirmLabel}
+          {busy && <Loader2 size={13} className="spin" aria-hidden="true" />}
+          {busy ? busyLabel : confirmLabel}
         </button>
       </div>
     </Modal>

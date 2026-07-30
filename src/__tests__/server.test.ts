@@ -673,6 +673,17 @@ describe('server', () => {
         expect(body.replies).toEqual([])
       })
 
+      it('POST rejects an unsupported comment side without persisting it', async () => {
+        const res = await app.fetch(new Request('http://localhost/api/comments', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filePath: 'f.ts', side: 'right', lineNumber: 1, lineContent: 'x', body: 'nice' }),
+        }))
+
+        expect(res.status).toBe(400)
+        expect(await res.json()).toEqual({ error: 'side must be additions or deletions' })
+        expect(await (await app.fetch(new Request('http://localhost/api/comments'))).json()).toEqual([])
+      })
+
       it('PUT updates existing comment', async () => {
         const { createApp } = await import('../server.js')
         const s = new MockCommentStore()

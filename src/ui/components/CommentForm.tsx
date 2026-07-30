@@ -16,6 +16,7 @@ import { useFileMention } from '../hooks/useFileMention'
 import { FileMentionDropdown } from './FileMentionDropdown'
 import { useSettings, type SavedReply } from '../hooks/useSettings'
 import type { CommentSeverity } from '../../lib/types'
+import { InputDialog } from '../primitives/InputDialog'
 
 function preprocessMentions(content: string): string {
   return content.replace(/@([^\s@]+)/g, (_, path: string) => {
@@ -30,14 +31,24 @@ const SEVERITY_OPTIONS: {
   hint: string
   icon: ReactNode
 }[] = [
-  { value: 'none', label: 'None', hint: 'Untriaged', icon: <Minus size={13} /> },
+  {
+    value: 'none',
+    label: 'None',
+    hint: 'Untriaged',
+    icon: <Minus size={13} />,
+  },
   {
     value: 'blocking',
     label: 'Blocking',
     hint: 'Must fix before merge',
     icon: <AlertOctagon size={13} />,
   },
-  { value: 'nit', label: 'Nit', hint: 'Optional polish', icon: <CircleDot size={13} /> },
+  {
+    value: 'nit',
+    label: 'Nit',
+    hint: 'Optional polish',
+    icon: <CircleDot size={13} />,
+  },
   {
     value: 'question',
     label: 'Question',
@@ -76,9 +87,7 @@ function SeveritySelect({
             {current.icon}
           </span>
           <BaseSelect.Value>
-            {(val: string) =>
-              SEVERITY_OPTIONS.find((o) => o.value === val)?.label ?? val
-            }
+            {(val: string) => SEVERITY_OPTIONS.find((o) => o.value === val)?.label ?? val}
           </BaseSelect.Value>
         </span>
         <BaseSelect.Icon className="ui-select-icon">
@@ -93,7 +102,10 @@ function SeveritySelect({
           side="top"
           alignItemWithTrigger={false}
         >
-          <BaseSelect.Popup className="ui-select-popup comment-severity-popup" aria-label="Severity">
+          <BaseSelect.Popup
+            className="ui-select-popup comment-severity-popup"
+            aria-label="Severity"
+          >
             {SEVERITY_OPTIONS.map((o) => (
               <BaseSelect.Item
                 key={o.value}
@@ -101,7 +113,11 @@ function SeveritySelect({
                 className={`ui-select-item comment-severity-item comment-severity-item-${o.value}`}
               >
                 <span className="comment-severity-item-main">
-                  <span className="comment-severity-icon" data-severity={o.value} aria-hidden="true">
+                  <span
+                    className="comment-severity-icon"
+                    data-severity={o.value}
+                    aria-hidden="true"
+                  >
                     {o.icon}
                   </span>
                   <span className="comment-severity-item-text">
@@ -184,6 +200,7 @@ export function CommentForm({
   const [severity, setSeverity] = useState<CommentSeverity>('none')
   const [activeTab, setActiveTab] = useState<'write' | 'preview'>('write')
   const [showSavedReplies, setShowSavedReplies] = useState(false)
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
 
@@ -197,15 +214,16 @@ export function CommentForm({
   }
 
   const saveCurrentAsReply = () => {
+    if (!body.trim()) return
+    setSaveTemplateOpen(true)
+  }
+
+  const saveReplyTemplate = (title: string) => {
     const trimmed = body.trim()
     if (!trimmed) return
-    const title = window.prompt('Template title', trimmed.slice(0, 40))?.trim()
-    if (!title) return
-    const next: SavedReply[] = [
-      ...savedReplies,
-      { id: crypto.randomUUID(), title, body: trimmed },
-    ]
+    const next: SavedReply[] = [...savedReplies, { id: crypto.randomUUID(), title, body: trimmed }]
     updateSettings({ savedReplies: next })
+    setSaveTemplateOpen(false)
   }
 
   useEffect(() => {
@@ -297,7 +315,10 @@ export function CommentForm({
     try {
       const form = new FormData()
       form.append('file', imageFile, imageFile.name || `pasted-${token}.png`)
-      const res = await fetch('/api/attachments', { method: 'POST', body: form })
+      const res = await fetch('/api/attachments', {
+        method: 'POST',
+        body: form,
+      })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = (await res.json()) as { url?: string; error?: string }
       if (!data.url) throw new Error(data.error || 'Upload failed')
@@ -322,7 +343,7 @@ export function CommentForm({
   }
 
   return (
-    <div className="comment-form" style={{ padding: '16px' }} role="form" aria-label="Comment form">
+    <div className="comment-form comment-form-sheet" role="form" aria-label="Comment form">
       {rangeEditable && range ? (
         <div className="comment-form-range" aria-live="polite">
           <span className="comment-form-range-prefix">Commenting on</span>
@@ -397,18 +418,19 @@ export function CommentForm({
           Commenting on <strong>{lineLabel}</strong>
         </div>
       ) : null}
-      <div
-        className="comment-form-tabs"
-        role="tablist"
-        aria-label="Comment form mode"
-      >
+      <div className="comment-form-tabs" role="tablist" aria-label="Comment form mode">
         <button
           type="button"
           role="tab"
           aria-selected={activeTab === 'write'}
           aria-controls="comment-write-panel"
           onClick={() => setActiveTab('write')}
-          onKeyDown={(e) => { if (e.key === 'ArrowRight') { e.preventDefault(); setActiveTab('preview') } }}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowRight') {
+              e.preventDefault()
+              setActiveTab('preview')
+            }
+          }}
           className={`comment-form-tab-btn ${activeTab === 'write' ? 'comment-form-tab-btn-active' : 'comment-form-tab-btn-inactive'}`}
         >
           Write
@@ -419,7 +441,12 @@ export function CommentForm({
           aria-selected={activeTab === 'preview'}
           aria-controls="comment-preview-panel"
           onClick={() => setActiveTab('preview')}
-          onKeyDown={(e) => { if (e.key === 'ArrowLeft') { e.preventDefault(); setActiveTab('write') } }}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowLeft') {
+              e.preventDefault()
+              setActiveTab('write')
+            }
+          }}
           className={`comment-form-tab-btn ${activeTab === 'preview' ? 'comment-form-tab-btn-active' : 'comment-form-tab-btn-inactive'}`}
         >
           Preview
@@ -486,11 +513,11 @@ export function CommentForm({
               </button>
             ) : null}
           </div>
-          <div style={{ position: 'relative' }}>
+          <div className="comment-form-editor">
             <textarea
               id="comment-write-panel"
               ref={(el) => {
-                (textareaRef as React.MutableRefObject<HTMLTextAreaElement | null>).current = el
+                ;(textareaRef as React.MutableRefObject<HTMLTextAreaElement | null>).current = el
                 mention.setTextareaRef(el)
               }}
               value={body}
@@ -500,7 +527,7 @@ export function CommentForm({
               placeholder="Leave a review comment (supports Markdown and Pasting Clipboard Images)..."
               rows={4}
               aria-label="Comment body"
-              style={{ minHeight: '100px' }}
+              className="comment-form-textarea"
             />
             {mention.isOpen && (
               <FileMentionDropdown
@@ -527,7 +554,7 @@ export function CommentForm({
               setActiveTab('write')
             }
           }}
-          style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}
+          className="comment-preview-panel"
         >
           {(() => {
             const suggestionMatch = body.match(/```suggestion\n([\s\S]*?)```/)
@@ -538,27 +565,11 @@ export function CommentForm({
             if (!hasOtherContent) return null
 
             return (
-              <div 
-                className="comment-preview markdown-body" 
-                style={{ 
-                  minHeight: '100px',
-                  padding: '12px 16px',
-                  border: '1px solid var(--border-normal)',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--bg-primary)',
-                  fontSize: '14px',
-                  lineHeight: 1.6,
-                  color: 'var(--text-primary)',
-                  overflowY: 'auto',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  overflowWrap: 'break-word'
-                }}
-              >
+              <div className="comment-preview markdown-body">
                 {body.trim() ? (
                   <Markdown content={preprocessMentions(body)} />
                 ) : (
-                  <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Nothing to preview</span>
+                  <span className="comment-preview-empty">Nothing to preview</span>
                 )}
               </div>
             )
@@ -570,58 +581,20 @@ export function CommentForm({
             if (!hasSuggestion) return null
 
             return (
-              <div 
-                className="suggestion-card" 
-                style={{
-                  border: '1px solid var(--border-normal)',
-                  borderRadius: 'var(--radius-md)',
-                  overflow: 'hidden',
-                  background: 'var(--bg-primary)',
-                  boxShadow: 'var(--shadow-sm)'
-                }}
-              >
-                <div 
-                  className="suggestion-header" 
-                  style={{
-                    padding: '8px 12px',
-                    background: 'var(--bg-secondary)',
-                    borderBottom: '1px solid var(--border-normal)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    fontSize: '12px',
-                    fontWeight: 600
-                  }}
-                >
-                  <span style={{ color: 'var(--text-secondary)' }}>Suggested Change Preview</span>
+              <div className="suggestion-card">
+                <div className="suggestion-header">
+                  <span className="suggestion-header-label">Suggested Change Preview</span>
                 </div>
-                 <div className="suggestion-diff" style={{ display: 'flex', flexDirection: 'column', fontSize: '12px', fontFamily: 'var(--font-mono)', overflowX: 'auto' }}>
+                <div className="suggestion-diff">
                   {lineContent && (
-                    <div 
-                      style={{ 
-                        display: 'flex', 
-                        padding: '8px 12px', 
-                        background: 'var(--feedback-danger-bg)', 
-                        borderBottom: '1px dashed var(--border-color)',
-                        color: 'var(--feedback-danger-text)',
-                        minWidth: 'max-content'
-                      }}
-                    >
-                      <span style={{ width: '20px', userSelect: 'none', opacity: 0.5 }}>-</span>
-                      <span style={{ whiteSpace: 'pre' }}>{lineContent}</span>
+                    <div className="suggestion-diff-line suggestion-diff-line-deletion">
+                      <span className="suggestion-diff-sign">-</span>
+                      <span className="suggestion-diff-code">{lineContent}</span>
                     </div>
                   )}
-                  <div 
-                    style={{ 
-                      display: 'flex', 
-                      padding: '8px 12px', 
-                      background: 'var(--feedback-success-bg)',
-                      color: 'var(--feedback-success-text)',
-                      minWidth: 'max-content'
-                    }}
-                  >
-                    <span style={{ width: '20px', userSelect: 'none', opacity: 0.5 }}>+</span>
-                    <span style={{ whiteSpace: 'pre' }}>{suggestionCode}</span>
+                  <div className="suggestion-diff-line suggestion-diff-line-addition">
+                    <span className="suggestion-diff-sign">+</span>
+                    <span className="suggestion-diff-code">{suggestionCode}</span>
                   </div>
                 </div>
               </div>
@@ -651,6 +624,18 @@ export function CommentForm({
           </button>
         </div>
       </div>
+      <InputDialog
+        open={saveTemplateOpen}
+        title="Save reply template"
+        description="Give this reusable review response a short, recognizable name."
+        label="Template name"
+        initialValue={body.trim().slice(0, 40)}
+        placeholder="Example: Add regression coverage"
+        confirmLabel="Save template"
+        maxLength={80}
+        onConfirm={saveReplyTemplate}
+        onCancel={() => setSaveTemplateOpen(false)}
+      />
     </div>
   )
 }

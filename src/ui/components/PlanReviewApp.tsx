@@ -18,7 +18,7 @@ import { useRoutePath, navigate } from '../router'
 import { SHIKI_THEME_MAP } from '../utils'
 import { HapticsProvider } from '../hooks/useHaptics'
 import { usePlanReviewKeymaps } from '../hooks/usePlanReviewKeymaps'
-import { getUiStateItem, setUiStateItem } from "../utils/uiState"
+import { getUiStateItem, setUiStateItem } from '../utils/uiState'
 import { PlanReview, type PlanViewMode } from './PlanReview'
 import { PLAN_UI, readBoolUi } from '../lib/planUiState'
 import { PlanList } from './PlanList'
@@ -32,8 +32,14 @@ import { SubmitPlanReviewPopover } from './SubmitPlanReviewPopover'
 import { VimStatusBar } from './VimStatusBar'
 import { ShortcutsHelpModal } from './ShortcutsHelpModal'
 
-const FONT_SIZE_OPTS = [11, 12, 13, 14, 15, 16].map((n) => ({ value: String(n), label: `${n}px` }))
-const TAB_SIZE_OPTS = [2, 4, 8].map((n) => ({ value: String(n), label: String(n) }))
+const FONT_SIZE_OPTS = [11, 12, 13, 14, 15, 16].map((n) => ({
+  value: String(n),
+  label: `${n}px`,
+}))
+const TAB_SIZE_OPTS = [2, 4, 8].map((n) => ({
+  value: String(n),
+  label: String(n),
+}))
 const HOVER_OPTS = [
   { value: 'both', label: 'Both' },
   { value: 'line', label: 'Line only' },
@@ -51,7 +57,17 @@ export function PlanReviewApp() {
   const poolManager = useWorkerPool()
   const { settings, loaded, updateSettings } = useSettings()
   useApplyFonts(loaded, settings.uiFont, settings.monoFont)
-  const { plans, getPlan, removePlan, agentActivity, clearAgentActivity, submitDecision, submitting, agentWaiting, isLoading } = usePlans()
+  const {
+    plans,
+    getPlan,
+    removePlan,
+    agentActivity,
+    clearAgentActivity,
+    submitDecision,
+    submitting,
+    agentWaiting,
+    isLoading,
+  } = usePlans()
   const path = useRoutePath()
   const [themeModalOpen, setThemeModalOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -67,7 +83,7 @@ export function PlanReviewApp() {
         return
       }
       // ⌘? / Ctrl+? (and ⌘Shift+/ ) — open shortcuts guide
-      if (e.key === '?' || (e.key === '/' && e.shiftKey) || e.code === 'Slash' && e.shiftKey) {
+      if (e.key === '?' || (e.key === '/' && e.shiftKey) || (e.code === 'Slash' && e.shiftKey)) {
         e.preventDefault()
         setShortcutsHelpOpen(true)
       }
@@ -189,20 +205,23 @@ export function PlanReviewApp() {
   useEffect(() => {
     const dark = shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine'
     const light = shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light'
-    preloadHighlighter({ themes: Array.from(new Set([dark, light])), langs: [] }).catch(() => {})
+    preloadHighlighter({
+      themes: Array.from(new Set([dark, light])),
+      langs: [],
+    }).catch(() => {})
   }, [shikiConfig])
 
   // Collapsible plans sidebar states matching App.tsx
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
-      const stored = getUiStateItem("diffing-sidebar-collapsed")
-      if (stored != null) return stored === "true"
+      const stored = getUiStateItem('diffing-sidebar-collapsed')
+      if (stored != null) return stored === 'true'
     } catch {}
     return typeof window !== 'undefined' && window.innerWidth <= 768
   })
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
-      const stored = getUiStateItem("diffing-sidebar-width")
+      const stored = getUiStateItem('diffing-sidebar-width')
       return stored ? Number(stored) : 320
     } catch {
       return 320
@@ -211,7 +230,7 @@ export function PlanReviewApp() {
 
   useEffect(() => {
     try {
-      setUiStateItem("diffing-sidebar-collapsed", String(sidebarCollapsed))
+      setUiStateItem('diffing-sidebar-collapsed', String(sidebarCollapsed))
     } catch {}
   }, [sidebarCollapsed])
 
@@ -241,24 +260,21 @@ export function PlanReviewApp() {
 
     if (guideEl) {
       guideEl.style.transform = `translateX(${sidebarLeft + startWidth}px)`
-      guideEl.classList.add("sidebar-resize-guide-active")
+      guideEl.classList.add('sidebar-resize-guide-active')
     }
 
     const handleMove = (ev: MouseEvent) => {
       const delta = ev.clientX - startX
-      latestWidth = Math.max(
-        SIDEBAR_MIN_WIDTH,
-        Math.min(SIDEBAR_MAX_WIDTH, startWidth + delta),
-      )
+      latestWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, startWidth + delta))
       if (!rafId) rafId = requestAnimationFrame(flush)
     }
 
     const handleUp = () => {
       if (rafId) cancelAnimationFrame(rafId)
-      if (guideEl) guideEl.classList.remove("sidebar-resize-guide-active")
+      if (guideEl) guideEl.classList.remove('sidebar-resize-guide-active')
       setSidebarWidth(latestWidth)
       try {
-        setUiStateItem("diffing-sidebar-width", String(latestWidth))
+        setUiStateItem('diffing-sidebar-width', String(latestWidth))
       } catch {}
       document.removeEventListener('mousemove', handleMove)
       document.removeEventListener('mouseup', handleUp)
@@ -274,7 +290,7 @@ export function PlanReviewApp() {
 
   // Vim keyboard shortcuts
   const toggleSidebar = useCallback(() => {
-    setSidebarCollapsed(c => !c)
+    setSidebarCollapsed((c) => !c)
   }, [])
 
   const toggleLineWrap = useCallback(() => {
@@ -299,23 +315,26 @@ export function PlanReviewApp() {
     updateSettings({ defaultTabSize: sizes[nextIndex] })
   }, [settings.defaultTabSize, updateSettings])
 
-  const navigatePlan = useCallback((direction: 'next' | 'prev') => {
-    if (plans.length === 0) return
-    const sorted = [...plans].sort((a, b) => b.createdAt - a.createdAt)
-    let nextIndex = 0
-    if (activePlan) {
-      const currentIndex = sorted.findIndex(p => p.id === activePlan.id)
-      if (currentIndex !== -1) {
-        if (direction === 'next') {
-          nextIndex = Math.min(currentIndex + 1, sorted.length - 1)
-        } else {
-          nextIndex = Math.max(currentIndex - 1, 0)
+  const navigatePlan = useCallback(
+    (direction: 'next' | 'prev') => {
+      if (plans.length === 0) return
+      const sorted = [...plans].sort((a, b) => b.createdAt - a.createdAt)
+      let nextIndex = 0
+      if (activePlan) {
+        const currentIndex = sorted.findIndex((p) => p.id === activePlan.id)
+        if (currentIndex !== -1) {
+          if (direction === 'next') {
+            nextIndex = Math.min(currentIndex + 1, sorted.length - 1)
+          } else {
+            nextIndex = Math.max(currentIndex - 1, 0)
+          }
         }
       }
-    }
-    const nextPlan = sorted[nextIndex]
-    navigate(`/plan/${nextPlan.id}`)
-  }, [plans, activePlan])
+      const nextPlan = sorted[nextIndex]
+      navigate(`/plan/${nextPlan.id}`)
+    },
+    [plans, activePlan],
+  )
 
   const planKeymapActions = useMemo(
     () => ({
@@ -356,14 +375,14 @@ export function PlanReviewApp() {
         className="app plan-app skeleton-app"
         style={
           {
-            "--sidebar-width": `${sidebarWidth}px`,
+            '--sidebar-width': `${sidebarWidth}px`,
           } as React.CSSProperties
         }
       >
         <header className="skeleton-toolbar">
-          <div className="skeleton-item skeleton-logo" style={{ width: '140px' }}></div>
-          <div className="skeleton-item skeleton-stats" style={{ width: '80px', marginLeft: '20px' }}></div>
-          <div className="skeleton-item skeleton-actions" style={{ width: '220px' }}></div>
+          <div className="skeleton-item skeleton-logo"></div>
+          <div className="skeleton-item skeleton-stats"></div>
+          <div className="skeleton-item skeleton-actions"></div>
         </header>
 
         <div className="app-body">
@@ -372,39 +391,33 @@ export function PlanReviewApp() {
           >
             {!sidebarCollapsed && (
               <>
-                <div className="skeleton-search" style={{ height: '32px', margin: '0 16px 16px 16px' }}></div>
+                <div className="skeleton-search"></div>
                 <div className="skeleton-tree-nodes">
                   {Array.from({ length: 4 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className="skeleton-tree-node"
-                      style={{ paddingLeft: '16px', height: '40px', borderBottom: '1px solid var(--border-weak)' }}
-                    >
-                      <div className="skeleton-node-icon" style={{ width: '20px', height: '20px', borderRadius: '50%' }}></div>
-                      <div className="skeleton-node-text" style={{ width: `${80 + ((i * 30) % 90)}px`, height: '14px' }}></div>
+                    <div key={i} className="skeleton-tree-node">
+                      <div className="skeleton-node-icon"></div>
+                      <div className="skeleton-node-text"></div>
                     </div>
                   ))}
                 </div>
               </>
             )}
           </aside>
-          {!sidebarCollapsed && (
-            <div className="sidebar-resize-handle" style={{ cursor: 'default' }} />
-          )}
+          {!sidebarCollapsed && <div className="sidebar-resize-handle skeleton-resize-handle" />}
 
           <main className="main plan-main skeleton-main">
-            <div className="file-diff-card skeleton-card" style={{ border: '1px solid var(--border-color)', borderRadius: '8px' }}>
-              <div className="skeleton-card-header" style={{ padding: '16px 20px' }}>
-                <div className="skeleton-card-title" style={{ width: '250px', height: '20px' }}></div>
-                <div className="skeleton-card-badge" style={{ width: '100px', height: '24px' }}></div>
+            <div className="file-diff-card skeleton-card">
+              <div className="skeleton-card-header">
+                <div className="skeleton-card-title"></div>
+                <div className="skeleton-card-badge"></div>
               </div>
-              <div className="skeleton-card-body" style={{ padding: '24px', background: 'var(--bg-secondary)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div className="skeleton-code-line" style={{ width: '90%', height: '16px' }}></div>
-                <div className="skeleton-code-line" style={{ width: '75%', height: '16px' }}></div>
-                <div className="skeleton-code-line" style={{ width: '85%', height: '16px' }}></div>
-                <div className="skeleton-code-line" style={{ width: '40%', height: '16px' }}></div>
-                <div className="skeleton-code-line" style={{ width: '60%', height: '16px' }}></div>
-                <div className="skeleton-code-line" style={{ width: '80%', height: '16px' }}></div>
+              <div className="skeleton-card-body">
+                <div className="skeleton-code-line"></div>
+                <div className="skeleton-code-line"></div>
+                <div className="skeleton-code-line"></div>
+                <div className="skeleton-code-line"></div>
+                <div className="skeleton-code-line"></div>
+                <div className="skeleton-code-line"></div>
               </div>
             </div>
           </main>
@@ -420,15 +433,11 @@ export function PlanReviewApp() {
         ref={appRef}
         style={
           {
-            "--sidebar-width": `${sidebarWidth}px`,
+            '--sidebar-width': `${sidebarWidth}px`,
           } as React.CSSProperties
         }
       >
-        <div
-          className="sidebar-resize-guide"
-          ref={sidebarGuideRef}
-          aria-hidden="true"
-        />
+        <div className="sidebar-resize-guide" ref={sidebarGuideRef} aria-hidden="true" />
 
         <div className="toolbar plan-app-toolbar">
           <div className="toolbar-left">
@@ -532,9 +541,8 @@ export function PlanReviewApp() {
                       setSettingsOpen(false)
                       setThemeModalOpen(true)
                     }}
-                    style={{ display: 'inline-flex', alignItems: 'center' }}
                   >
-                    <Palette size={14} style={{ marginRight: '4px' }} />
+                    <Palette size={14} className="settings-item-icon" />
                     <span>Switch Theme...</span>
                   </button>
                 </div>
@@ -637,7 +645,7 @@ export function PlanReviewApp() {
             ref={sidebarRef}
             className={`sidebar plan-sidebar ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}
           >
-            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <div className="plan-sidebar-content">
               <PlanList
                 plans={plans}
                 activeId={activePlan?.id ?? null}
@@ -745,7 +753,9 @@ function PlanEmptyState({ hasPlans, notFound }: { hasPlans: boolean; notFound: b
       {notFound ? (
         <>
           <h2 className="plan-empty-title">Plan not found</h2>
-          <p className="plan-empty-body">It may have been deleted. Pick another from the list, or submit a new one.</p>
+          <p className="plan-empty-body">
+            It may have been deleted. Pick another from the list, or submit a new one.
+          </p>
         </>
       ) : hasPlans ? (
         <>

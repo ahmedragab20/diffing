@@ -763,15 +763,11 @@ export function App() {
     );
 
     const handleResolveAllOpen = useCallback(async () => {
-        try {
-            const result = await resolveAllOpen();
-            fireFeedback('selection', 'toggle');
-            // Toast or sound feedback could be wired here; for now we just
-            // emit a short haptic pulse to acknowledge the bulk action.
-            void result.resolved;
-        } catch {
-            // error already logged by mutation
-        }
+        const result = await resolveAllOpen();
+        fireFeedback('selection', 'toggle');
+        // Keep the mutation result observed while the query refresh removes
+        // the now-resolved threads from the open-comment count.
+        void result.resolved;
     }, [resolveAllOpen, fireFeedback]);
 
     const toggleLineWrap = useCallback(() => {

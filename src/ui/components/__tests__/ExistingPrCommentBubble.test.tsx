@@ -43,6 +43,50 @@ describe('ExistingPrCommentBubble GitHub actions', () => {
     await waitFor(() => expect(setResolved).toHaveBeenCalledWith('PRRT_thread', false))
   })
 
+  it('confirms deletion in the app before removing a published comment', async () => {
+    const remove = vi.fn().mockResolvedValue(undefined)
+    render(<ExistingPrCommentBubble comment={comment} onDelete={remove} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete GitHub comment' }))
+    expect(
+      await screen.findByRole('alertdialog', { name: 'Delete published GitHub comment?' }),
+    ).toBeInTheDocument()
+    expect(remove).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete comment' }))
+    await waitFor(() => expect(remove).toHaveBeenCalledWith(101))
+  })
+
+  it('confirms deletion in the app before removing a published reply', async () => {
+    const remove = vi.fn().mockResolvedValue(undefined)
+    render(
+      <ExistingPrCommentBubble
+        comment={{
+          ...comment,
+          replies: [
+            {
+              id: 202,
+              body: 'Published reply',
+              createdAt: '2026-07-18T10:01:00.000Z',
+              author: { login: 'reviewer' },
+              viewerDidAuthor: true,
+            },
+          ],
+        }}
+        onDelete={remove}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 1 reply' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete GitHub reply' }))
+    expect(
+      await screen.findByRole('alertdialog', { name: 'Delete published GitHub reply?' }),
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete reply' }))
+    await waitFor(() => expect(remove).toHaveBeenCalledWith(202))
+  })
+
   it('renders GitHub suggestion fences as a before/after preview', () => {
     render(
       <ExistingPrCommentBubble

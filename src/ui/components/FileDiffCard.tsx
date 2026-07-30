@@ -1,11 +1,33 @@
 import { useState, memo, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react'
 import { FileDiff, MultiFileDiff } from '@pierre/diffs/react'
-import type { DiffLineAnnotation, FileDiffMetadata, AnnotationSide, SelectedLineRange } from '@pierre/diffs'
-import { ChevronDown, ChevronRight, Edit3, MessageSquare, Maximize2, Loader2, Undo2, AlertCircle, X, HelpCircle, GitCommit, Clock, User, Copy, Check } from 'lucide-react'
+import type {
+  DiffLineAnnotation,
+  FileDiffMetadata,
+  AnnotationSide,
+  SelectedLineRange,
+} from '@pierre/diffs'
+import {
+  ChevronDown,
+  ChevronRight,
+  Edit3,
+  MessageSquare,
+  Maximize2,
+  Loader2,
+  Undo2,
+  AlertCircle,
+  X,
+  HelpCircle,
+  GitCommit,
+  Clock,
+  User,
+  Copy,
+  Check,
+} from 'lucide-react'
 import { Modal } from '../primitives/Modal'
 import { Tooltip } from '../primitives/Tooltip'
+import { EMBEDDED_COMMENT_STYLES } from '../lib/embeddedCommentStyles'
 import { useFileContents } from '../hooks/useFileContents'
-import type { ReviewComment } from '../../lib/types'
+import { isReviewCommentSide, type ReviewComment } from '../../lib/types'
 import type { PrExistingComment } from '../../lib/pr-session'
 import type {
   LineDiffType,
@@ -36,12 +58,18 @@ import {
 type PendingComment = PendingLineComment
 
 /** Keep current GitHub threads on their exact diff line; stale anchors fall back to file-level context. */
-export function canAnchorPrComment(fileDiff: FileDiffMetadata, comment: PrExistingComment): boolean {
-  if (comment.isOutdated || comment.line == null || comment.line < 1 || comment.side == null) return false
+export function canAnchorPrComment(
+  fileDiff: FileDiffMetadata,
+  comment: PrExistingComment,
+): boolean {
+  if (comment.isOutdated || comment.line == null || comment.line < 1 || comment.side == null)
+    return false
   const side = comment.side === 'LEFT' ? 'deletions' : 'additions'
   const startKey = side === 'additions' ? 'additionStart' : 'deletionStart'
   const countKey = side === 'additions' ? 'additionCount' : 'deletionCount'
-  return fileDiff.hunks.some((hunk) => comment.line! >= hunk[startKey] && comment.line! < hunk[startKey] + hunk[countKey])
+  return fileDiff.hunks.some(
+    (hunk) => comment.line! >= hunk[startKey] && comment.line! < hunk[startKey] + hunk[countKey],
+  )
 }
 
 /** Min/max file line numbers present on one side of a pierre FileDiffMetadata. */
@@ -70,6 +98,15 @@ function boundsForSide(
     return { min: 1, max: Math.max(1, expandedLineCount ?? 1) }
   }
   return { min, max }
+}
+
+/** Keep malformed persisted annotations away from Pierre's strict side index. */
+export function filterSupportedLineAnnotations<T>(
+  annotations: DiffLineAnnotation<T>[],
+): DiffLineAnnotation<T>[] {
+  return annotations.filter(
+    (annotation) => annotation.lineNumber > 0 && isReviewCommentSide(annotation.side),
+  )
 }
 
 interface FileDiffCardProps {
@@ -203,16 +240,8 @@ export const FileDiffCard = memo(function FileDiffCard({
     )
   }
 
-  const handleRevertHunk = async (hunkIndex: number, skipConfirm = false) => {
+  const handleRevertHunk = async (hunkIndex: number) => {
     if (revertingHunk !== null) return
-    if (
-      !skipConfirm &&
-      typeof window !== 'undefined' &&
-      !window.confirm(
-        `Revert hunk #${hunkIndex + 1} in ${filePath}? This rewrites the file via "git apply --reverse".`,
-      )
-    )
-      return
     setRevertingHunk(hunkIndex)
     setRevertError(null)
     try {
@@ -236,13 +265,12 @@ export const FileDiffCard = memo(function FileDiffCard({
   const isChangedFile = fileDiff.type === 'change' || fileDiff.type === 'rename-changed'
   const canExpandContext = !collapsed && isChangedFile
   const oldFilePath = fileDiff.prevName ?? filePath
-  const { loading: contentsLoading, oldContent, newContent } = useFileContents(
-    filePath,
-    contextExpanded && canExpandContext,
-    oldFilePath,
-  )
-  const contentsReady =
-    contextExpanded && oldContent !== null && newContent !== null
+  const {
+    loading: contentsLoading,
+    oldContent,
+    newContent,
+  } = useFileContents(filePath, contextExpanded && canExpandContext, oldFilePath)
+  const contentsReady = contextExpanded && oldContent !== null && newContent !== null
 
   // Synchronize collapse with viewed state changes from parent.
   // Must use `useLayoutEffect` (NOT `useEffect`) so the collapse commits
@@ -291,19 +319,25 @@ export const FileDiffCard = memo(function FileDiffCard({
   // Stable across re-renders triggered by unrelated prop changes (e.g. toggling
   // split/unified) so the diff renderer isn't handed a brand-new CSS string
   // every time. Only tabSize/fontSize actually affect it.
-  const unsafeCSS = useMemo(() => buildUnsafeCSS(tabSize, fontSize, monoFontFamily), [tabSize, fontSize, monoFontFamily])
+  const unsafeCSS = useMemo(
+    () => buildUnsafeCSS(tabSize, fontSize, monoFontFamily),
+    [tabSize, fontSize, monoFontFamily],
+  )
 
-  const getLineContent = (side: AnnotationSide, lineNumber: number, startLineNumber?: number): string => {
+  const getLineContent = (
+    side: AnnotationSide,
+    lineNumber: number,
+    startLineNumber?: number,
+  ): string => {
     const a = startLineNumber ?? lineNumber
     const b = lineNumber
     const startNum = Math.min(a, b)
     const endNum = Math.max(a, b)
     const resultLines: string[] = []
     // Full-file contents when "Expand context" is on — fills lines outside patch hunks.
-    const expanded =
-      contentsReady
-        ? (side === 'additions' ? newContent : oldContent)?.replace(/\r\n/g, '\n').split('\n')
-        : undefined
+    const expanded = contentsReady
+      ? (side === 'additions' ? newContent : oldContent)?.replace(/\r\n/g, '\n').split('\n')
+      : undefined
 
     for (let line = startNum; line <= endNum; line++) {
       const lines = side === 'additions' ? fileDiff.additionLines : fileDiff.deletionLines
@@ -409,29 +443,35 @@ export const FileDiffCard = memo(function FileDiffCard({
   }
 
   const fileLevelAnnotations = annotations.filter((a) => a.lineNumber === 0)
-  const lineAnnotations = annotations.filter((a) => a.lineNumber > 0)
+  // Treat persisted/API data as untrusted at the third-party renderer boundary.
+  // Pierre assumes every annotation side is valid and otherwise throws while
+  // indexing the line, blanking the entire diff surface.
+  const lineAnnotations = filterSupportedLineAnnotations(annotations)
 
-  const existingLineAnnotations: DiffLineAnnotation<{ _existingPr: true; comment: PrExistingComment }>[] = existingComments
+  const existingLineAnnotations: DiffLineAnnotation<{
+    _existingPr: true
+    comment: PrExistingComment
+  }>[] = existingComments
     .filter((comment) => canAnchorPrComment(fileDiff, comment))
     .map((comment) => ({
       side: comment.side === 'LEFT' ? 'deletions' : 'additions',
       lineNumber: comment.line!,
       metadata: { _existingPr: true, comment },
     }))
-  const existingFileLevelComments = existingComments.filter((comment) => !canAnchorPrComment(fileDiff, comment))
+  const existingFileLevelComments = existingComments.filter(
+    (comment) => !canAnchorPrComment(fileDiff, comment),
+  )
 
   const renderAnnotationFn = (
-    annotation: DiffLineAnnotation<ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }>,
+    annotation: DiffLineAnnotation<
+      ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }
+    >,
   ) => {
     if ('_pending' in annotation.metadata) {
       if (!pending) return null
       const session = draftSessionRef.current ?? 'open'
       const draftKey = `new:${filePath}:${pending.side}:${session}`
-      const lineContent = getLineContent(
-        pending.side,
-        pending.lineNumber,
-        pending.startLineNumber,
-      )
+      const lineContent = getLineContent(pending.side, pending.lineNumber, pending.startLineNumber)
       const ordered = pendingOrderedRange(pending)
       const bounds = pendingBounds
       return (
@@ -491,10 +531,7 @@ export const FileDiffCard = memo(function FileDiffCard({
       )
     }
     return (
-      <CommentBubble
-        comment={annotation.metadata as ReviewComment}
-        onDelete={onDeleteComment}
-      />
+      <CommentBubble comment={annotation.metadata as ReviewComment} onDelete={onDeleteComment} />
     )
   }
 
@@ -537,7 +574,9 @@ export const FileDiffCard = memo(function FileDiffCard({
     [openPending],
   )
 
-  const allAnnotations: DiffLineAnnotation<ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }>[] = [
+  const allAnnotations: DiffLineAnnotation<
+    ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }
+  >[] = [
     ...lineAnnotations,
     ...existingLineAnnotations,
     ...(pending
@@ -583,7 +622,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               {pathCopyFlash ? <Check size={12} /> : <Copy size={12} />}
             </button>
             {getStatusBadge()}
-            {(lineAnnotations.length + existingLineAnnotations.length) > 0 && (
+            {lineAnnotations.length + existingLineAnnotations.length > 0 && (
               <span
                 className="file-diff-comment-badge"
                 title={`${lineAnnotations.length + existingLineAnnotations.length} inline comment${lineAnnotations.length + existingLineAnnotations.length === 1 ? '' : 's'}`}
@@ -613,11 +652,7 @@ export const FileDiffCard = memo(function FileDiffCard({
         <div className="file-diff-header-right" onClick={(e) => e.stopPropagation()}>
           {canExpandContext && (
             <Tooltip
-              content={
-                contextExpanded
-                  ? 'Hide unchanged context'
-                  : 'Expand full-file context'
-              }
+              content={contextExpanded ? 'Hide unchanged context' : 'Expand full-file context'}
               side="bottom"
             >
               <button
@@ -687,14 +722,16 @@ export const FileDiffCard = memo(function FileDiffCard({
       {allowLocalActions && !collapsed && fileDiff.hunks.length > 0 && (
         <div className="file-diff-hunk-actions" onClick={(e) => e.stopPropagation()}>
           <div className="file-diff-hunk-actions-meta">
-            <span className="file-diff-hunk-actions-label">
-              Revert hunks
-            </span>
-            <Tooltip content="Preview and undo specific change blocks via git apply --reverse" side="top">
+            <span className="file-diff-hunk-actions-label">Revert hunks</span>
+            <Tooltip
+              content="Preview and undo specific change blocks via git apply --reverse"
+              side="top"
+            >
               <HelpCircle size={12} className="file-diff-hunk-help" />
             </Tooltip>
             <span className="file-diff-hunk-count">
-              {fileDiff.hunks.length} block{fileDiff.hunks.length !== 1 ? 's' : ''}
+              {fileDiff.hunks.length} block
+              {fileDiff.hunks.length !== 1 ? 's' : ''}
             </span>
           </div>
           <div className="file-diff-hunk-actions-buttons">
@@ -707,11 +744,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 disabled={revertingHunk !== null}
                 title={`Preview and revert hunk #${i + 1} (lines @${h.additionStart}+${h.additionLines ?? h.additionCount})`}
               >
-                {revertingHunk === i ? (
-                  <Loader2 size={10} className="spin" />
-                ) : (
-                  <Undo2 size={10} />
-                )}
+                {revertingHunk === i ? <Loader2 size={10} className="spin" /> : <Undo2 size={10} />}
                 <span>Hunk #{i + 1}</span>
               </button>
             ))}
@@ -726,90 +759,117 @@ export const FileDiffCard = memo(function FileDiffCard({
       )}
 
       {/* Selective Revert Hunk Preview Modal */}
-      {allowLocalActions && previewHunkIndex !== null && (() => {
-        const previewHunk = fileDiff.hunks[previewHunkIndex]
-        if (!previewHunk) return null
-        const previewDeletedLines = fileDiff.deletionLines.slice(
-          previewHunk.deletionLineIndex,
-          previewHunk.deletionLineIndex + (previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0)
-        )
-        const previewAddedLines = fileDiff.additionLines.slice(
-          previewHunk.additionLineIndex,
-          previewHunk.additionLineIndex + (previewHunk.additionStart !== undefined && previewHunk.additionLines !== undefined ? previewHunk.additionLines : (previewHunk.additionCount ?? 0))
-        )
-        return (
-          <Modal
-            open={previewHunkIndex !== null}
-            onClose={() => setPreviewHunkIndex(null)}
-            className="hunk-revert-modal"
-            ariaLabel={`Selective Revert Preview Hunk #${previewHunkIndex + 1}`}
-          >
-            <div className="shortcuts-header">
-              <div className="shortcuts-header-title">
-                <Undo2 size={18} className="shortcuts-icon" />
-                <h2>Revert Hunk #{previewHunkIndex + 1}</h2>
-              </div>
-              <button className="shortcuts-close-btn" onClick={() => setPreviewHunkIndex(null)} aria-label="Close dialog">
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="shortcuts-body">
-              <div className="hunk-preview-intro">
-                Reverting this hunk will restore the deleted (<span style={{ color: 'var(--feedback-danger-text)', fontWeight: 600 }}>red</span>) lines and remove the added (<span style={{ color: 'var(--feedback-success-text)', fontWeight: 600 }}>green</span>) lines from <strong>{filePath.split('/').pop()}</strong>.
-              </div>
-
-              <div className="hunk-preview-container">
-                <div className="hunk-preview-header">
-                  <span>{filePath}</span>
-                  <span>Lines: @-{previewHunk.deletionStart},{previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0} @+{previewHunk.additionStart},{previewHunk.additionLines ?? previewHunk.additionCount ?? 0}</span>
+      {allowLocalActions &&
+        previewHunkIndex !== null &&
+        (() => {
+          const previewHunk = fileDiff.hunks[previewHunkIndex]
+          if (!previewHunk) return null
+          const previewDeletedLines = fileDiff.deletionLines.slice(
+            previewHunk.deletionLineIndex,
+            previewHunk.deletionLineIndex +
+              (previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0),
+          )
+          const previewAddedLines = fileDiff.additionLines.slice(
+            previewHunk.additionLineIndex,
+            previewHunk.additionLineIndex +
+              (previewHunk.additionStart !== undefined && previewHunk.additionLines !== undefined
+                ? previewHunk.additionLines
+                : previewHunk.additionCount ?? 0),
+          )
+          return (
+            <Modal
+              open={previewHunkIndex !== null}
+              onClose={() => setPreviewHunkIndex(null)}
+              className="hunk-revert-modal"
+              ariaLabel={`Selective Revert Preview Hunk #${previewHunkIndex + 1}`}
+            >
+              <div className="shortcuts-header">
+                <div className="shortcuts-header-title">
+                  <Undo2 size={18} className="shortcuts-icon" />
+                  <h2>Revert Hunk #{previewHunkIndex + 1}</h2>
                 </div>
-                <div className="hunk-preview-code">
-                  {previewDeletedLines.map((line, idx) => (
-                    <div key={`del-${idx}`} className="hunk-preview-line hunk-preview-line-deletion">
-                      <span className="hunk-preview-sign">-</span>
-                      <span className="hunk-preview-text">{line}</span>
-                    </div>
-                  ))}
-                  {previewAddedLines.map((line, idx) => (
-                    <div key={`add-${idx}`} className="hunk-preview-line hunk-preview-line-addition">
-                      <span className="hunk-preview-sign">+</span>
-                      <span className="hunk-preview-text">{line}</span>
-                    </div>
-                  ))}
-                  {previewDeletedLines.length === 0 && previewAddedLines.length === 0 && (
-                    <div className="hunk-preview-line" style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>
-                      No changes in this hunk.
-                    </div>
-                  )}
-                </div>
+                <button
+                  className="shortcuts-close-btn"
+                  onClick={() => setPreviewHunkIndex(null)}
+                  aria-label="Close dialog"
+                >
+                  <X size={16} />
+                </button>
               </div>
 
-              <HunkHistorySection
-                filePath={filePath}
-                deletionStart={previewHunk.deletionStart}
-                deletionCount={previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0}
-              />
-            </div>
+              <div className="shortcuts-body">
+                <div className="hunk-preview-intro">
+                  Reverting this hunk will restore the deleted (
+                  <span className="hunk-preview-negative">red</span>) lines and remove the added (
+                  <span className="hunk-preview-positive">green</span>) lines from{' '}
+                  <strong>{filePath.split('/').pop()}</strong>.
+                </div>
 
-            <div className="modal-footer">
-              <button className="hunk-revert-btn-secondary" onClick={() => setPreviewHunkIndex(null)}>
-                Cancel
-              </button>
-              <button
-                className="hunk-revert-btn-primary"
-                onClick={async () => {
-                  const idx = previewHunkIndex
-                  setPreviewHunkIndex(null)
-                  await handleRevertHunk(idx, true)
-                }}
-              >
-                Revert Changes
-              </button>
-            </div>
-          </Modal>
-        )
-      })()}
+                <div className="hunk-preview-container">
+                  <div className="hunk-preview-header">
+                    <span>{filePath}</span>
+                    <span>
+                      Lines: @-{previewHunk.deletionStart},
+                      {previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0} @+
+                      {previewHunk.additionStart},
+                      {previewHunk.additionLines ?? previewHunk.additionCount ?? 0}
+                    </span>
+                  </div>
+                  <div className="hunk-preview-code">
+                    {previewDeletedLines.map((line, idx) => (
+                      <div
+                        key={`del-${idx}`}
+                        className="hunk-preview-line hunk-preview-line-deletion"
+                      >
+                        <span className="hunk-preview-sign">-</span>
+                        <span className="hunk-preview-text">{line}</span>
+                      </div>
+                    ))}
+                    {previewAddedLines.map((line, idx) => (
+                      <div
+                        key={`add-${idx}`}
+                        className="hunk-preview-line hunk-preview-line-addition"
+                      >
+                        <span className="hunk-preview-sign">+</span>
+                        <span className="hunk-preview-text">{line}</span>
+                      </div>
+                    ))}
+                    {previewDeletedLines.length === 0 && previewAddedLines.length === 0 && (
+                      <div className="hunk-preview-line hunk-preview-empty">
+                        No changes in this hunk.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <HunkHistorySection
+                  filePath={filePath}
+                  deletionStart={previewHunk.deletionStart}
+                  deletionCount={previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0}
+                />
+              </div>
+
+              <div className="modal-footer">
+                <button
+                  className="hunk-revert-btn-secondary"
+                  onClick={() => setPreviewHunkIndex(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="hunk-revert-btn-primary"
+                  onClick={async () => {
+                    const idx = previewHunkIndex
+                    setPreviewHunkIndex(null)
+                    await handleRevertHunk(idx)
+                  }}
+                >
+                  Revert Changes
+                </button>
+              </div>
+            </Modal>
+          )
+        })()}
       {!collapsed && (
         <div className="file-diff-card-body">
           {!bodyMounted && (
@@ -827,63 +887,57 @@ export const FileDiffCard = memo(function FileDiffCard({
             />
           )}
           {/* File-level comments section */}
-          {bodyMounted && (fileLevelAnnotations.length > 0 || existingFileLevelComments.length > 0 || showFileCommentForm) && (
-            <div 
-              className="file-level-comments-section"
-              style={{
-                margin: '16px 20px',
-                padding: '12px',
-                background: 'rgba(255,255,255,0.02)',
-                border: '1px solid var(--border-color)',
-                borderRadius: '8px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '12px'
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                <MessageSquare size={14} />
-                <span>File-Level Comments ({fileLevelAnnotations.length + existingFileLevelComments.length})</span>
-              </div>
-              
-              {fileLevelAnnotations.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {fileLevelAnnotations.map((anno) => (
-                    <CommentBubble
-                      key={anno.metadata.id}
-                      comment={anno.metadata}
-                      onDelete={onDeleteComment}
-                    />
-                  ))}
+          {bodyMounted &&
+            (fileLevelAnnotations.length > 0 ||
+              existingFileLevelComments.length > 0 ||
+              showFileCommentForm) && (
+              <div className="file-level-comments-section">
+                <div className="file-level-comments-header">
+                  <MessageSquare size={14} />
+                  <span>
+                    File-Level Comments (
+                    {fileLevelAnnotations.length + existingFileLevelComments.length})
+                  </span>
                 </div>
-              )}
 
-              {existingFileLevelComments.map((comment) => (
-                <ExistingPrCommentBubble
-                  key={`github-${comment.id}`}
-                  comment={comment}
-                  onReply={onReplyExisting}
-                  onEdit={onEditExisting}
-                  onDelete={onDeleteExisting}
-                  onSetResolved={onSetExistingResolved}
-                />
-              ))}
+                {fileLevelAnnotations.length > 0 && (
+                  <div className="file-level-comments-list">
+                    {fileLevelAnnotations.map((anno) => (
+                      <CommentBubble
+                        key={anno.metadata.id}
+                        comment={anno.metadata}
+                        onDelete={onDeleteComment}
+                      />
+                    ))}
+                  </div>
+                )}
 
-              {showFileCommentForm && (
-                <div style={{ background: 'var(--bg-secondary)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                  <CommentForm
-                    draftKey={`file-comment:${filePath}`}
-                    lineContent=""
-                    onSubmit={(body, severity) => {
-                      onAddComment(filePath, 'additions', 0, '', body, undefined, severity)
-                      setShowFileCommentForm(false)
-                    }}
-                    onCancel={() => setShowFileCommentForm(false)}
+                {existingFileLevelComments.map((comment) => (
+                  <ExistingPrCommentBubble
+                    key={`github-${comment.id}`}
+                    comment={comment}
+                    onReply={onReplyExisting}
+                    onEdit={onEditExisting}
+                    onDelete={onDeleteExisting}
+                    onSetResolved={onSetExistingResolved}
                   />
-                </div>
-              )}
-            </div>
-          )}
+                ))}
+
+                {showFileCommentForm && (
+                  <div className="file-level-comment-form">
+                    <CommentForm
+                      draftKey={`file-comment:${filePath}`}
+                      lineContent=""
+                      onSubmit={(body, severity) => {
+                        onAddComment(filePath, 'additions', 0, '', body, undefined, severity)
+                        setShowFileCommentForm(false)
+                      }}
+                      onCancel={() => setShowFileCommentForm(false)}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
 
           {/* Render switch: when the user opts in to "Expand Context",
               we use MultiFileDiff (computes the diff from full file
@@ -891,7 +945,9 @@ export const FileDiffCard = memo(function FileDiffCard({
               the cheaper FileDiff render is used against the parsed
               partial patch. Lazy-mounted until near the viewport. */}
           {bodyMounted && contentsReady ? (
-            <MultiFileDiff<ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }>
+            <MultiFileDiff<
+              ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }
+            >
               oldFile={{ name: oldFilePath, contents: oldContent ?? '' }}
               newFile={{ name: filePath, contents: newContent ?? '' }}
               options={{
@@ -946,55 +1002,57 @@ export const FileDiffCard = memo(function FileDiffCard({
               renderAnnotation={renderAnnotationFn}
             />
           ) : bodyMounted ? (
-          <FileDiff<ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }>
-            fileDiff={fileDiff}
-            options={{
-              diffStyle,
-              enableGutterUtility: true,
-              enableLineSelection: true,
-              disableFileHeader: true, // Disable built-in header to use custom header
-              lineDiffType,
-              overflow: lineWrap ? 'wrap' : 'scroll',
-              diffIndicators,
-              disableLineNumbers: !showLineNumbers,
-              hunkSeparators,
-              lineHoverHighlight,
-              onLineSelectionStart: handleSelectionStart,
-              onLineSelectionChange: handleSelectionChange,
-              onLineSelectionEnd: handleSelectionEnd,
-              onGutterUtilityClick: handleGutterUtilityClick,
-              onLineNumberClick: (props) => {
-                const side = props.annotationSide === 'deletions' ? 'deletions' : 'additions'
-                const short = `${filePath}:${side === 'deletions' ? '-' : '+'}${props.lineNumber}`
-                const params = new URLSearchParams({
-                  file: filePath,
-                  line: String(props.lineNumber),
-                  side,
-                })
-                const full =
-                  typeof window !== 'undefined'
-                    ? `${window.location.origin}${window.location.pathname}?${params}`
-                    : short
-                navigator.clipboard?.writeText(full).then(
-                  () => {
-                    setPermalinkFlash(short)
-                    setTimeout(() => setPermalinkFlash(null), 1600)
-                  },
-                  () => {},
-                )
-              },
-              theme: {
-                dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
-                light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
-              },
-              themeType: shikiConfig.type,
-              unsafeCSS,
-            }}
-            selectedLines={pending ? selectedRange : undefined}
-            lineAnnotations={allAnnotations}
-            renderHeaderMetadata={() => null} // Header is disabled
-            renderAnnotation={renderAnnotationFn}
-          />
+            <FileDiff<
+              ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }
+            >
+              fileDiff={fileDiff}
+              options={{
+                diffStyle,
+                enableGutterUtility: true,
+                enableLineSelection: true,
+                disableFileHeader: true, // Disable built-in header to use custom header
+                lineDiffType,
+                overflow: lineWrap ? 'wrap' : 'scroll',
+                diffIndicators,
+                disableLineNumbers: !showLineNumbers,
+                hunkSeparators,
+                lineHoverHighlight,
+                onLineSelectionStart: handleSelectionStart,
+                onLineSelectionChange: handleSelectionChange,
+                onLineSelectionEnd: handleSelectionEnd,
+                onGutterUtilityClick: handleGutterUtilityClick,
+                onLineNumberClick: (props) => {
+                  const side = props.annotationSide === 'deletions' ? 'deletions' : 'additions'
+                  const short = `${filePath}:${side === 'deletions' ? '-' : '+'}${props.lineNumber}`
+                  const params = new URLSearchParams({
+                    file: filePath,
+                    line: String(props.lineNumber),
+                    side,
+                  })
+                  const full =
+                    typeof window !== 'undefined'
+                      ? `${window.location.origin}${window.location.pathname}?${params}`
+                      : short
+                  navigator.clipboard?.writeText(full).then(
+                    () => {
+                      setPermalinkFlash(short)
+                      setTimeout(() => setPermalinkFlash(null), 1600)
+                    },
+                    () => {},
+                  )
+                },
+                theme: {
+                  dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
+                  light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
+                },
+                themeType: shikiConfig.type,
+                unsafeCSS,
+              }}
+              selectedLines={pending ? selectedRange : undefined}
+              lineAnnotations={allAnnotations}
+              renderHeaderMetadata={() => null} // Header is disabled
+              renderAnnotation={renderAnnotationFn}
+            />
           ) : null}
         </div>
       )}
@@ -1054,7 +1112,7 @@ function HunkHistorySection({
   if (loading) {
     return (
       <div className="hunk-history-loading">
-        <Loader2 size={14} className="spin" style={{ marginRight: '8px' }} />
+        <Loader2 size={14} className="spin hunk-history-status-icon" />
         <span>Loading git history & origin blame…</span>
       </div>
     )
@@ -1063,7 +1121,7 @@ function HunkHistorySection({
   if (error) {
     return (
       <div className="hunk-history-error">
-        <AlertCircle size={14} style={{ color: 'var(--feedback-danger-text)', marginRight: '8px' }} />
+        <AlertCircle size={14} className="hunk-history-status-icon hunk-history-error-icon" />
         <span>Failed to load git history: {error}</span>
       </div>
     )
@@ -1072,9 +1130,7 @@ function HunkHistorySection({
   if (!data) return null
 
   // Get unique commits from blame
-  const uniqueBlames = Array.from(
-    new Map(data.blame.map((item) => [item.commit, item])).values()
-  )
+  const uniqueBlames = Array.from(new Map(data.blame.map((item) => [item.commit, item])).values())
 
   return (
     <div className="hunk-history-section">
@@ -1109,7 +1165,9 @@ function HunkHistorySection({
             {data.recentCommits.map((c) => (
               <div key={c.hash} className="hunk-history-log-row">
                 <span className="hunk-history-log-hash">{c.hash}</span>
-                <span className="hunk-history-log-msg" title={c.summary}>{c.summary}</span>
+                <span className="hunk-history-log-msg" title={c.summary}>
+                  {c.summary}
+                </span>
                 <span className="hunk-history-log-author">{c.author}</span>
                 <span className="hunk-history-log-date">{c.date}</span>
               </div>
@@ -1121,14 +1179,14 @@ function HunkHistorySection({
   )
 }
 
-function buildUnsafeCSS(tabSize: number, fontSize: number, fontFamily: string): string {
+export function buildUnsafeCSS(tabSize: number, fontSize: number, fontFamily: string): string {
   return `
     :host {
       --diffs-tab-size: ${tabSize} !important;
       --diffs-font-family: ${fontFamily} !important;
       --diffs-font-size: ${fontSize}px !important;
-      --diffs-border: var(--border-normal) !important;
-      --diffs-bg: var(--bg-secondary) !important;
+      --diffs-border: var(--gl-rule) !important;
+      --diffs-bg: var(--gl-canvas) !important;
       --diffs-line-height: ${Math.round(fontSize * 1.7)}px !important;
     }
     [data-column-number], [data-line], [data-line] * {
@@ -1138,51 +1196,31 @@ function buildUnsafeCSS(tabSize: number, fontSize: number, fontFamily: string): 
       font-feature-settings: "liga" on, "calt" on !important;
     }
     [data-column-number] {
-      color: var(--text-muted) !important;
-      opacity: 0.65 !important;
+      color: var(--gl-gutter) !important;
+      opacity: 1 !important;
       user-select: none !important;
       padding-right: 12px !important;
       cursor: pointer !important;
     }
     [data-line]:hover [data-column-number] {
       opacity: 1 !important;
-      color: var(--primary) !important;
+      color: var(--gl-accent) !important;
     }
     [data-line][data-line-type="addition"] {
-      background-color: var(--feedback-success-bg) !important;
-      border-left: 3px solid var(--feedback-success-border) !important;
+      background-color: var(--gl-added-surface) !important;
+      box-shadow: inset 2px 0 var(--gl-positive) !important;
     }
     [data-line][data-line-type="deletion"] {
-      background-color: var(--feedback-danger-bg) !important;
-      border-left: 3px solid var(--feedback-danger-border) !important;
+      background-color: var(--gl-removed-surface) !important;
+      box-shadow: inset 2px 0 var(--gl-negative) !important;
     }
     [data-line].selected-line {
-      background-color: var(--accent-subtle) !important;
+      outline: 1px solid var(--gl-focus) !important;
+      outline-offset: -1px !important;
     }
-    .comment-bubble-canvas {
-      width: calc(100% - 40px) !important;
-      max-width: min(720px, calc(100% - 40px)) !important;
-      margin: 14px 20px !important;
-      min-width: 0 !important;
-      box-sizing: border-box !important;
+    [data-line].selected-line:not([data-line-type="addition"]):not([data-line-type="deletion"]) {
+      background-color: var(--gl-selected) !important;
     }
-    .comment-replies {
-      min-width: 0 !important;
-    }
-    .comment-node {
-      min-width: 0 !important;
-    }
-    .comment-content-col {
-      min-width: 0 !important;
-    }
-    .comment-node-header {
-      flex-wrap: wrap !important;
-      min-width: 0 !important;
-    }
-    .comment-node-body {
-      word-break: break-word !important;
-      overflow-wrap: break-word !important;
-      min-width: 0 !important;
-    }
+    ${EMBEDDED_COMMENT_STYLES}
   `
 }

@@ -29,6 +29,11 @@ export interface CommentReply {
 /** Reviewer intent label for triage (optional; missing = none). */
 export type CommentSeverity = 'blocking' | 'nit' | 'question' | 'praise' | 'none'
 
+/** Runtime guard for comment data crossing HTTP or persisted-storage boundaries. */
+export function isReviewCommentSide(value: unknown): value is ReviewComment['side'] {
+  return value === 'deletions' || value === 'additions'
+}
+
 export interface ReviewComment {
   id: string
   filePath: string

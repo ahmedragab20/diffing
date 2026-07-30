@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import {
   GitBranch,
   Search,
@@ -18,6 +18,7 @@ import { ReviewHistoryPopover } from '../components/ReviewHistoryPopover'
 import { BrandMark } from './BrandMark'
 import { ReviewSettingsPopover } from './ReviewSettingsPopover'
 import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
+import { ConfirmDialog } from '../primitives/ConfirmDialog'
 
 interface LastSendSummary {
   round: number
@@ -85,7 +86,7 @@ interface ToolbarProps {
   onShowStatusBarChange: (v: boolean) => void
   onIgnoreSpaceChange: (v: boolean) => void
   onIgnoreAllSpaceChange: (v: boolean) => void
-  onResolveAllOpen: () => void
+  onResolveAllOpen: () => void | Promise<void>
   onOpenUiFontModal: () => void
   onOpenMonoFontModal: () => void
   onOpenSearch: () => void
@@ -102,6 +103,67 @@ interface ToolbarProps {
   sidebarCollapsed?: boolean
   onToggleSidebar?: () => void
 }
+
+export function ResolveAllControl({
+  commentCount,
+  onResolveAllOpen,
+}: {
+  commentCount: number
+  onResolveAllOpen: () => void | Promise<void>
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const [resolving, setResolving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  if (commentCount < 1) return null
+
+  const closeDialog = () => {
+    setConfirming(false)
+    setError(null)
+  }
+
+  const resolveAll = async () => {
+    setResolving(true)
+    setError(null)
+    try {
+      await onResolveAllOpen()
+      closeDialog()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not resolve the open comments.')
+    } finally {
+      setResolving(false)
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="btn btn-sm toolbar-resolve-all-btn"
+        onClick={() => setConfirming(true)}
+        title="Resolve all open comments"
+        aria-haspopup="dialog"
+      >
+        <CheckCheck size={14} />
+        <span className="btn-label">Resolve all</span>
+      </button>
+      <ConfirmDialog
+        open={confirming}
+        title={`Resolve all ${commentCount} open comment${commentCount === 1 ? '' : 's'}?`}
+        description="Every open review thread will be marked as resolved. You can reopen individual threads later."
+        confirmLabel={commentCount === 1 ? 'Resolve comment' : `Resolve all ${commentCount}`}
+        busyLabel="Resolving…"
+        variant="primary"
+        icon={<CheckCheck size={18} />}
+        busy={resolving}
+        error={error}
+        onConfirm={resolveAll}
+        onCancel={closeDialog}
+      />
+    </>
+  )
+}
+
 export const Toolbar = memo(function Toolbar({
   repoName,
   branch,
@@ -259,26 +321,10 @@ export const Toolbar = memo(function Toolbar({
           </button>
         )}
 
-        {commentCount > 0 && (
-          <button
-            className="btn btn-sm toolbar-resolve-all-btn"
-            onClick={() => {
-              if (typeof window === 'undefined') return
-              if (
-                window.confirm(
-                  `Resolve all ${commentCount} open comment${commentCount === 1 ? '' : 's'}? ` +
-                    'This marks every open thread as resolved in one move.',
-                )
-              ) {
-                onResolveAllOpen()
-              }
-            }}
-            title="Resolve all open comments"
-          >
-            <CheckCheck size={14} />
-            <span className="btn-label">Resolve all</span>
-          </button>
-        )}
+        <ResolveAllControl
+          commentCount={commentCount}
+          onResolveAllOpen={onResolveAllOpen}
+        />
 
         <ReviewSettingsPopover
           diffStyle={diffStyle}

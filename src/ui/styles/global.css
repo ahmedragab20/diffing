@@ -282,7 +282,7 @@ textarea,
     --bg-secondary: #073642;
     --bg-secondary-rgb: 7, 54, 66;
     --bg-tertiary: #586e75;
-    --text-primary: #839496;
+    --text-primary: #93a1a1;
     --text-secondary: #93a1a1;
     --text-muted: #657b83;
     --border-color: #073642;
@@ -317,11 +317,11 @@ textarea,
     --bg-secondary: #eee8d5;
     --bg-secondary-rgb: 238, 232, 213;
     --bg-tertiary: #93a1a1;
-    --text-primary: #657b83;
+    --text-primary: #475b62;
     --text-secondary: #586e75;
     --text-muted: #93a1a1;
     --border-color: #eee8d5;
-    --border-focus: #268bd2;
+    --border-focus: #1f7fb8;
     --primary: #268bd2;
     --primary-hover: #2aa198;
     --accent: #d33682;
@@ -636,7 +636,7 @@ textarea,
     --text-secondary: #768390;
     --text-muted: #636e7b;
     --border-color: #444c56;
-    --border-focus: #316dca;
+    --border-focus: #539bf5;
     --primary: #539bf5;
     --primary-hover: #6cb6ff;
     --accent: #bc8cff;
@@ -811,7 +811,7 @@ textarea,
     --text-secondary: #828c99;
     --text-muted: #abb2bf;
     --border-color: #e6e6e6;
-    --border-focus: #ff9900;
+    --border-focus: #a85d00;
     --primary: #ff9900;
     --primary-hover: #f29718;
     --accent: #e6b450;
@@ -916,7 +916,7 @@ textarea,
     --text-secondary: #858585;
     --text-muted: #626262;
     --border-color: #3c3c3c;
-    --border-focus: #0e639c;
+    --border-focus: #3794ff;
     --primary: #0e639c;
     --primary-hover: #1177bb;
     --accent: #c586c0;
@@ -1122,11 +1122,11 @@ textarea,
     --bg-secondary: #eeeded;
     --bg-secondary-rgb: 238, 237, 237;
     --bg-tertiary: #e6e5e5;
-    --text-primary: #80cbc4;
-    --text-secondary: #90a4ae;
-    --text-muted: #b0bec5;
+    --text-primary: #37474f;
+    --text-secondary: #546e7a;
+    --text-muted: #607d8b;
     --border-color: #e6e5e5;
-    --border-focus: #80cbd8;
+    --border-focus: #00796b;
     --primary: #80cbd8;
     --primary-hover: #4dd0e1;
     --accent: #7c4dff;
@@ -1336,7 +1336,7 @@ textarea,
     --text-secondary: #696c77;
     --text-muted: #a0a1a7;
     --border-color: #e5e5e6;
-    --border-focus: #40a9ff;
+    --border-focus: #0060b5;
     --primary: #40a9ff;
     --primary-hover: #1890ff;
     --accent: #a626a4;
@@ -3011,6 +3011,11 @@ body {
     min-width: 0;
 }
 
+.comment-node-body p {
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+
 .comment-resolved-line {
     text-decoration: line-through;
     color: var(--text-muted) !important;
@@ -3079,6 +3084,10 @@ body {
 .comment-form textarea:focus {
     border-color: var(--border-strong);
     box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.comment-form-editor {
+    position: relative;
 }
 
 .comment-form-tabs {
@@ -5352,30 +5361,6 @@ file-tree,
     padding: 2px 8px;
   }
 
-  /* Keyboard cheat sheet guide modal */
-.shortcuts-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    z-index: 400;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    animation: shortcuts-fade-in var(--transition-fast);
-}
-
-@keyframes shortcuts-fade-in {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
-}
-
 .shortcuts-modal {
     width: 70vw;
 }
@@ -7087,6 +7072,11 @@ file-tree,
     background: var(--accent-subtle);
     border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
 }
+.confirm-dialog-icon-warning {
+    color: var(--feedback-warning-text);
+    background: var(--feedback-warning-bg);
+    border: 1px solid var(--feedback-warning-border);
+}
 .confirm-dialog-title {
     margin: 0;
     font-size: 15px;
@@ -7115,6 +7105,17 @@ file-tree,
     display: -webkit-box;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
+}
+.confirm-dialog-error {
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--feedback-danger-border);
+    border-radius: var(--radius-sm);
+    background: var(--feedback-danger-bg);
+    color: var(--feedback-danger-text);
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
 }
 .confirm-dialog-footer {
     display: flex;
@@ -7148,6 +7149,45 @@ file-tree,
 }
 .confirm-dialog-confirm-primary:hover {
     filter: brightness(1.05);
+}
+.confirm-dialog-confirm-warning {
+    border: 1px solid var(--feedback-warning-border);
+    background: var(--feedback-warning-bg);
+    color: var(--feedback-warning-text);
+    font-weight: 700;
+}
+.confirm-dialog-confirm-warning:hover {
+    filter: brightness(1.06);
+}
+.input-dialog-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.input-dialog-label {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+}
+.input-dialog-input {
+    width: 100%;
+    min-height: 32px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-normal);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.4;
+}
+.input-dialog-input::placeholder {
+    color: var(--text-muted);
+}
+.input-dialog-input:focus {
+    border-color: var(--border-focus);
+    outline: none;
+    box-shadow: var(--ring);
 }
 
 /* Plan edit discard — choice cards (dual: recent vs original) */
@@ -7280,7 +7320,7 @@ file-tree,
 .ui-modal-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 400;
+    z-index: var(--gl-layer-modal-backdrop, 1800);
     background: rgba(0, 0, 0, 0.55);
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
@@ -7296,7 +7336,7 @@ file-tree,
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    z-index: 401;
+    z-index: var(--gl-layer-modal, 1801);
     max-width: calc(100vw - var(--space-8));
     max-height: 90vh;
     background: var(--bg-secondary);
@@ -7316,7 +7356,8 @@ file-tree,
 .ui-modal-popup[data-starting-style],
 .ui-modal-popup[data-ending-style] {
     opacity: 0;
-    transform: translate(-50%, -46%) scale(0.97);
+    transform: translate(-50%, calc(-50% + var(--gl-dialog-motion-y, -10px)))
+        scale(var(--gl-dialog-motion-scale, 0.98));
 }
 
 /* Command-palette variant: anchored near the top of the viewport. */
@@ -7327,7 +7368,8 @@ file-tree,
 .ui-modal-popup.ui-modal--palette[data-starting-style],
 .ui-modal-popup.ui-modal--palette[data-ending-style] {
     opacity: 0;
-    transform: translate(-50%, -10px) scale(0.98);
+    transform: translate(-50%, var(--gl-dialog-motion-y, -10px))
+        scale(var(--gl-dialog-motion-scale, 0.98));
 }
 
 /* Tooltip (Base UI Tooltip) — must clear sticky plan/diff chrome (z≈5–100)
@@ -12860,31 +12902,6 @@ button.toolbar-last-send-btn:hover {
     .pr-review-activity-link {
         margin-left: auto;
     }
-}
-
-/* Submit-to-GitHub popover (mirrors the existing .srp SendReviewPopover) */
-.srp-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 200;
-}
-
-.srp-popover {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 201;
-    width: min(560px, calc(100vw - 32px));
-    max-height: calc(100vh - 64px);
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: var(--shadow-lg);
-    overflow: hidden;
 }
 
 .srp-header {

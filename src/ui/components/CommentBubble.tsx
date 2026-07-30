@@ -15,6 +15,7 @@ import { timeAgo } from '../utils'
 import { Markdown } from './Markdown'
 import { useComments } from '../hooks/useComments'
 import { CommentForm } from './CommentForm'
+import { NoticeDialog } from '../primitives/NoticeDialog'
 
 interface CommentBubbleProps {
   comment: ReviewComment
@@ -24,13 +25,13 @@ interface CommentBubbleProps {
 function AvatarIcon({ role, size = 16 }: { role: 'user' | 'agent'; size?: number }) {
   if (role === 'agent') {
     return (
-      <div className="comment-avatar-circle comment-avatar-agent" style={{ width: `${size * 2}px`, height: `${size * 2}px` }}>
+      <div className={`comment-avatar-circle comment-avatar-agent comment-avatar-size-${size}`}>
         <Bot size={size} aria-hidden="true" />
       </div>
     )
   }
   return (
-    <div className="comment-avatar-circle comment-avatar-user" style={{ width: `${size * 2}px`, height: `${size * 2}px` }}>
+    <div className={`comment-avatar-circle comment-avatar-user comment-avatar-size-${size}`}>
       <User size={size} aria-hidden="true" />
     </div>
   )
@@ -38,7 +39,15 @@ function AvatarIcon({ role, size = 16 }: { role: 'user' | 'agent'; size?: number
 
 export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
   const [, setTick] = useState(0)
-  const { resolveComment, unresolveComment, addReply, removeReply, editReply, applySuggestion, editComment } = useComments()
+  const {
+    resolveComment,
+    unresolveComment,
+    addReply,
+    removeReply,
+    editReply,
+    applySuggestion,
+    editComment,
+  } = useComments()
   const isResolved = comment.status === 'resolved'
   /** Open threads start expanded; resolved start collapsed. User can toggle either. */
   const [collapsed, setCollapsed] = useState(isResolved)
@@ -46,6 +55,8 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [editingReplyId, setEditingReplyId] = useState<string | null>(null)
+  const [applyingSuggestion, setApplyingSuggestion] = useState(false)
+  const [suggestionError, setSuggestionError] = useState<string | null>(null)
 
   const firstActionBtnRef = useRef<HTMLButtonElement>(null)
 
@@ -76,11 +87,12 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
 
   const locationBits = (
     <>
-      {comment.lineNumber === 0 && (
-        <span className="comment-file-chip">File</span>
-      )}
+      {comment.lineNumber === 0 && <span className="comment-file-chip">File</span>}
       {comment.outdated && (
-        <span className="comment-outdated-badge" title="Anchored code no longer matches the live diff">
+        <span
+          className="comment-outdated-badge"
+          title="Anchored code no longer matches the live diff"
+        >
           <AlertTriangle size={10} /> outdated
         </span>
       )}
@@ -126,13 +138,15 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
         </button>
         <div className="comment-collapsed-main">
           {isResolved ? (
-            <CheckCircle2 size={14} className="comment-collapsed-resolved-icon" aria-hidden="true" />
+            <CheckCircle2
+              size={14}
+              className="comment-collapsed-resolved-icon"
+              aria-hidden="true"
+            />
           ) : (
             <AvatarIcon role="user" size={11} />
           )}
-          <span className="comment-collapsed-label">
-            {isResolved ? 'Resolved' : 'User'}
-          </span>
+          <span className="comment-collapsed-label">{isResolved ? 'Resolved' : 'User'}</span>
           {locationBits}
           <span className="comment-collapsed-preview" title={comment.body}>
             {bodyPreview}
@@ -156,7 +170,12 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
 
   if (isEditing) {
     return (
-      <div className="comment-bubble-canvas" id={`comment-${comment.id}`} role="article" aria-label="Edit comment">
+      <div
+        className="comment-bubble-canvas"
+        id={`comment-${comment.id}`}
+        role="article"
+        aria-label="Edit comment"
+      >
         <div className="comment-node">
           <div className="comment-avatar-col">
             <AvatarIcon role="user" size={16} />
@@ -165,27 +184,16 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
             <div className="comment-node-header">
               <span className="comment-node-author">User</span>
               <span className="comment-node-badge comment-node-badge-user">User</span>
-              <span className="comment-node-time" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span className="comment-node-time comment-node-meta">
                 {timeAgo(comment.createdAt)}
                 {comment.lineNumber === 0 && (
-                  <span
-                    style={{
-                      padding: '1px 5px',
-                      background: 'var(--accent-subtle)',
-                      border: '1px solid var(--primary)',
-                      borderRadius: 'var(--radius-sm)',
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      color: 'var(--primary)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.5px'
-                    }}
-                  >
-                    File Comment
-                  </span>
+                  <span className="comment-file-chip">File Comment</span>
                 )}
                 {comment.outdated && (
-                  <span className="comment-outdated-badge" title="Anchored code no longer matches the live diff">
+                  <span
+                    className="comment-outdated-badge"
+                    title="Anchored code no longer matches the live diff"
+                  >
                     <AlertTriangle size={10} /> outdated
                   </span>
                 )}
@@ -195,24 +203,13 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                   </span>
                 )}
                 {comment.startLineNumber && comment.startLineNumber !== comment.lineNumber && (
-                  <span
-                    style={{
-                      padding: '1px 5px',
-                      background: 'var(--bg-primary)',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: 'var(--radius-sm)',
-                      fontSize: '10px',
-                      fontWeight: 600,
-                      fontFamily: 'var(--font-mono)',
-                      color: 'var(--text-secondary)'
-                    }}
-                  >
+                  <span className="comment-range-chip">
                     L{comment.startLineNumber}–{comment.lineNumber}
                   </span>
                 )}
               </span>
             </div>
-            <div style={{ marginTop: '8px' }}>
+            <div className="comment-edit-form-wrap">
               <CommentForm
                 draftKey={`edit:${comment.id}`}
                 initialBody={comment.body}
@@ -235,7 +232,11 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
       className={`comment-bubble-canvas ${isResolved ? 'comment-bubble-canvas-resolved' : ''}`}
       id={`comment-${comment.id}`}
       role="article"
-      aria-label={comment.lineNumber === 0 ? "File-level comment" : `Comment by user on line ${comment.lineNumber}`}
+      aria-label={
+        comment.lineNumber === 0
+          ? 'File-level comment'
+          : `Comment by user on line ${comment.lineNumber}`
+      }
     >
       {/* Parent Comment Node */}
       <div className={`comment-node ${isResolved ? 'comment-node-resolved' : ''}`}>
@@ -256,45 +257,18 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
             </button>
             <span className="comment-node-author">User</span>
             <span className="comment-node-badge comment-node-badge-user">User</span>
-            <span className="comment-node-time" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span className="comment-node-time comment-node-meta">
               {timeAgo(comment.createdAt)}
-              {comment.lineNumber === 0 && (
-                <span
-                  style={{
-                    padding: '1px 5px',
-                    background: 'var(--accent-subtle)',
-                    border: '1px solid var(--primary)',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '10px',
-                    fontWeight: 700,
-                    color: 'var(--primary)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px'
-                  }}
-                >
-                  File Comment
-                </span>
-              )}
+              {comment.lineNumber === 0 && <span className="comment-file-chip">File Comment</span>}
               {comment.startLineNumber && comment.startLineNumber !== comment.lineNumber && (
-                <span
-                  style={{
-                    padding: '1px 5px',
-                    background: 'var(--bg-primary)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '10px',
-                    fontWeight: 600,
-                    fontFamily: 'var(--font-mono)',
-                    color: 'var(--text-secondary)'
-                  }}
-                >
+                <span className="comment-range-chip">
                   L{comment.startLineNumber}–{comment.lineNumber}
                 </span>
               )}
             </span>
 
             {isResolved && (
-              <span className="comment-canvas-resolved-banner" style={{ marginLeft: '8px' }}>
+              <span className="comment-canvas-resolved-banner comment-resolved-inline">
                 <CheckCircle2 size={13} />
                 Resolved
               </span>
@@ -306,7 +280,12 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                   ref={firstActionBtnRef}
                   className="comment-node-btn"
                   onClick={() => setIsEditing(true)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsEditing(true) } }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setIsEditing(true)
+                    }
+                  }}
                   title="Edit comment"
                   aria-label="Edit comment"
                   tabIndex={0}
@@ -314,38 +293,27 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                   <Pencil size={13} aria-hidden="true" />
                 </button>
                 {deleteConfirming ? (
-                  <div className="comment-delete-confirm" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <div className="comment-delete-confirm">
                     <button
-                      className="comment-node-btn comment-node-btn-delete"
+                      className="comment-node-btn comment-node-btn-delete comment-delete-confirm-yes"
                       onClick={() => onDelete(comment.id)}
                       title="Confirm delete"
                       aria-label="Confirm delete comment"
-                      style={{
-                        color: 'var(--danger)',
-                        background: 'var(--feedback-danger-bg)',
-                        fontWeight: 600,
-                        fontSize: '11px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--feedback-danger-border)',
-                        padding: '2px 6px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '2px',
-                        width: 'auto',
-                        height: 'auto'
-                      }}
                     >
                       <AlertTriangle size={11} />
                       Delete?
                     </button>
                     <button
-                      className="comment-node-btn"
+                      className="comment-node-btn comment-delete-confirm-cancel"
                       onClick={() => setDeleteConfirming(false)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDeleteConfirming(false) } }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          setDeleteConfirming(false)
+                        }
+                      }}
                       title="Cancel delete"
                       aria-label="Cancel delete"
-                      style={{ fontSize: '11px', padding: '2px 6px', width: 'auto', height: 'auto' }}
                     >
                       Cancel
                     </button>
@@ -354,7 +322,12 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                   <button
                     className="comment-node-btn comment-node-btn-delete"
                     onClick={() => setDeleteConfirming(true)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDeleteConfirming(true) } }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setDeleteConfirming(true)
+                      }
+                    }}
                     title="Delete comment"
                     aria-label="Delete comment"
                     tabIndex={0}
@@ -366,7 +339,10 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
             )}
           </div>
           {hasBodyContent && (
-            <Markdown content={comment.body} className={`comment-node-body markdown-body ${isResolved ? 'comment-resolved-line' : ''}`} />
+            <Markdown
+              content={comment.body}
+              className={`comment-node-body markdown-body ${isResolved ? 'comment-resolved-line' : ''}`}
+            />
           )}
 
           {/* Suggestion Card */}
@@ -377,82 +353,45 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
             if (!hasSuggestion) return null
 
             return (
-              <div
-                className="suggestion-card"
-                style={{
-                  marginTop: '12px',
-                  marginBottom: '4px',
-                  border: '1px solid var(--border-normal)',
-                  borderRadius: 'var(--radius-md)',
-                  overflow: 'hidden',
-                  background: 'var(--bg-primary)',
-                  boxShadow: 'var(--shadow-sm)'
-                }}
-              >
-                <div
-                  className="suggestion-header"
-                  style={{
-                    padding: '8px 12px',
-                    background: 'var(--bg-secondary)',
-                    borderBottom: '1px solid var(--border-normal)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    fontSize: '12px',
-                    fontWeight: 600
-                  }}
-                >
-                  <span style={{ color: 'var(--text-secondary)' }}>Suggested Change</span>
+              <div className="suggestion-card comment-suggestion-card">
+                <div className="suggestion-header">
+                  <span className="suggestion-header-label">Suggested Change</span>
                   {isResolved ? (
-                    <span style={{ color: 'var(--feedback-success-text)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <span className="suggestion-applied">
                       <CheckCircle2 size={12} /> Applied
                     </span>
                   ) : (
                     <button
+                      type="button"
                       className="btn btn-primary btn-sm"
+                      disabled={applyingSuggestion}
                       onClick={async () => {
+                        setApplyingSuggestion(true)
                         try {
                           await applySuggestion(comment.id)
-                        } catch (err: any) {
-                          alert(err.message)
+                        } catch (err) {
+                          setSuggestionError(
+                            err instanceof Error
+                              ? err.message
+                              : 'The suggestion could not be applied.',
+                          )
+                        } finally {
+                          setApplyingSuggestion(false)
                         }
                       }}
-                      style={{
-                        fontSize: '11px',
-                        padding: '2px 8px',
-                        borderRadius: 'var(--radius-sm)',
-                        height: '24px'
-                      }}
                     >
-                      Apply Suggestion
+                      {applyingSuggestion ? 'Applying…' : 'Apply Suggestion'}
                     </button>
                   )}
                 </div>
-                <div className="suggestion-diff" style={{ display: 'flex', flexDirection: 'column', fontSize: '12px', fontFamily: 'var(--font-mono)', overflowX: 'auto' }}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      padding: '8px 12px',
-                      background: 'var(--feedback-danger-bg)',
-                      borderBottom: '1px dashed var(--border-color)',
-                      color: 'var(--feedback-danger-text)',
-                      minWidth: 'max-content'
-                    }}
-                  >
-                    <span style={{ width: '20px', userSelect: 'none', opacity: 0.5 }}>-</span>
-                    <span style={{ whiteSpace: 'pre' }}>{comment.lineContent}</span>
+                <div className="suggestion-diff">
+                  <div className="suggestion-diff-line suggestion-diff-line-deletion">
+                    <span className="suggestion-diff-sign">-</span>
+                    <span className="suggestion-diff-code">{comment.lineContent}</span>
                   </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      padding: '8px 12px',
-                      background: 'var(--feedback-success-bg)',
-                      color: 'var(--feedback-success-text)',
-                      minWidth: 'max-content'
-                    }}
-                  >
-                    <span style={{ width: '20px', userSelect: 'none', opacity: 0.5 }}>+</span>
-                    <span style={{ whiteSpace: 'pre' }}>{suggestionCode}</span>
+                  <div className="suggestion-diff-line suggestion-diff-line-addition">
+                    <span className="suggestion-diff-sign">+</span>
+                    <span className="suggestion-diff-code">{suggestionCode}</span>
                   </div>
                 </div>
               </div>
@@ -480,13 +419,13 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                 <div className="comment-content-col">
                   <div className="comment-node-header">
                     <span className="comment-node-author">{isAgent ? 'Agent' : 'User'}</span>
-                    <span className={`comment-node-badge ${isAgent ? 'comment-node-badge-agent' : 'comment-node-badge-user'}`}>
+                    <span
+                      className={`comment-node-badge ${isAgent ? 'comment-node-badge-agent' : 'comment-node-badge-user'}`}
+                    >
                       {isAgent ? 'Agent' : 'User'}
                     </span>
                     {isAgent && reply.model && (
-                      <span style={{ fontSize: '10px', fontWeight: 600, padding: '1px 5px', borderRadius: '4px', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
-                        {reply.model}
-                      </span>
+                      <span className="comment-model-chip">{reply.model}</span>
                     )}
                     <span className="comment-node-time">{timeAgo(reply.createdAt)}</span>
 
@@ -495,7 +434,12 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                         <button
                           className="comment-node-btn"
                           onClick={() => handleStartEditReply(reply.id)}
-                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleStartEditReply(reply.id) } }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              handleStartEditReply(reply.id)
+                            }
+                          }}
                           title="Edit reply"
                           aria-label="Edit reply"
                           tabIndex={0}
@@ -505,7 +449,12 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                         <button
                           className="comment-node-btn comment-node-btn-delete"
                           onClick={() => handleDeleteReply(reply.id)}
-                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleDeleteReply(reply.id) } }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              handleDeleteReply(reply.id)
+                            }
+                          }}
                           title="Delete reply"
                           aria-label="Delete reply"
                           tabIndex={0}
@@ -517,7 +466,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                   </div>
 
                   {isEditingThis ? (
-                    <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginTop: '6px' }}>
+                    <div className="comment-reply-editor">
                       <CommentForm
                         draftKey={`reply-edit:${comment.id}:${reply.id}`}
                         initialBody={reply.body}
@@ -541,25 +490,28 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
       {/* Footer (Reply trigger and Resolve toggle) */}
       <div className="comment-canvas-footer">
         {!isReplying && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="comment-canvas-footer-row">
             <button
               onClick={() => setIsReplying(true)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsReplying(true) } }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setIsReplying(true)
+                }
+              }}
               className="comment-reply-trigger"
               aria-label="Write a reply"
               tabIndex={0}
-              style={{ width: '100%', maxWidth: '320px' }}
             >
               <Reply size={14} aria-hidden="true" />
               Reply...
             </button>
 
             {isResolved ? (
-              <div style={{ display: 'flex', gap: '6px', marginLeft: '12px' }}>
+              <div className="comment-canvas-footer-actions">
                 <button
                   className="btn btn-secondary btn-sm"
                   onClick={() => setCollapsed(true)}
-                  style={{ fontSize: '12px', padding: '4px 10px' }}
                   aria-label="Hide resolved conversation"
                 >
                   Hide
@@ -567,7 +519,6 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                 <button
                   className="btn btn-secondary btn-sm"
                   onClick={handleUnresolve}
-                  style={{ fontSize: '12px', padding: '4px 10px' }}
                   aria-label="Unresolve conversation"
                 >
                   Unresolve
@@ -577,7 +528,6 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
               <button
                 className="btn btn-secondary btn-sm"
                 onClick={handleResolve}
-                style={{ fontSize: '12px', padding: '4px 10px', marginLeft: '12px' }}
                 aria-label="Resolve conversation"
               >
                 Resolve conversation
@@ -587,7 +537,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
         )}
 
         {isReplying && (
-          <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginTop: '4px' }}>
+          <div className="comment-reply-composer">
             <CommentForm
               draftKey={`reply:${comment.id}`}
               onSubmit={(body) => {
@@ -602,6 +552,13 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
           </div>
         )}
       </div>
+      <NoticeDialog
+        open={suggestionError !== null}
+        title="Could not apply suggestion"
+        description={suggestionError ?? 'The suggestion could not be applied.'}
+        closeLabel="Return to review"
+        onClose={() => setSuggestionError(null)}
+      />
     </div>
   )
 }

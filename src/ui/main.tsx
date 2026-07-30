@@ -11,6 +11,10 @@ import '../../node_modules/@pierre/diffs/dist/components/web-components.js'
 import { TooltipProvider } from './primitives/Tooltip'
 import { Root } from './Root'
 import './styles/global.css'
+// Gridline is the canonical web design-system layer. Keep it last: it adapts
+// the legacy component stylesheet to the same terminal-native contract as the
+// Rust TUI while components migrate away from historical one-off styling.
+import './styles/gridline.css'
 
 const queryClient = new QueryClient()
 

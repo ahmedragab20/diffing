@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SUBMIT_PANEL_SIZE_KEY, SUBMIT_PANEL_WIDTH_KEY } from '../../hooks/useSubmitPanelSize'
@@ -19,6 +19,9 @@ vi.mock('lucide-react', () => ({
   ClipboardCheck: () => <svg data-testid="lucide-clipboard" />,
   RefreshCw: () => <svg data-testid="lucide-refresh" />,
   AlertCircle: () => <svg data-testid="lucide-alert" />,
+  AlertTriangle: () => <svg data-testid="lucide-alert-triangle" />,
+  Loader2: () => <svg data-testid="lucide-loader" />,
+  ShieldAlert: () => <svg data-testid="lucide-shield-alert" />,
   ExternalLink: () => <svg data-testid="lucide-external" />,
   FilePenLine: () => <svg data-testid="lucide-file-pen" />,
 }))
@@ -79,7 +82,10 @@ import { SubmitToGitHubPopover } from '../SubmitToGitHubPopover'
 
 const noop = async () => {}
 
-function renderSend(open = true) {
+function renderSend(
+  open = true,
+  overrides: Partial<React.ComponentProps<typeof SendReviewPopover>> = {},
+) {
   return render(
     <SendReviewPopover
       comments={[]}
@@ -91,6 +97,7 @@ function renderSend(open = true) {
       onSend={noop as any}
       sending={false}
       agentWaiting={false}
+      {...overrides}
     />
   )
 }
@@ -159,6 +166,30 @@ describe('SendReviewPopover', () => {
     expect(screen.getByRole('group', { name: /panel size/i })).toBeInTheDocument()
     const buttons = screen.getAllByRole('radio', { name: /S|M|L|XL/ })
     expect(buttons).toHaveLength(4)
+  })
+
+  it('uses an in-app dialog before sending with unviewed files', async () => {
+    const user = userEvent.setup()
+    const onSend = vi.fn().mockResolvedValue(undefined)
+    renderSend(true, {
+      totalFileCount: 3,
+      viewedFileCount: 1,
+      requireViewAllBeforeSend: true,
+      onSend,
+    })
+
+    await user.click(screen.getByRole('radio', { name: /Approve/ }))
+    await user.click(screen.getByRole('button', { name: /^Send review$/ }))
+
+    expect(
+      await screen.findByRole('alertdialog', { name: 'Send with 2 unviewed files?' }),
+    ).toBeInTheDocument()
+    expect(onSend).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Send anyway' }))
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith('approved', '', 'standard', true),
+    )
   })
 })
 
