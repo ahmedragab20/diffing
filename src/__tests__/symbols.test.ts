@@ -17,10 +17,28 @@ describe('classifySymbolLine', () => {
   })
 
   it.each([
+    ['function helpers($x) {', 'helpers', 'function'],
+    ['public function handle(): void {', 'handle', 'function'],
+    ['private static function boot(): void', 'boot', 'function'],
+    ['abstract class BaseController', 'BaseController', 'class'],
+    ['final readonly class Dto', 'Dto', 'class'],
+    ['interface RepositoryInterface', 'RepositoryInterface', 'interface'],
+    ['trait HasFactory', 'HasFactory', 'trait'],
+    ['enum Status: string', 'Status', 'enum'],
+    ['namespace App\\Http\\Controllers;', 'App\\Http\\Controllers', 'namespace'],
+  ])('recognizes PHP %s', (line, name, kind) => {
+    expect(classifySymbolLine(line)).toEqual({ name, kind })
+  })
+
+  it.each([
     'if (ready) {',
     'render_search()',
     '// function notARealSymbol() {}',
     'return value',
+    'if ($ready) {',
+    'new class {',
+    'use App\\Models\\User;',
+    'fn () => 1',
   ])('rejects non-definitions: %s', (line) => {
     expect(classifySymbolLine(line)).toBeNull()
   })

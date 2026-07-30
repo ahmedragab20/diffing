@@ -1331,7 +1331,7 @@ Now, running `git review` inside any repository will spin up the interactive bro
 The engine exposes four powerful search scopes via its JSON query payload:
 - **Files Fuzzy Search** (`scope: 'files'`): Perform rapid, error-tolerant fuzzy matching on workspace paths.
 - **Text Grep Search** (`scope: 'text'`): Search across all workspace lines using raw case-insensitive strings or high-performance Rust regular expressions.
-- **Symbols Search** (`scope: 'symbols'`): Locates method declarations, class definitions, and variable identifiers, which are syntactically classified server-side based on their language patterns.
+- **Symbols Search** (`scope: 'symbols'`): Locates method declarations, class definitions, and variable identifiers, which are syntactically classified server-side based on their language patterns (JavaScript, TypeScript, Go, Rust, Python, and PHP).
 - **Concurrently Unified Search** (`scope: 'all'`): Query all three indexes concurrently to return a mixed list of fuzzy file matches, text greps, and symbol hits.
 
 ### The Search HTTP API (`POST /api/search`)

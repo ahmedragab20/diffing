@@ -421,7 +421,12 @@ pub fn classify_symbol_line(line: &str) -> Option<SymbolDefinition> {
         ("mod", "module"),
     ] {
         if let Some(rest) = after_keyword(declaration, keyword) {
-            if let Some(name) = take_identifier(rest) {
+            let name = if keyword == "namespace" {
+                take_php_namespace(rest)
+            } else {
+                take_identifier(rest)
+            };
+            if let Some(name) = name {
                 return Some(SymbolDefinition {
                     name: name.to_string(),
                     kind,
@@ -546,6 +551,8 @@ fn strip_declaration_modifiers(mut line: &str) -> &str {
             "protected",
             "internal",
             "final",
+            "readonly",
+            "static",
             "sealed",
             "open",
             "data",
@@ -629,6 +636,23 @@ fn take_identifier(value: &str) -> Option<&str> {
         .map(|(index, character)| index + character.len_utf8())
         .last()?;
     Some(&value[..end])
+}
+
+fn take_php_namespace(value: &str) -> Option<&str> {
+    let mut rest = value;
+    let mut consumed = 0usize;
+    loop {
+        let segment = take_identifier(rest)?;
+        consumed += segment.len();
+        rest = &rest[segment.len()..];
+        if let Some(tail) = rest.strip_prefix('\\') {
+            consumed += 1;
+            rest = tail;
+            continue;
+        }
+        break;
+    }
+    (consumed > 0).then(|| &value[..consumed])
 }
 
 fn is_identifier_character(character: char) -> bool {
@@ -1086,6 +1110,23 @@ mod tests {
                 "SearchPalette",
                 "class",
             ),
+            ("function helpers($x) {", "helpers", "function"),
+            ("public function handle(): void {", "handle", "function"),
+            ("private static function boot(): void", "boot", "function"),
+            ("abstract class BaseController", "BaseController", "class"),
+            ("final readonly class Dto", "Dto", "class"),
+            (
+                "interface RepositoryInterface",
+                "RepositoryInterface",
+                "interface",
+            ),
+            ("trait HasFactory", "HasFactory", "trait"),
+            ("enum Status: string", "Status", "enum"),
+            (
+                "namespace App\\Http\\Controllers;",
+                "App\\Http\\Controllers",
+                "namespace",
+            ),
         ];
         for (line, name, kind) in cases {
             let symbol = classify_symbol_line(line)
@@ -1093,7 +1134,15 @@ mod tests {
             assert_eq!(symbol.name, name);
             assert_eq!(symbol.kind, kind);
         }
-        assert_eq!(classify_symbol_line("render_search();"), None);
+        for line in [
+            "render_search();",
+            "if ($ready) {",
+            "new class {",
+            "use App\\Models\\User;",
+            "fn () => 1",
+        ] {
+            assert_eq!(classify_symbol_line(line), None, "expected reject for {line:?}");
+        }
     }
 
     #[test]

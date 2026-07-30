@@ -32,8 +32,12 @@ export const SYMBOL_PATTERNS: SymbolPattern[] = [
   { pattern: /^\s*(?:(?:export|declare)\s+)*interface\s+(\w[\w$]*)/i, kind: 'interface', nameGroup: 1 },
   { pattern: /^\s*(?:(?:export|declare)\s+)*type\s+(\w[\w$]*)\s*=/i, kind: 'type', nameGroup: 1 },
   { pattern: /^\s*(?:(?:export|declare)\s+)*(?:const\s+)?enum\s+(\w[\w$]*)/i, kind: 'enum', nameGroup: 1 },
+  { pattern: /^\s*namespace\s+((?:\w[\w$]*(?:\\\w[\w$]*)*)+)\s*;/i, kind: 'namespace', nameGroup: 1 },
   { pattern: /^\s*(?:(?:export|declare)\s+)*namespace\s+(\w[\w$]*)/i, kind: 'namespace', nameGroup: 1 },
   { pattern: /^\s*(?:export\s+)?(?:const|let|var)\s+(\w[\w$]*)\s*=/i, kind: 'variable', nameGroup: 1 },
+  // PHP before JS method — visibility + `function` must not capture `function` as the name
+  { pattern: /^\s*(?:(?:public|private|protected|static|abstract|final)\s+)+function\s+(\w[\w$]*)\s*\(/i, kind: 'function', nameGroup: 1 },
+  { pattern: /^\s*(?:(?:abstract|final|readonly)\s+)+class\s+(\w[\w$]*)/i, kind: 'class', nameGroup: 1 },
   { pattern: /^\s*(?!(?:if|for|while|switch|catch)\b)(?:(?:public|private|protected|static|async|abstract|readonly|override|get|set)\s+)*(\w[\w$]*)\s*(?:<[^>]+>)?\s*\([^)]*\)\s*(?:\{|:[^={]+[;{])/i, kind: 'method', nameGroup: 1 },
 
   // Python

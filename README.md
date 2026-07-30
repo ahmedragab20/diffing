@@ -110,7 +110,7 @@ Blazing-fast, native fuzzy code search integrated directly into the sidebar sear
 
 - **Fuzzy File Search** (`Files` scope) — Error-tolerant fuzzy matching on workspace paths using a native Rust engine.
 - **Codebase Grep** (`Text` scope) — Instant case-insensitive text search with full **Regular Expression** support.
-- **Syntactic Symbol Search** (`Symbols` scope) — Finds function declarations, class headers, type definitions, and variable assignments across JavaScript, TypeScript, Go, Rust, and Python (17+ language patterns).
+- **Syntactic Symbol Search** (`Symbols` scope) — Finds function declarations, class headers, type definitions, and variable assignments across JavaScript, TypeScript, Go, Rust, Python, and PHP (27 language patterns).
 - **Unified "All" Search** — Concurrent search across files, text, and symbols with automatic deduplication.
 - **Frecency Ranking** — SQLite-backed history database remembers which files you open for specific queries, floating high-value results to the top.
 - **"Changed Only" Filter** — Restricts search scope exclusively to files changed in the active git diff.

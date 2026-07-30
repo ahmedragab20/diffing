@@ -126,7 +126,7 @@ npx skills add ahmedragab20/diffing
 
 ### 1.7 Search (Rust-powered, fff)
 - Headline: **Native Rust-powered code search** across four scopes.
-- Scopes: `Files` (fuzzy), `Text` (grep, with regex), `Symbols` (17 patterns across JS/TS, Go, Rust, Python), `All` (unified).
+- Scopes: `Files` (fuzzy), `Text` (grep, with regex), `Symbols` (27 patterns across JS/TS, Go, Rust, Python, PHP), `All` (unified).
 - Symbol kinds detected: functions, classes, interfaces, types, enums, variables, structs, impl blocks, traits, methods.
 - Frecency-ranked results backed by SQLite (`frecency.db`, `history.db`) under the per-repo storage dir; the engine keeps its own filesystem watcher so the index stays fresh during review.
 - "Changed only" filter restricts results to files in the active diff.
@@ -463,7 +463,7 @@ The builder must never reintroduce these wrong claims. Use the **corrected** val
 | "`t` cycles themes" (design brief & README keymap) | **`t` cycles tab size (2→4→8)**; the theme picker opens with **`g t`** (App.tsx) |
 | "Cmd/Ctrl+`,` toggles settings" (README:126) | **No such binding exists** — do not document it. Use `g t` (themes) / `Cmd/Ctrl+K` (palette) |
 | "monochromatic theme 'Blue'" (README:139) | The 6th-listed palette is **"Sky Blue"**; the 6 palettes are Cyan, Green, Magenta, Yellow, **Sky Blue**, Orange |
-| "17+ language patterns / 17+ as a range" | **17 symbol patterns** across JS/TS, Go, Rust, Python (don't imply more) |
+| "17+ language patterns / 17+ as a range" | **27 symbol patterns** across JS/TS, Go, Rust, Python, PHP (don't imply more) |
 | "53 themes" (one agent report) | **52 themes** — also wrong; the real count is 52 |
 | Implying a fixed/default port | Default is a **random available port**; default **host 127.0.0.1**. `--port` sets a fixed one. The `4317` on the page is a labeled demo placeholder |
 | "settings stored in localStorage" (about the real app) | The real app stores nothing in localStorage — state is server-side at `~/.diffing/<repo>-<hash>/` and `~/.config/diffing/settings.json`. (The **landing page** may use localStorage for its own theme/toggles; just don't claim the app does.) |
