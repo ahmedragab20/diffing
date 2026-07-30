@@ -164,7 +164,7 @@ jobs:
           npm install --global --prefix "$install_prefix" "$root_archive" "$native_archive"
           "$install_prefix/bin/diffing-tui" --version
           NO_COLOR=1 "$install_prefix/bin/diffing" doctor | tee "$RUNNER_TEMP/diffing-doctor.txt"
-          grep -Eq 'TUI binary.*@diffing/tui-linux-x64-gnu' "$RUNNER_TEMP/diffing-doctor.txt"
+          grep -Eq '/@diffing/tui-linux-x64-gnu/bin/diffing-tui$' "$RUNNER_TEMP/diffing-doctor.txt"
 
   publish-native:
     name: Publish ${{ matrix.package }}
@@ -223,7 +223,7 @@ jobs:
                 --prefix "$install_prefix" "$root_archive" \
               && NO_COLOR=1 "$install_prefix/bin/diffing" doctor \
                 | tee "$RUNNER_TEMP/diffing-registry-doctor.txt" \
-              && grep -Eq 'TUI binary.*@diffing/tui-linux-x64-gnu' \
+              && grep -Eq '/@diffing/tui-linux-x64-gnu/bin/diffing-tui$' \
                 "$RUNNER_TEMP/diffing-registry-doctor.txt"; then
               exit 0
             fi
