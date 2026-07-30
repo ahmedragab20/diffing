@@ -151,9 +151,9 @@ jobs:
           test "$(find target/native-tarballs -name '*.tgz' | wc -l | tr -d ' ')" = 7
           test "$(find target/root-tarball -name '*.tgz' | wc -l | tr -d ' ')" = 1
           for archive in target/native-tarballs/*.tgz; do
-            tar -tzf "$archive" | grep -Eq '^package/bin/diffing-tui(\.exe)?$'
+            tar -tzf "$archive" | grep -E '^package/bin/diffing-tui(\.exe)?$' >/dev/null
           done
-          tar -tzf target/root-tarball/*.tgz | grep -q '^package/dist/cli.mjs$'
+          tar -tzf target/root-tarball/*.tgz | grep -E '^package/dist/cli.mjs$' >/dev/null
       - name: Verify root and native package integration
         shell: bash
         run: |
