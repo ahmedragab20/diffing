@@ -174,6 +174,7 @@ impl Default for TrackerState {
 
 pub fn render_tracker(
     comments: &[ReviewComment],
+    visible_indices: &[usize],
     outdated_comments: &HashSet<String>,
     state: &mut TrackerState,
     focused: bool,
@@ -182,7 +183,7 @@ pub fn render_tracker(
     buf: &mut Buffer,
 ) {
     let tokens = GridlineTokens::from(palette);
-    let visible = state.visible_indices(comments);
+    let visible = visible_indices;
     let title = format!(
         " comments {}/{} · {} · {} ",
         visible.len(),
@@ -301,6 +302,7 @@ mod tests {
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
         render_tracker(
             &[],
+            &[],
             &HashSet::new(),
             &mut s,
             false,
@@ -320,8 +322,10 @@ mod tests {
         let area = Rect::new(0, 0, 80, 5);
         let mut buf = Buffer::empty(area);
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
+        let visible = s.visible_indices(&comments);
         render_tracker(
             &comments,
+            &visible,
             &HashSet::new(),
             &mut s,
             true,
@@ -348,8 +352,10 @@ mod tests {
         state.cursor = 7;
         let area = Rect::new(0, 0, 80, 4);
         let mut buffer = Buffer::empty(area);
+        let visible = state.visible_indices(&comments);
         render_tracker(
             &comments,
+            &visible,
             &HashSet::new(),
             &mut state,
             true,

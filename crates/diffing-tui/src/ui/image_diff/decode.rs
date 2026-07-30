@@ -2,7 +2,7 @@
 
 use std::ffi::OsStr;
 use std::io::{Cursor, Read, Write};
-use std::path::{Component, Path};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -121,24 +121,8 @@ fn read_git_blob(repo_root: &Path, oid: &str) -> Result<Vec<u8>> {
     read_bounded_git_output(repo_root, &["cat-file", "blob", oid]).context("reading image blob")
 }
 
-fn safe_relative_path(path: &Path) -> bool {
-    !path.as_os_str().is_empty()
-        && path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
-}
-
 fn read_worktree_file(repo_root: &Path, path: &Path) -> Result<Vec<u8>> {
-    if !safe_relative_path(path) {
-        bail!("image path is outside the repository");
-    }
-    let target = repo_root.join(path);
-    let canonical_repo = repo_root.canonicalize().context("resolving repository")?;
-    let canonical_target = target.canonicalize().context("resolving image path")?;
-    if !canonical_target.starts_with(&canonical_repo) {
-        bail!("image symlink leaves the repository");
-    }
-    let mut file = std::fs::File::open(&canonical_target).context("opening image")?;
+    let mut file = crate::path_safety::open_file_within_repo(repo_root, path)?;
     let metadata = file.metadata().context("reading image metadata")?;
     if !metadata.is_file() || metadata.len() > MAX_ENCODED_BYTES as u64 {
         bail!(
@@ -161,7 +145,7 @@ fn read_worktree_file(repo_root: &Path, path: &Path) -> Result<Vec<u8>> {
 }
 
 fn read_git_path(repo_root: &Path, path: &Path, version: Version) -> Result<Vec<u8>> {
-    if !safe_relative_path(path) {
+    if !crate::path_safety::safe_relative_path(path) {
         bail!("image path is outside the repository");
     }
     let path = path.to_string_lossy();
@@ -1650,8 +1634,8 @@ pub(crate) mod tests {
 
     #[test]
     fn paths_and_object_ids_are_constrained() {
-        assert!(safe_relative_path(Path::new("assets/image.png")));
-        assert!(!safe_relative_path(Path::new("../secret.png")));
+        assert!(crate::path_safety::safe_relative_path(Path::new("assets/image.png")));
+        assert!(!crate::path_safety::safe_relative_path(Path::new("../secret.png")));
         assert!(valid_oid("abcdef12"));
         assert!(!valid_oid("HEAD:secret"));
     }

@@ -31,6 +31,7 @@ pub struct CommentFormState {
     pub target_label: String,
     pub textarea: TextArea<'static>,
     pub severity: Option<CommentSeverity>,
+    pub char_count: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -108,6 +109,7 @@ impl CommentFormState {
             target_label,
             textarea: ta,
             severity: None,
+            char_count: 0,
         }
     }
 
@@ -121,6 +123,7 @@ impl CommentFormState {
             target_label,
             textarea: ta,
             severity: None,
+            char_count: 0,
         }
     }
 
@@ -129,17 +132,23 @@ impl CommentFormState {
         let lines = textarea_lines(body);
         let mut ta = TextArea::new(lines);
         ta.set_placeholder_text("edit, Ctrl-S to save, Esc to cancel");
+        let char_count = textarea_char_count(&ta);
         Self {
             kind: FormKind::Edit,
             target_label,
             textarea: ta,
             severity: None,
+            char_count,
         }
     }
 
     /// Drain the textarea into a single string.
     pub fn body(&self) -> String {
         self.textarea.lines().join("\n")
+    }
+
+    pub fn refresh_char_count(&mut self) {
+        self.char_count = textarea_char_count(&self.textarea);
     }
 
     pub fn cycle_severity(&mut self) {
@@ -151,6 +160,15 @@ impl CommentFormState {
             Some(CommentSeverity::Praise) => None,
         };
     }
+}
+
+pub fn textarea_char_count(textarea: &TextArea<'_>) -> usize {
+    textarea
+        .lines()
+        .iter()
+        .map(|line| line.chars().count())
+        .sum::<usize>()
+        .saturating_add(textarea.lines().len().saturating_sub(1))
 }
 
 fn textarea_lines(body: &str) -> Vec<String> {

@@ -10,7 +10,7 @@ use crate::ui::gridline::{
     dim_buffer, fill, hint_line, overlay_block, GridlineTokens, GLYPHS, METRICS,
 };
 
-pub const SETTINGS_ROWS: usize = 11;
+pub const SETTINGS_ROWS: usize = 12;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SettingsState {
@@ -30,6 +30,7 @@ pub struct SettingsValues {
     pub comments_visible: bool,
     pub review_enabled: bool,
     pub intelligence_mode: IntelligenceMode,
+    pub trust_repo_local_bin: bool,
     pub theme_name: &'static str,
 }
 
@@ -173,6 +174,14 @@ pub fn render_settings(
             },
         ),
         ("Language intelligence", values.intelligence_mode.label()),
+        (
+            "Repo-local LSP binaries",
+            if values.trust_repo_local_bin {
+                "Trusted"
+            } else {
+                "Blocked"
+            },
+        ),
         ("Theme", values.theme_name),
     ];
 
@@ -242,6 +251,7 @@ pub fn render_settings(
         "Adjust sidebar width in terminal columns",
         "Show the review thread drawer (review mode only)",
         "Hover, definitions, and diagnostics through language servers",
+        "Allow language servers from this repository's node_modules/.bin",
         "Choose a terminal-aware color palette",
     ];
     let footer = format!(
@@ -283,14 +293,15 @@ mod tests {
             settings_row_at(&state, area, inner.x + 3, inner.y + 1),
             Some(0)
         );
-        assert_eq!(
-            settings_row_at(&state, area, inner.x + 3, inner.y + 3),
-            Some(1)
-        );
-        assert_eq!(
-            settings_row_at(&state, area, inner.x + 3, inner.y + 21),
-            Some(10)
-        );
+        for index in 0..SETTINGS_ROWS {
+            let stride = settings_row_stride(inner);
+            let scroll = setting_scroll(state.cursor, visible_setting_rows(inner, stride));
+            let row = inner.y + 1 + ((index - scroll) as u16) * stride;
+            assert_eq!(
+                settings_row_at(&state, area, inner.x + 3, row),
+                Some(index)
+            );
+        }
         assert_eq!(
             settings_row_at(&state, area, inner.x - 1, inner.y + 1),
             None
@@ -309,7 +320,7 @@ mod tests {
         let scroll = setting_scroll(state.cursor, visible);
         let row = inner.y + 1 + (state.cursor - scroll) as u16;
         assert!(row < inner.y + inner.height.saturating_sub(1));
-        assert_eq!(settings_row_at(&state, area, inner.x + 3, row), Some(10));
+        assert_eq!(settings_row_at(&state, area, inner.x + 3, row), Some(11));
     }
 
     #[test]
@@ -334,6 +345,7 @@ mod tests {
                 comments_visible: true,
                 review_enabled: true,
                 intelligence_mode: IntelligenceMode::Auto,
+                trust_repo_local_bin: false,
                 theme_name: "Rose Pine",
             },
             area,
@@ -365,6 +377,7 @@ mod tests {
                 comments_visible: true,
                 review_enabled: true,
                 intelligence_mode: IntelligenceMode::Auto,
+                trust_repo_local_bin: false,
                 theme_name: "GitHub Dark",
             },
             area,

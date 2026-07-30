@@ -17,7 +17,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
-use crate::diff::highlight::highlight_line;
+use crate::diff::highlight::{highlight_line, reset_highlight_session};
 use crate::lsp::LspDiagnostic;
 use crate::themes::{Palette, ThemeName};
 use crate::ui::gridline::{safe_terminal_character, GridlineTokens};
@@ -422,6 +422,7 @@ pub fn render_card(
         .get(file_index)
         .map(|file| file.display_path().to_string_lossy().into_owned())
         .unwrap_or_default();
+    reset_highlight_session(&path, theme, palette, palette.bg);
     let options = RowRenderOptions {
         path: &path,
         horizontal_offset,

@@ -92,7 +92,7 @@ impl Keymap {
         }
         self.updated_at = Instant::now();
         if let KeyCode::Char(digit @ '0'..='9') = key.code {
-            if self.count > 0 || digit != '0' {
+            if key.modifiers.is_empty() && (self.count > 0 || digit != '0') {
                 self.count = self
                     .count
                     .saturating_mul(10)
@@ -125,7 +125,12 @@ impl Keymap {
             }
             _ => {
                 let action = classify(key);
-                (action != Action::Noop).then(|| self.command(action))
+                if action == Action::Noop {
+                    self.clear();
+                    None
+                } else {
+                    Some(self.command(action))
+                }
             }
         }
     }
@@ -233,8 +238,8 @@ pub fn classify(key: &KeyEvent) -> Action {
         KeyCode::PageUp => Action::ScrollHalfUp,
         KeyCode::Down => Action::ScrollDown,
         KeyCode::Up => Action::ScrollUp,
-        KeyCode::Right => Action::CycleVerdict,
-        KeyCode::Left => Action::CycleVerdict,
+        KeyCode::Right => Action::ScrollRight,
+        KeyCode::Left => Action::ScrollLeft,
         _ => Action::Noop,
     }
 }
@@ -270,7 +275,7 @@ REVIEW
   V              start/cancel line selection
   o / Enter      open focused thread
   e / r          edit/reply
-  x / X          resolve thread / all
+  x / X          resolve thread / X×2 all (confirm)
   d d            confirm thread deletion
   s / p          filter status/severity
   v              toggle viewed
@@ -480,17 +485,44 @@ mod tests {
     }
 
     #[test]
-    fn arrows_cycle_verdict_in_send_popover() {
-        // Without a focus arg, classify still returns CycleVerdict for arrows
-        // so the popover's verdict radios can use them.
+    fn horizontal_arrows_scroll_in_normal_mode() {
         assert_eq!(
             classify(&key(KeyCode::Right, KeyModifiers::NONE)),
-            Action::CycleVerdict
+            Action::ScrollRight
         );
         assert_eq!(
             classify(&key(KeyCode::Left, KeyModifiers::NONE)),
-            Action::CycleVerdict
+            Action::ScrollLeft
         );
+    }
+
+    #[test]
+    fn unrecognized_keys_and_esc_clear_pending_prefix() {
+        let mut keymap = Keymap::default();
+        assert!(keymap
+            .feed(&key(KeyCode::Char('g'), KeyModifiers::NONE))
+            .is_none());
+        assert_eq!(keymap.pending_display(), "g");
+        assert!(keymap
+            .feed(&key(KeyCode::Esc, KeyModifiers::NONE))
+            .is_none());
+        assert!(keymap.pending_display().is_empty());
+        assert!(keymap
+            .feed(&key(KeyCode::Char('2'), KeyModifiers::NONE))
+            .is_none());
+        assert!(keymap
+            .feed(&key(KeyCode::F(1), KeyModifiers::NONE))
+            .is_none());
+        assert!(keymap.pending_display().is_empty());
+    }
+
+    #[test]
+    fn ctrl_digit_does_not_accumulate_count() {
+        let mut keymap = Keymap::default();
+        assert!(keymap
+            .feed(&key(KeyCode::Char('2'), KeyModifiers::CONTROL))
+            .is_none());
+        assert!(keymap.pending_display().is_empty());
     }
 
     #[test]

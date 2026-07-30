@@ -1,4 +1,9 @@
 //! Theme-aware, bounded syntax highlighting for terminal diff viewports.
+//!
+//! Highlighting is sequential per `(file, syntax, theme)` session: callers
+//! rendering a viewport should invoke [`reset_highlight_session`] once per
+//! file card so multi-line constructs (strings, block comments) colorize
+//! correctly across adjacent diff lines.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -16,9 +21,11 @@ static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(two_face::syntax::extra_newlines)
 static THEME_SET: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
 thread_local! {
     static CACHE: RefCell<HighlightCache> = RefCell::new(HighlightCache::default());
+    static SEQUENTIAL: RefCell<Option<SequentialSession>> = const { RefCell::new(None) };
 }
 const MAX_CACHE_ENTRIES: usize = 4_096;
 const MAX_CACHE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SEQUENTIAL_LOOKBACK: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct HighlightContext {
@@ -110,6 +117,50 @@ impl HighlightCache {
     }
 }
 
+struct SequentialSession {
+    key: (String, HighlightContext),
+    highlighter: HighlightLines<'static>,
+    recent: VecDeque<String>,
+}
+
+impl SequentialSession {
+    fn new(path: &str, context: HighlightContext) -> Self {
+        let syntax = syntax_for_path(path);
+        Self {
+            key: (path.to_string(), context),
+            highlighter: HighlightLines::new(syntax, syntax_theme()),
+            recent: VecDeque::with_capacity(MAX_SEQUENTIAL_LOOKBACK),
+        }
+    }
+
+    fn highlight_line(
+        &mut self,
+        content: &str,
+        palette: &Palette,
+        background: Color,
+    ) -> Vec<StyledSpan> {
+        if self.recent.len() >= MAX_SEQUENTIAL_LOOKBACK {
+            let syntax = syntax_for_path(&self.key.0);
+            self.highlighter = HighlightLines::new(syntax, syntax_theme());
+            self.recent.clear();
+        }
+        self.recent.push_back(content.to_string());
+        highlight_uncached_with_highlighter(&mut self.highlighter, content, palette, background)
+    }
+}
+
+/// Begin (or reset) sequential highlighting for one file card render pass.
+pub fn reset_highlight_session(path: &str, theme: ThemeName, palette: &Palette, background: Color) {
+    let context = HighlightContext {
+        theme,
+        background: color_key(background),
+        palette: palette_key(palette),
+    };
+    SEQUENTIAL.with(|session| {
+        *session.borrow_mut() = Some(SequentialSession::new(path, context));
+    });
+}
+
 #[derive(Debug, Clone)]
 pub struct StyledSpan {
     pub text: String,
@@ -158,6 +209,8 @@ fn language_for_extension(ext: &str) -> &'static str {
     }
 }
 
+const MAX_HIGHLIGHT_LINE_BYTES: usize = 8 * 1024;
+
 pub fn highlight_line(
     path: &str,
     content: &str,
@@ -165,6 +218,12 @@ pub fn highlight_line(
     palette: &Palette,
     background: Color,
 ) -> Arc<[StyledSpan]> {
+    if content.len() > MAX_HIGHLIGHT_LINE_BYTES {
+        return Arc::from([StyledSpan {
+            text: content.to_string(),
+            style: Style::default().fg(palette.code_fg),
+        }]);
+    }
     let syntax = syntax_for_path(path);
     let context = HighlightContext {
         theme,
@@ -176,7 +235,19 @@ pub fn highlight_line(
     {
         return spans;
     }
-    let spans: Arc<[StyledSpan]> = highlight_uncached(syntax, content, palette, background).into();
+    let spans: Arc<[StyledSpan]> = if let Some(spans) = SEQUENTIAL.with(|session| {
+        let mut session = session.borrow_mut();
+        if let Some(active) = session.as_mut() {
+            if active.key == (path.to_string(), context) {
+                return Some(active.highlight_line(content, palette, background));
+            }
+        }
+        None
+    }) {
+        Arc::from(spans)
+    } else {
+        Arc::from(highlight_uncached(syntax, content, palette, background))
+    };
     CACHE.with(|cache| {
         cache
             .borrow_mut()
@@ -192,6 +263,15 @@ fn highlight_uncached(
     background: Color,
 ) -> Vec<StyledSpan> {
     let mut highlighter = HighlightLines::new(syntax, syntax_theme());
+    highlight_uncached_with_highlighter(&mut highlighter, content, palette, background)
+}
+
+fn highlight_uncached_with_highlighter(
+    highlighter: &mut HighlightLines<'_>,
+    content: &str,
+    palette: &Palette,
+    background: Color,
+) -> Vec<StyledSpan> {
     let synthetic = format!("{}\n", content.trim_end_matches('\n'));
     match highlighter.highlight_line(&synthetic, &SYNTAX_SET) {
         Ok(ranges) => ranges

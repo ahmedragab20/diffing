@@ -5,11 +5,14 @@
 //! second platform-specific ABI while this small loopback client keeps the
 //! Rust renderer self-contained.
 
-use std::fs::File;
+use std::collections::{HashMap, HashSet};
 use std::io::{ErrorKind, Read, Write};
-use std::net::TcpStream;
-use std::path::{Component, Path};
-use std::time::Duration;
+use std::net::{SocketAddr, TcpStream};
+use std::path::Path;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
+
+use diffing_core::index::{DiffIndex, IndexedChangeKind, IndexedLineKind, ViewRow};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -20,6 +23,10 @@ const MAX_CAPABILITY_BYTES: usize = 256;
 const MAX_SEARCH_HITS: usize = 80;
 const MAX_PREVIEW_BYTES: usize = 2 * 1024 * 1024;
 const BINARY_SAMPLE_BYTES: usize = 8 * 1024;
+const SEARCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const SEARCH_READ_DEADLINE: Duration = Duration::from_secs(30);
+const SEARCH_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const SEARCH_READ_CHUNK_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -67,7 +74,7 @@ pub struct SearchHit {
 #[derive(Debug, Clone)]
 pub struct SearchResponse {
     pub hits: Vec<SearchHit>,
-    pub total: usize,
+    pub total: Option<usize>,
     pub indexing: bool,
     pub error: Option<String>,
     pub notice: Option<String>,
@@ -161,10 +168,12 @@ impl SearchClient {
 
     fn post(&self, path: &str, body: Value) -> Result<Value> {
         let body = serde_json::to_vec(&body)?;
-        let mut stream = TcpStream::connect((self.host.as_str(), self.port))
+        let address: SocketAddr = format!("{}:{}", self.host, self.port)
+            .parse()
+            .context("invalid fff search endpoint address")?;
+        let mut stream = TcpStream::connect_timeout(&address, SEARCH_CONNECT_TIMEOUT)
             .context("connecting to fff search bridge")?;
-        stream.set_read_timeout(Some(Duration::from_secs(12)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        stream.set_write_timeout(Some(SEARCH_WRITE_TIMEOUT))?;
         write!(
             stream,
             "POST {path} HTTP/1.1\r\nHost: {}:{}\r\nX-Diffing-Capability: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -176,10 +185,33 @@ impl SearchClient {
         stream.write_all(&body)?;
         stream.flush()?;
 
+        let deadline = Instant::now() + SEARCH_READ_DEADLINE;
         let mut response = Vec::new();
-        stream
-            .take((MAX_RESPONSE_BYTES + 1) as u64)
-            .read_to_end(&mut response)?;
+        let mut buffer = [0u8; 8192];
+        while response.len() <= MAX_RESPONSE_BYTES {
+            if Instant::now() >= deadline {
+                bail!("fff search response timed out");
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            stream.set_read_timeout(Some(
+                remaining
+                    .min(SEARCH_READ_CHUNK_TIMEOUT)
+                    .max(Duration::from_millis(1)),
+            ))?;
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => response.extend_from_slice(&buffer[..count]),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::WouldBlock | ErrorKind::TimedOut
+                    ) && Instant::now() < deadline =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
         if response.len() > MAX_RESPONSE_BYTES {
             bail!("fff search response is too large");
         }
@@ -214,8 +246,7 @@ fn decode_response(value: Value, scope: SearchScope) -> Result<SearchResponse> {
     let total = value
         .get("total")
         .and_then(Value::as_u64)
-        .and_then(|total| usize::try_from(total).ok())
-        .unwrap_or(usize::MAX);
+        .and_then(|total| usize::try_from(total).ok());
     let indexing = value
         .get("indexing")
         .and_then(Value::as_bool)
@@ -457,14 +488,7 @@ pub fn classify_symbol_line(line: &str) -> Option<SymbolDefinition> {
 /// bridge. Paths are repository-relative and may not escape the repository.
 pub fn load_local_preview(repo_root: &Path, path: &str) -> Result<SearchPreview> {
     let relative = Path::new(path);
-    if relative.as_os_str().is_empty()
-        || relative.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
+    if !crate::path_safety::safe_relative_path(relative) {
         bail!("preview path must stay inside the repository");
     }
 
@@ -472,23 +496,18 @@ pub fn load_local_preview(repo_root: &Path, path: &str) -> Result<SearchPreview>
         .canonicalize()
         .context("resolving preview repository")?;
     let candidate = repo_root.join(relative);
-    let resolved = match candidate.canonicalize() {
-        Ok(path) => path,
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            return Ok(SearchPreview {
-                path: path.to_string(),
-                content: String::new(),
-                missing: true,
-                binary: false,
-                truncated: false,
-            });
-        }
-        Err(error) => return Err(error).context("resolving search preview"),
-    };
-    if !resolved.starts_with(&repo_root) {
-        bail!("preview path must stay inside the repository");
+    if !candidate.exists() {
+        return Ok(SearchPreview {
+            path: path.to_string(),
+            content: String::new(),
+            missing: true,
+            binary: false,
+            truncated: false,
+        });
     }
-    let mut file = File::open(resolved).context("opening search preview")?;
+
+    let mut file = crate::path_safety::open_file_within_repo(repo_root.as_path(), relative)
+        .context("opening search preview")?;
     let mut bytes = Vec::new();
     Read::by_ref(&mut file)
         .take((MAX_PREVIEW_BYTES + 1) as u64)
@@ -643,6 +662,323 @@ fn decode_preview(value: Value, fallback_path: &str) -> SearchPreview {
     }
 }
 
+fn indexed_git_status(kind: IndexedChangeKind) -> &'static str {
+    match kind {
+        IndexedChangeKind::Modified => "modified",
+        IndexedChangeKind::Added => "added",
+        IndexedChangeKind::Deleted => "deleted",
+        IndexedChangeKind::Renamed => "renamed",
+        IndexedChangeKind::Untracked => "untracked",
+        IndexedChangeKind::Binary => "binary",
+    }
+}
+
+fn fuzzy_path_score(path: &str, query: &str) -> Option<i64> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Some(0);
+    }
+    let path_lower = path.to_lowercase();
+    let path_chars: Vec<char> = path_lower.chars().collect();
+    let mut cursor = 0usize;
+    let mut previous = None;
+    let mut score = 0i64;
+    for needle in query.chars() {
+        let offset = path_chars
+            .get(cursor..)?
+            .iter()
+            .position(|character| *character == needle)?;
+        let index = cursor + offset;
+        score += 8;
+        if previous == Some(index.saturating_sub(1)) {
+            score += 12;
+        }
+        if index == 0 || matches!(path_chars[index - 1], '/' | '_' | '-' | '.') {
+            score += 16;
+        }
+        previous = Some(index);
+        cursor = index + 1;
+    }
+    if path_lower.contains(&query) {
+        score += 80;
+    }
+    let basename = path_lower.rsplit('/').next().unwrap_or(&path_lower);
+    if basename.starts_with(&query) {
+        score += 120;
+    }
+    Some(score - path_chars.len().min(i64::MAX as usize) as i64)
+}
+
+pub fn changed_file_search_hits(index: &DiffIndex, query: &str) -> (Vec<SearchHit>, usize) {
+    let mut ranked = index
+        .files
+        .iter()
+        .enumerate()
+        .filter_map(|(order, file)| {
+            let path = file.display_path().to_string_lossy().into_owned();
+            let score = fuzzy_path_score(&path, query)?;
+            let title = file
+                .display_path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&path)
+                .to_string();
+            let detail = file
+                .display_path()
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(|parent| format!("{}/", parent.to_string_lossy()))
+                .unwrap_or_else(|| "./".to_string());
+            Some((
+                score,
+                order,
+                SearchHit {
+                    kind: SearchHitKind::File,
+                    path,
+                    line: None,
+                    title,
+                    detail,
+                    git_status: indexed_git_status(file.kind).to_string(),
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    if !query.trim().is_empty() {
+        ranked.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+    }
+    let total = ranked.len();
+    let hits = ranked
+        .into_iter()
+        .take(MAX_SEARCH_HITS)
+        .map(|(_, _, hit)| hit)
+        .collect();
+    (hits, total)
+}
+
+pub fn interleave_search_hits(groups: Vec<Vec<SearchHit>>, limit: usize) -> Vec<SearchHit> {
+    let mut groups = groups.into_iter().map(Vec::into_iter).collect::<Vec<_>>();
+    let mut hits = Vec::new();
+    while hits.len() < limit {
+        let mut appended = false;
+        for group in &mut groups {
+            if let Some(hit) = group.next() {
+                hits.push(hit);
+                appended = true;
+                if hits.len() == limit {
+                    break;
+                }
+            }
+        }
+        if !appended {
+            break;
+        }
+    }
+    hits
+}
+
+pub fn changed_symbol_search_hits(
+    index: &DiffIndex,
+    query: &str,
+    symbol_cache: &mut HashMap<(u64, String), (Vec<SearchHit>, usize)>,
+) -> Result<(Vec<SearchHit>, usize)> {
+    let cache_key = (index.generation, query.trim().to_lowercase());
+    if let Some(cached) = symbol_cache.get(&cache_key) {
+        return Ok(cached.clone());
+    }
+    let needle = query.trim().to_lowercase();
+    let mut hits = Vec::new();
+    let mut total = 0usize;
+    'files: for (file_index, file) in index.files.iter().enumerate() {
+        let path = file.display_path().to_string_lossy().into_owned();
+        let mut row = 0u64;
+        while row < file.row_count {
+            let page = index.viewport(file_index, row, 512, 1024 * 1024)?;
+            if page.rows.is_empty() {
+                break;
+            }
+            for view_row in page.rows {
+                let ViewRow::Line {
+                    kind: IndexedLineKind::Add,
+                    new_lineno: Some(line),
+                    content,
+                    ..
+                } = view_row
+                else {
+                    continue;
+                };
+                let Some(symbol) = classify_symbol_line(&content) else {
+                    continue;
+                };
+                if !needle.is_empty() && !symbol.name.to_lowercase().contains(&needle) {
+                    continue;
+                }
+                total = total.saturating_add(1);
+                if total > MAX_SEARCH_HITS {
+                    break 'files;
+                }
+                if hits.len() < MAX_SEARCH_HITS {
+                    hits.push(SearchHit {
+                        kind: SearchHitKind::Symbol,
+                        path: path.clone(),
+                        line: Some(line),
+                        title: symbol.name,
+                        detail: format!("{} · {path}:{line}", symbol.kind),
+                        git_status: indexed_git_status(file.kind).to_string(),
+                    });
+                }
+            }
+            let Some(next) = page.next_row else {
+                break;
+            };
+            if next <= row {
+                break;
+            }
+            row = next;
+        }
+    }
+    let result = (hits, total);
+    symbol_cache.insert(cache_key, result.clone());
+    Ok(result)
+}
+
+pub fn changed_text_search_hits(index: &DiffIndex, query: &str) -> Result<(Vec<SearchHit>, usize)> {
+    if query.trim().is_empty() {
+        return Ok((Vec::new(), 0));
+    }
+    let page = index.search_literal(query, 0, 0, 512, 2 * 1024 * 1024)?;
+    let truncated = page.truncated;
+    let hits = page
+        .hits
+        .into_iter()
+        .filter_map(|hit| {
+            let line = hit.new_lineno.or(hit.old_lineno)?;
+            let git_status = index
+                .files
+                .get(hit.file_index)
+                .map(|file| indexed_git_status(file.kind))
+                .unwrap_or("")
+                .to_string();
+            Some(SearchHit {
+                kind: SearchHitKind::Text,
+                path: hit.path.clone(),
+                line: Some(line),
+                title: hit.preview.trim().to_string(),
+                detail: format!("{}:{line}", hit.path),
+                git_status,
+            })
+        })
+        .collect::<Vec<_>>();
+    let total = hits.len().saturating_add(usize::from(truncated));
+    Ok((hits, total))
+}
+
+pub fn execute_local_search(
+    index: &DiffIndex,
+    query: &str,
+    scope: SearchScope,
+    regex: bool,
+    symbol_cache: &mut HashMap<(u64, String), (Vec<SearchHit>, usize)>,
+) -> Result<(Vec<SearchHit>, usize)> {
+    if regex {
+        bail!("Regex search requires the diffing Node launcher");
+    }
+    match scope {
+        SearchScope::Files => Ok(changed_file_search_hits(index, query)),
+        SearchScope::Text => changed_text_search_hits(index, query),
+        SearchScope::Symbols => changed_symbol_search_hits(index, query, symbol_cache),
+        SearchScope::All if query.is_empty() => Ok(changed_file_search_hits(index, query)),
+        SearchScope::All => {
+            let (files, file_total) = changed_file_search_hits(index, query);
+            let (symbols, symbol_total) =
+                changed_symbol_search_hits(index, query, symbol_cache)?;
+            let symbol_locations = symbols
+                .iter()
+                .filter_map(|hit| hit.line.map(|line| (hit.path.clone(), line)))
+                .collect::<HashSet<_>>();
+            let (mut text, text_total) = changed_text_search_hits(index, query)?;
+            let before_dedup = text.len();
+            text.retain(|hit| {
+                !hit
+                    .line
+                    .is_some_and(|line| symbol_locations.contains(&(hit.path.clone(), line)))
+            });
+            let deduplicated = before_dedup.saturating_sub(text.len());
+            let total = file_total
+                .saturating_add(symbol_total)
+                .saturating_add(text_total.saturating_sub(deduplicated));
+            let hits = interleave_search_hits(vec![files, symbols, text], MAX_SEARCH_HITS);
+            Ok((hits, total))
+        }
+    }
+}
+
+fn should_search_locally(request: &SearchRequest, bridge: Option<&SearchClient>) -> bool {
+    bridge.is_none()
+        || request.changed_paths.is_some()
+        || (request.scope == SearchScope::Symbols && request.query.chars().count() < 2)
+}
+
+pub struct SearchRequest {
+    pub id: u64,
+    pub query: String,
+    pub scope: SearchScope,
+    pub regex: bool,
+    pub changed_paths: Option<Vec<String>>,
+}
+
+pub struct SearchWorkerContext {
+    pub bridge: Option<SearchClient>,
+    pub index: Arc<RwLock<Arc<DiffIndex>>>,
+    pub symbol_cache: Mutex<HashMap<(u64, String), (Vec<SearchHit>, usize)>>,
+}
+
+pub fn execute_search_request(
+    ctx: &SearchWorkerContext,
+    request: &SearchRequest,
+) -> Result<SearchResponse> {
+    if should_search_locally(request, ctx.bridge.as_ref()) {
+        let index = ctx
+            .index
+            .read()
+            .map_err(|_| anyhow!("diff index lock poisoned"))?;
+        let (hits, total) = {
+            let mut symbol_cache = ctx
+                .symbol_cache
+                .lock()
+                .map_err(|_| anyhow!("symbol cache lock poisoned"))?;
+            execute_local_search(
+                &index,
+                &request.query,
+                request.scope,
+                request.regex,
+                &mut symbol_cache,
+            )?
+        };
+        return Ok(SearchResponse {
+            hits,
+            total: Some(total),
+            indexing: !index.complete,
+            error: None,
+            notice: None,
+        });
+    }
+    let client = ctx.bridge.as_ref().expect("bridge required for remote search");
+    client.search(
+        &request.query,
+        request.scope,
+        request.regex,
+        request.changed_paths.as_deref(),
+    )
+}
+
+pub fn diff_first_search_hits(hits: Vec<SearchHit>, changed_paths: &HashSet<String>) -> Vec<SearchHit> {
+    let (mut in_diff, outside_diff): (Vec<_>, Vec<_>) = hits
+        .into_iter()
+        .partition(|hit| changed_paths.contains(&hit.path));
+    in_diff.extend(outside_diff);
+    in_diff
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -701,7 +1037,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(response.hits.len(), 2);
-        assert_eq!(response.total, 2);
+        assert_eq!(response.total, Some(2));
         assert_eq!(response.hits[0].title, "app.rs");
         assert_eq!(response.hits[0].detail, "src/");
         assert_eq!(response.hits[1].line, Some(42));

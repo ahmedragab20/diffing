@@ -11,6 +11,7 @@ pub mod editorconfig;
 pub mod handoff;
 pub mod keys;
 pub mod lsp;
+pub mod path_safety;
 pub mod persistence;
 pub mod search;
 pub mod server_lock;

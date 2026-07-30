@@ -1,7 +1,7 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -32,13 +32,15 @@ use crate::lsp::{
     RequestKind, RequestToken, ServerState,
 };
 use crate::persistence::FileDisplay;
+use crate::path_safety;
 use crate::search::{
-    classify_symbol_line, load_local_preview, SearchClient, SearchHit, SearchHitKind,
-    SearchPreview, SearchResponse, SearchScope,
+    diff_first_search_hits, execute_search_request, interleave_search_hits, load_local_preview,
+    SearchClient, SearchHit, SearchHitKind, SearchPreview, SearchRequest, SearchResponse,
+    SearchScope, SearchWorkerContext,
 };
 use crate::themes::{Palette, ThemeName};
 use crate::ui::agent_activity_toast::{render_toast, Toast};
-use crate::ui::comment_form::{comment_form_regions, render_form, CommentFormState};
+use crate::ui::comment_form::{comment_form_regions, render_form, textarea_char_count, CommentFormState};
 use crate::ui::comment_thread::render_thread;
 use crate::ui::comment_tracker::{render_tracker, TrackerState};
 use crate::ui::file_diff_card::{render_card, DiffRenderCache};
@@ -64,7 +66,6 @@ use crate::ui::vim_status_bar::{render_status_bar, StatusBarContext};
 const MAX_MODAL_INPUT_CHARACTERS: usize = 4_096;
 const MAX_PASTE_CHARACTERS: usize = 1_048_576;
 const MAX_TEXTAREA_CHARACTERS: usize = 1_048_576;
-const SEARCH_RESULT_LIMIT: usize = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -194,7 +195,7 @@ struct UiRegions {
     sidebar_divider: Option<Rect>,
     comment_divider: Option<Rect>,
     theme_rows: Vec<(Rect, ThemeName)>,
-    toast_rows: Vec<(Rect, usize)>,
+    toast_rows: Vec<(Rect, u64)>,
     search_scopes: Vec<(Rect, SearchScope)>,
     search_changed: Option<Rect>,
     search_regex: Option<Rect>,
@@ -353,6 +354,7 @@ pub struct App {
     editorconfig: EditorConfigCache,
     pub line_numbers: bool,
     pub mouse_enabled: bool,
+    pub trust_repo_local_bin: bool,
     pub theme: ThemeName,
     pub palette: Palette,
     pub scroll: usize,
@@ -401,26 +403,32 @@ pub struct App {
     search_changed_only: bool,
     search_regex: bool,
     repo_search_hits: Vec<SearchHit>,
-    repo_search_total: usize,
+    repo_search_total: Option<usize>,
     repo_search_indexing: bool,
     repo_search_loading: bool,
     repo_search_error: Option<String>,
     repo_search_notice: Option<String>,
     repo_search_query: String,
     search_request_id: u64,
-    search_request_tx: Option<Sender<SearchRequest>>,
+    search_request_tx: Sender<SearchRequest>,
     search_result_rx: Receiver<SearchEvent>,
+    _search_worker: Arc<SearchWorkerContext>,
+    changed_paths_cache: Option<(u64, Arc<[String]>)>,
+    status_bar_memo: Option<StatusBarMemo>,
     search_preview: Option<SearchPreview>,
     search_preview_loading: bool,
     search_preview_error: Option<String>,
     search_preview_scroll: usize,
     preview_request_id: u64,
-    preview_request_tx: Option<Sender<PreviewRequest>>,
+    preview_request_tx: Sender<PreviewRequest>,
     preview_result_rx: Receiver<PreviewEvent>,
     pub file_tree_scroll: usize,
     file_filter_mode: FileFilterMode,
     pub status_message: Option<String>,
+    status_message_at: Option<std::time::Instant>,
     pending_delete_id: Option<String>,
+    pending_resolve_all: bool,
+    last_ctrl_c_at: Option<std::time::Instant>,
     pub quit: bool,
     pub comments: Vec<ReviewComment>,
     comments_revision: u64,
@@ -436,7 +444,7 @@ pub struct App {
     #[allow(dead_code)]
     pub watcher: CommentsWatcher,
     #[allow(dead_code)]
-    pub repo_watcher: RepoWatcher,
+    pub repo_watcher: Option<RepoWatcher>,
 }
 
 enum IndexEvent {
@@ -444,17 +452,19 @@ enum IndexEvent {
     Failed(String),
 }
 
-struct SearchRequest {
-    id: u64,
-    query: String,
-    scope: SearchScope,
-    regex: bool,
-    changed_paths: Option<Vec<String>>,
-}
-
 struct SearchEvent {
     id: u64,
     response: Result<SearchResponse, String>,
+}
+
+#[derive(Debug, Clone)]
+struct StatusBarMemo {
+    generation: u64,
+    file_index: usize,
+    cursor_row: u64,
+    lsp_revision: u64,
+    location_label: String,
+    diagnostic_hint: Option<String>,
 }
 
 struct PreviewRequest {
@@ -660,214 +670,6 @@ impl DiffRenderMetadata {
     }
 }
 
-fn diff_first_search_hits(hits: Vec<SearchHit>, changed_paths: &HashSet<String>) -> Vec<SearchHit> {
-    let (mut in_diff, outside_diff): (Vec<_>, Vec<_>) = hits
-        .into_iter()
-        .partition(|hit| changed_paths.contains(&hit.path));
-    in_diff.extend(outside_diff);
-    in_diff
-}
-
-fn indexed_git_status(kind: IndexedChangeKind) -> &'static str {
-    match kind {
-        IndexedChangeKind::Modified => "modified",
-        IndexedChangeKind::Added => "added",
-        IndexedChangeKind::Deleted => "deleted",
-        IndexedChangeKind::Renamed => "renamed",
-        IndexedChangeKind::Untracked => "untracked",
-        IndexedChangeKind::Binary => "binary",
-    }
-}
-
-fn fuzzy_path_score(path: &str, query: &str) -> Option<i64> {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
-        return Some(0);
-    }
-    let path_lower = path.to_lowercase();
-    let path_chars: Vec<char> = path_lower.chars().collect();
-    let mut cursor = 0usize;
-    let mut previous = None;
-    let mut score = 0i64;
-    for needle in query.chars() {
-        let offset = path_chars
-            .get(cursor..)?
-            .iter()
-            .position(|character| *character == needle)?;
-        let index = cursor + offset;
-        score += 8;
-        if previous == Some(index.saturating_sub(1)) {
-            score += 12;
-        }
-        if index == 0 || matches!(path_chars[index - 1], '/' | '_' | '-' | '.') {
-            score += 16;
-        }
-        previous = Some(index);
-        cursor = index + 1;
-    }
-    if path_lower.contains(&query) {
-        score += 80;
-    }
-    let basename = path_lower.rsplit('/').next().unwrap_or(&path_lower);
-    if basename.starts_with(&query) {
-        score += 120;
-    }
-    Some(score - path_chars.len().min(i64::MAX as usize) as i64)
-}
-
-fn changed_file_search_hits(index: &DiffIndex, query: &str) -> (Vec<SearchHit>, usize) {
-    let mut ranked = index
-        .files
-        .iter()
-        .enumerate()
-        .filter_map(|(order, file)| {
-            let path = file.display_path().to_string_lossy().into_owned();
-            let score = fuzzy_path_score(&path, query)?;
-            let title = file
-                .display_path()
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or(&path)
-                .to_string();
-            let detail = file
-                .display_path()
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .map(|parent| format!("{}/", parent.to_string_lossy()))
-                .unwrap_or_else(|| "./".to_string());
-            Some((
-                score,
-                order,
-                SearchHit {
-                    kind: SearchHitKind::File,
-                    path,
-                    line: None,
-                    title,
-                    detail,
-                    git_status: indexed_git_status(file.kind).to_string(),
-                },
-            ))
-        })
-        .collect::<Vec<_>>();
-    if !query.trim().is_empty() {
-        ranked.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
-    }
-    let total = ranked.len();
-    let hits = ranked
-        .into_iter()
-        .take(SEARCH_RESULT_LIMIT)
-        .map(|(_, _, hit)| hit)
-        .collect();
-    (hits, total)
-}
-
-fn interleave_search_hits(groups: Vec<Vec<SearchHit>>, limit: usize) -> Vec<SearchHit> {
-    let mut groups = groups.into_iter().map(Vec::into_iter).collect::<Vec<_>>();
-    let mut hits = Vec::new();
-    while hits.len() < limit {
-        let mut appended = false;
-        for group in &mut groups {
-            if let Some(hit) = group.next() {
-                hits.push(hit);
-                appended = true;
-                if hits.len() == limit {
-                    break;
-                }
-            }
-        }
-        if !appended {
-            break;
-        }
-    }
-    hits
-}
-
-fn changed_symbol_search_hits(index: &DiffIndex, query: &str) -> Result<(Vec<SearchHit>, usize)> {
-    let needle = query.trim().to_lowercase();
-    let mut hits = Vec::new();
-    let mut total = 0usize;
-    'files: for (file_index, file) in index.files.iter().enumerate() {
-        let path = file.display_path().to_string_lossy().into_owned();
-        let mut row = 0u64;
-        while row < file.row_count {
-            let page = index.viewport(file_index, row, 512, 1024 * 1024)?;
-            if page.rows.is_empty() {
-                break;
-            }
-            for view_row in page.rows {
-                let ViewRow::Line {
-                    kind: IndexedLineKind::Add,
-                    new_lineno: Some(line),
-                    content,
-                    ..
-                } = view_row
-                else {
-                    continue;
-                };
-                let Some(symbol) = classify_symbol_line(&content) else {
-                    continue;
-                };
-                if !needle.is_empty() && !symbol.name.to_lowercase().contains(&needle) {
-                    continue;
-                }
-                total = total.saturating_add(1);
-                if total > SEARCH_RESULT_LIMIT {
-                    break 'files;
-                }
-                if hits.len() < SEARCH_RESULT_LIMIT {
-                    hits.push(SearchHit {
-                        kind: SearchHitKind::Symbol,
-                        path: path.clone(),
-                        line: Some(line),
-                        title: symbol.name,
-                        detail: format!("{} · {path}:{line}", symbol.kind),
-                        git_status: indexed_git_status(file.kind).to_string(),
-                    });
-                }
-            }
-            let Some(next) = page.next_row else {
-                break;
-            };
-            if next <= row {
-                break;
-            }
-            row = next;
-        }
-    }
-    Ok((hits, total))
-}
-
-fn changed_text_search_hits(index: &DiffIndex, query: &str) -> Result<(Vec<SearchHit>, usize)> {
-    if query.trim().is_empty() {
-        return Ok((Vec::new(), 0));
-    }
-    let page = index.search_literal(query, 0, 0, 512, 2 * 1024 * 1024)?;
-    let truncated = page.truncated;
-    let hits = page
-        .hits
-        .into_iter()
-        .filter_map(|hit| {
-            let line = hit.new_lineno.or(hit.old_lineno)?;
-            let git_status = index
-                .files
-                .get(hit.file_index)
-                .map(|file| indexed_git_status(file.kind))
-                .unwrap_or("")
-                .to_string();
-            Some(SearchHit {
-                kind: SearchHitKind::Text,
-                path: hit.path.clone(),
-                line: Some(line),
-                title: hit.preview.trim().to_string(),
-                detail: format!("{}:{line}", hit.path),
-                git_status,
-            })
-        })
-        .collect::<Vec<_>>();
-    let total = hits.len().saturating_add(usize::from(truncated));
-    Ok((hits, total))
-}
-
 fn spawn_index_worker(
     repo_root: PathBuf,
     git_diff_args: Vec<String>,
@@ -888,7 +690,7 @@ fn spawn_index_worker(
 }
 
 fn spawn_search_worker(
-    client: SearchClient,
+    worker: Arc<SearchWorkerContext>,
     request_rx: Receiver<SearchRequest>,
     result_tx: Sender<SearchEvent>,
 ) -> Result<()> {
@@ -902,13 +704,7 @@ fn spawn_search_worker(
                 while let Ok(newer) = request_rx.try_recv() {
                     request = newer;
                 }
-                let response = client
-                    .search(
-                        &request.query,
-                        request.scope,
-                        request.regex,
-                        request.changed_paths.as_deref(),
-                    )
+                let response = execute_search_request(&worker, &request)
                     .map_err(|error| error.to_string());
                 let _ = result_tx.send(SearchEvent {
                     id: request.id,
@@ -920,7 +716,8 @@ fn spawn_search_worker(
 }
 
 fn spawn_preview_worker(
-    client: SearchClient,
+    bridge: Option<SearchClient>,
+    repo_root: PathBuf,
     request_rx: Receiver<PreviewRequest>,
     result_tx: Sender<PreviewEvent>,
 ) -> Result<()> {
@@ -931,9 +728,11 @@ fn spawn_preview_worker(
                 while let Ok(newer) = request_rx.try_recv() {
                     request = newer;
                 }
-                let response = client
-                    .preview(&request.path)
-                    .map_err(|error| error.to_string());
+                let response = match bridge.as_ref() {
+                    Some(client) => client.preview(&request.path),
+                    None => load_local_preview(&repo_root, &request.path),
+                }
+                .map_err(|error| error.to_string());
                 let _ = result_tx.send(PreviewEvent {
                     id: request.id,
                     response,
@@ -977,13 +776,24 @@ impl App {
         let (search_result_tx, search_result_rx) = mpsc::channel();
         let (preview_request_tx, preview_request_rx) = mpsc::channel();
         let (preview_result_tx, preview_result_rx) = mpsc::channel();
-        let has_search_client = search_client.is_some();
-        if let Some(client) = search_client.clone() {
-            spawn_search_worker(client.clone(), search_request_rx, search_result_tx)?;
-            spawn_preview_worker(client, preview_request_rx, preview_result_tx)?;
-        }
+        let search_worker = Arc::new(SearchWorkerContext {
+            bridge: search_client.clone(),
+            index: shared_index.clone(),
+            symbol_cache: Mutex::new(HashMap::new()),
+        });
+        spawn_search_worker(search_worker.clone(), search_request_rx, search_result_tx)?;
+        spawn_preview_worker(
+            search_client.clone(),
+            repo_root.clone(),
+            preview_request_rx,
+            preview_result_tx,
+        )?;
         let theme = persisted.theme;
-        let lsp = LspManager::new(repo_root.clone(), persisted.intelligence_mode);
+        let lsp = LspManager::new(
+            repo_root.clone(),
+            persisted.intelligence_mode,
+            persisted.trust_repo_local_bin,
+        );
         let store = FileCommentStore::new(repo_str);
         let comments = store.load().unwrap_or_default();
         let last_comment_count = comments.len();
@@ -993,7 +803,7 @@ impl App {
             .unwrap_or_else(|| repo_root.clone());
         std::fs::create_dir_all(&storage_dir)?;
         let watcher = CommentsWatcher::start(&storage_dir)?;
-        let repo_watcher = RepoWatcher::start(&repo_root)?;
+        let repo_watcher = RepoWatcher::start(&repo_root);
         let agent_status = AgentStatus::Idle;
         Ok(Self {
             repo_root,
@@ -1026,6 +836,7 @@ impl App {
             editorconfig: EditorConfigCache::default(),
             line_numbers: persisted.line_numbers,
             mouse_enabled: persisted.mouse_enabled,
+            trust_repo_local_bin: persisted.trust_repo_local_bin,
             theme,
             palette: Palette::for_terminal(theme),
             scroll: 0,
@@ -1074,26 +885,32 @@ impl App {
             search_changed_only: false,
             search_regex: false,
             repo_search_hits: Vec::new(),
-            repo_search_total: 0,
+            repo_search_total: None,
             repo_search_indexing: false,
             repo_search_loading: false,
             repo_search_error: None,
             repo_search_notice: None,
             repo_search_query: String::new(),
             search_request_id: 0,
-            search_request_tx: has_search_client.then_some(search_request_tx),
+            search_request_tx,
             search_result_rx,
+            _search_worker: search_worker,
+            changed_paths_cache: None,
+            status_bar_memo: None,
             search_preview: None,
             search_preview_loading: false,
             search_preview_error: None,
             search_preview_scroll: 0,
             preview_request_id: 0,
-            preview_request_tx: has_search_client.then_some(preview_request_tx),
+            preview_request_tx,
             preview_result_rx,
             file_tree_scroll: 0,
             file_filter_mode: FileFilterMode::All,
             status_message: None,
+            status_message_at: None,
             pending_delete_id: None,
+            pending_resolve_all: false,
+            last_ctrl_c_at: None,
             quit: false,
             tracker: TrackerState::new(),
             comment_detail_scroll: 0,
@@ -1165,6 +982,8 @@ impl App {
         self.index = Arc::new(snapshot);
         self.apply_file_filter();
         self.lsp_active_path = None;
+        self.changed_paths_cache = None;
+        self.status_bar_memo = None;
         if let Ok(mut shared) = self.shared_index.write() {
             *shared = self.index.clone();
         }
@@ -1274,6 +1093,7 @@ impl App {
     }
 
     pub fn poll_background(&mut self) -> bool {
+        let status_expired = self.tick_status_message_ttl();
         let pointer_dirty = std::mem::take(&mut self.pointer_overlay_dirty);
         let repo_dirty = self.tick_repo_watcher();
         let review_dirty = if self.experience == Experience::Review {
@@ -1290,6 +1110,25 @@ impl App {
             | review_dirty
             | repo_dirty
             | pointer_dirty
+            | status_expired
+    }
+
+    fn tick_status_message_ttl(&mut self) -> bool {
+        const STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(4);
+        if self
+            .status_message_at
+            .is_some_and(|started| started.elapsed() > STATUS_TTL)
+        {
+            self.status_message = None;
+            self.status_message_at = None;
+            return true;
+        }
+        false
+    }
+
+    fn set_status_message(&mut self, message: impl Into<String>) {
+        self.status_message = Some(message.into());
+        self.status_message_at = Some(std::time::Instant::now());
     }
 
     fn tick_search(&mut self) -> bool {
@@ -1301,12 +1140,7 @@ impl App {
             self.repo_search_loading = false;
             match event.response {
                 Ok(response) => {
-                    let changed_paths: HashSet<String> = self
-                        .index
-                        .files
-                        .iter()
-                        .map(|file| file.display_path().to_string_lossy().into_owned())
-                        .collect();
+                    let changed_paths = self.changed_paths_set();
                     self.repo_search_hits = diff_first_search_hits(response.hits, &changed_paths);
                     self.repo_search_total = response.total;
                     self.repo_search_indexing = response.indexing;
@@ -1319,7 +1153,7 @@ impl App {
                 }
                 Err(error) => {
                     self.repo_search_hits.clear();
-                    self.repo_search_total = 0;
+                    self.repo_search_total = None;
                     self.repo_search_error = Some(error);
                     self.repo_search_notice = None;
                     self.clear_search_preview();
@@ -1366,7 +1200,9 @@ impl App {
             .and_then(|index| self.files.get(index))
             .map(|file| file.display_path().to_path_buf());
         if path != self.lsp_active_path {
-            self.lsp_active_path = None;
+            if let Some(previous) = self.lsp_active_path.take() {
+                let _ = self.lsp.close_document(&previous);
+            }
             self.code_column = None;
             self.queued_lsp = None;
             self.cancel_pending_language_request();
@@ -1381,8 +1217,15 @@ impl App {
                         ServerState::Error
                     }
                 };
-                self.lsp_active_path = Some(path);
+                self.lsp_active_path = Some(path.clone());
                 dirty |= previous != self.lsp_last_state;
+                if let Some(warning) = self.lsp.take_sync_warning() {
+                    self.status_message = Some(warning);
+                } else if self.lsp_last_state == ServerState::Ready {
+                    if let Some(label) = self.lsp.resolved_command_label(&path) {
+                        self.status_message = Some(format!("language server: {label}"));
+                    }
+                }
             }
         }
 
@@ -1440,9 +1283,13 @@ impl App {
             }
             Ok(ServerState::Unavailable) => {
                 let server = LspManager::expected_server(&path).unwrap_or("language server");
-                self.status_message = Some(format!(
-                    "{server} was not found in node_modules/.bin or PATH"
-                ));
+                self.status_message = Some(if self.trust_repo_local_bin {
+                    format!("{server} was not found in PATH or node_modules/.bin")
+                } else {
+                    format!(
+                        "{server} was not found in PATH · enable repo-local trust in Settings to use node_modules/.bin"
+                    )
+                });
             }
             Ok(ServerState::Error) | Err(_) => {
                 self.status_message = Some("language server could not start".to_string());
@@ -1585,12 +1432,10 @@ impl App {
     }
 
     fn tick_repo_watcher(&mut self) -> bool {
-        let mut relevant = false;
-        while let Some(event) = self.repo_watcher.try_recv() {
-            if let Ok(event) = event {
-                relevant |= event.paths.iter().any(|path| relevant_repo_path(path));
-            }
-        }
+        let relevant = self
+            .repo_watcher
+            .as_ref()
+            .is_some_and(RepoWatcher::try_recv);
         if relevant {
             if self.indexing {
                 self.reindex_pending = true;
@@ -1719,7 +1564,9 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
-        self.status_message = None;
+        if self.handle_global_quit(key) {
+            return;
+        }
         match self.mode {
             Mode::CommentForm => self.handle_form_key(key),
             Mode::SendReview => self.handle_send_review_key(key),
@@ -1732,26 +1579,84 @@ impl App {
             Mode::CommentDetail => self.handle_comment_detail_key(key),
             Mode::Help => self.handle_help_key(key),
             Mode::Normal => {
-                if key.code == crossterm::event::KeyCode::Esc && self.visual_anchor.take().is_some()
-                {
-                    self.status_message = Some("line selection cancelled".to_string());
-                    return;
-                }
                 if self.image_focus_active() && self.try_handle_image_key(key) {
-                    return;
-                }
-                if self.focus == Focus::FileTree && key.code == crossterm::event::KeyCode::Enter {
-                    if self.file_tree.selected_file_idx().is_some() {
-                        self.focus = Focus::Diff;
-                    } else {
-                        self.file_tree.toggle_selected();
-                    }
+                    self.keymap.clear();
                     return;
                 }
                 if let Some(command) = self.keymap.feed(&key) {
+                    if matches!(command.action, Action::ExpandContext)
+                        && self.focus == Focus::FileTree
+                        && key.code == crossterm::event::KeyCode::Enter
+                    {
+                        if self.file_tree.selected_file_idx().is_some() {
+                            self.focus = Focus::Diff;
+                        } else {
+                            self.file_tree.toggle_selected();
+                        }
+                        return;
+                    }
                     self.dispatch_command(command);
+                    return;
+                }
+                if self.keymap.pending_display().is_empty() {
+                    if key.code == crossterm::event::KeyCode::Esc
+                        && self.visual_anchor.take().is_some()
+                    {
+                        self.status_message = Some("line selection cancelled".to_string());
+                    }
                 }
             }
+        }
+    }
+
+    fn handle_global_quit(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        if key.code != KeyCode::Char('c') || !key.modifiers.contains(KeyModifiers::CONTROL) {
+            return false;
+        }
+        let in_text_entry = matches!(self.mode, Mode::CommentForm | Mode::SendReview);
+        if in_text_entry {
+            let has_draft = self.text_entry_has_draft();
+            let now = std::time::Instant::now();
+            let double_tap = self
+                .last_ctrl_c_at
+                .is_some_and(|previous| now.duration_since(previous) < std::time::Duration::from_secs(1));
+            self.last_ctrl_c_at = Some(now);
+            if has_draft && double_tap {
+                self.quit = true;
+                return true;
+            }
+            self.cancel_text_entry();
+            return true;
+        }
+        self.quit = true;
+        true
+    }
+
+    fn text_entry_has_draft(&self) -> bool {
+        if let Some(form) = &self.comment_form {
+            return !form.body().trim().is_empty();
+        }
+        if let Some(send) = &self.send_review {
+            return !send.body().trim().is_empty();
+        }
+        false
+    }
+
+    fn cancel_text_entry(&mut self) {
+        match self.mode {
+            Mode::CommentForm => {
+                self.comment_form = None;
+                self.pending_comment_target = None;
+                self.mode = Mode::Normal;
+                self.set_status_message("comment cancelled");
+            }
+            Mode::SendReview => {
+                self.send_review = None;
+                self.mode = Mode::Normal;
+                self.set_status_message("send cancelled");
+            }
+            _ => {}
         }
     }
 
@@ -2126,16 +2031,14 @@ impl App {
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(index) = self
+                if let Some(toast_id) = self
                     .regions
                     .toast_rows
                     .iter()
                     .find(|(area, _)| contains(*area, mouse.column, mouse.row))
-                    .map(|(_, index)| *index)
+                    .map(|(_, id)| *id)
                 {
-                    if index < self.toasts.len() {
-                        self.toasts.remove(index);
-                    }
+                    self.toasts.retain(|toast| toast.id != toast_id);
                     return true;
                 }
                 if self
@@ -2385,6 +2288,9 @@ impl App {
         if command.action != Action::DeleteComment {
             self.pending_delete_id = None;
         }
+        if command.action != Action::ResolveAllComments {
+            self.pending_resolve_all = false;
+        }
         match command.action {
             Action::Quit => self.quit = true,
             Action::OpenSendReview => self.open_send_review(),
@@ -2505,7 +2411,14 @@ impl App {
             self.status_message = Some("no file selected".to_string());
             return;
         };
-        let path = self.repo_root.join(file.display_path());
+        let relative = std::path::Path::new(file.display_path());
+        let path = match path_safety::resolve_within_repo(&self.repo_root, relative) {
+            Ok(path) => path,
+            Err(error) => {
+                self.status_message = Some(format!("cannot open editor: {error:#}"));
+                return;
+            }
+        };
         self.pending_editor = Some(EditorTarget {
             path,
             line: self.current_line().max(1),
@@ -2520,7 +2433,7 @@ impl App {
 
     pub fn report_error(&mut self, message: impl Into<String>) {
         let message = message.into();
-        self.status_message = Some(message.clone());
+        self.set_status_message(message.clone());
         self.toasts.push(Toast::warn(message));
     }
 
@@ -2552,6 +2465,7 @@ impl App {
                             "comment limited to {MAX_TEXTAREA_CHARACTERS} characters"
                         ));
                     }
+                    form.refresh_char_count();
                 }
             }
             Mode::SendReview => {
@@ -2562,6 +2476,7 @@ impl App {
                             "general comment limited to {MAX_TEXTAREA_CHARACTERS} characters"
                         ));
                     }
+                    state.general_char_count = textarea_char_count(&state.general);
                 }
             }
             Mode::Search => {
@@ -2789,60 +2704,77 @@ impl App {
         }
     }
 
+    fn cached_changed_paths(&mut self) -> Arc<[String]> {
+        let generation = self.index.generation;
+        if self
+            .changed_paths_cache
+            .as_ref()
+            .is_some_and(|(cached_generation, _)| *cached_generation == generation)
+        {
+            return self.changed_paths_cache.as_ref().unwrap().1.clone();
+        }
+        let paths: Arc<[String]> = self
+            .index
+            .files
+            .iter()
+            .map(|file| file.display_path().to_string_lossy().into_owned())
+            .collect();
+        self.changed_paths_cache = Some((generation, paths.clone()));
+        paths
+    }
+
+    fn changed_paths_set(&mut self) -> HashSet<String> {
+        self.cached_changed_paths()
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>()
+    }
+
     fn queue_repo_search(&mut self) {
         self.search_request_id = self.search_request_id.saturating_add(1);
         self.repo_search_query = self.modal_input.trim().to_string();
 
-        // A short symbol query is much more useful as a browse/filter over
-        // definitions in changed lines than as an enormous repository grep.
-        // This mirrors the web palette and also gives the standalone TUI a
-        // complete Symbols implementation without the Node bridge.
-        if self.search_scope == SearchScope::Symbols && self.repo_search_query.chars().count() < 2 {
-            if self.search_changed_only {
-                self.refresh_changed_search_fallback();
-            } else {
-                self.repo_search_hits.clear();
-                self.repo_search_total = 0;
-                self.repo_search_loading = false;
-                self.repo_search_indexing = self.indexing;
-                self.repo_search_error = None;
-                self.repo_search_notice = None;
-                self.clear_search_preview();
-            }
+        if self.search_scope == SearchScope::Symbols
+            && self.repo_search_query.chars().count() < 2
+            && self.search_client.is_some()
+            && !self.search_changed_only
+        {
+            self.repo_search_hits.clear();
+            self.repo_search_total = None;
+            self.repo_search_loading = false;
+            self.repo_search_indexing = self.indexing;
+            self.repo_search_error = None;
+            self.repo_search_notice = None;
+            self.clear_search_preview();
             return;
         }
 
-        let Some(tx) = self.search_request_tx.clone() else {
-            self.refresh_changed_search_fallback();
-            return;
-        };
+        let use_changed_only = self.search_changed_only
+            || self.search_client.is_none()
+            || (self.search_scope == SearchScope::Symbols
+                && self.repo_search_query.chars().count() < 2);
         self.repo_search_loading = true;
         self.repo_search_error = None;
         self.repo_search_notice = None;
         self.repo_search_hits.clear();
-        self.repo_search_total = 0;
+        self.repo_search_total = None;
         self.clear_search_preview();
+        let changed_paths = use_changed_only.then(|| self.cached_changed_paths().to_vec());
         let request = SearchRequest {
             id: self.search_request_id,
             query: self.repo_search_query.clone(),
             scope: self.search_scope,
             regex: self.search_scope == SearchScope::Text && self.search_regex,
-            changed_paths: self.search_changed_only.then(|| {
-                self.index
-                    .files
-                    .iter()
-                    .map(|file| file.display_path().to_string_lossy().into_owned())
-                    .collect()
-            }),
+            changed_paths,
         };
-        if tx.send(request).is_err() {
+        if self.search_request_tx.send(request).is_err() {
             self.repo_search_loading = false;
-            self.repo_search_error = Some("fff search worker stopped".to_string());
+            self.repo_search_error = Some("search worker stopped".to_string());
         }
     }
 
     fn toggle_search_changed_only(&mut self) {
-        if self.search_request_tx.is_none() {
+        if self.search_client.is_none() {
             self.status_message =
                 Some("whole-repository search requires the diffing Node launcher".to_string());
             return;
@@ -2853,7 +2785,7 @@ impl App {
     }
 
     fn toggle_search_regex(&mut self) {
-        if self.search_request_tx.is_none() {
+        if self.search_client.is_none() {
             self.status_message =
                 Some("regex search requires the diffing Node launcher".to_string());
             return;
@@ -2861,74 +2793,6 @@ impl App {
         self.search_regex = !self.search_regex;
         self.search_cursor = 0;
         self.queue_repo_search();
-    }
-
-    fn refresh_changed_search_fallback(&mut self) {
-        self.search_changed_only = true;
-        self.repo_search_query = self.modal_input.trim().to_string();
-        self.repo_search_hits.clear();
-        self.repo_search_total = 0;
-        self.repo_search_loading = false;
-        self.repo_search_indexing = self.indexing;
-        self.repo_search_error = None;
-        self.repo_search_notice = None;
-        self.clear_search_preview();
-
-        if self.search_regex {
-            self.repo_search_error =
-                Some("Regex search requires the diffing Node launcher".to_string());
-            return;
-        }
-        let result: Result<(Vec<SearchHit>, usize)> = (|| match self.search_scope {
-            SearchScope::Files => Ok(changed_file_search_hits(
-                &self.index,
-                &self.repo_search_query,
-            )),
-            SearchScope::Text => changed_text_search_hits(&self.index, &self.repo_search_query),
-            SearchScope::Symbols => {
-                changed_symbol_search_hits(&self.index, &self.repo_search_query)
-            }
-            SearchScope::All if self.repo_search_query.is_empty() => Ok(changed_file_search_hits(
-                &self.index,
-                &self.repo_search_query,
-            )),
-            SearchScope::All => {
-                let (files, file_total) =
-                    changed_file_search_hits(&self.index, &self.repo_search_query);
-                let (symbols, symbol_total) =
-                    changed_symbol_search_hits(&self.index, &self.repo_search_query)?;
-                let symbol_locations = symbols
-                    .iter()
-                    .filter_map(|hit| hit.line.map(|line| (hit.path.clone(), line)))
-                    .collect::<HashSet<_>>();
-                let (mut text, text_total) =
-                    changed_text_search_hits(&self.index, &self.repo_search_query)?;
-                let before_dedup = text.len();
-                text.retain(|hit| {
-                    !hit.line
-                        .is_some_and(|line| symbol_locations.contains(&(hit.path.clone(), line)))
-                });
-                let deduplicated = before_dedup.saturating_sub(text.len());
-                let total = file_total
-                    .saturating_add(symbol_total)
-                    .saturating_add(text_total.saturating_sub(deduplicated));
-                let hits = interleave_search_hits(vec![files, symbols, text], SEARCH_RESULT_LIMIT);
-                Ok((hits, total))
-            }
-        })();
-        match result {
-            Ok((hits, total)) => {
-                self.repo_search_hits = hits.into_iter().take(SEARCH_RESULT_LIMIT).collect();
-                self.repo_search_total = total;
-                self.search_cursor = self
-                    .search_cursor
-                    .min(self.repo_search_hits.len().saturating_sub(1));
-                self.queue_search_preview();
-            }
-            Err(error) => {
-                self.repo_search_error = Some(format!("search failed: {error}"));
-            }
-        }
     }
 
     fn move_search_cursor(&mut self, delta: isize) {
@@ -2959,27 +2823,13 @@ impl App {
             .line
             .map(|line| line.saturating_sub(4) as usize)
             .unwrap_or(0);
-        let Some(tx) = self.preview_request_tx.as_ref() else {
-            self.search_preview_loading = false;
-            match load_local_preview(&self.repo_root, &hit.path) {
-                Ok(preview) => {
-                    self.search_preview = Some(preview);
-                    self.search_preview_error = None;
-                }
-                Err(error) => {
-                    self.search_preview = None;
-                    self.search_preview_error = Some(error.to_string());
-                }
-            }
-            return;
-        };
         self.search_preview_loading = true;
         self.search_preview_error = None;
         let request = PreviewRequest {
             id: self.preview_request_id,
             path: hit.path,
         };
-        if tx.send(request).is_err() {
+        if self.preview_request_tx.send(request).is_err() {
             self.search_preview_loading = false;
             self.search_preview_error = Some("preview worker stopped".to_string());
         }
@@ -3204,6 +3054,9 @@ impl App {
         if key.code != KeyCode::Delete {
             self.pending_delete_id = None;
         }
+        if key.code != KeyCode::Char('X') {
+            self.pending_resolve_all = false;
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Char('q' | 'o') => self.mode = Mode::Normal,
             KeyCode::Enter => {
@@ -3270,16 +3123,20 @@ impl App {
         let previous_viewport_offset = self
             .continuous_cursor
             .saturating_sub(self.continuous_scroll);
+        let comment_counts = if self.experience == Experience::Review {
+            let mut counts = HashMap::with_capacity(self.comments.len());
+            for comment in &self.comments {
+                *counts
+                    .entry(PathBuf::from(&comment.file_path))
+                    .or_insert(0u32) += 1;
+            }
+            counts
+        } else {
+            HashMap::new()
+        };
         for index in 0..self.files.len() {
             let path = self.files[index].display_path();
-            let count = if self.experience == Experience::Review {
-                self.comments
-                    .iter()
-                    .filter(|comment| std::path::Path::new(&comment.file_path) == path)
-                    .count() as u32
-            } else {
-                0
-            };
+            let count = comment_counts.get(path).copied().unwrap_or(0);
             self.file_tree.set_comment_count(index, count);
             self.file_tree.set_viewed(
                 index,
@@ -3504,15 +3361,14 @@ impl App {
         }
         // Otherwise feed the key to the general-comment textarea.
         if sr.focused == SendField::General {
-            if textarea_character_count(&sr.general) >= MAX_TEXTAREA_CHARACTERS
-                && textarea_key_inserts(&key)
-            {
+            if sr.general_char_count >= MAX_TEXTAREA_CHARACTERS && textarea_key_inserts(&key) {
                 self.status_message = Some(format!(
                     "general comment limited to {MAX_TEXTAREA_CHARACTERS} characters"
                 ));
                 return;
             }
             sr.general.input(key);
+            sr.general_char_count = textarea_char_count(&sr.general);
         }
     }
 
@@ -3608,15 +3464,14 @@ impl App {
             return;
         }
         if let Some(form) = self.comment_form.as_mut() {
-            if textarea_character_count(&form.textarea) >= MAX_TEXTAREA_CHARACTERS
-                && textarea_key_inserts(&key)
-            {
+            if form.char_count >= MAX_TEXTAREA_CHARACTERS && textarea_key_inserts(&key) {
                 self.status_message = Some(format!(
                     "comment limited to {MAX_TEXTAREA_CHARACTERS} characters"
                 ));
                 return;
             }
             form.textarea.input(key);
+            form.refresh_char_count();
         }
     }
 
@@ -3889,6 +3744,18 @@ impl App {
         use crossterm::event::KeyCode;
         match key.code {
             KeyCode::Esc | KeyCode::Char(',') => self.mode = Mode::Normal,
+            KeyCode::Char('r') if self.settings_state.cursor == 9 || self.settings_state.cursor == 10 => {
+                self.lsp.retry_failed_servers();
+                self.lsp_active_path = None;
+                self.lsp_last_state = if self.lsp.mode() == crate::lsp::IntelligenceMode::Off {
+                    ServerState::Off
+                } else {
+                    ServerState::Unavailable
+                };
+                self.queued_lsp = None;
+                self.cancel_pending_language_request();
+                self.status_message = Some("retrying language servers…".to_string());
+            }
             KeyCode::Up | KeyCode::Char('k') => self.settings_state.move_cursor(-1),
             KeyCode::Down | KeyCode::Char('j') => self.settings_state.move_cursor(1),
             KeyCode::Left => self.activate_setting(-1),
@@ -3963,7 +3830,33 @@ impl App {
                 self.persist_settings();
                 self.status_message = Some(format!("language intelligence: {}", mode.label()));
             }
-            10 => self.open_theme_picker(),
+            10 => {
+                self.trust_repo_local_bin = !self.trust_repo_local_bin;
+                self.lsp.set_trust_repo_local_bin(self.trust_repo_local_bin);
+                self.lsp_active_path = None;
+                self.lsp_last_state = if self.lsp.mode() == crate::lsp::IntelligenceMode::Off {
+                    ServerState::Off
+                } else {
+                    ServerState::Unavailable
+                };
+                self.queued_lsp = None;
+                self.cancel_pending_language_request();
+                if let Err(error) = crate::persistence::save_trust_repo_local_bin(
+                    self.repo_root.to_str().unwrap_or("."),
+                    self.trust_repo_local_bin,
+                ) {
+                    self.report_error(format!("could not save trust setting: {error}"));
+                }
+                self.status_message = Some(format!(
+                    "repo-local language servers: {}",
+                    if self.trust_repo_local_bin {
+                        "trusted"
+                    } else {
+                        "blocked"
+                    }
+                ));
+            }
+            11 => self.open_theme_picker(),
             _ => {}
         }
     }
@@ -4547,10 +4440,28 @@ impl App {
     }
 
     fn resolve_all_comments(&mut self) {
+        if !self.pending_resolve_all {
+            let open = self
+                .comments
+                .iter()
+                .filter(|comment| comment.status == CommentStatus::Open)
+                .count();
+            if open == 0 {
+                self.set_status_message("no open comments");
+                return;
+            }
+            self.pending_resolve_all = true;
+            self.set_status_message(format!(
+                "press X again to resolve {open} open thread{}",
+                if open == 1 { "" } else { "s" }
+            ));
+            return;
+        }
+        self.pending_resolve_all = false;
         match self.comment_store.resolve_all() {
-            Ok(0) => self.status_message = Some("no open comments".to_string()),
+            Ok(0) => self.set_status_message("no open comments"),
             Ok(count) => {
-                self.status_message = Some(format!("resolved {count} comment threads"));
+                self.set_status_message(format!("resolved {count} comment threads"));
                 self.reload_comments_with_notifications(false);
             }
             Err(error) => self.report_error(format!("resolve all failed: {error}")),
@@ -4702,6 +4613,33 @@ impl App {
             .rows
             .into_iter()
             .next()
+    }
+
+    fn status_bar_hints(&mut self) -> (String, Option<String>) {
+        let file_index = self.file_tree.active_file_idx().unwrap_or(usize::MAX);
+        let lsp_revision = self.lsp.diagnostics_revision();
+        let generation = self.index.generation;
+        let cursor_row = self.cursor_row;
+        if let Some(memo) = &self.status_bar_memo {
+            if memo.generation == generation
+                && memo.file_index == file_index
+                && memo.cursor_row == cursor_row
+                && memo.lsp_revision == lsp_revision
+            {
+                return (memo.location_label.clone(), memo.diagnostic_hint.clone());
+            }
+        }
+        let location_label = self.current_location_label();
+        let diagnostic_hint = self.current_diagnostic_hint();
+        self.status_bar_memo = Some(StatusBarMemo {
+            generation,
+            file_index,
+            cursor_row,
+            lsp_revision,
+            location_label: location_label.clone(),
+            diagnostic_hint: diagnostic_hint.clone(),
+        });
+        (location_label, diagnostic_hint)
     }
 
     fn current_diagnostic_hint(&self) -> Option<String> {
@@ -5179,18 +5117,18 @@ impl App {
             let tracker_inner = inset(tracker_area, 1);
             self.tracker
                 .keep_cursor_visible(&self.comments, tracker_inner.height as usize);
-            let outdated_comments: HashSet<String> = self
-                .tracker
-                .visible_indices(&self.comments)
-                .into_iter()
+            let visible_comments = self.tracker.visible_indices(&self.comments);
+            let outdated_comments: HashSet<String> = visible_comments
+                .iter()
                 .skip(self.tracker.scroll)
                 .take(tracker_inner.height as usize)
-                .filter_map(|index| self.comments.get(index))
+                .filter_map(|index| self.comments.get(*index))
                 .filter(|comment| self.comment_is_outdated(comment))
                 .map(|comment| comment.id.clone())
                 .collect();
             render_tracker(
                 &self.comments,
+                &visible_comments,
                 &outdated_comments,
                 &mut self.tracker,
                 matches!(self.focus, Focus::Tracker),
@@ -5200,7 +5138,6 @@ impl App {
             );
             self.regions.comment_panel = Some(tracker_area);
             let inner = tracker_inner;
-            let visible_comments = self.tracker.visible_indices(&self.comments);
             self.regions.comment_rows = (0..inner.height as usize)
                 .filter_map(|offset| {
                     visible_comments
@@ -5246,7 +5183,8 @@ impl App {
             AgentStatus::Idle
         };
         let active_file_idx = self.file_tree.active_file_idx();
-        let navigable_files = self.file_tree.navigable_file_indices();
+        let navigable_files = self.file_tree.navigable_file_indices().to_vec();
+        let (status_location_label, diagnostic_hint) = self.status_bar_hints();
         let file_idx = active_file_idx
             .and_then(|selected| navigable_files.iter().position(|index| *index == selected))
             .unwrap_or(0);
@@ -5281,7 +5219,6 @@ impl App {
                 Focus::Diff => "wheel/jk move · c comment · / search · , settings · ? help",
             },
         };
-        let diagnostic_hint = self.current_diagnostic_hint();
         let pending_key_hint = self.keymap.pending_hint();
         let selection_hint = self.visual_anchor.map(|(_, anchor)| {
             let rows = anchor.abs_diff(self.cursor_row).saturating_add(1);
@@ -5309,7 +5246,7 @@ impl App {
             active_file_idx.map(|_| {
                 format!(
                     "{}{}{}",
-                    self.current_location_label(),
+                    status_location_label,
                     if self.experience == Experience::Viewer || self.comments.is_empty() {
                         String::new()
                     } else {
@@ -5362,6 +5299,7 @@ impl App {
                     comments_visible: self.comments_visible,
                     review_enabled: self.experience == Experience::Review,
                     intelligence_mode: self.lsp.mode(),
+                    trust_repo_local_bin: self.trust_repo_local_bin,
                     theme_name: self.theme.display_name(),
                 },
                 area,
@@ -5388,10 +5326,9 @@ impl App {
                 width: 38.min(area.width),
                 height: toast_height,
             };
-            for (i, (index, toast)) in self
+            for (i, toast) in self
                 .toasts
                 .iter()
-                .enumerate()
                 .skip(self.toasts.len().saturating_sub(visible))
                 .enumerate()
             {
@@ -5402,7 +5339,7 @@ impl App {
                     height: 1,
                 };
                 render_toast(toast, row, &self.palette, buf);
-                self.regions.toast_rows.push((row, index));
+                self.regions.toast_rows.push((row, toast.id));
             }
         }
     }
@@ -6390,10 +6327,9 @@ impl App {
         }
 
         let shown = self.repo_search_hits.len();
-        let count = if self.repo_search_total > shown {
-            format!("{shown} of {}", self.repo_search_total)
-        } else {
-            format!("{shown}")
+        let count = match self.repo_search_total {
+            Some(total) if total > shown => format!("{shown} of {total}"),
+            _ => format!("{shown}"),
         };
         let (state, state_color) = if self.repo_search_loading {
             ("  ◌ searching".to_string(), tokens.info)
@@ -6408,7 +6344,11 @@ impl App {
             Span::styled(
                 format!(
                     " {count} result{}",
-                    if self.repo_search_total == 1 { "" } else { "s" }
+                    if self.repo_search_total.unwrap_or(shown.max(1)) == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
                 ),
                 Style::default().fg(tokens.text_subtle).bg(tokens.raised),
             ),
@@ -7557,17 +7497,6 @@ fn metadata_files(index: &DiffIndex) -> Vec<FileDiff> {
         .collect()
 }
 
-fn relevant_repo_path(path: &std::path::Path) -> bool {
-    !path.components().any(|component| {
-        let name = component.as_os_str();
-        name == ".git"
-            || name == "node_modules"
-            || name == "target"
-            || name == "dist"
-            || name == ".diffing"
-    })
-}
-
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -7883,7 +7812,11 @@ mod tests {
 
     #[test]
     fn fallback_search_implements_files_text_and_symbols() {
+        use crate::search::{
+            changed_file_search_hits, changed_symbol_search_hits, changed_text_search_hits,
+        };
         use diffing_core::index::build_index_from_reader;
+        use std::collections::HashMap;
         use std::io::Cursor;
 
         let directory = tempfile::tempdir().unwrap();
@@ -7895,7 +7828,9 @@ mod tests {
         assert_eq!(file_total, 1);
         assert_eq!(files[0].path, "src/search.rs");
 
-        let (symbols, symbol_total) = changed_symbol_search_hits(&index, "render").unwrap();
+        let mut symbol_cache = HashMap::new();
+        let (symbols, symbol_total) =
+            changed_symbol_search_hits(&index, "render", &mut symbol_cache).unwrap();
         assert_eq!(symbol_total, 1);
         assert_eq!(symbols[0].title, "render_search");
         assert_eq!(symbols[0].line, Some(2));

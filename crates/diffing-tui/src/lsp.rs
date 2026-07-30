@@ -1,23 +1,39 @@
 //! Optional local Language Server Protocol client.
 //!
-//! Servers are discovered from PATH and communicate over stdio. Nothing is
-//! downloaded and no repository content leaves the machine.
+//! Servers are discovered from PATH first. Repository-local `node_modules/.bin`
+//! binaries are used only when the repository is explicitly trusted in
+//! `ui-state.json`. Nothing is downloaded and no repository content leaves the
+//! machine.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::path_safety;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 const MAX_DIAGNOSTICS_PER_FILE: usize = 200;
 const MAX_MESSAGE_CHARS: usize = 512;
+const MAX_LSP_BODY_BYTES: usize = 32 * 1024 * 1024;
+const MAX_LSP_HEADER_BYTES: usize = 8 * 1024;
+const MAX_LSP_HEADER_LINES: usize = 64;
+const LSP_INIT_TIMEOUT: Duration = Duration::from_secs(30);
+const LSP_RESPAWN_COOLDOWN: Duration = Duration::from_secs(45);
+const LSP_WRITE_QUEUE_CAPACITY: usize = 64;
+const MAX_OPEN_DOCUMENTS: usize = 8;
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+enum LspWriteJob {
+    Message(Value),
+    Shutdown,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntelligenceMode {
@@ -126,9 +142,12 @@ struct OpenDocument {
 
 struct LspSession {
     child: Child,
-    writer: Arc<Mutex<ChildStdin>>,
+    write_tx: SyncSender<LspWriteJob>,
+    writer_handle: Option<JoinHandle<()>>,
     responses: Arc<Mutex<HashMap<u64, Value>>>,
+    reader_alive: Arc<AtomicBool>,
     opened: HashMap<PathBuf, OpenDocument>,
+    open_order: VecDeque<PathBuf>,
     initialize_id: Option<u64>,
     started: Instant,
 }
@@ -154,41 +173,61 @@ impl LspSession {
             .stdout
             .take()
             .context("language server has no stdout")?;
-        let writer = Arc::new(Mutex::new(stdin));
-        let reader_writer = writer.clone();
-        let responses = Arc::new(Mutex::new(HashMap::new()));
-        let reader_responses = responses.clone();
+        let (write_tx, write_rx) = mpsc::sync_channel(LSP_WRITE_QUEUE_CAPACITY);
+        let writer_handle = thread::Builder::new()
+            .name(format!("diffing-lsp-write-{}", spec.key))
+            .spawn(move || run_lsp_writer(stdin, write_rx))?;
+        let reader_responses = Arc::new(Mutex::new(HashMap::new()));
+        let responses = reader_responses.clone();
         let reader_diagnostics = diagnostics;
         let reader_revision = diagnostics_revision;
+        let reader_alive = Arc::new(AtomicBool::new(true));
+        let reader_alive_flag = reader_alive.clone();
+        let reader_write_tx = write_tx.clone();
         let root = repo_root.to_path_buf();
         thread::Builder::new()
             .name(format!("diffing-lsp-{}", spec.key))
             .spawn(move || {
                 let mut reader = BufReader::new(stdout);
-                while let Ok(Some(message)) = read_message(&mut reader) {
-                    if message.get("method").is_some() && message.get("id").is_some() {
-                        respond_to_server_request(&message, &reader_writer);
-                        continue;
-                    }
-                    if let Some(id) = message.get("id").and_then(Value::as_u64) {
-                        if let Ok(mut values) = reader_responses.lock() {
-                            values.insert(id, message);
+                loop {
+                    match read_message(&mut reader) {
+                        Ok(Some(message)) => {
+                            if message.get("method").is_some() && message.get("id").is_some() {
+                                respond_to_server_request(&message, &reader_write_tx);
+                                continue;
+                            }
+                            if let Some(id) = message.get("id").and_then(Value::as_u64) {
+                                if let Ok(mut values) = reader_responses.lock() {
+                                    values.insert(id, message);
+                                }
+                                continue;
+                            }
+                            if message.get("method").and_then(Value::as_str)
+                                == Some("textDocument/publishDiagnostics")
+                            {
+                                record_diagnostics(
+                                    &message,
+                                    &root,
+                                    &reader_diagnostics,
+                                    &reader_revision,
+                                );
+                            }
                         }
-                        continue;
-                    }
-                    if message.get("method").and_then(Value::as_str)
-                        == Some("textDocument/publishDiagnostics")
-                    {
-                        record_diagnostics(&message, &root, &reader_diagnostics, &reader_revision);
+                        Ok(None) => break,
+                        Err(_) => break,
                     }
                 }
+                reader_alive_flag.store(false, Ordering::Release);
             })?;
 
         let mut session = Self {
             child,
-            writer,
+            write_tx,
+            writer_handle: Some(writer_handle),
             responses,
+            reader_alive,
             opened: HashMap::new(),
+            open_order: VecDeque::new(),
             initialize_id: None,
             started: Instant::now(),
         };
@@ -222,11 +261,10 @@ impl LspSession {
     }
 
     fn send(&mut self, message: &Value) -> Result<()> {
-        let mut writer = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("LSP writer poisoned"))?;
-        write_message(&mut *writer, message)
+        self.write_tx
+            .try_send(LspWriteJob::Message(message.clone()))
+            .map_err(|_| anyhow::anyhow!("language server write queue is full"))?;
+        Ok(())
     }
 
     fn take_raw_response(&self, id: u64) -> Option<Value> {
@@ -246,7 +284,7 @@ impl LspSession {
             self.notify("initialized", json!({}))?;
             return Ok(true);
         }
-        if self.started.elapsed() > Duration::from_secs(5) {
+        if self.started.elapsed() > LSP_INIT_TIMEOUT {
             anyhow::bail!("language server initialization timed out");
         }
         Ok(false)
@@ -256,18 +294,56 @@ impl LspSession {
         self.initialize_id.is_none()
     }
 
-    fn sync_document(&mut self, path: &Path) -> Result<()> {
+    fn close_document(&mut self, path: &Path) -> Result<()> {
+        if !self.opened.contains_key(path) {
+            return Ok(());
+        }
+        self.notify(
+            "textDocument/didClose",
+            json!({ "textDocument": { "uri": path_to_uri(path) } }),
+        )?;
+        self.opened.remove(path);
+        self.open_order.retain(|entry| entry != path);
+        Ok(())
+    }
+
+    fn touch_open_document(&mut self, path: PathBuf) {
+        self.open_order.retain(|entry| entry != &path);
+        self.open_order.push_back(path);
+    }
+
+    fn evict_oldest_document(&mut self) -> Result<()> {
+        let Some(path) = self.open_order.pop_front() else {
+            return Ok(());
+        };
+        if self.opened.contains_key(&path) {
+            self.close_document(&path)?;
+        }
+        Ok(())
+    }
+
+    fn sync_document(&mut self, path: &Path) -> Result<bool> {
         self.ensure_running()?;
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {} for language server", path.display()))?;
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    %error,
+                    "skipping unreadable file for language server"
+                );
+                return Ok(false);
+            }
+        };
         let uri = path_to_uri(path);
         if let Some(document) = self.opened.get_mut(path) {
             if document.text == text {
-                return Ok(());
+                return Ok(true);
             }
             document.version = document.version.saturating_add(1);
             document.text = text.clone();
             let version = document.version;
+            self.touch_open_document(path.to_path_buf());
             self.notify(
                 "textDocument/didChange",
                 json!({
@@ -276,6 +352,9 @@ impl LspSession {
                 }),
             )?;
         } else {
+            while self.opened.len() >= MAX_OPEN_DOCUMENTS {
+                self.evict_oldest_document()?;
+            }
             self.notify(
                 "textDocument/didOpen",
                 json!({
@@ -289,11 +368,15 @@ impl LspSession {
             )?;
             self.opened
                 .insert(path.to_path_buf(), OpenDocument { version: 1, text });
+            self.touch_open_document(path.to_path_buf());
         }
-        Ok(())
+        Ok(true)
     }
 
     fn ensure_running(&mut self) -> Result<()> {
+        if !self.reader_alive.load(Ordering::Acquire) {
+            anyhow::bail!("language server reader stopped");
+        }
         if let Some(status) = self.child.try_wait()? {
             anyhow::bail!("language server exited with {status}");
         }
@@ -303,37 +386,101 @@ impl LspSession {
 
 impl Drop for LspSession {
     fn drop(&mut self) {
-        if let Ok(id) = self.request("shutdown", Value::Null) {
-            let deadline = Instant::now() + Duration::from_millis(100);
-            while Instant::now() < deadline && self.take_raw_response(id).is_none() {
-                thread::sleep(Duration::from_millis(5));
-            }
-        }
-        let _ = self.notify("exit", Value::Null);
+        let write_tx = self.write_tx.clone();
+        let writer_handle = self.writer_handle.take();
+        thread::Builder::new()
+            .name("diffing-lsp-shutdown".into())
+            .spawn(move || {
+                let _ = write_tx.send(LspWriteJob::Shutdown);
+                if let Some(handle) = writer_handle {
+                    let _ = handle.join();
+                }
+            })
+            .ok();
         let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
 pub struct LspManager {
     repo_root: PathBuf,
     mode: IntelligenceMode,
+    trust_repo_local_bin: bool,
     sessions: HashMap<String, LspSession>,
     unavailable: HashMap<String, String>,
+    unavailable_until: HashMap<String, Instant>,
+    resolved_commands: HashMap<String, ResolvedCommand>,
     diagnostics: DiagnosticStore,
     diagnostics_revision: Arc<AtomicU64>,
+    sync_warning: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedCommand {
+    pub path: PathBuf,
+    pub repo_local: bool,
 }
 
 impl LspManager {
-    pub fn new(repo_root: PathBuf, mode: IntelligenceMode) -> Self {
+    pub fn new(
+        repo_root: PathBuf,
+        mode: IntelligenceMode,
+        trust_repo_local_bin: bool,
+    ) -> Self {
         Self {
             repo_root,
             mode,
+            trust_repo_local_bin,
             sessions: HashMap::new(),
             unavailable: HashMap::new(),
+            unavailable_until: HashMap::new(),
+            resolved_commands: HashMap::new(),
             diagnostics: Arc::new(Mutex::new(HashMap::new())),
             diagnostics_revision: Arc::new(AtomicU64::new(0)),
+            sync_warning: None,
         }
+    }
+
+    pub fn take_sync_warning(&mut self) -> Option<String> {
+        self.sync_warning.take()
+    }
+
+    pub fn retry_failed_servers(&mut self) {
+        self.unavailable
+            .retain(|_, reason| reason.ends_with("not found"));
+        self.unavailable_until.clear();
+        self.sessions.clear();
+    }
+
+    pub fn trust_repo_local_bin(&self) -> bool {
+        self.trust_repo_local_bin
+    }
+
+    pub fn set_trust_repo_local_bin(&mut self, trusted: bool) {
+        if self.trust_repo_local_bin == trusted {
+            return;
+        }
+        self.trust_repo_local_bin = trusted;
+        self.sessions.clear();
+        self.unavailable.clear();
+        self.unavailable_until.clear();
+        self.resolved_commands.clear();
+        if let Ok(mut diagnostics) = self.diagnostics.lock() {
+            diagnostics.clear();
+        }
+    }
+
+    pub fn resolved_command_for_path(&self, path: &Path) -> Option<&ResolvedCommand> {
+        server_spec(path).and_then(|spec| self.resolved_commands.get(spec.key))
+    }
+
+    pub fn resolved_command_label(&self, path: &Path) -> Option<String> {
+        self.resolved_command_for_path(path).map(|resolved| {
+            if resolved.repo_local {
+                format!("{} (repo-local)", resolved.path.display())
+            } else {
+                resolved.path.display().to_string()
+            }
+        })
     }
 
     pub fn mode(&self) -> IntelligenceMode {
@@ -345,6 +492,7 @@ impl LspManager {
         if mode == IntelligenceMode::Off {
             self.sessions.clear();
             self.unavailable.clear();
+            self.unavailable_until.clear();
             if let Ok(mut diagnostics) = self.diagnostics.lock() {
                 diagnostics.clear();
             }
@@ -385,19 +533,38 @@ impl LspManager {
         if self.mode == IntelligenceMode::Off {
             return Ok(ServerState::Off);
         }
-        let absolute = self.repo_root.join(relative_path);
+        let absolute = path_safety::resolve_within_repo(&self.repo_root, relative_path)
+            .with_context(|| format!("invalid document path {}", relative_path.display()))?;
         let Some(spec) = server_spec(&absolute) else {
             return Ok(ServerState::Unavailable);
         };
         if !self.sessions.contains_key(spec.key) {
-            let Some(command) = resolve_command(spec.command, &self.repo_root) else {
+            if self.unavailable.contains_key(spec.key)
+                && !self
+                    .unavailable
+                    .get(spec.key)
+                    .is_some_and(|reason| reason.ends_with("not found"))
+            {
+                if let Some(until) = self.unavailable_until.get(spec.key) {
+                    if Instant::now() < *until {
+                        return Ok(ServerState::Error);
+                    }
+                }
+                self.unavailable.remove(spec.key);
+                self.unavailable_until.remove(spec.key);
+            }
+            let Some(resolved) =
+                resolve_command(spec.command, &self.repo_root, self.trust_repo_local_bin)
+            else {
                 self.unavailable
                     .insert(spec.key.to_string(), format!("{} not found", spec.command));
                 return Ok(ServerState::Unavailable);
             };
+            self.resolved_commands
+                .insert(spec.key.to_string(), resolved.clone());
             match LspSession::spawn(
                 spec.clone(),
-                &command,
+                &resolved.path,
                 &self.repo_root,
                 self.diagnostics.clone(),
                 self.diagnostics_revision.clone(),
@@ -406,8 +573,7 @@ impl LspManager {
                     self.sessions.insert(spec.key.to_string(), session);
                 }
                 Err(error) => {
-                    self.unavailable
-                        .insert(spec.key.to_string(), error.to_string());
+                    self.mark_unavailable(spec.key, error.to_string());
                     return Ok(ServerState::Error);
                 }
             }
@@ -421,22 +587,41 @@ impl LspManager {
             Ok(false) => return Ok(ServerState::Starting),
             Ok(true) => {}
             Err(error) => {
-                self.sessions.remove(spec.key);
-                self.unavailable
-                    .insert(spec.key.to_string(), error.to_string());
+                self.teardown_session(spec.key, error.to_string());
                 return Ok(ServerState::Error);
             }
         }
         let Some(session) = self.sessions.get_mut(spec.key) else {
             return Ok(ServerState::Error);
         };
-        if let Err(error) = session.sync_document(&absolute) {
-            self.sessions.remove(spec.key);
-            self.unavailable
-                .insert(spec.key.to_string(), error.to_string());
-            return Ok(ServerState::Error);
+        match session.sync_document(&absolute) {
+            Ok(true) => {
+                self.sync_warning = None;
+                Ok(ServerState::Ready)
+            }
+            Ok(false) => {
+                self.sync_warning = Some(format!(
+                    "could not read {} for language server",
+                    relative_path.display()
+                ));
+                Ok(ServerState::Ready)
+            }
+            Err(error) => {
+                self.teardown_session(spec.key, error.to_string());
+                Ok(ServerState::Error)
+            }
         }
-        Ok(ServerState::Ready)
+    }
+
+    fn mark_unavailable(&mut self, key: &str, reason: String) {
+        self.unavailable.insert(key.to_string(), reason);
+        self.unavailable_until
+            .insert(key.to_string(), Instant::now() + LSP_RESPAWN_COOLDOWN);
+    }
+
+    fn teardown_session(&mut self, key: &str, reason: String) {
+        self.sessions.remove(key);
+        self.mark_unavailable(key, reason);
     }
 
     pub fn request_hover(
@@ -518,6 +703,26 @@ impl LspManager {
         }
     }
 
+    pub fn close_document(&mut self, relative_path: &Path) -> Result<()> {
+        if self.mode == IntelligenceMode::Off {
+            return Ok(());
+        }
+        let absolute = path_safety::resolve_within_repo(&self.repo_root, relative_path)
+            .with_context(|| format!("invalid document path {}", relative_path.display()))?;
+        let Some(spec) = server_spec(&absolute) else {
+            return Ok(());
+        };
+        if let Some(session) = self.sessions.get_mut(spec.key) {
+            session.close_document(&absolute)?;
+        }
+        if let Ok(mut diagnostics) = self.diagnostics.lock() {
+            if diagnostics.remove(&absolute).is_some() {
+                self.diagnostics_revision.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Ok(())
+    }
+
     pub fn diagnostics_for(&self, relative_path: &Path) -> Arc<[LspDiagnostic]> {
         let absolute = self.repo_root.join(relative_path);
         self.diagnostics
@@ -587,13 +792,27 @@ fn language_id(path: &Path) -> Option<&'static str> {
     }
 }
 
-fn resolve_command(command: &str, repo_root: &Path) -> Option<PathBuf> {
-    let local_bin = repo_root.join("node_modules").join(".bin");
-    executable_in(&local_bin, command).or_else(|| {
-        std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+fn resolve_command(
+    command: &str,
+    repo_root: &Path,
+    trust_repo_local: bool,
+) -> Option<ResolvedCommand> {
+    if let Some(path) = std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
             .find_map(|directory| executable_in(&directory, command))
+    }) {
+        return Some(ResolvedCommand {
+            path,
+            repo_local: false,
+        });
+    }
+    if !trust_repo_local {
+        return None;
+    }
+    let local_bin = repo_root.join("node_modules").join(".bin");
+    executable_in(&local_bin, command).map(|path| ResolvedCommand {
+        path,
+        repo_local: true,
     })
 }
 
@@ -733,7 +952,7 @@ fn parse_definitions(value: &Value) -> Vec<DefinitionTarget> {
         .collect()
 }
 
-fn respond_to_server_request(message: &Value, writer: &Arc<Mutex<ChildStdin>>) {
+fn respond_to_server_request(message: &Value, writer: &SyncSender<LspWriteJob>) {
     let Some(id) = message.get("id").cloned() else {
         return;
     };
@@ -752,11 +971,21 @@ fn respond_to_server_request(message: &Value, writer: &Arc<Mutex<ChildStdin>>) {
         }),
         _ => Value::Null,
     };
-    if let Ok(mut writer) = writer.lock() {
-        let _ = write_message(
-            &mut *writer,
-            &json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-        );
+    let _ = writer.try_send(LspWriteJob::Message(json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result
+    })));
+}
+
+fn run_lsp_writer(mut stdin: ChildStdin, rx: mpsc::Receiver<LspWriteJob>) {
+    while let Ok(job) = rx.recv() {
+        match job {
+            LspWriteJob::Message(message) => {
+                let _ = write_message(&mut stdin, &message);
+            }
+            LspWriteJob::Shutdown => break,
+        }
     }
 }
 
@@ -770,11 +999,21 @@ fn write_message(writer: &mut impl Write, message: &Value) -> Result<()> {
 
 fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>> {
     let mut content_length = None;
+    let mut header_bytes = 0usize;
+    let mut header_lines = 0usize;
     loop {
+        if header_lines >= MAX_LSP_HEADER_LINES {
+            anyhow::bail!("LSP header line limit exceeded");
+        }
         let mut header = String::new();
         if reader.read_line(&mut header)? == 0 {
             return Ok(None);
         }
+        header_bytes += header.len();
+        if header_bytes > MAX_LSP_HEADER_BYTES {
+            anyhow::bail!("LSP header byte limit exceeded");
+        }
+        header_lines += 1;
         if header == "\r\n" || header == "\n" {
             break;
         }
@@ -785,6 +1024,9 @@ fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>> {
     let Some(content_length) = content_length else {
         anyhow::bail!("LSP message missing Content-Length");
     };
+    if content_length > MAX_LSP_BODY_BYTES {
+        anyhow::bail!("LSP Content-Length exceeds limit");
+    }
     let mut body = vec![0; content_length];
     reader.read_exact(&mut body)?;
     Ok(Some(serde_json::from_slice(&body)?))
@@ -936,7 +1178,48 @@ mod tests {
     }
 
     #[test]
-    fn local_node_language_server_is_preferred() {
+    fn path_language_server_is_preferred_over_repo_local_bin() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("node_modules/.bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let local_executable = bin.join("typescript-language-server");
+        std::fs::write(&local_executable, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &local_executable,
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+
+        let path_dir = tempfile::tempdir().unwrap();
+        let path_executable = path_dir.path().join("typescript-language-server");
+        std::fs::write(&path_executable, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path_executable, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        let previous_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", path_dir.path());
+        let resolved = resolve_command("typescript-language-server", root.path(), true);
+        if let Some(previous_path) = previous_path {
+            std::env::set_var("PATH", previous_path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+
+        let resolved = resolved.expect("expected PATH binary");
+        assert_eq!(resolved.path, path_executable);
+        assert!(!resolved.repo_local);
+    }
+
+    #[test]
+    fn repo_local_language_server_requires_trust() {
         let root = tempfile::tempdir().unwrap();
         let bin = root.path().join("node_modules/.bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -947,9 +1230,20 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        assert_eq!(
-            resolve_command("typescript-language-server", root.path()),
-            Some(executable)
-        );
+
+        let previous_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", "/usr/bin:/bin");
+        let untrusted = resolve_command("typescript-language-server", root.path(), false);
+        let trusted = resolve_command("typescript-language-server", root.path(), true);
+        if let Some(previous_path) = previous_path {
+            std::env::set_var("PATH", previous_path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+
+        assert!(untrusted.is_none());
+        let trusted = trusted.expect("trusted repo-local binary");
+        assert_eq!(trusted.path, executable);
+        assert!(trusted.repo_local);
     }
 }

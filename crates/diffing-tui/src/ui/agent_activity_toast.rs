@@ -13,8 +13,11 @@ use unicode_width::UnicodeWidthChar;
 use crate::themes::Palette;
 use crate::ui::gridline::{fill, GridlineTokens, Tone, GLYPHS};
 
+static NEXT_TOAST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 #[derive(Debug, Clone)]
 pub struct Toast {
+    pub id: u64,
     pub message: String,
     pub accent: ToastAccent,
     pub created_at: Instant,
@@ -40,6 +43,7 @@ impl Toast {
     }
     fn new(msg: impl Into<String>, accent: ToastAccent, ttl: Duration) -> Self {
         Self {
+            id: NEXT_TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             message: msg.into(),
             accent,
             created_at: Instant::now(),

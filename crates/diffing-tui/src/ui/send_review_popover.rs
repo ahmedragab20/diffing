@@ -167,6 +167,7 @@ pub struct SendReviewState {
     pub focused: SendField,
     pub unviewed_files: usize,
     pub guard_acknowledged: bool,
+    pub general_char_count: usize,
 }
 
 impl SendReviewState {
@@ -179,6 +180,7 @@ impl SendReviewState {
             focused: SendField::Verdict,
             unviewed_files,
             guard_acknowledged: false,
+            general_char_count: 0,
         }
     }
 

@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
-    KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    KeyEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -111,10 +111,10 @@ fn event_loop(
                         if key.kind == KeyEventKind::Release {
                             continue;
                         }
-                        if is_global_quit(&key) {
+                        app.handle_key(key);
+                        if app.quit {
                             return Ok(());
                         }
-                        app.handle_key(key);
                         if let Some(target) = app.take_editor_target() {
                             if let Err(error) =
                                 open_editor(terminal, &target, &mut mouse_capture_enabled)?
@@ -257,15 +257,30 @@ fn split_command_line(value: &str) -> Option<Vec<String>> {
     let mut current = String::new();
     let mut quote = None;
     let mut escaped = false;
-    for character in value.chars() {
+    let mut chars = value.chars().peekable();
+    while let Some(character) = chars.next() {
         if escaped {
             current.push(character);
             escaped = false;
             continue;
         }
         if character == '\\' && quote != Some('\'') {
-            escaped = true;
-            continue;
+            #[cfg(windows)]
+            {
+                escaped = true;
+                continue;
+            }
+            #[cfg(not(windows))]
+            {
+                let escape_next = matches!(chars.peek(), Some('\'' | '"' | '\\'))
+                    || chars.peek().is_some_and(|next| next.is_whitespace());
+                if escape_next {
+                    escaped = true;
+                    continue;
+                }
+                current.push(character);
+                continue;
+            }
         }
         if matches!(character, '\'' | '"') {
             if quote == Some(character) {
@@ -311,13 +326,6 @@ fn sync_mouse_capture(
     Ok(())
 }
 
-fn is_global_quit(key: &KeyEvent) -> bool {
-    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        return true;
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,6 +342,14 @@ mod tests {
             ])
         );
         assert_eq!(split_command_line("code 'unfinished"), None);
+    }
+
+    #[test]
+    fn editor_command_parser_preserves_windows_paths_on_unix() {
+        assert_eq!(
+            split_command_line(r"code C:\src\main.rs"),
+            Some(vec!["code".into(), r"C:\src\main.rs".into()])
+        );
     }
 
     #[test]

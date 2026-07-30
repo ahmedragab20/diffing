@@ -11,7 +11,8 @@
 pub mod format;
 pub mod review;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
@@ -24,30 +25,93 @@ pub struct CommentsWatcher {
     rx: Receiver<DebounceEventResult>,
 }
 
+/// Coalesced repository change notifications for live diff refresh.
+///
+/// When the watcher cannot start (permissions, file-descriptor limits, etc.)
+/// the TUI continues without live refresh instead of failing startup.
 pub struct RepoWatcher {
     _watcher: notify::RecommendedWatcher,
-    rx: Receiver<notify::Result<Event>>,
+    rx: Receiver<()>,
 }
 
 impl RepoWatcher {
-    pub fn start(repo_root: &Path) -> Result<Self> {
-        let (tx, rx) = mpsc::channel();
-        let mut watcher = notify::recommended_watcher(move |event| {
-            let _ = tx.send(event);
+    /// Start watching `repo_root` recursively for working-tree changes.
+    /// Returns `None` when the OS refuses the watch — callers should log and
+    /// continue without live refresh.
+    pub fn start(repo_root: &Path) -> Option<Self> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let root = repo_root.to_path_buf();
+        let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+            let Ok(event) = event else {
+                return;
+            };
+            if event
+                .paths
+                .iter()
+                .any(|path| repo_watch_path_is_relevant(&root, path))
+            {
+                let _ = tx.try_send(());
+            }
         })
-        .context("creating repository watcher")?;
-        watcher
-            .watch(repo_root, RecursiveMode::Recursive)
-            .with_context(|| format!("watching repository {}", repo_root.display()))?;
-        Ok(Self {
+        .ok()?;
+        if let Err(error) = watcher.watch(repo_root, RecursiveMode::Recursive) {
+            tracing::warn!(
+                "could not watch {} for live refresh: {error:#}; continuing without it",
+                repo_root.display()
+            );
+            return None;
+        }
+        Some(Self {
             _watcher: watcher,
             rx,
         })
     }
 
-    pub fn try_recv(&self) -> Option<notify::Result<Event>> {
-        self.rx.try_recv().ok()
+    /// Drain coalesced refresh signals without blocking.
+    pub fn try_recv(&self) -> bool {
+        let mut dirty = false;
+        while self.rx.try_recv().is_ok() {
+            dirty = true;
+        }
+        dirty
     }
+}
+
+fn repo_watch_path_is_relevant(repo_root: &Path, path: &Path) -> bool {
+    if !path.starts_with(repo_root) {
+        return false;
+    }
+    if path
+        .components()
+        .any(|component| matches!(component.as_os_str().to_str(), Some(".git")))
+    {
+        return false;
+    }
+    for ignored in ["node_modules", "target", "dist", ".diffing"] {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == ignored)
+        {
+            return false;
+        }
+    }
+    !git_ignores_path(repo_root, path)
+}
+
+fn git_ignores_path(repo_root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(repo_root) else {
+        return true;
+    };
+    if relative.as_os_str().is_empty() {
+        return false;
+    }
+    Command::new("git")
+        .args(["check-ignore", "-q", "--"])
+        .arg(relative)
+        .current_dir(repo_root)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 impl CommentsWatcher {
@@ -137,5 +201,15 @@ mod tests {
             "watcher did not fire for {} (events: timeout)",
             path.display()
         );
+    }
+
+    #[test]
+    fn repo_watch_path_skips_git_and_ignored_dirs() {
+        let root = PathBuf::from("/tmp/repo");
+        assert!(!repo_watch_path_is_relevant(&root, &root.join(".git/config")));
+        assert!(!repo_watch_path_is_relevant(
+            &root,
+            &root.join("node_modules/pkg/index.js")
+        ));
     }
 }

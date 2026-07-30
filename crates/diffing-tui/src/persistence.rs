@@ -3,12 +3,43 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use diffing_core::project_storage_dir;
 use serde_json::{json, Map, Value};
 
 use crate::lsp::IntelligenceMode;
 use crate::themes::ThemeName;
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn unique_temp_path(path: &Path) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_extension(format!("json.{id}.{stamp}.tmp"))
+}
+
+fn sweep_stale_temp_files(directory: &Path, keep: &Path) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == keep {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name.ends_with(".tmp") {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileDisplay {
@@ -42,6 +73,7 @@ pub struct PersistedTuiState {
     pub line_numbers: bool,
     pub mouse_enabled: bool,
     pub intelligence_mode: IntelligenceMode,
+    pub trust_repo_local_bin: bool,
     pub sidebar_width: u16,
     pub comment_height: u16,
     pub sidebar_visible: bool,
@@ -49,7 +81,20 @@ pub struct PersistedTuiState {
 }
 
 pub fn load(repo_root: &str) -> PersistedTuiState {
-    let settings = read_object(&settings_path());
+    let settings_path = settings_path();
+    if let Some(path) = settings_path.as_ref() {
+        if let Some(parent) = path.parent() {
+            sweep_stale_temp_files(parent, path);
+        }
+    }
+    let ui_state_path = project_storage_dir(repo_root).join("ui-state.json");
+    if let Some(parent) = ui_state_path.parent() {
+        sweep_stale_temp_files(parent, &ui_state_path);
+    }
+    let settings = settings_path
+        .as_ref()
+        .map(|path| read_object(path))
+        .unwrap_or_default();
     let ui_state = read_object(&project_storage_dir(repo_root).join("ui-state.json"));
     let theme = settings
         .get("theme")
@@ -87,10 +132,14 @@ pub fn load(repo_root: &str) -> PersistedTuiState {
         .get("tuiLanguageIntelligence")
         .and_then(Value::as_str)
         .map(|value| match value {
-            "off" => IntelligenceMode::Off,
-            _ => IntelligenceMode::Auto,
+            "auto" => IntelligenceMode::Auto,
+            _ => IntelligenceMode::Off,
         })
-        .unwrap_or(IntelligenceMode::Auto);
+        .unwrap_or(IntelligenceMode::Off);
+    let trust_repo_local_bin = ui_state
+        .get("tuiTrustRepoLocalBin")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let viewed_files = ui_state
         .get("tuiViewedFiles")
         .and_then(Value::as_array)
@@ -127,6 +176,7 @@ pub fn load(repo_root: &str) -> PersistedTuiState {
         line_numbers,
         mouse_enabled,
         intelligence_mode,
+        trust_repo_local_bin,
         sidebar_width,
         comment_height,
         sidebar_visible,
@@ -141,6 +191,14 @@ fn load_mouse_enabled(settings: &Map<String, Value>) -> bool {
         .unwrap_or(true)
 }
 
+pub fn save_trust_repo_local_bin(repo_root: &str, trusted: bool) -> std::io::Result<()> {
+    let path = project_storage_dir(repo_root).join("ui-state.json");
+    with_lock(&path, |root| {
+        root.insert("tuiTrustRepoLocalBin".to_string(), json!(trusted));
+        Ok(())
+    })
+}
+
 pub fn save_layout(
     repo_root: &str,
     sidebar_width: u16,
@@ -150,31 +208,33 @@ pub fn save_layout(
     file_display: FileDisplay,
 ) -> std::io::Result<()> {
     let path = project_storage_dir(repo_root).join("ui-state.json");
-    let mut root = read_object_for_update(&path)?;
-    root.insert("tuiSidebarWidth".to_string(), json!(sidebar_width));
-    root.insert("tuiCommentHeight".to_string(), json!(comment_height));
-    root.insert("tuiSidebarVisible".to_string(), json!(sidebar_visible));
-    root.insert("tuiCommentsVisible".to_string(), json!(comments_visible));
-    root.insert(
-        "tuiFileDisplay".to_string(),
-        json!(match file_display {
-            FileDisplay::Single => "single",
-            FileDisplay::Continuous => "continuous",
-        }),
-    );
-    write_object(&path, root)
+    with_lock(&path, |root| {
+        root.insert("tuiSidebarWidth".to_string(), json!(sidebar_width));
+        root.insert("tuiCommentHeight".to_string(), json!(comment_height));
+        root.insert("tuiSidebarVisible".to_string(), json!(sidebar_visible));
+        root.insert("tuiCommentsVisible".to_string(), json!(comments_visible));
+        root.insert(
+            "tuiFileDisplay".to_string(),
+            json!(match file_display {
+                FileDisplay::Single => "single",
+                FileDisplay::Continuous => "continuous",
+            }),
+        );
+        Ok(())
+    })
 }
 
 pub fn save_viewed(repo_root: &str, viewed: &HashSet<PathBuf>) -> std::io::Result<()> {
     let path = project_storage_dir(repo_root).join("ui-state.json");
-    let mut root = read_object_for_update(&path)?;
-    let mut files: Vec<String> = viewed
-        .iter()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect();
-    files.sort();
-    root.insert("tuiViewedFiles".to_string(), json!(files));
-    write_object(&path, root)
+    with_lock(&path, |root| {
+        let mut files: Vec<String> = viewed
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        files.sort();
+        root.insert("tuiViewedFiles".to_string(), json!(files));
+        Ok(())
+    })
 }
 
 pub fn save_settings(
@@ -186,31 +246,33 @@ pub fn save_settings(
     mouse_enabled: bool,
     intelligence_mode: IntelligenceMode,
 ) -> std::io::Result<()> {
-    let path = settings_path();
-    let mut root = read_object_for_update(&path)?;
-    root.insert("theme".to_string(), json!(theme.label()));
-    root.insert("lineWrap".to_string(), json!(wrap));
-    root.insert(
-        "diffStyle".to_string(),
-        json!(if split { "split" } else { "unified" }),
-    );
-    root.insert("defaultTabSize".to_string(), json!(tab_size));
-    root.insert("showLineNumbers".to_string(), json!(line_numbers));
-    root.insert("tuiMouseEnabled".to_string(), json!(mouse_enabled));
-    root.insert(
-        "tuiLanguageIntelligence".to_string(),
-        json!(match intelligence_mode {
-            IntelligenceMode::Auto => "auto",
-            IntelligenceMode::Off => "off",
-        }),
-    );
-    write_object(&path, root)
+    let Some(path) = settings_path() else {
+        return Ok(());
+    };
+    with_lock(&path, |root| {
+        root.insert("theme".to_string(), json!(theme.label()));
+        root.insert("lineWrap".to_string(), json!(wrap));
+        root.insert(
+            "diffStyle".to_string(),
+            json!(if split { "split" } else { "unified" }),
+        );
+        root.insert("defaultTabSize".to_string(), json!(tab_size));
+        root.insert("showLineNumbers".to_string(), json!(line_numbers));
+        root.insert("tuiMouseEnabled".to_string(), json!(mouse_enabled));
+        root.insert(
+            "tuiLanguageIntelligence".to_string(),
+            json!(match intelligence_mode {
+                IntelligenceMode::Auto => "auto",
+                IntelligenceMode::Off => "off",
+            }),
+        );
+        Ok(())
+    })
 }
 
-fn settings_path() -> PathBuf {
+fn settings_path() -> Option<PathBuf> {
     directories::UserDirs::new()
         .map(|dirs| dirs.home_dir().join(".config/diffing/settings.json"))
-        .unwrap_or_else(|| PathBuf::from(".config/diffing/settings.json"))
 }
 
 fn read_object(path: &Path) -> Map<String, Value> {
@@ -239,11 +301,19 @@ fn read_object_for_update(path: &Path) -> std::io::Result<Map<String, Value>> {
         })
 }
 
+fn with_lock<T>(path: &Path, mut operation: impl FnMut(&mut Map<String, Value>) -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut root = read_object_for_update(path)?;
+    let result = operation(&mut root)?;
+    write_object(path, root)?;
+    Ok(result)
+}
+
 fn write_object(path: &Path, value: Map<String, Value>) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+        sweep_stale_temp_files(parent, path);
     }
-    let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    let temp = unique_temp_path(path);
     let json = serde_json::to_vec_pretty(&Value::Object(value))
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
     fs::write(&temp, json)?;
