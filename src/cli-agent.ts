@@ -2,6 +2,8 @@ import { parseArgs } from 'node:util'
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveActiveServerLock } from './lib/server-lock.js'
+import { reviewSessionUrl } from './lib/session-url.js'
+import { SESSION_TOKEN_HEADER } from './lib/server-auth.js'
 import { getProjectStorageDir } from './lib/git.js'
 import { formatComments } from './lib/comment-format.js'
 import {
@@ -34,6 +36,7 @@ const EXIT_NOT_FOUND = 4
 const EXIT_USAGE = 5
 
 let activeCapability: string | undefined
+let activeAuthToken: string | undefined
 
 /** Resolve the running server's base URL from the lockfile, or exit cleanly. */
 function baseUrl(): string {
@@ -46,14 +49,41 @@ function baseUrl(): string {
   // CLI never traverses the network.
   const host = lock.host === '0.0.0.0' || lock.host === '::' ? '127.0.0.1' : lock.host
   activeCapability = lock.mode === 'tui' ? lock.capability : undefined
+  activeAuthToken = lock.authToken
   return `http://${host}:${lock.port}`
 }
 
-/** Attach the per-session TUI capability while preserving ordinary web calls. */
+/** Attach session credentials while preserving ordinary web calls. */
 function apiFetch(input: string | URL | Request, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers)
   if (activeCapability) headers.set('X-Diffing-Capability', activeCapability)
+  if (activeAuthToken) headers.set(SESSION_TOKEN_HEADER, activeAuthToken)
   return fetch(input, { ...init, headers })
+}
+
+function connectionErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  return String(err)
+}
+
+/** apiFetch wrapper that logs connection failures and returns null instead of throwing. */
+async function tryApiFetch(input: string | URL | Request, init?: RequestInit): Promise<Response | null> {
+  try {
+    return await apiFetch(input, init)
+  } catch (err) {
+    console.error(`Failed to reach diffing server: ${connectionErrorMessage(err)}`)
+    return null
+  }
+}
+
+function parseTimeoutSeconds(raw: string | undefined, flag = '--timeout'): number | null {
+  if (raw === undefined) return DEFAULT_AWAIT_TIMEOUT_SECONDS
+  const t = Number(raw)
+  if (!Number.isFinite(t) || t <= 0) {
+    console.error(`${flag} must be a positive number of seconds.`)
+    return null
+  }
+  return t
 }
 
 async function readStdin(): Promise<string> {
@@ -74,7 +104,9 @@ async function awaitReview(args: string[]): Promise<number> {
     },
     allowPositionals: false,
   })
-  const totalBudgetMs = (values.timeout ? Number(values.timeout) : DEFAULT_AWAIT_TIMEOUT_SECONDS) * 1000
+  const timeoutSeconds = parseTimeoutSeconds(values.timeout as string | undefined)
+  if (timeoutSeconds === null) return EXIT_USAGE
+  const totalBudgetMs = timeoutSeconds * 1000
   const base = baseUrl()
 
   // Register identity so the human UI can show multi-agent waiting chips.
@@ -100,11 +132,10 @@ async function awaitReview(args: string[]): Promise<number> {
 
   // Seed the round cursor so we only react to sends that happen from now on.
   let sinceRound = 0
-  try {
-    const status = await apiFetch(`${base}/api/review/status`).then((r) => r.json())
+  const statusRes = await tryApiFetch(`${base}/api/review/status`)
+  if (statusRes?.ok) {
+    const status = (await statusRes.json()) as { round?: number }
     sinceRound = status.round ?? 0
-  } catch {
-    // fall through; the await loop will surface a connection error
   }
 
   const unregister = async () => {
@@ -128,9 +159,14 @@ async function awaitReview(args: string[]): Promise<number> {
       )
     } catch (err: any) {
       if (err?.name === 'TimeoutError') continue
-      console.error(`Failed to reach diffing server: ${err?.message ?? err}`)
+      console.error(`Failed to reach diffing server: ${connectionErrorMessage(err)}`)
       await unregister()
       return EXIT_NO_SERVER
+    }
+    if (!res.ok) {
+      console.error(`Failed to await review: HTTP ${res.status}`)
+      await unregister()
+      return 1
     }
     const result = await res.json()
     if (result.status === 'released') {
@@ -163,17 +199,26 @@ async function reply(args: string[]): Promise<number> {
     return EXIT_USAGE
   }
   let body = values.body
-  if (body === '-' || body === undefined) body = (await readStdin()).trim()
+  if (body === undefined) {
+    if (process.stdin.isTTY) {
+      console.error('Usage: diffing reply <commentId> --body <text> [--model <name>]')
+      return EXIT_USAGE
+    }
+    body = (await readStdin()).trim()
+  } else if (body === '-') {
+    body = (await readStdin()).trim()
+  }
   if (!body) {
     console.error('A reply body is required (--body <text> or pipe via stdin).')
     return EXIT_USAGE
   }
 
-  const res = await apiFetch(`${baseUrl()}/api/comments/${commentId}/replies`, {
+  const res = await tryApiFetch(`${baseUrl()}/api/comments/${commentId}/replies`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ body, role: 'agent', model: values.model }),
   })
+  if (!res) return EXIT_NO_SERVER
   if (res.status === 404) {
     console.error(`Comment ${commentId} not found.`)
     return EXIT_NOT_FOUND
@@ -193,11 +238,12 @@ async function resolve(args: string[]): Promise<number> {
     console.error('Usage: diffing resolve <commentId>')
     return EXIT_USAGE
   }
-  const res = await apiFetch(`${baseUrl()}/api/comments/${commentId}`, {
+  const res = await tryApiFetch(`${baseUrl()}/api/comments/${commentId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status: 'resolved' }),
   })
+  if (!res) return EXIT_NO_SERVER
   if (res.status === 404) {
     console.error(`Comment ${commentId} not found.`)
     return EXIT_NOT_FOUND
@@ -217,11 +263,12 @@ async function unresolve(args: string[]): Promise<number> {
     console.error('Usage: diffing unresolve <commentId>')
     return EXIT_USAGE
   }
-  const res = await apiFetch(`${baseUrl()}/api/comments/${commentId}`, {
+  const res = await tryApiFetch(`${baseUrl()}/api/comments/${commentId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status: 'open' }),
   })
+  if (!res) return EXIT_NO_SERVER
   if (res.status === 404) {
     console.error(`Comment ${commentId} not found.`)
     return EXIT_NOT_FOUND
@@ -246,16 +293,25 @@ async function commentEdit(args: string[]): Promise<number> {
     return EXIT_USAGE
   }
   let body = values.body as string | undefined
-  if (body === '-' || body === undefined) body = (await readStdin()).trim()
+  if (body === undefined) {
+    if (process.stdin.isTTY) {
+      console.error('Usage: diffing comment edit <commentId> --body <text>')
+      return EXIT_USAGE
+    }
+    body = (await readStdin()).trim()
+  } else if (body === '-') {
+    body = (await readStdin()).trim()
+  }
   if (!body) {
     console.error('A body is required (--body <text> or stdin).')
     return EXIT_USAGE
   }
-  const res = await apiFetch(`${baseUrl()}/api/comments/${commentId}`, {
+  const res = await tryApiFetch(`${baseUrl()}/api/comments/${commentId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ body }),
   })
+  if (!res) return EXIT_NO_SERVER
   if (res.status === 404) {
     console.error(`Comment ${commentId} not found.`)
     return EXIT_NOT_FOUND
@@ -275,9 +331,10 @@ async function commentDelete(args: string[]): Promise<number> {
     console.error('Usage: diffing comment delete <commentId>')
     return EXIT_USAGE
   }
-  const res = await apiFetch(`${baseUrl()}/api/comments/${commentId}`, {
+  const res = await tryApiFetch(`${baseUrl()}/api/comments/${commentId}`, {
     method: 'DELETE',
   })
+  if (!res) return EXIT_NO_SERVER
   if (res.status === 404) {
     console.error(`Comment ${commentId} not found.`)
     return EXIT_NOT_FOUND
@@ -305,7 +362,13 @@ async function commentCmd(args: string[]): Promise<number> {
 }
 
 async function url(): Promise<number> {
-  process.stdout.write(baseUrl() + '\n')
+  const lock = resolveActiveServerLock()
+  if (!lock) {
+    console.error('No diffing server running for this repo. Start one with `diffing`.')
+    process.exit(EXIT_NO_SERVER)
+  }
+  const printed = reviewSessionUrl(lock) ?? baseUrl()
+  process.stdout.write(`${printed}\n`)
   return EXIT_OK
 }
 
@@ -319,9 +382,19 @@ async function comments(args: string[]): Promise<number> {
     },
     allowPositionals: false,
   })
-  const all: ReviewComment[] = await apiFetch(`${baseUrl()}/api/comments`).then((r) => r.json())
+  const res = await tryApiFetch(`${baseUrl()}/api/comments`)
+  if (!res) return EXIT_NO_SERVER
+  if (!res.ok) {
+    console.error(`Failed to fetch comments: HTTP ${res.status}`)
+    return 1
+  }
+  const all: ReviewComment[] = await res.json()
   const selected = values.open ? all.filter((c) => c.status === 'open') : all
   const format = (values.format as string | undefined)?.toLowerCase()
+  if (format && format !== 'xml' && format !== 'json' && format !== 'md' && format !== 'markdown') {
+    console.error('Unknown --format. Use xml, json, md, or markdown.')
+    return EXIT_USAGE
+  }
   if (values.json || format === 'json') {
     process.stdout.write(JSON.stringify(selected, null, 2) + '\n')
   } else if (format === 'markdown' || format === 'md') {
@@ -381,11 +454,10 @@ function deriveTitle(body: string): string {
 async function pollPlanDecision(base: string, totalBudgetMs: number, seedSince?: number): Promise<number> {
   let sinceRound = seedSince ?? 0
   if (seedSince === undefined) {
-    try {
-      const status = await apiFetch(`${base}/api/plan-review/status`).then((r) => r.json())
+    const statusRes = await tryApiFetch(`${base}/api/plan-review/status`)
+    if (statusRes?.ok) {
+      const status = (await statusRes.json()) as { round?: number }
       sinceRound = status.round ?? 0
-    } catch {
-      // fall through; the await loop will surface a connection error
     }
   }
 
@@ -399,8 +471,12 @@ async function pollPlanDecision(base: string, totalBudgetMs: number, seedSince?:
       )
     } catch (err: any) {
       if (err?.name === 'TimeoutError') continue
-      console.error(`Failed to reach diffing server: ${err?.message ?? err}`)
+      console.error(`Failed to reach diffing server: ${connectionErrorMessage(err)}`)
       return EXIT_NO_SERVER
+    }
+    if (!res.ok) {
+      console.error(`Failed to await plan review: HTTP ${res.status}`)
+      return 1
     }
     const result = await res.json()
     if (result.status === 'released') {
@@ -467,24 +543,24 @@ async function planSubmit(args: string[]): Promise<number> {
   // Capture the current round so --wait only reacts to decisions after submit.
   let sinceRound = 0
   if (values.wait) {
-    try {
-      const status = await apiFetch(`${base}/api/plan-review/status`).then((r) => r.json())
+    const statusRes = await tryApiFetch(`${base}/api/plan-review/status`)
+    if (statusRes?.ok) {
+      const status = (await statusRes.json()) as { round?: number }
       sinceRound = status.round ?? 0
-    } catch {
-      // surfaced by the poll loop below
     }
   }
 
-  const res = await apiFetch(`${base}/api/plans`, {
+  const submitRes = await tryApiFetch(`${base}/api/plans`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: values.id, title, body, source, model: values.model }),
   })
-  if (!res.ok) {
-    console.error(`Failed to submit plan: HTTP ${res.status}`)
+  if (!submitRes) return EXIT_NO_SERVER
+  if (!submitRes.ok) {
+    console.error(`Failed to submit plan: HTTP ${submitRes.status}`)
     return 1
   }
-  const plan = (await res.json()) as Plan
+  const plan = (await submitRes.json()) as Plan
   console.error(`Submitted plan ${plan.id} (v${plan.version}) — review at ${base}/plan/${plan.id}`)
   if (plan.sourcePath) {
     console.error(`Source path: ${plan.sourcePath}`)
@@ -511,8 +587,9 @@ async function planSubmit(args: string[]): Promise<number> {
     process.stdout.write(plan.id + '\n')
     return EXIT_OK
   }
-  const totalBudgetMs = (values.timeout ? Number(values.timeout) : DEFAULT_AWAIT_TIMEOUT_SECONDS) * 1000
-  return pollPlanDecision(base, totalBudgetMs, sinceRound)
+  const timeoutSeconds = parseTimeoutSeconds(values.timeout as string | undefined)
+  if (timeoutSeconds === null) return EXIT_USAGE
+  return pollPlanDecision(base, timeoutSeconds * 1000, sinceRound)
 }
 
 async function planAwait(args: string[]): Promise<number> {
@@ -521,13 +598,20 @@ async function planAwait(args: string[]): Promise<number> {
     options: { timeout: { type: 'string', short: 't' } },
     allowPositionals: false,
   })
-  const totalBudgetMs = (values.timeout ? Number(values.timeout) : DEFAULT_AWAIT_TIMEOUT_SECONDS) * 1000
-  return pollPlanDecision(baseUrl(), totalBudgetMs)
+  const timeoutSeconds = parseTimeoutSeconds(values.timeout as string | undefined)
+  if (timeoutSeconds === null) return EXIT_USAGE
+  return pollPlanDecision(baseUrl(), timeoutSeconds * 1000)
 }
 
 async function planList(args: string[]): Promise<number> {
   const { values } = parseArgs({ args, options: { json: { type: 'boolean' } }, allowPositionals: false })
-  const all: Plan[] = await apiFetch(`${baseUrl()}/api/plans`).then((r) => r.json())
+  const res = await tryApiFetch(`${baseUrl()}/api/plans`)
+  if (!res) return EXIT_NO_SERVER
+  if (!res.ok) {
+    console.error(`Failed to list plans: HTTP ${res.status}`)
+    return 1
+  }
+  const all: Plan[] = await res.json()
   if (values.json) {
     process.stdout.write(JSON.stringify(all, null, 2) + '\n')
     return EXIT_OK
@@ -552,17 +636,28 @@ async function planShow(args: string[]): Promise<number> {
   const base = baseUrl()
   let planId = positionals[0]
   if (!planId) {
-    const all: Plan[] = await apiFetch(`${base}/api/plans`).then((r) => r.json())
+    const listRes = await tryApiFetch(`${base}/api/plans`)
+    if (!listRes) return EXIT_NO_SERVER
+    if (!listRes.ok) {
+      console.error(`Failed to list plans: HTTP ${listRes.status}`)
+      return 1
+    }
+    const all: Plan[] = await listRes.json()
     if (all.length === 0) {
       console.error('No plans submitted yet.')
       return EXIT_NOT_FOUND
     }
     planId = all[all.length - 1].id
   }
-  const res = await apiFetch(`${base}/api/plans/${planId}`)
+  const res = await tryApiFetch(`${base}/api/plans/${planId}`)
+  if (!res) return EXIT_NO_SERVER
   if (res.status === 404) {
     console.error(`Plan ${planId} not found.`)
     return EXIT_NOT_FOUND
+  }
+  if (!res.ok) {
+    console.error(`Failed to load plan: HTTP ${res.status}`)
+    return 1
   }
   const plan = (await res.json()) as Plan
   const requestedVersion = values.version !== undefined ? Number(values.version) : undefined
@@ -597,10 +692,15 @@ async function planVersions(args: string[]): Promise<number> {
     console.error('Usage: diffing plan versions <id> [--json]')
     return EXIT_USAGE
   }
-  const planRes = await apiFetch(`${base}/api/plans/${planId}`)
+  const planRes = await tryApiFetch(`${base}/api/plans/${planId}`)
+  if (!planRes) return EXIT_NO_SERVER
   if (planRes.status === 404) {
     console.error(`Plan ${planId} not found.`)
     return EXIT_NOT_FOUND
+  }
+  if (!planRes.ok) {
+    console.error(`Failed to load plan: HTTP ${planRes.status}`)
+    return 1
   }
   const plan = (await planRes.json()) as Plan
   const versions = plan.versions ?? []
@@ -622,7 +722,9 @@ async function planVersions(args: string[]): Promise<number> {
 
 /** Locate which plan owns a given comment id (comment ids are globally unique). */
 async function findCommentPlan(base: string, commentId: string): Promise<Plan | null> {
-  const all: Plan[] = await apiFetch(`${base}/api/plans`).then((r) => r.json())
+  const res = await tryApiFetch(`${base}/api/plans`)
+  if (!res?.ok) return null
+  const all: Plan[] = await res.json()
   return all.find((p) => (p.comments ?? []).some((c) => c.id === commentId)) ?? null
 }
 
@@ -638,7 +740,15 @@ async function planReply(args: string[]): Promise<number> {
     return EXIT_USAGE
   }
   let body = values.body
-  if (body === '-' || body === undefined) body = (await readStdin()).trim()
+  if (body === undefined) {
+    if (process.stdin.isTTY) {
+      console.error('Usage: diffing plan reply <commentId> --body <text> [--model <name>]')
+      return EXIT_USAGE
+    }
+    body = (await readStdin()).trim()
+  } else if (body === '-') {
+    body = (await readStdin()).trim()
+  }
   if (!body) {
     console.error('A reply body is required (--body <text> or pipe via stdin).')
     return EXIT_USAGE
@@ -649,11 +759,12 @@ async function planReply(args: string[]): Promise<number> {
     console.error(`Plan comment ${commentId} not found.`)
     return EXIT_NOT_FOUND
   }
-  const res = await apiFetch(`${base}/api/plans/${plan.id}/comments/${commentId}/replies`, {
+  const res = await tryApiFetch(`${base}/api/plans/${plan.id}/comments/${commentId}/replies`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ body, role: 'agent', model: values.model }),
   })
+  if (!res) return EXIT_NO_SERVER
   if (!res.ok) {
     console.error(`Failed to reply: HTTP ${res.status}`)
     return 1
@@ -675,11 +786,12 @@ async function planResolve(args: string[]): Promise<number> {
     console.error(`Plan comment ${commentId} not found.`)
     return EXIT_NOT_FOUND
   }
-  const res = await apiFetch(`${base}/api/plans/${plan.id}/comments/${commentId}`, {
+  const res = await tryApiFetch(`${base}/api/plans/${plan.id}/comments/${commentId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status: 'resolved' }),
   })
+  if (!res) return EXIT_NO_SERVER
   if (!res.ok) {
     console.error(`Failed to resolve: HTTP ${res.status}`)
     return 1
@@ -720,13 +832,17 @@ async function doctor(): Promise<number> {
 }
 
 async function completion(args: string[]): Promise<number> {
-  const shell = args[0]
-  if (!shell || args.includes('--help') || args.includes('-h')) {
+  if (args.includes('--help') || args.includes('-h')) {
     console.error('Usage: diffing completion <bash|zsh|fish>')
     console.error('  # Install examples:')
     console.error('  #   diffing completion bash >> ~/.bashrc')
     console.error('  #   diffing completion zsh  > ~/.zfunc/_diffing')
     console.error('  #   diffing completion fish > ~/.config/fish/completions/diffing.fish')
+    return EXIT_OK
+  }
+  const shell = args[0]
+  if (!shell) {
+    console.error('Usage: diffing completion <bash|zsh|fish>')
     return EXIT_USAGE
   }
   const { completionFor } = await import('./lib/completions.js')
@@ -829,11 +945,12 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`)
   }
 
   const base = baseUrl()
+  const queryString = params.toString()
   let response: Response
   try {
-    response = await apiFetch(`${base}${endpoint}${params.size ? `?${params}` : ''}`)
-  } catch (error: any) {
-    console.error(`Failed to reach diffing server: ${error?.message ?? error}`)
+    response = await apiFetch(`${base}${endpoint}${queryString ? `?${queryString}` : ''}`)
+  } catch (error) {
+    console.error(`Failed to reach diffing server: ${connectionErrorMessage(error)}`)
     return EXIT_NO_SERVER
   }
   const body = await response.json().catch(() => ({ error: response.statusText }))
@@ -846,7 +963,7 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`)
 }
 
 async function progress(args: string[]): Promise<number> {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args,
     options: {
       message: { type: 'string', short: 'm' },
@@ -859,13 +976,14 @@ async function progress(args: string[]): Promise<number> {
   })
   const message =
     (values.message as string | undefined) ||
-    (args.find((a) => !a.startsWith('-')) ?? '')
+    positionals[0] ||
+    ''
   if (!message) {
     console.error('Usage: diffing progress --message "Working on comment…" [--model M] [--pct N]')
     return EXIT_USAGE
   }
   const base = baseUrl()
-  const res = await apiFetch(`${base}/api/agent/progress`, {
+  const res = await tryApiFetch(`${base}/api/agent/progress`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -876,6 +994,7 @@ async function progress(args: string[]): Promise<number> {
       pct: values.pct != null ? Number(values.pct) : undefined,
     }),
   })
+  if (!res) return EXIT_NO_SERVER
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     console.error((err as any).error ?? res.statusText)

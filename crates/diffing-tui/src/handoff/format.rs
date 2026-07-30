@@ -101,7 +101,7 @@ pub fn format_comments(
     }
 
     for (file_path, file_comments) in &grouped {
-        lines.push(format!("  <file path=\"{}\">", file_path));
+        lines.push(format!("  <file path=\"{}\">", escape_attr(file_path)));
         for comment in file_comments {
             let line_attr = if comment.line_number == 0 {
                 "file".to_string()
@@ -135,7 +135,12 @@ pub fn format_comments(
                 .unwrap_or_default();
             lines.push(format!(
                 "    <comment id=\"{}\" line=\"{}\" side=\"{}\" status=\"{}\"{} created-at=\"{}\">",
-                comment.id, line_attr, side_str, status_str, severity_attr, iso_date
+                escape_attr(&comment.id),
+                line_attr,
+                side_str,
+                status_str,
+                severity_attr,
+                iso_date
             ));
 
             if comment.line_number != 0 {
@@ -173,11 +178,14 @@ pub fn format_comments(
                     let model_attr = reply
                         .model
                         .as_deref()
-                        .map(|m| format!(" model=\"{m}\""))
+                        .map(|m| format!(" model=\"{}\"", escape_attr(m)))
                         .unwrap_or_default();
                     lines.push(format!(
                         "        <reply id=\"{}\" created-at=\"{}\" role=\"{}\"{}>",
-                        reply.id, reply_iso, role, model_attr
+                        escape_attr(&reply.id),
+                        reply_iso,
+                        escape_attr(role),
+                        model_attr
                     ));
                     lines.push(format!(
                         "          <![CDATA[{}]]>",
@@ -195,6 +203,14 @@ pub fn format_comments(
     lines.push("</code-review-comments>".to_string());
 
     lines.join("\n")
+}
+
+fn escape_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn escape_cdata(value: &str) -> String {
@@ -434,6 +450,25 @@ mod tests {
         let pos_a = out.find("src/a.rs").unwrap();
         let pos_b = out.find("src/b.rs").unwrap();
         assert!(pos_a < pos_b, "file order must match input order");
+    }
+
+    #[test]
+    fn escapes_quote_bearing_paths_and_attributes() {
+        let mut c = sample_comment("c\"1", "body", CommentStatus::Open);
+        c.file_path = "src/\"evil\".ts".to_string();
+        c.replies.push(CommentReply {
+            id: "r\"1".to_string(),
+            body: "reply".to_string(),
+            created_at: 2000,
+            role: Some("reviewer\"".to_string()),
+            model: Some("gpt\"4".to_string()),
+        });
+        let out = format_comments(&[c], None, None);
+        assert!(out.contains("<file path=\"src/&quot;evil&quot;.ts\">"));
+        assert!(out.contains("<comment id=\"c&quot;1\""));
+        assert!(out.contains("role=\"reviewer&quot;\""));
+        assert!(out.contains("model=\"gpt&quot;4\""));
+        assert!(out.contains("<reply id=\"r&quot;1\""));
     }
 
     #[test]

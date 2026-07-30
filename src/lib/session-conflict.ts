@@ -1,8 +1,10 @@
+import { probeLockServerSync } from './lock-probe.js'
 import {
   removeServerSession,
   type ServerLock,
 } from './server-lock.js'
 import { loadSettings } from './settings.js'
+import { reviewSessionUrl } from './session-url.js'
 
 export interface StopLockOwnerOptions {
   timeoutMs?: number
@@ -13,6 +15,8 @@ export interface StopLockOwnerOptions {
   now?: () => number
   isAlive?: (lock: ServerLock) => boolean
   clearLock?: (lock: ServerLock) => void
+  /** When false, the lock is stale — clear it without signaling the pid. */
+  lockMatches?: (lock: ServerLock) => boolean | Promise<boolean>
 }
 
 export interface OpenExistingSessionOptions {
@@ -27,11 +31,7 @@ function sleepMs(ms: number): Promise<void> {
 
 /** Loopback-safe review URL for web / gh-pr locks; null for TUI or invalid ports. */
 export function existingSessionUrl(lock: ServerLock): string | null {
-  const mode = lock.mode ?? 'web'
-  if (mode === 'tui' || !(lock.port > 0)) return null
-  const host = lock.host === '0.0.0.0' ? '127.0.0.1' : lock.host
-  const path = mode === 'gh-pr' ? '/gh/pr' : ''
-  return `http://${host}:${lock.port}${path}`
+  return reviewSessionUrl(lock)
 }
 
 function defaultClearLock(lock: ServerLock): void {
@@ -68,6 +68,14 @@ export async function stopLockOwner(
     options.isAlive ??
     ((candidate) => pidAlive(candidate.pid, kill))
   const clearLock = options.clearLock ?? defaultClearLock
+  const lockMatches =
+    options.lockMatches ?? ((candidate) => probeLockServerSync(candidate))
+
+  const matches = await lockMatches(lock)
+  if (!matches) {
+    clearLock(lock)
+    return
+  }
 
   if (!isAlive(lock)) {
     clearLock(lock)

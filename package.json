@@ -4,6 +4,9 @@
   "description": "local-first CLI for reviewing, navigating, and discussing git diffs with AI",
   "type": "module",
   "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "packageManager": "pnpm@11.6.0",
   "homepage": "https://github.com/ahmedragab20/diffing",
   "repository": {

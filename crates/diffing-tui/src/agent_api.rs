@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -21,12 +22,26 @@ use serde_json::{json, Value};
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PAGE_LINES: usize = 1_000;
+const MAX_CONCURRENT_CONNECTIONS: usize = 32;
 
 #[derive(Clone)]
 pub struct AgentApi {
     pub port: u16,
     pub capability: String,
     review: Arc<(Mutex<ReviewState>, Condvar)>,
+    shutdown: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+}
+
+impl Drop for AgentApi {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.shutdown) == 1 {
+            if let Ok(mut guard) = self.shutdown.lock() {
+                if let Some(shutdown) = guard.take() {
+                    let _ = shutdown.send(());
+                }
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -56,25 +71,59 @@ impl AgentApi {
             index,
             review: review.clone(),
         });
+        let connection_slots = Arc::new(Mutex::new(0usize));
+        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        let shutdown = Arc::new(Mutex::new(Some(shutdown_tx)));
+        listener
+            .set_nonblocking(true)
+            .context("configuring TUI agent API listener")?;
         thread::Builder::new()
             .name("diffing-agent-api".to_string())
             .spawn(move || {
-                for connection in listener.incoming() {
-                    let Ok(stream) = connection else {
-                        continue;
-                    };
-                    let state = state.clone();
-                    let _ = thread::Builder::new()
-                        .name("diffing-agent-request".to_string())
-                        .spawn(move || {
-                            let _ = handle_connection(stream, &state);
-                        });
+                loop {
+                    if shutdown_rx.try_recv().is_ok() {
+                        break;
+                    }
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            let state = state.clone();
+                            let slots = connection_slots.clone();
+                            let mut guard = match slots.lock() {
+                                Ok(guard) => guard,
+                                Err(_) => continue,
+                            };
+                            if *guard >= MAX_CONCURRENT_CONNECTIONS {
+                                continue;
+                            }
+                            *guard += 1;
+                            drop(guard);
+                            let slots_for_handler = connection_slots.clone();
+                            let spawned = thread::Builder::new()
+                                .name("diffing-agent-request".to_string())
+                                .spawn(move || {
+                                    let _ = handle_connection(stream, &state);
+                                    if let Ok(mut guard) = slots_for_handler.lock() {
+                                        *guard = guard.saturating_sub(1);
+                                    }
+                                });
+                            if spawned.is_err() {
+                                if let Ok(mut guard) = connection_slots.lock() {
+                                    *guard = guard.saturating_sub(1);
+                                }
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => break,
+                    }
                 }
             })?;
         Ok(Self {
             port,
             capability,
             review,
+            shutdown,
         })
     }
 
@@ -99,8 +148,7 @@ fn handle_connection(mut stream: TcpStream, state: &ApiState) -> Result<()> {
     let authorized = request
         .headers
         .get("x-diffing-capability")
-        .map(|value| value == &state.capability)
-        .unwrap_or(false);
+        .is_some_and(|value| constant_time_eq(value, &state.capability));
     if !authorized {
         return write_json(
             &mut stream,
@@ -239,13 +287,19 @@ fn route(
         return Ok((200, serde_json::to_value(store.load()?)?));
     }
     if method == "POST" && path == "/api/comments" {
-        let value: Value = serde_json::from_slice(body)?;
+        let value = match parse_json_body(body) {
+            Ok(value) => value,
+            Err(response) => return Ok(response),
+        };
         let file_path = value.get("filePath").and_then(Value::as_str).unwrap_or("");
-        let line_number = value.get("lineNumber").and_then(Value::as_u64).unwrap_or(0) as u32;
-        let start_line_number = value
-            .get("startLineNumber")
-            .and_then(Value::as_u64)
-            .map(|line| line as u32);
+        let line_number = match optional_u32_field(&value, "lineNumber") {
+            Ok(value) => value.unwrap_or(0),
+            Err(response) => return Ok(response),
+        };
+        let start_line_number = match optional_u32_field(&value, "startLineNumber") {
+            Ok(value) => value,
+            Err(response) => return Ok(response),
+        };
         let comment_body = value.get("body").and_then(Value::as_str).unwrap_or("");
         if file_path.is_empty() || comment_body.trim().is_empty() {
             return Ok((400, json!({ "error": "filePath and body are required" })));
@@ -288,7 +342,10 @@ fn route(
     if let Some(id) = path.strip_prefix("/api/comments/") {
         if let Some(id) = id.strip_suffix("/replies") {
             if method == "POST" {
-                let value: Value = serde_json::from_slice(body)?;
+                let value = match parse_json_body(body) {
+                    Ok(value) => value,
+                    Err(response) => return Ok(response),
+                };
                 let reply = store.add_reply(
                     id,
                     value.get("body").and_then(Value::as_str).unwrap_or(""),
@@ -302,7 +359,10 @@ fn route(
                 ));
             }
         } else if method == "PUT" {
-            let value: Value = serde_json::from_slice(body)?;
+            let value = match parse_json_body(body) {
+                Ok(value) => value,
+                Err(response) => return Ok(response),
+            };
             let status = match value.get("status").and_then(Value::as_str) {
                 Some("resolved") => Some(CommentStatus::Resolved),
                 Some("open") => Some(CommentStatus::Open),
@@ -463,20 +523,43 @@ fn percent_decode(value: &str) -> String {
     let mut index = 0;
     while index < bytes.len() {
         match bytes[index] {
-            b'+' => decoded.push(b' '),
-            b'%' if index + 2 < bytes.len() => {
-                if let Ok(byte) = u8::from_str_radix(&value[index + 1..index + 3], 16) {
-                    decoded.push(byte);
-                    index += 2;
-                } else {
-                    decoded.push(bytes[index]);
-                }
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
             }
-            byte => decoded.push(byte),
+            b'%' => {
+                let hex = match bytes.get(index + 1..index + 3) {
+                    Some(slice) => std::str::from_utf8(slice).ok(),
+                    None => None,
+                };
+                if let Some(hex) = hex {
+                    if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                        decoded.push(byte);
+                        index += 3;
+                        continue;
+                    }
+                }
+                decoded.push(bytes[index]);
+                index += 1;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
         }
-        index += 1;
     }
     String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (left_byte, right_byte) in left.bytes().zip(right.bytes()) {
+        diff |= left_byte ^ right_byte;
+    }
+    diff == 0
 }
 
 fn usize_param(params: &HashMap<String, String>, name: &str, default: usize) -> usize {
@@ -500,6 +583,38 @@ fn u32_param(params: &HashMap<String, String>, name: &str, default: u32) -> u32 
         .unwrap_or(default)
 }
 
+fn parse_json_body(body: &[u8]) -> Result<Value, (u16, Value)> {
+    serde_json::from_slice(body).map_err(|error| {
+        (
+            400,
+            json!({ "error": format!("invalid JSON body: {error}") }),
+        )
+    })
+}
+
+fn optional_u32_field(value: &Value, field: &str) -> Result<Option<u32>, (u16, Value)> {
+    match value.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(number) => number
+            .as_u64()
+            .ok_or_else(|| {
+                (
+                    400,
+                    json!({ "error": format!("{field} must be a non-negative integer") }),
+                )
+            })
+            .and_then(|line| {
+                u32::try_from(line).map_err(|_| {
+                    (
+                        400,
+                        json!({ "error": format!("{field} out of range") }),
+                    )
+                })
+            })
+            .map(Some),
+    }
+}
+
 fn new_capability() -> Result<String> {
     let mut bytes = [0u8; 32];
     getrandom::getrandom(&mut bytes)
@@ -520,10 +635,21 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn query_decoder_handles_spaces_and_percent_encoding() {
+    fn query_decoder_handles_spaces_multibyte_and_percent_encoding() {
         let params = parse_query("q=hello+world%21&limit=10");
         assert_eq!(params.get("q").map(String::as_str), Some("hello world!"));
         assert_eq!(usize_param(&params, "limit", 1), 10);
+
+        let adversarial = parse_query("q=%E2%82%AC&broken=%E");
+        assert_eq!(adversarial.get("q").map(String::as_str), Some("€"));
+        assert_eq!(adversarial.get("broken").map(String::as_str), Some("%E"));
+    }
+
+    #[test]
+    fn constant_time_capability_compare_matches_equal_values() {
+        assert!(constant_time_eq("abc", "abc"));
+        assert!(!constant_time_eq("abc", "abd"));
+        assert!(!constant_time_eq("abc", "ab"));
     }
 
     #[test]
@@ -535,12 +661,62 @@ mod tests {
     }
 
     #[test]
+    fn malformed_comment_json_returns_400() {
+        let index = Arc::new(DiffIndex::empty(1, PathBuf::from("/tmp/repo"), true));
+        let shared = Arc::new(RwLock::new(index));
+        let state = ApiState {
+            repo_root: "/tmp/repo".to_string(),
+            index: shared,
+            capability: "cap".to_string(),
+            review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
+        };
+        let (status, body) = route(
+            "POST",
+            "/api/comments",
+            &HashMap::new(),
+            b"{not json",
+            &state,
+        )
+        .unwrap();
+        assert_eq!(status, 400);
+        assert!(body.get("error").is_some());
+    }
+
+    #[test]
+    fn oversized_line_number_returns_400() {
+        let index = Arc::new(DiffIndex::empty(1, PathBuf::from("/tmp/repo"), true));
+        let shared = Arc::new(RwLock::new(index));
+        let state = ApiState {
+            repo_root: "/tmp/repo".to_string(),
+            index: shared,
+            capability: "cap".to_string(),
+            review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
+        };
+        let payload = json!({
+            "filePath": "a.rs",
+            "lineNumber": u64::MAX,
+            "body": "note"
+        });
+        let (status, body) = route(
+            "POST",
+            "/api/comments",
+            &HashMap::new(),
+            &serde_json::to_vec(&payload).unwrap(),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(status, 400);
+        assert!(body.get("error").is_some());
+    }
+
+    #[test]
     fn review_release_wakes_and_caches_round() {
         let review = Arc::new((Mutex::new(ReviewState::default()), Condvar::new()));
         let api = AgentApi {
             port: 1,
             capability: "test".to_string(),
             review: review.clone(),
+            shutdown: Arc::new(Mutex::new(None)),
         };
         assert_eq!(api.release_review("<review/>".to_string()), 1);
         let state = review.0.lock().unwrap();

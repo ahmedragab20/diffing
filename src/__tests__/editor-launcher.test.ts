@@ -72,13 +72,10 @@ describe('resolveEditorCommand', () => {
       expect(cmd.args[1]).not.toContain(' vim ')
     })
 
-    it('escapes embedded double-quotes in the path', () => {
-      // Pathological but legal on macOS/Linux. The escaped string lives
-      // inside a double-quoted AppleScript literal, so a raw `"` would
-      // break the script and let arbitrary code through.
+    it('uses AppleScript quoted form for terminal editor paths', () => {
       const cmd = resolveEditorCommand('vim', '/Users/me/he said "hi".txt', 'darwin', {})!
-      // The escaped form should NOT contain a bare `"hi"` token.
-      expect(cmd.args[1]).toContain('\\"hi\\"')
+      expect(cmd.args[1]).toContain('quoted form of')
+      expect(cmd.args[1]).toMatch(/quoted form of "\/Users\/me\/he said \\"hi\\"\.txt"/)
     })
   })
 

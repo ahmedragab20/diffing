@@ -10,6 +10,7 @@ import DiffsWorker from '@pierre/diffs/worker/worker.js?worker'
 import '../../node_modules/@pierre/diffs/dist/components/web-components.js'
 import { TooltipProvider } from './primitives/Tooltip'
 import { Root } from './Root'
+import { installSessionAuth } from './session-auth'
 import './styles/global.css'
 // Gridline is the canonical web design-system layer. Keep it last: it adapts
 // the legacy component stylesheet to the same terminal-native contract as the
@@ -17,6 +18,8 @@ import './styles/global.css'
 import './styles/gridline.css'
 
 const queryClient = new QueryClient()
+
+installSessionAuth()
 
 createRoot(document.getElementById('root')!).render(
   <QueryClientProvider client={queryClient}>

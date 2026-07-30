@@ -98,7 +98,8 @@ diffing [options] [<revision>...] [-- <path>...]
 
 #### Diffing Server Options
 - `--port <port>`: The port to bind the server to. If omitted, it automatically requests a random available port.
-- `--host <host>`: Host address to bind the server to (default: `127.0.0.1`). Pass `0.0.0.0` to expose the review dashboard to your local network.
+- `--host <host>`: Host address to bind the server to (default: `127.0.0.1`). Loopback binds generate a per-session API token (printed in the review URL). To expose the dashboard on your LAN, pass `0.0.0.0` together with `--insecure-no-auth` (disables API authentication).
+- `--insecure-no-auth`: Required when binding to `0.0.0.0` or `::`. Allows LAN clients to reach the API without a token. Ignored on loopback binds.
 - `--no-open`: Prevents the CLI from automatically launching your browser when the server starts.
 - `--reuse-session`: Open the active session (print URL / launch browser) instead of starting another.
 - `--replace-session`: Stop the active session and start a replacement with the current arguments.
@@ -1024,7 +1025,7 @@ shows valid completions while a multi-key sequence is pending.
 | `e` | Edit the current comment |
 | `r` | Reply to the current comment thread |
 | `x` | Resolve the current comment |
-| `X` | Resolve all open comment threads |
+| `X` | Resolve all open comment threads (press `X` twice to confirm) |
 | `d d` | Confirm and permanently delete the current thread |
 | `s` / `p` | Cycle comment status / severity filters |
 | `o` / `Enter` (review pane) | Open the complete focused thread |

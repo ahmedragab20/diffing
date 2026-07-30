@@ -355,9 +355,9 @@ pub enum GitDiffError {
 /// config (mirroring the Node CLI's `runTerminalDiff`).
 pub fn run_git_diff(repo_root: &str, args: &[String]) -> Result<String, GitDiffError> {
     let mut cmd = Command::new("git");
-    cmd.arg("diff").arg("--no-ext-diff");
+    cmd.arg("diff").arg("--no-ext-diff").arg("--no-textconv");
     for a in args {
-        if a != "--no-ext-diff" {
+        if a != "--no-ext-diff" && a != "--no-textconv" {
             cmd.arg(a);
         }
     }

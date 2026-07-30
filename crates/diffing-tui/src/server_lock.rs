@@ -1,10 +1,42 @@
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use diffing_core::storage::{ensure_dir, lock_path, sessions_dir};
+use diffing_core::storage::{lock_path, sessions_dir};
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn unique_temp_path(path: &Path) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_extension(format!("json.{id}.{stamp}.tmp"))
+}
+
+fn sweep_stale_temp_files(directory: &Path, keep: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == keep {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name.ends_with(".tmp") {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
 
 /// Mirrors `src/lib/server-lock.ts#ServerLock` in the Node CLI.
 ///
@@ -89,11 +121,50 @@ fn session_record_path(repo_root: &str, lock: &ServerLock) -> PathBuf {
     sessions_dir(repo_root).join(format!("{safe_id}.json"))
 }
 
+fn ensure_private_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating directory {}", parent.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                .with_context(|| format!("restricting permissions on {}", parent.display()))?;
+        }
+    }
+    Ok(())
+}
+
 fn write_json_atomically(path: &Path, lock: &ServerLock) -> Result<()> {
-    ensure_dir(path).with_context(|| format!("preparing parent of {}", path.display()))?;
+    ensure_private_dir(path).with_context(|| format!("preparing parent of {}", path.display()))?;
+    if let Some(parent) = path.parent() {
+        sweep_stale_temp_files(parent, path);
+    }
     let json = serde_json::to_string_pretty(lock).context("serializing session lock")?;
-    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    std::fs::write(&temporary, json).with_context(|| format!("writing {}", temporary.display()))?;
+    let temporary = unique_temp_path(path);
+    #[cfg(unix)]
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&temporary)
+            .with_context(|| format!("writing {}", temporary.display()))?;
+        file.write_all(json.as_bytes())
+            .with_context(|| format!("writing {}", temporary.display()))?;
+        file.sync_all()
+            .with_context(|| format!("syncing {}", temporary.display()))?;
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("restricting permissions on {}", temporary.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&temporary, json).with_context(|| format!("writing {}", temporary.display()))?;
+    }
     std::fs::rename(&temporary, path).with_context(|| format!("publishing {}", path.display()))?;
     Ok(())
 }
@@ -161,9 +232,10 @@ pub fn list_server_locks(repo_root: &str) -> Vec<ServerLock> {
                     let normalized = normalized_lock(&candidate);
                     sessions.insert(session_id(&normalized), normalized);
                 }
-                _ => {
+                Some(candidate) if candidate.repo_root == repo_root => {
                     let _ = std::fs::remove_file(path);
                 }
+                _ => {}
             }
         }
     }
@@ -180,10 +252,15 @@ pub fn remove_server_lock_if_owned(repo_root: &str, owner: &ServerLock) -> Resul
     let normalized = normalized_lock(owner);
     let record_path = session_record_path(repo_root, &normalized);
     if let Ok(raw) = std::fs::read_to_string(&record_path) {
-        if serde_json::from_str::<ServerLock>(&raw)
-            .is_ok_and(|stored| same_session(&stored, &normalized))
+        if serde_json::from_str::<ServerLock>(&raw).is_ok_and(|stored| same_session(&stored, &normalized))
         {
-            let _ = std::fs::remove_file(record_path);
+            if let Ok(raw_again) = std::fs::read_to_string(&record_path) {
+                if serde_json::from_str::<ServerLock>(&raw_again)
+                    .is_ok_and(|stored| same_session(&stored, &normalized))
+                {
+                    let _ = std::fs::remove_file(&record_path);
+                }
+            }
         }
     }
 
@@ -200,10 +277,13 @@ pub fn remove_server_lock_if_owned(repo_root: &str, owner: &ServerLock) -> Resul
         .into_iter()
         .find(|candidate| !same_session(candidate, &normalized))
     {
-        write_json_atomically(&lock_path(repo_root), &fallback)
-    } else {
-        remove_server_lock(repo_root)
+        if read_server_lock(repo_root).is_some_and(|active| same_session(&active, &normalized)) {
+            write_json_atomically(&lock_path(repo_root), &fallback)?;
+        }
+    } else if read_server_lock(repo_root).is_some_and(|active| same_session(&active, &normalized)) {
+        remove_server_lock(repo_root)?;
     }
+    Ok(())
 }
 
 pub fn new_session_id() -> Result<String> {
@@ -213,26 +293,87 @@ pub fn new_session_id() -> Result<String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+fn loopback_probe_host(host: &str) -> &str {
+    if host == "0.0.0.0" {
+        "127.0.0.1"
+    } else {
+        host
+    }
+}
+
+fn probe_lock_server(lock: &ServerLock) -> bool {
+    if lock.port == 0 {
+        return true;
+    }
+    use std::net::{SocketAddr, TcpStream};
+
+    let host = loopback_probe_host(&lock.host);
+    let address: SocketAddr = format!("{}:{}", host, lock.port)
+        .parse()
+        .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], lock.port)));
+    let mut stream = match TcpStream::connect_timeout(&address, Duration::from_millis(400)) {
+        Ok(stream) => stream,
+        Err(_) => return false,
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_millis(400)))
+        .ok();
+    stream
+        .set_write_timeout(Some(Duration::from_millis(400)))
+        .ok();
+    let mut request = format!(
+        "GET /api/review/status HTTP/1.1\r\nHost: {}\r\n",
+        host
+    );
+    if let Some(capability) = &lock.capability {
+        request.push_str(&format!("X-Diffing-Capability: {}\r\n", capability));
+    }
+    request.push_str("Connection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = Vec::with_capacity(4096);
+    if stream.read(&mut response).is_err() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&response);
+    let body = text.split("\r\n\r\n").nth(1).unwrap_or("").trim();
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("round").and_then(|round| round.as_u64()))
+        .is_some()
+}
+
 /// True if the process named by the lock is still alive. Uses
 /// `kill(pid, 0)` on Unix (a no-op that returns 0 if the process exists)
 /// and `tasklist` on Windows. On unknown platforms we conservatively
 /// assume alive — a stale lock will be overwritten on the next write.
 pub fn is_lock_alive(lock: &ServerLock) -> bool {
-    #[cfg(unix)]
-    {
-        // SAFETY: kill(pid, 0) is documented as safe when signal is 0.
-        let result = unsafe { libc::kill(lock.pid as i32, 0) };
-        result == 0
+    if !is_pid_alive(lock.pid) {
+        return false;
     }
-    #[cfg(windows)]
-    {
-        is_pid_alive_windows(lock.pid)
+    probe_lock_server(lock)
+}
+
+#[cfg(unix)]
+fn is_pid_alive(pid: u32) -> bool {
+    // SAFETY: kill(pid, 0) is documented as safe when signal is 0.
+    let result = unsafe { libc::kill(pid as i32, 0) };
+    if result == 0 {
+        return true;
     }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = lock;
-        true
-    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(windows)]
+fn is_pid_alive(pid: u32) -> bool {
+    is_pid_alive_windows(pid)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn is_pid_alive(pid: u32) -> bool {
+    let _ = pid;
+    true
 }
 
 /// Windows process-liveness probe via `tasklist`. We avoid pulling in a

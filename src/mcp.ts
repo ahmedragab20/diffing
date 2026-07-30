@@ -28,6 +28,8 @@ import {
   type ServerStartupLease,
 } from './lib/server-lock.js'
 import { startServer } from './server.js'
+import { generateSessionToken, isLoopbackHost, SESSION_TOKEN_HEADER } from './lib/server-auth.js'
+import { reviewSessionUrl } from './lib/session-url.js'
 import type { Plan } from './lib/plan-types.js'
 import type { ReviewComment } from './lib/types.js'
 
@@ -153,28 +155,16 @@ interface SessionStatus {
   nextAction: string
 }
 
-function isLoopbackHost(host: string): boolean {
-  const normalized = host.toLowerCase()
-  if (normalized === 'localhost' || normalized === '::1' || normalized === '[::1]') return true
-  const octets = normalized.split('.')
-  return octets.length === 4 && octets[0] === '127' && octets.every((part) => {
-    if (!/^\d{1,3}$/.test(part)) return false
-    const value = Number(part)
-    return value >= 0 && value <= 255
-  })
-}
-
 function lockUrl(lock: ServerLock): string | null {
-  if (lock.port <= 0) return null
-  if (!isLoopbackHost(lock.host)) return null
-  const host = lock.host === '::1' ? '[::1]' : lock.host
-  return `http://${host}:${lock.port}`
+  return reviewSessionUrl(lock)
 }
 
-async function requestJson<T>(base: string, path: string, init?: RequestInit): Promise<T> {
+async function requestJson<T>(base: string, path: string, init?: RequestInit, authToken?: string): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`${base}${path}`, init)
+    const headers = new Headers(init?.headers)
+    if (authToken) headers.set(SESSION_TOKEN_HEADER, authToken)
+    response = await fetch(`${base}${path}`, { ...init, headers })
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error(`Request to ${path} was cancelled. Retry the MCP tool when ready.`)
@@ -522,8 +512,10 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     if (session.lock.mode === 'tui') {
       if (!session.lock.capability) throw new Error('The TUI lock is missing its API capability.')
       headers.set('X-Diffing-Capability', session.lock.capability)
+    } else if (session.lock.authToken) {
+      headers.set(SESSION_TOKEN_HEADER, session.lock.authToken)
     }
-    return requestJson<T>(session.url, path, { ...init, headers })
+    return requestJson<T>(session.url, path, { ...init, headers }, session.lock.authToken)
   }
 
   function requestBaseJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -704,11 +696,16 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
         const afterLease = liveLock()
         if (afterLease) return reuse(afterLease)
 
+        const authToken = generateSessionToken()
         const started = await startServerFn({
           port: 0,
           host: '127.0.0.1',
           clientDir,
           diffOpts: parsed,
+          security: {
+            bindHost: '127.0.0.1',
+            authToken,
+          },
         })
         const lock: ServerLock = {
           port: started.port,
@@ -723,6 +720,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
           owner: 'mcp',
           ownerId,
           sessionId: ownerId,
+          authToken,
         }
         try {
           writeLock(lock)

@@ -58,14 +58,12 @@ function terminalEditorCommand(
   env: NodeJS.ProcessEnv,
 ): EditorCommand {
   if (platform === 'darwin') {
-    // Escape backslashes first, then double-quotes — otherwise the second
-    // pass would re-escape the backslashes we just inserted.
-    const escaped = absolutePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    const appleScriptPath = absolutePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
     return {
       cmd: 'osascript',
       args: [
         '-e',
-        `tell application "Terminal" to do script "${bin} \\"${escaped}\\""`,
+        `tell application "Terminal" to do script ("${bin} " & quoted form of "${appleScriptPath}")`,
       ],
     }
   }

@@ -22,6 +22,8 @@
  * each hold their own socket.
  */
 
+import { liveEventSourceUrl } from './session-auth.js'
+
 export type LiveEvent =
   | 'change'
   | 'comments'
@@ -38,7 +40,7 @@ let source: EventSource | null = null
 
 function ensureConnected() {
   if (source || typeof EventSource === 'undefined') return
-  source = new EventSource('/api/live')
+  source = new EventSource(liveEventSourceUrl())
   for (const event of handlers.keys()) {
     attach(event)
   }

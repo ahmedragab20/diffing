@@ -129,12 +129,17 @@ describe('diffing MCP', () => {
       })
       expect(first.isError, JSON.stringify(first.content)).not.toBe(true)
       expect(first.structuredContent).toMatchObject({
-        status: 'started', url: 'http://127.0.0.1:43123', managedBy: 'mcp',
+        status: 'started', managedBy: 'mcp',
       })
+      expect(String(first.structuredContent?.url)).toMatch(/^http:\/\/127\.0\.0\.1:43123\/\?token=/)
       expect(second.structuredContent).toMatchObject({ status: 'reused' })
       expect(startServerFn).toHaveBeenCalledTimes(1)
       expect(startServerFn).toHaveBeenCalledWith(expect.objectContaining({
         host: '127.0.0.1',
+        security: expect.objectContaining({
+          bindHost: '127.0.0.1',
+          authToken: expect.any(String),
+        }),
         diffOpts: expect.objectContaining({
           staged: true,
           noExtDiff: true,
@@ -146,6 +151,7 @@ describe('diffing MCP', () => {
       }))
       expect(lock).toMatchObject({
         host: '127.0.0.1', owner: 'mcp', diffArgs: ['--staged'], repoRoot,
+        authToken: expect.any(String),
       })
 
       // A later human launch may become the repository-wide active pointer;
@@ -163,9 +169,9 @@ describe('diffing MCP', () => {
       expect(status.structuredContent).toMatchObject({
         mode: 'web',
         managedBy: 'mcp',
-        url: 'http://127.0.0.1:43123',
         diffArgs: ['--staged'],
       })
+      expect(String(status.structuredContent?.url)).toMatch(/^http:\/\/127\.0\.0\.1:43123\/\?token=/)
     } finally {
       await session.close()
     }

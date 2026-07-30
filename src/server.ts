@@ -26,6 +26,7 @@ import type { PlanDecision, PlanMode } from './lib/plan-types.js'
 import { executeDiffWithMeta } from './lib/diff-engine.js'
 import type { DiffOptions } from './lib/diff-options.js'
 import { DEFAULTS } from './lib/diff-options.js'
+import { createServerAuthMiddleware, type ServerAuthConfig } from './lib/server-auth.js'
 import { FilePrSessionStore, InMemoryPrSessionStore } from './lib/pr-session.js'
 import type { PrSessionStore, PrDecision, PrExistingReview, PrSession, PrExistingComment, PrExistingReply } from './lib/pr-session.js'
 import { buildPrOverview } from './lib/diff-overview.js'
@@ -102,8 +103,10 @@ export function createApp(
   planStore?: PlanStore,
   prSessionStore?: PrSessionStore,
   prMode = false,
+  security: ServerAuthConfig = { bindHost: '127.0.0.1', authToken: null, insecureNoAuth: true },
 ) {
   const app = new Hono()
+  app.use('*', createServerAuthMiddleware(security))
   // Mutable so the UI can live-toggle whitespace (and future) options without
   // restarting the server. Seeded from startup CLI flags / defaults.
   let diffOpts: DiffOptions = { ...diffOptsInput }
@@ -2153,6 +2156,7 @@ export async function startServer(options: {
   host: string
   clientDir: string
   diffOpts?: DiffOptions
+  security: ServerAuthConfig
   /**
    * If set, the server builds a `pr-session.json` from this ref on startup so
    * the web UI opens in PR mode. The session is persisted in the per-repo
@@ -2191,7 +2195,15 @@ export async function startServer(options: {
     }
   }
 
-  const app = createApp(options.clientDir, options.diffOpts, undefined, undefined, undefined, prMode)
+  const app = createApp(
+    options.clientDir,
+    options.diffOpts,
+    undefined,
+    undefined,
+    undefined,
+    prMode,
+    options.security,
+  )
 
   return new Promise((resolve) => {
     serve({

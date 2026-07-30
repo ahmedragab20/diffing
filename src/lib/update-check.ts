@@ -39,16 +39,19 @@ export async function checkForUpdates(currentVersion: string): Promise<UpdateInf
   try {
     const controller = new AbortController()
     const id = setTimeout(() => controller.abort(), 1000)
-    const res = await fetch('https://registry.npmjs.org/diffing/latest', {
-      signal: controller.signal,
-    })
-    clearTimeout(id)
-    if (!res.ok) return null
-    const data = (await res.json()) as { version: string }
-    if (!data.version) return null
-    return {
-      hasUpdate: isNewerVersion(currentVersion, data.version),
-      latestVersion: data.version,
+    try {
+      const res = await fetch('https://registry.npmjs.org/diffing/latest', {
+        signal: controller.signal,
+      })
+      if (!res.ok) return null
+      const data = (await res.json()) as { version: string }
+      if (!data.version) return null
+      return {
+        hasUpdate: isNewerVersion(currentVersion, data.version),
+        latestVersion: data.version,
+      }
+    } finally {
+      clearTimeout(id)
     }
   } catch {
     return null
@@ -127,7 +130,7 @@ export async function runUpdateCommand(): Promise<number> {
   console.log(`Running: ${cmd} ${args.join(' ')}\n`)
 
   const spawnPromise = new Promise<number>((res) => {
-    const child = spawn(cmd, args, { stdio: 'inherit', shell: true })
+    const child = spawn(cmd, args, { stdio: 'inherit' })
     child.on('close', (code) => {
       res(code ?? 0)
     })
@@ -141,8 +144,11 @@ export async function runUpdateCommand(): Promise<number> {
   if (exitCode === 0) {
     console.log(`\n\x1b[38;5;82mSuccessfully updated diffing to v${latest}!\x1b[0m\n`)
   } else {
-    console.error(`\n\x1b[38;5;196mFailed to update diffing. Please try running the command manually with sudo if required:\x1b[0m`)
-    console.error(`  sudo ${cmd} ${args.join(' ')}\n`)
+    console.error(
+      `\n\x1b[38;5;196mFailed to update diffing. Install into your user prefix instead of using sudo:\x1b[0m`,
+    )
+    console.error(`  npm config get prefix   # e.g. ~/.npm-global or ~/.local`)
+    console.error(`  ${cmd} ${args.join(' ')}\n`)
   }
 
   return exitCode

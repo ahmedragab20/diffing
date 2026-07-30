@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util'
 import { resolveActiveServerLock } from './lib/server-lock.js'
+import { SESSION_TOKEN_HEADER } from './lib/server-auth.js'
 import { formatComments } from './lib/comment-format.js'
 import type { ReviewComment } from './lib/types.js'
 import type { PrSession } from './lib/pr-session.js'
@@ -25,6 +26,8 @@ const EXIT_NO_SERVER = 3
 const EXIT_NOT_FOUND = 4
 const EXIT_USAGE = 5
 
+let activeAuthToken: string | undefined
+
 function baseUrl(): string {
   const lock = resolveActiveServerLock()
   if (!lock) {
@@ -32,11 +35,18 @@ function baseUrl(): string {
     process.exit(EXIT_NO_SERVER)
   }
   const host = lock.host === '0.0.0.0' || lock.host === '::' ? '127.0.0.1' : lock.host
+  activeAuthToken = lock.authToken
   return `http://${host}:${lock.port}`
 }
 
+function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers)
+  if (activeAuthToken) headers.set(SESSION_TOKEN_HEADER, activeAuthToken)
+  return fetch(input, { ...init, headers })
+}
+
 async function fetchJson<T>(path: string): Promise<{ ok: true; data: T } | { ok: false; status: number; error: string }> {
-  const res = await fetch(`${baseUrl()}${path}`)
+  const res = await apiFetch(`${baseUrl()}${path}`)
   if (res.status === 404) {
     return { ok: false, status: 404, error: 'No active PR session. Start one with `diffing "gh pr <ref>"`.' }
   }
@@ -83,7 +93,7 @@ async function ghOverview(args: string[]): Promise<number> {
 
 async function ghStatus(): Promise<number> {
   // Prefer slim overview; fall back to fat session for older servers.
-  const overview = await fetch(`${baseUrl()}/api/gh/overview`)
+  const overview = await apiFetch(`${baseUrl()}/api/gh/overview`)
   if (overview.ok) {
     const session = (await overview.json()) as PrOverviewPayload
     const submitted = session.submittedAt
@@ -96,7 +106,7 @@ async function ghStatus(): Promise<number> {
     )
     return EXIT_OK
   }
-  const res = await fetch(`${baseUrl()}/api/gh/session`)
+  const res = await apiFetch(`${baseUrl()}/api/gh/session`)
   if (res.status === 404) {
     console.error('No active PR session. Start one with `diffing "gh pr <ref>"`.')
     return EXIT_NOT_FOUND
@@ -153,7 +163,7 @@ async function ghThreads(args: string[]): Promise<number> {
   }
   params.set('format', format)
 
-  const res = await fetch(`${baseUrl()}/api/gh/threads?${params}`)
+  const res = await apiFetch(`${baseUrl()}/api/gh/threads?${params}`)
   if (res.status === 404) {
     console.error('No active PR session.')
     return EXIT_NOT_FOUND
@@ -199,7 +209,7 @@ async function ghReviews(args: string[]): Promise<number> {
   }
   params.set('format', format)
 
-  const res = await fetch(`${baseUrl()}/api/gh/reviews?${params}`)
+  const res = await apiFetch(`${baseUrl()}/api/gh/reviews?${params}`)
   if (res.status === 404) {
     console.error('No active PR session.')
     return EXIT_NOT_FOUND
@@ -234,9 +244,9 @@ async function ghPrFetch(args: string[]): Promise<number> {
   const base = baseUrl()
   // Prefer refresh so in-progress draft comments are preserved. Fall back to
   // init only when no session is active (refresh 404s).
-  let res = await fetch(`${base}/api/gh/pr/refresh`, { method: 'POST' })
+  let res = await apiFetch(`${base}/api/gh/pr/refresh`, { method: 'POST' })
   if (res.status === 404) {
-    res = await fetch(`${base}/api/gh/pr/init`, {
+    res = await apiFetch(`${base}/api/gh/pr/init`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ref }),
@@ -248,7 +258,7 @@ async function ghPrFetch(args: string[]): Promise<number> {
     return 1
   }
   // Prefer slim overview after refresh to avoid dumping full session JSON.
-  const overviewRes = await fetch(`${base}/api/gh/overview`)
+  const overviewRes = await apiFetch(`${base}/api/gh/overview`)
   if (overviewRes.ok) {
     const result = (await overviewRes.json()) as Record<string, unknown>
     if (values.json) {
@@ -258,7 +268,7 @@ async function ghPrFetch(args: string[]): Promise<number> {
     }
     return EXIT_OK
   }
-  const sessionRes = await fetch(`${base}/api/gh/session`)
+  const sessionRes = await apiFetch(`${base}/api/gh/session`)
   const result = sessionRes.ok
     ? ((await sessionRes.json()) as Record<string, unknown>)
     : ((await res.json()) as Record<string, unknown>)
@@ -272,7 +282,7 @@ async function ghPrFetch(args: string[]): Promise<number> {
 
 async function ghPrListComments(): Promise<number> {
   const base = baseUrl()
-  const res = await fetch(`${base}/api/gh/pr-session/comments`)
+  const res = await apiFetch(`${base}/api/gh/pr-session/comments`)
   if (res.status === 404) {
     console.error('No active PR session.')
     return EXIT_NOT_FOUND
@@ -312,7 +322,7 @@ async function ghPrReview(args: string[]): Promise<number> {
     body: values.body ?? '',
     dryRun: values['dry-run'] === true,
   }
-  const res = await fetch(`${base}/api/gh/submit`, {
+  const res = await apiFetch(`${base}/api/gh/submit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

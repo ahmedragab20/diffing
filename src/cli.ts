@@ -8,6 +8,8 @@ import getPort from 'get-port'
 import { parseDiffOptions, DEFAULTS, printHelp, intoShowMode, buildTuiGitDiffArgs } from './lib/diff-options.js'
 import { runTerminalDiff, validateEnvironment } from './lib/diff-engine.js'
 import { startServer } from './server.js'
+import { generateSessionToken, isWildcardBindHost } from './lib/server-auth.js'
+import { appendSessionToken } from './lib/session-url.js'
 import { loadSettings } from './lib/settings.js'
 import {
   acquireServerStartupLease,
@@ -26,6 +28,22 @@ import {
   stopLockOwner,
 } from './lib/session-conflict.js'
 import type { DiffOptions } from './lib/diff-options.js'
+
+async function resolveServerPort(requested?: number): Promise<number> {
+  if (requested === undefined) {
+    return getPort()
+  }
+  if (!Number.isInteger(requested) || requested < 1 || requested > 65535) {
+    console.error(`--port must be an integer between 1 and 65535 (got ${String(requested)}).`)
+    process.exit(5)
+  }
+  const port = await getPort({ port: requested })
+  if (port !== requested) {
+    console.error(`Port ${requested} is not available.`)
+    process.exit(1)
+  }
+  return port
+}
 import type { TuiSearchBridge } from './lib/tui-search-bridge.js'
 
 const args = process.argv.slice(2)
@@ -245,8 +263,24 @@ const updateCheckPromise = (async () => {
   }
 })()
 
-const port = await getPort(opts.port ? { port: opts.port } : undefined)
+const port = await resolveServerPort(opts.port)
 const host = opts.host
+
+if (isWildcardBindHost(host) && !opts.insecureNoAuth) {
+  console.error(
+    'Binding to all interfaces requires --insecure-no-auth. ' +
+    'Loopback review (default --host 127.0.0.1) uses a per-session API token instead.',
+  )
+  process.exit(1)
+}
+
+const authToken = opts.insecureNoAuth ? null : generateSessionToken()
+if (isWildcardBindHost(host) && opts.insecureNoAuth) {
+  console.error(
+    'WARNING: diffing is exposed on the LAN without API authentication. ' +
+    'Anyone on your network can read and modify review data.',
+  )
+}
 
 const clientDir = resolve(__pkgDir, 'client')
 const resolvedClientDir = existsSync(clientDir)
@@ -301,6 +335,11 @@ try {
     clientDir: resolvedClientDir,
     diffOpts: opts,
     prRef: prRef ?? undefined,
+    security: {
+      bindHost: host,
+      authToken,
+      insecureNoAuth: opts.insecureNoAuth,
+    },
   })
   actualPort = started.port
   prMode = started.prMode
@@ -316,6 +355,7 @@ try {
     scope: diffScopeKey(opts),
     ownerId: sessionOwnerId,
     sessionId: sessionOwnerId,
+    authToken: authToken ?? undefined,
   })
 } catch (error) {
   startupLease?.release()
@@ -326,7 +366,10 @@ try {
 startupLease?.release()
 startupLease = null
 
-const localUrl = `http://${host}:${actualPort}`
+const localUrl = appendSessionToken(
+  `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${actualPort}${prMode ? '/gh/pr' : ''}`,
+  authToken ?? undefined,
+)
 
 console.log(`diffing server running at ${localUrl}`)
 
@@ -339,7 +382,10 @@ if (openModulePromise) {
     const openHost = host === '0.0.0.0' ? '127.0.0.1' : host
     // PR mode mounts <PrReviewApp> only on `/gh/pr` — open that path so the
     // user lands on Submit-to-GitHub instead of the local review surface.
-    const openUrl = `http://${openHost}:${actualPort}${prMode ? '/gh/pr' : ''}`
+    const openUrl = appendSessionToken(
+      `http://${openHost}:${actualPort}${prMode ? '/gh/pr' : ''}`,
+      authToken ?? undefined,
+    )
     const openModule = await openModulePromise
     let appName: string | readonly string[] | undefined
     if (settings.browser) {
@@ -353,8 +399,8 @@ if (openModulePromise) {
   }
 }
 
-// Decorative startup quote — non-blocking; never delay the review UI for it.
-void playStartupDisplay()
+// Decorative startup quote — await before update disclaimer so output stays ordered.
+await playStartupDisplay()
 
 try {
   const updateInfo = await updateCheckPromise
@@ -379,6 +425,7 @@ process.on('SIGTERM', shutdown)
 import {
   findTuiBinaries as _findTuiBinaries,
   findTuiBinary as _findTuiBinary,
+  findViewerTuiBinary as _findViewerTuiBinary,
 } from './lib/find-tui-binary.js'
 
 /**
@@ -431,7 +478,9 @@ async function launchTui(args: string[], opts: DiffOptions): Promise<number> {
     return runTerminalFallback(args)
   }
   // Gate 2 — binary present and executable.
-  const bin = findTuiBinary(viewOnly)
+  const bin = viewOnly
+    ? await _findViewerTuiBinary(import.meta.url)
+    : _findTuiBinary(import.meta.url)
   if (!bin) {
     console.error(`${viewOnly ? 'compatible ' : ''}diffing-tui binary not found; reinstall with \`npm i -g diffing@latest\` or build it with \`pnpm build:tui\`; falling back to git diff`)
     return runTerminalFallback(args)

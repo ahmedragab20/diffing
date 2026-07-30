@@ -12,6 +12,12 @@ vi.mock('../lib/git.js', () => ({
   getRepoRoot: () => mockGetRepoRoot(),
 }))
 
+const mockProbeLockServerSync = vi.fn(() => true)
+
+vi.mock('../lib/lock-probe.js', () => ({
+  probeLockServerSync: (...args: any[]) => mockProbeLockServerSync(...args),
+}))
+
 let storageDir: string
 
 async function loadModule() {
@@ -33,6 +39,7 @@ function makeLock(overrides: Partial<import('../lib/server-lock.js').ServerLock>
 describe('server-lock', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockProbeLockServerSync.mockReturnValue(true)
     storageDir = mkdtempSync(join(tmpdir(), 'diffing-lock-'))
     mockGetProjectStorageDir.mockReturnValue(storageDir)
     mockGetRepoRoot.mockReturnValue('/tmp/test-repo')
@@ -64,10 +71,17 @@ describe('server-lock', () => {
     expect(isLockAlive(makeLock({ pid: process.pid }))).toBe(true)
   })
 
-  it('treats a dead pid as not alive', async () => {
+  it('treats a dead pid as not alive even when probe would succeed', async () => {
     const { isLockAlive } = await loadModule()
+    mockProbeLockServerSync.mockReturnValue(true)
     // 2^31-1 is effectively never a live pid.
     expect(isLockAlive(makeLock({ pid: 2147483646 }))).toBe(false)
+  })
+
+  it('treats a live pid without a diffing server as not alive', async () => {
+    const { isLockAlive } = await loadModule()
+    mockProbeLockServerSync.mockReturnValue(false)
+    expect(isLockAlive(makeLock({ pid: process.pid }))).toBe(false)
   })
 
   it('treats a lock from a different repo as not alive', async () => {

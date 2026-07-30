@@ -727,10 +727,14 @@ where
 
     let mut cmd = Command::new("git");
     // The index consumes a machine-stable unified patch. Never allow a user
-    // color configuration to inject ANSI bytes into structural headers.
-    cmd.arg("diff").arg("--no-color").arg("--no-ext-diff");
+    // color configuration to inject ANSI bytes into structural headers, or
+    // repository-configured diff drivers / textconv filters to run.
+    cmd.arg("diff")
+        .arg("--no-color")
+        .arg("--no-ext-diff")
+        .arg("--no-textconv");
     for arg in args {
-        if arg != "--no-color" && arg != "--no-ext-diff" {
+        if arg != "--no-color" && arg != "--no-ext-diff" && arg != "--no-textconv" {
             cmd.arg(arg);
         }
     }
@@ -832,7 +836,14 @@ impl<R> GitAndUntrackedReader<R> {
         };
         self.next_untracked += 1;
         let mut child = Command::new("git")
-            .args(["diff", "--no-index", "--no-ext-diff", "--", NULL_DEVICE])
+            .args([
+                "diff",
+                "--no-index",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+                NULL_DEVICE,
+            ])
             .arg(path)
             .current_dir(&self.repo_root)
             .stdout(Stdio::piped())
@@ -1506,6 +1517,64 @@ mod tests {
         assert!(page.truncated);
         assert_eq!(page.hits[0].new_lineno, Some(2));
         assert!(page.next_row.is_some());
+    }
+
+    #[test]
+    fn git_diff_index_uses_safe_diff_flags() {
+        let repo = tempfile::tempdir().unwrap();
+        assert!(Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(repo.path())
+            .status()
+            .unwrap()
+            .success());
+        Command::new("git")
+            .args(["config", "user.email", "t@example.com"])
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "test"])
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+        std::fs::write(repo.path().join(".gitattributes"), "*.txt diff=mock\n").unwrap();
+        std::fs::write(repo.path().join("secret.txt"), "PLAIN\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-qm", "init"])
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+        std::fs::write(repo.path().join("secret.txt"), "PLAIN\nCHANGED\n").unwrap();
+        // A textconv filter would replace every character with X when enabled.
+        Command::new("git")
+            .args([
+                "config",
+                "diff.mock.textconv",
+                "sed 's/./X/g'",
+            ])
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+
+        let root = repo.path().to_string_lossy().into_owned();
+        let index = build_git_diff_index(&root, &[], |_| {}).unwrap();
+        assert_eq!(index.files.len(), 1);
+        let patch = std::fs::read_to_string(&index.spool_path).unwrap();
+        assert!(
+            patch.contains("CHANGED"),
+            "expected raw file content, not textconv-transformed output: {patch}"
+        );
+        assert!(
+            !patch.contains("XXXX"),
+            "textconv filter must not run when building the diff index: {patch}"
+        );
+        let _ = std::fs::remove_dir_all(crate::project_storage_dir(&root));
     }
 
     #[test]

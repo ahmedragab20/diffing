@@ -9,7 +9,9 @@ import {
   renameSync,
   rmdirSync,
   statSync,
+  chmodSync,
 } from 'node:fs'
+import { probeLockServerSync } from './lock-probe.js'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { getProjectStorageDir, getRepoRoot } from './git.js'
@@ -39,6 +41,9 @@ export interface ServerLock {
 
   /** Bearer capability for a TUI-owned loopback API. Never sent off-host. */
   capability?: string
+
+  /** Per-session API token for web/gh-pr review servers. Omitted when auth is disabled. */
+  authToken?: string
 
   /**
    * When `mode === 'gh-pr'`, the original `gh pr <ref>` input. Used by
@@ -86,6 +91,7 @@ export function diffScopeKey(options: DiffOptions): string {
     port: _port,
     host: _host,
     noOpen: _noOpen,
+    insecureNoAuth: _insecureNoAuth,
     reuseSession: _reuseSession,
     replaceSession: _replaceSession,
     help: _help,
@@ -122,10 +128,24 @@ function sessionPath(lock: ServerLock): string {
 }
 
 function writeJsonAtomically(path: string, value: unknown): void {
-  mkdirSync(join(path, '..'), { recursive: true })
+  const parent = join(path, '..')
+  mkdirSync(parent, { recursive: true, mode: 0o700 })
+  try {
+    chmodSync(parent, 0o700)
+  } catch {
+    // best-effort when parent already existed with different ownership
+  }
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`
-  writeFileSync(temporary, JSON.stringify(value, null, 2), 'utf-8')
+  writeFileSync(temporary, JSON.stringify(value, null, 2), {
+    encoding: 'utf-8',
+    mode: 0o600,
+  })
   renameSync(temporary, path)
+  try {
+    chmodSync(path, 0o600)
+  } catch {
+    // best-effort
+  }
 }
 
 function normalizedLock(lock: ServerLock): ServerLock {
@@ -247,21 +267,32 @@ export function activateServerLock(lock: ServerLock): ServerLock {
   return normalized
 }
 
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error: unknown) {
+    const code =
+      error && typeof error === 'object' && 'code' in error
+        ? (error as { code?: string }).code
+        : undefined
+    // ESRCH means no such process; EPERM still proves the pid exists.
+    return code === 'EPERM'
+  }
+}
+
 /**
- * True if the process named by the lock is still alive and the lock belongs to
- * this repo. `process.kill(pid, 0)` sends no signal — it just probes existence.
+ * True when the lock pid is alive, belongs to this repo, and the loopback port
+ * still serves a diffing review status endpoint (detects PID reuse).
  */
 export function isLockAlive(lock: ServerLock, expectedRepoRoot?: string): boolean {
+  if (!isPidAlive(lock.pid)) return false
   try {
-    process.kill(lock.pid, 0)
+    if (lock.repoRoot !== (expectedRepoRoot ?? getRepoRoot())) return false
   } catch {
-    return false
+    // keep checking when repo root cannot be resolved
   }
-  try {
-    return lock.repoRoot === (expectedRepoRoot ?? getRepoRoot())
-  } catch {
-    return true
-  }
+  return probeLockServerSync(lock)
 }
 
 export function removeServerLock(repoRoot?: string): void {
@@ -378,8 +409,17 @@ export function acquireServerStartupLease(
       // releases through an owner-specific marker, so it can never unlink the
       // new lease even if it wakes after stale recovery.
       const stalePath = `${path}.stale-${process.pid}-${now}`
-      renameSync(path, stalePath)
-      rmSync(stalePath, { recursive: true, force: true })
+      try {
+        renameSync(path, stalePath)
+        rmSync(stalePath, { recursive: true, force: true })
+      } catch (error: any) {
+        if (error?.code === 'ENOENT') {
+          if (!tryCreate()) return null
+          acquiredAfterRace = true
+        } else {
+          return null
+        }
+      }
     }
     if (!acquiredAfterRace && !tryCreate()) return null
   }

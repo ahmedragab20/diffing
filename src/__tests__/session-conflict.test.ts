@@ -61,6 +61,7 @@ describe('stopLockOwner', () => {
       now: () => t,
       isAlive: () => alive,
       clearLock,
+      lockMatches: async () => true,
     })
 
     expect(signals[0]).toBe('SIGTERM')
@@ -87,9 +88,22 @@ describe('stopLockOwner', () => {
       now: () => t,
       isAlive: () => alive,
       clearLock: () => {},
+      lockMatches: async () => true,
     })
     expect(signals).toContain('SIGTERM')
     expect(signals).toContain('SIGKILL')
+  })
+
+  it('clears a stale lock without signaling when the port probe fails', async () => {
+    const kill = vi.fn()
+    const clearLock = vi.fn()
+    await stopLockOwner(makeLock(), {
+      lockMatches: async () => false,
+      kill,
+      clearLock,
+    })
+    expect(kill).not.toHaveBeenCalled()
+    expect(clearLock).toHaveBeenCalledOnce()
   })
 
   it('throws when the process never exits', async () => {
@@ -106,6 +120,7 @@ describe('stopLockOwner', () => {
         now: () => t,
         isAlive: () => true,
         clearLock: () => {},
+        lockMatches: async () => true,
       }),
     ).rejects.toThrow(/Timed out waiting for diffing pid 7/)
   })
