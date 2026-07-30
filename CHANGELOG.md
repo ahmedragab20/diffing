@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.12.0
+
+### Minor Changes
+
+- Add PHP symbol search patterns for functions, classes, traits, enums, and
+  namespaces in TUI and web search, keeping the TypeScript and Rust classifiers
+  aligned.
+
+### Patch Changes
+
+- Harden CLI option parsing and hot-path resilience, and stabilize the native
+  TUI around LSP trust/lifecycle, keymaps, resolve-all confirmation, and
+  off-thread search bounds.
+- Fix plan outline scrolling for nested Split panes and hash deep links, and
+  make J/K file navigation walk the same filtered, name-sorted list the diff
+  viewer renders.
+- Require per-session auth on the web UI and API. Prefer an HttpOnly session
+  cookie for browseable review/plan URLs, keep `x-diffing-token` for CLI/MCP,
+  and close related supply-chain gaps around lock probes, textconv, and
+  AppleScript path quoting.
+
 ## 0.11.0
 
 ### Minor Changes
