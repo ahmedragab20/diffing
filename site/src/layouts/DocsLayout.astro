@@ -64,25 +64,34 @@ const toc = headings.filter((h) => h.depth >= 2 && h.depth <= 3);
       Menu
     </button>
     <aside class="docs-sidebar" id="docs-sidebar" aria-label="Documentation">
-      {
-        NAV_SECTIONS.map((section) => {
-          const items = bySection.get(section.id) ?? [];
-          if (!items.length) return null;
-          return (
-            <div>
-              <h2>{section.label}</h2>
-              {items.map((item) => (
-                <a
-                  href={docHref(item.slug)}
-                  aria-current={isCurrent(item.slug) ? 'page' : undefined}
-                >
-                  {item.title}
-                </a>
-              ))}
-            </div>
-          );
-        })
-      }
+      <nav class="docs-nav" aria-label="Docs sections">
+        {
+          NAV_SECTIONS.map((section) => {
+            const items = bySection.get(section.id) ?? [];
+            if (!items.length) return null;
+            return (
+              <div class="docs-nav-section">
+                <p class="docs-nav-label" id={`nav-${section.id}`}>
+                  {section.label}
+                </p>
+                <ul class="docs-nav-list" aria-labelledby={`nav-${section.id}`}>
+                  {items.map((item) => (
+                    <li>
+                      <a
+                        class="docs-nav-link"
+                        href={docHref(item.slug)}
+                        aria-current={isCurrent(item.slug) ? 'page' : undefined}
+                      >
+                        {item.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })
+        }
+      </nav>
     </aside>
 
     <div class="docs-content">
