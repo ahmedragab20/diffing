@@ -3,6 +3,9 @@
  */
 
 const SUBCOMMANDS = [
+  'setup',
+  'init',
+  'onboard',
   'await-review',
   'reply',
   'resolve',
@@ -46,6 +49,7 @@ const GLOBAL_FLAGS = [
   '--no-open',
   '--reuse-session',
   '--replace-session',
+  '--skip-setup',
   '--port',
   '--host',
   '--insecure-no-auth',
@@ -85,6 +89,7 @@ export function zshCompletion(): string {
 _diffing() {
   local -a commands
   commands=(
+    'setup:First-time setup wizard'
     'await-review:Block until human sends review'
     'reply:Reply to a comment'
     'resolve:Resolve a comment'

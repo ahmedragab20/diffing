@@ -27,7 +27,7 @@ describe('diffing mode CLI', () => {
   it('persists and prints the user preference', () => {
     const set = runCli(['mode', 'tui'])
     expect(set.status).toBe(0)
-    expect(set.stdout).toBe('Default mode set to tui.\n')
+    expect(set.stdout).toBe('Default mode set to TUI.\n')
 
     const saved = JSON.parse(
       readFileSync(join(USER_HOME, '.config', 'diffing', 'settings.json'), 'utf-8'),

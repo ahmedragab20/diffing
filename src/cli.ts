@@ -87,7 +87,7 @@ if (ghPrConsumed > 0) {
 //
 //   await-review | comments | reply | resolve | unresolve | comment
 //   progress | url | plan | gh | mcp | inspect | doctor | completion | update
-//   mode
+//   mode | setup | init | onboard
 //   view and show are handled separately (fall through to native/web modes).
 const SUBCOMMANDS = new Set([
   'await-review',
@@ -107,7 +107,13 @@ const SUBCOMMANDS = new Set([
   'inspect',
   'mode',
   'sessions',
+  'setup',
+  'init',
+  'onboard',
 ])
+if (args[0] === 'init' || args[0] === 'onboard') {
+  args[0] = 'setup'
+}
 if (SUBCOMMANDS.has(args[0])) {
   if (args[0] === 'mcp') {
     const mcpArgs = args.slice(1)
@@ -168,7 +174,8 @@ See docs/cli.md §5 (MCP) for the full tool table.`)
     await new Promise<never>(() => {})
   }
   const { runSubcommand } = await import('./cli-agent.js')
-  process.exit(await runSubcommand(args[0], args.slice(1)))
+  const code = await runSubcommand(args[0], args.slice(1))
+  process.exit(code)
 }
 
 // ── `view` subcommand ──────────────────────────────────
@@ -226,6 +233,9 @@ if (opts.version) {
   console.log(pkg.version)
   process.exit(0)
 }
+
+const { handleFirstRunGate } = await import('./lib/setup.js')
+await handleFirstRunGate({ skipSetup: opts.skipSetup, cliImportMetaUrl: import.meta.url })
 
 const envErr = validateEnvironment()
 if (envErr) {

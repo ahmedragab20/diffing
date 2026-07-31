@@ -16,15 +16,32 @@ A local-first code review tool and double-sided bridge designed for the modern A
 
 ## Quick Start
 
+**Requirements:** Node.js 20+, `git` on your PATH.
+
 ### 1. Install
-Install `diffing` globally via npm:
+Install `diffing` globally via npm or pnpm:
 ```bash
 npm install -g diffing
+# or: pnpm add -g diffing
 ```
 
-### 2. Run
+A short postinstall banner may print in interactive terminals (print-only — nothing is written to your IDE or project).
+
+### 2. First-time setup
+On the first interactive `diffing` run, you'll be offered setup (`[Y] Run setup now`). Or run it directly:
+
+```bash
+diffing setup          # wizard: doctor, mode, skills, MCP
+diffing setup --yes    # install skills + print MCP JSON
+diffing --skip-setup   # bypass the first-run prompt
+```
+
+See **[docs/getting-started.md](docs/getting-started.md)** for the full walkthrough.
+
+### 3. Run
 Launch it within any active git repository:
 ```bash
+cd your-repo
 diffing
 ```
 With the initial web preference, this spins up a local server, establishes an active repository watcher, and opens your default browser to an interactive code review dashboard. Use `diffing mode tui` to make the native review TUI the interactive default instead.

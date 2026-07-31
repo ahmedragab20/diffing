@@ -997,11 +997,7 @@
         cls: "accent",
       },
       {
-        text: "Exposes 10 tools: await_review, list_comments, reply_to_comment, resolve_comment, submit_plan,",
-        cls: "out",
-      },
-      {
-        text: "await_plan_review, list_plans, get_plan, reply_to_plan_comment, resolve_plan_comment.",
+        text: "Exposes 37 MCP tools: session, diff inspection, comments, plan review, and GitHub PR workflows (see docs/cli.md).",
         cls: "out",
       },
     ],
@@ -1024,6 +1020,16 @@
     "diffing plan await": [
       {
         text: "Blocks until the human decides (default timeout 570s). Exit: 0 decision · 2 timeout.",
+        cls: "out",
+      },
+    ],
+    "diffing setup": [
+      {
+        text: "First-time wizard: doctor, default mode, skills (npx skills add ahmedragab20/diffing), MCP JSON.",
+        cls: "out",
+      },
+      {
+        text: "Flags: --yes · --check · --write-mcp · --write-project-mcp · Aliases: init, onboard.",
         cls: "out",
       },
     ],

@@ -13,7 +13,7 @@ import {
   DEFAULT_AWAIT_TIMEOUT_SECONDS,
 } from './lib/handoff.js'
 import { formatPlanReview } from './lib/plan-format.js'
-import { loadSettings, saveSettings } from './lib/settings.js'
+import { formatModeLabel, loadSettings, saveSettings } from './lib/settings.js'
 import type { ReviewComment } from './lib/types.js'
 import type { Plan } from './lib/plan-types.js'
 
@@ -430,7 +430,7 @@ function mode(args: string[]): number {
     console.error(`Failed to save default mode: ${detail}`)
     return 1
   }
-  process.stdout.write(`Default mode set to ${requested}.\n`)
+  process.stdout.write(`Default mode set to ${formatModeLabel(requested)}.\n`)
   return EXIT_OK
 }
 
@@ -824,6 +824,74 @@ async function plan(args: string[]): Promise<number> {
   }
 }
 
+async function setup(args: string[]): Promise<number> {
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(`Usage: diffing setup [skills|mcp] [options]
+
+Interactive first-time setup: doctor, default mode, completions, agent skills, MCP.
+
+Options:
+  -y, --yes                 Non-interactive defaults (install skills; print MCP JSON)
+  --check                   Preflight checks only
+  --reset                   Clear setupCompletedAt marker
+  --write-mcp               Merge diffing into global IDE MCP configs
+  --write-project-mcp       Write .cursor/mcp.json in the current directory
+  --write-completions       Print shell completion scripts
+  -h, --help                Show this help
+
+Aliases: diffing init, diffing onboard
+
+See docs/getting-started.md for the full walkthrough.`)
+    return EXIT_OK
+  }
+
+  let yes = false
+  let check = false
+  let reset = false
+  let writeMcp = false
+  let writeProjectMcp = false
+  let writeCompletions = false
+  const positionals: string[] = []
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (arg === '-y' || arg === '--yes') yes = true
+    else if (arg === '--check') check = true
+    else if (arg === '--reset') reset = true
+    else if (arg === '--write-mcp') writeMcp = true
+    else if (arg === '--write-project-mcp') writeProjectMcp = true
+    else if (arg === '--write-completions') writeCompletions = true
+    else if (arg.startsWith('-')) {
+      console.error(`diffing setup: unknown option ${arg}`)
+      return EXIT_USAGE
+    } else {
+      positionals.push(arg)
+    }
+  }
+
+  const action = positionals[0]
+  if (positionals.length > 1) {
+    console.error('Usage: diffing setup [skills|mcp] [options]')
+    return EXIT_USAGE
+  }
+  if (action && action !== 'skills' && action !== 'mcp') {
+    console.error(`Unknown setup action: ${action}`)
+    return EXIT_USAGE
+  }
+
+  const { runSetup } = await import('./lib/setup.js')
+  return runSetup({
+    yes,
+    check,
+    reset,
+    writeMcp,
+    writeProjectMcp,
+    writeCompletions,
+    skillsOnly: action === 'skills',
+    mcpOnly: action === 'mcp',
+    cliImportMetaUrl: import.meta.url,
+  })
+}
+
 async function doctor(): Promise<number> {
   const { runDoctor, formatDoctorReport } = await import('./lib/doctor.js')
   const report = await runDoctor({ cwd: process.cwd(), cliImportMetaUrl: import.meta.url })
@@ -1029,6 +1097,8 @@ export async function runSubcommand(name: string, args: string[]): Promise<numbe
       return runGhSubcommand(args)
     case 'doctor':
       return doctor()
+    case 'setup':
+      return setup(args)
     case 'completion':
       return completion(args)
     case 'progress':

@@ -152,6 +152,9 @@ export interface DiffOptions {
   /** Print version and exit */
   version: boolean
 
+  /** Skip the first-run setup gate on interactive launch */
+  skipSetup: boolean
+
   /** Whether unstaged working-tree changes should be included (web mode default) */
   includeUnstaged: boolean
   /** Whether untracked files should be included (web mode default) */
@@ -226,6 +229,7 @@ export const DEFAULTS: DiffOptions = {
   replaceSession: false,
   help: false,
   version: false,
+  skipSetup: false,
   includeUnstaged: true,
   includeUntracked: true,
   tui: false,
@@ -350,6 +354,7 @@ export const DIFFING_OPTIONS = {
   view: { type: 'boolean' as const, default: false },
   gpu: { type: 'boolean' as const, default: false },
   'gh-pr': { type: 'string' as const },
+  'skip-setup': { type: 'boolean' as const, default: false },
   help: { type: 'boolean' as const, short: 'h' },
   version: { type: 'boolean' as const },
 }
@@ -388,6 +393,7 @@ Diffing Server Options:
   --no-open            Don't open the browser automatically
   --reuse-session      Open the active review instead of starting another
   --replace-session    Stop the active review and start a replacement
+  --skip-setup         Skip the first-run setup prompt (interactive TTY only)
   --gh-pr <ref>        Open a GitHub PR review session (number, owner/repo#N, or URL)
                        Same as: diffing "gh pr <ref>"
 
@@ -405,6 +411,7 @@ Output Modes:
   missing binary).
 
 Subcommands:
+  setup|init|onboard   First-time setup wizard (skills, MCP, doctor)
   view [diff options]    Browse diffs in the focused read-only native TUI
   show <revspec>...    Drop-in for 'git show'. Renders commit metadata
                        above the diff. Accepts commits, ranges, tags.
@@ -431,6 +438,7 @@ Custom ranges (e.g. main..feature) and 'gh pr' sessions also display a
 
 Examples:
   diffing                        Review uncommitted changes (preferred UI)
+  diffing setup                  Run the first-time setup wizard
   diffing --staged               Review staged changes
   diffing HEAD~3                 Review last 3 commits
   diffing main..feature          Compare branches
@@ -701,6 +709,7 @@ export function parseDiffOptions(
   if (values['reuse-session']) opts.reuseSession = true
   if (values['replace-session']) opts.replaceSession = true
   if (values['gh-pr']) opts.ghPr = String(values['gh-pr'])
+  if (values['skip-setup']) opts.skipSetup = true
   if (values.view) opts.viewOnly = true
 
   // ── Staging / merge ───────────────────────────────

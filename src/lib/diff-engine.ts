@@ -322,7 +322,11 @@ function runTerminalShow(opts: DiffOptions): number {
  */
 export function validateEnvironment(): string | null {
   if (!isGitRepo()) {
-    return 'Error: not inside a git repository'
+    return [
+      'Error: not inside a git repository.',
+      'Run `diffing setup` for first-time configuration, or `diffing doctor` to diagnose your environment.',
+      'Then `cd <your-repo> && diffing` to start a review.',
+    ].join('\n')
   }
   return null
 }

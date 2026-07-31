@@ -26,7 +26,8 @@
     "diffing": "./dist/cli.mjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "scripts/postinstall.mjs"
   ],
   "scripts": {
     "build": "pnpm run build:ts && pnpm run build:tui && pnpm run bundle:tui",
@@ -34,6 +35,7 @@
     "build:tui": "cargo build --release --manifest-path crates/diffing-tui/Cargo.toml",
     "build:tui:debug": "cargo build --manifest-path crates/diffing-tui/Cargo.toml",
     "bundle:tui": "node scripts/stage-tui-binary.mjs",
+    "postinstall": "node scripts/postinstall.mjs",
     "changeset": "changeset",
     "dev:client": "vite",
     "dev:server": "tsx src/cli.ts --no-open --port 3433",

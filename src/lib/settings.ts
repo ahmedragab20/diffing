@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { writeJsonAtomically } from './json-atomic.js'
@@ -11,6 +11,13 @@ export type DiffIndicators = 'classic' | 'bars' | 'none'
 export type HunkSeparatorStyle = 'simple' | 'metadata' | 'line-info' | 'line-info-basic'
 export type LineHoverHighlight = 'disabled' | 'both' | 'number' | 'line'
 export type DefaultMode = 'web' | 'tui'
+
+/** Human-facing label for stored mode values (`tui` → `TUI`, `web` → `Web`). */
+export function formatModeLabel(mode: string): string {
+  if (mode === 'tui') return 'TUI'
+  if (mode === 'web') return 'Web'
+  return mode
+}
 
 export interface Settings {
   /** Interactive mode used when no explicit output-mode flag is provided. */
@@ -73,6 +80,8 @@ export interface Settings {
   ignoreSpaceChange: boolean
   /** Ignore all whitespace (`git diff -w`). Live-toggled from UI. */
   ignoreAllSpace: boolean
+  /** ISO timestamp when `diffing setup` last completed successfully. */
+  setupCompletedAt?: string | null
 }
 
 export interface SavedReply {
@@ -130,4 +139,29 @@ export function saveSettings(settings: Partial<Settings>): Settings {
   const merged = { ...current, ...settings }
   writeJsonAtomically(SETTINGS_FILE, merged)
   return merged
+}
+
+export function configDir(): string {
+  return CONFIG_DIR
+}
+
+export function settingsFilePath(): string {
+  return SETTINGS_FILE
+}
+
+export function ensureConfigDir(): void {
+  mkdirSync(CONFIG_DIR, { recursive: true })
+}
+
+export function isSetupCompleted(): boolean {
+  const at = loadSettings().setupCompletedAt
+  return typeof at === 'string' && at.length > 0
+}
+
+export function markSetupCompleted(): Settings {
+  return saveSettings({ setupCompletedAt: new Date().toISOString() })
+}
+
+export function resetSetupCompleted(): Settings {
+  return saveSettings({ setupCompletedAt: null })
 }

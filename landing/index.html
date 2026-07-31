@@ -111,6 +111,9 @@
                         <p class="micro-line">
                             Auto-detects your terminal: TTY → opens the web UI ·
                             pipe/redirect → prints a unified patch.
+                            First run? <code>diffing setup</code> or accept the
+                            welcome prompt —
+                            <a href="https://github.com/ahmedragab20/diffing/blob/main/docs/getting-started.md">getting started</a>.
                         </p>
                     </div>
                     <div class="hero-boot">
@@ -632,13 +635,10 @@
                     class="code-block"
                 ><code>{ "mcpServers": { "diffing": { "command": "diffing", "args": ["mcp"] } } }</code></pre>
                 <p>
-                    Exposes <strong>10 tools</strong>:
-                    <code>await_review</code>, <code>list_comments</code>,
-                    <code>reply_to_comment</code>, <code>resolve_comment</code>,
-                    <code>submit_plan</code>, <code>await_plan_review</code>,
-                    <code>list_plans</code>, <code>get_plan</code>,
-                    <code>reply_to_plan_comment</code>,
-                    <code>resolve_plan_comment</code>.
+                    Exposes <strong>37 MCP tools</strong> across session
+                    lifecycle, bounded diff inspection, inline comments, plan
+                    review, and GitHub PR workflows (see
+                    <code>docs/cli.md</code> §5).
                 </p>
                 <p class="sublabel">Skills</p>
                 <p>
@@ -646,7 +646,7 @@
                     diffing skills into your AI coding assistant.
                 </p>
                 <p class="spec-chip">
-                    subcommands · 10 MCP tools · await default 570s · exit
+                    subcommands · 37 MCP tools · await default 570s · exit
                     0/2/3/4/5
                 </p>
             </section>

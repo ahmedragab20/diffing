@@ -10,6 +10,7 @@ portable fallback:
 
 ```bash
 diffing                    # Start the preferred review UI for current repo
+diffing setup              # First-time wizard (skills, MCP, doctor)
 diffing mode <web|tui>     # Change the default interactive review mode
 diffing sessions           # List/select/stop concurrent review sessions
 diffing url                # Get server base URL (port-agnostic discovery)
@@ -27,7 +28,7 @@ diffing doctor                       # Environment self-check
 diffing mcp --repo /abs/path         # Stdio MCP server
 ```
 
-Full CLI/MCP contracts: `docs/cli.md`.
+Full CLI/MCP contracts: `docs/cli.md`. Human onboarding: `docs/getting-started.md`.
 
 ## Skill Registry
 

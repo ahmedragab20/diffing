@@ -12,8 +12,9 @@ import { isLockAlive, readServerLock } from './server-lock.js'
 import { detectGhCli, readGithubToken } from './github.js'
 import { getSearchStatus } from './search.js'
 import { findTuiBinary } from './find-tui-binary.js'
-import { loadSettings } from './settings.js'
+import { formatModeLabel, loadSettings } from './settings.js'
 import { reviewSessionUrl } from './session-url.js'
+import { isColorEnabled, rule, tone } from './terminal.js'
 
 export type DoctorLevel = 'ok' | 'warn' | 'error'
 
@@ -85,12 +86,12 @@ export async function runDoctor(options: {
       })
     } else {
       const url = reviewSessionUrl(lock)
-        ?? (lock.port > 0 ? `http://${lock.host}:${lock.port}` : `mode=${lock.mode ?? 'web'}`)
+        ?? (lock.port > 0 ? `http://${lock.host}:${lock.port}` : `mode=${formatModeLabel(lock.mode ?? 'web')}`)
       checks.push({
         id: 'server',
         label: 'Review server',
         level: 'ok',
-        detail: `${url} (pid ${lock.pid}, mode ${lock.mode ?? 'web'})`,
+        detail: `${url} (pid ${lock.pid}, mode ${formatModeLabel(lock.mode ?? 'web')})`,
       })
     }
   }
@@ -229,15 +230,23 @@ export async function runDoctor(options: {
   return { checks, ok }
 }
 
-export function formatDoctorReport(report: DoctorReport): string {
-  const icon = (level: DoctorLevel) =>
-    level === 'ok' ? '✓' : level === 'warn' ? '!' : '✗'
-  const lines = ['diffing doctor', '─────────────']
+export function formatDoctorReport(
+  report: DoctorReport,
+  options: { color?: boolean } = {},
+): string {
+  const color = options.color ?? isColorEnabled()
+  const lines = [tone('info', 'diffing doctor', { color }), rule({ color })]
   for (const c of report.checks) {
-    lines.push(`${icon(c.level)} ${c.label}`)
+    lines.push(tone(c.level, c.label, { color }))
     lines.push(`  ${c.detail}`)
   }
   lines.push('')
-  lines.push(report.ok ? 'Overall: OK' : 'Overall: issues found (see errors above)')
+  lines.push(
+    tone(
+      report.ok ? 'ok' : 'error',
+      report.ok ? 'Overall: OK' : 'Overall: issues found (see errors above)',
+      { color },
+    ),
+  )
   return lines.join('\n')
 }

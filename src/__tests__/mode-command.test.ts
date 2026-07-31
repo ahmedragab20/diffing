@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const settings = vi.hoisted(() => ({
   loadSettings: vi.fn(),
   saveSettings: vi.fn(),
+  formatModeLabel: (mode: string) => (mode === 'tui' ? 'TUI' : mode === 'web' ? 'Web' : mode),
 }))
 
 vi.mock('../lib/settings.js', () => settings)
@@ -26,12 +27,15 @@ describe('mode subcommand', () => {
     stdout.mockRestore()
   })
 
-  it.each(['web', 'tui'] as const)('saves %s as the default mode', async (mode) => {
+  it.each([
+    ['web', 'Web'],
+    ['tui', 'TUI'],
+  ] as const)('saves %s as the default mode', async (mode, label) => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
 
     expect(await runSubcommand('mode', [mode])).toBe(0)
     expect(settings.saveSettings).toHaveBeenCalledWith({ defaultMode: mode })
-    expect(stdout).toHaveBeenCalledWith(`Default mode set to ${mode}.\n`)
+    expect(stdout).toHaveBeenCalledWith(`Default mode set to ${label}.\n`)
 
     stdout.mockRestore()
   })

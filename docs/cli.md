@@ -122,6 +122,23 @@ sessions can therefore coexist for the same repository.
 
 `--reuse-session` and `--replace-session` are mutually exclusive.
 
+#### First-run setup gate
+
+On an interactive TTY, when `setupCompletedAt` is unset in
+`~/.config/diffing/settings.json`, the primary command prints a welcome prompt
+before starting a review:
+
+```text
+[Y] Run setup now   [n] Skip   [?] Docs
+```
+
+- **Y** — runs the `diffing setup` wizard, then continues (if inside a Git repo).
+- **n** — continues without setup.
+- **?** — prints the getting-started doc URL.
+
+Bypass the gate with `--skip-setup`. CI and non-TTY environments never show the
+prompt. See **[getting-started.md](getting-started.md)** and **`setup`** below.
+
 #### Git-Compatible Flags Supported
 - **Revisions / Range**: `--staged`, `--cached`, `--merge`
 - **Diff Algorithms**: `--diff-algorithm=<algo>` (`minimal`, `patience`, `histogram`, `myers`), `--indent-heuristic`, `--no-indent-heuristic`, `--anchored=<text>`
@@ -153,6 +170,7 @@ A specialized suite of subcommands is integrated into the `diffing` binary to co
 | `mcp` | Stdio MCP server (see §5) |
 | `inspect …` | Bounded web, TUI, or PR diff reads (see below) |
 | `mode [web\|tui]` | Get or set the default interactive review mode |
+| `setup` / `init` / `onboard` | First-time setup wizard (see below) |
 | `doctor` / `completion` / `update` | DX |
 
 ### `sessions`
@@ -316,6 +334,39 @@ diffing url
 
 - **Behavior**:
   - Resolves the lockfile and outputs `http://127.0.0.1:<port>` to stdout.
+
+---
+
+### `setup` (aliases: `init`, `onboard`)
+
+First-time configuration wizard: preflight checks, `doctor`, default interactive
+mode, optional shell completions, agent skills, and MCP registration.
+
+```bash
+diffing setup [skills|mcp] [options]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-y`, `--yes` | Non-interactive: install skills, print MCP JSON (no IDE writes) |
+| `--check` | Preflight only (Node, git, config dir, setup marker) |
+| `--reset` | Clear `setupCompletedAt` in settings |
+| `--write-mcp` | Merge `mcpServers.diffing` into global IDE configs (backs up under `~/.diffing/backups/`) |
+| `--write-project-mcp` | Opt-in: write `.cursor/mcp.json` in the current directory |
+| `--write-completions` | Print bash/zsh/fish completion scripts |
+
+Sub-steps:
+
+- `diffing setup skills` — run `npx skills add ahmedragab20/diffing`
+- `diffing setup mcp` — print or write MCP JSON for `diffing mcp`
+
+On success the wizard sets `setupCompletedAt` in `~/.config/diffing/settings.json`.
+Running setup outside a Git repo is allowed; next steps suggest
+`cd <repo> && diffing`.
+
+In an interactive TTY, the wizard prints colored step headers and bordered panels
+(gold borders, semantic status colors). Plain text is used when `NO_COLOR` is set,
+stdout is not a TTY, or `TERM=dumb`.
 
 ---
 
