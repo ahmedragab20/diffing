@@ -458,10 +458,10 @@ cat PLAN.md | diffing plan submit                 # body via stdin (omit <file> 
 - `--wait` — after submitting, block until the verdict arrives (combines
   `submit` + `await`); `--timeout` sets the total wait budget in seconds.
   Omit `--wait` for the default async handoff (URL on stderr + park hint).
-- `--save-source`, `-S` — after submission, save a copy of the submitted
-  markdown body to `~/.diffing/<repo>/plan-sources/<id>.md`. This preserves the
-  source file for later reference without polluting the consumer project's
-  working tree.
+- `--save-source` / `-S` (alias: `--saveSource`) — after submission, save a
+  copy of the submitted markdown body to
+  `~/.diffing/<repo>/plan-sources/<id>.md`. This preserves the source file for
+  later reference without polluting the consumer project's working tree.
 - **Output**: the plan id on stdout; the review URL (`<base>/plan/<id>`) on
   stderr; source path on stderr when `--save-source` is used.
 

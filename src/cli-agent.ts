@@ -503,7 +503,9 @@ async function planSubmit(args: string[]): Promise<number> {
       id: { type: 'string' },
       wait: { type: 'boolean', short: 'w' },
       timeout: { type: 'string', short: 't' },
-      saveSource: { type: 'boolean', short: 'S' },
+      // Kebab-case is canonical; camelCase kept so older docs/skills still work.
+      'save-source': { type: 'boolean', short: 'S' },
+      saveSource: { type: 'boolean' },
     },
     allowPositionals: true,
   })
@@ -569,9 +571,10 @@ async function planSubmit(args: string[]): Promise<number> {
     console.error(CLI_PLAN_SUBMIT_PARK_HINT)
   }
 
-  // Optional extra mirror next to the input file (--saveSource). Server always
-  // writes ~/.diffing/.../plan-sources/<id>.md as sourcePath.
-  if (values.saveSource) {
+  // Optional extra mirror under plan-sources/ (--save-source / -S / --saveSource).
+  // Server always writes ~/.diffing/.../plan-sources/<id>.md as sourcePath.
+  const saveSource = Boolean(values['save-source'] || values.saveSource)
+  if (saveSource) {
     try {
       const sourcesDir = join(getProjectStorageDir(), 'plan-sources')
       await mkdir(sourcesDir, { recursive: true })

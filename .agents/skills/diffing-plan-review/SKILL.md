@@ -31,7 +31,7 @@ diffing plan await [--timeout N]                         # sync / resume
 # or: cat PLAN.md | diffing plan submit --model "..."
 ```
 
-Keep temporary plan files in **`~/.diffing/<repo>/plan-sources/`** — never in the consumer project tree. Use `--save-source` / `-S` to copy the submitted body there. Prefer stdin for zero working-tree footprint. Always resubmit revisions with the original plan **`--id`** so history stays one conversation.
+Keep temporary plan files in **`~/.diffing/<repo>/plan-sources/`** — never in the consumer project tree. Use `--save-source` (or `-S`) to copy the submitted body there. Prefer stdin for zero working-tree footprint. Always resubmit revisions with the original plan **`--id`** so history stays one conversation.
 
 Useful reads:
 
@@ -79,20 +79,8 @@ Human comments on the plan appear in `<plan-review>` XML with:
 
 Treat **blocking** as must-fix before resubmit; **nit** as optional; **question** as needing a reply (usually leave open); **praise** as no change required. Missing severity = untriaged normal request.
 
-## Human UI notes (so agents set expectations)
+## Human UI facts (so agents set expectations)
 
-The human reviews at `/plan` or `/plan/<id>`:
-
-| Feature | Behavior |
-|---------|----------|
-| Source / Read / Split | `m` cycles modes; toolbar switches the same modes |
-| Zen Read | `z` toggles full-width focus (switches to Read if needed); Esc exits zen when not editing |
-| Live edit | `e` / pencil: edit current version markdown + title; autosave `PUT` (no version bump); Save as new version = `POST` same id; Esc opens Discard |
-| Discard | Recent = this session; original = first enter for this version (survives exit/re-enter). Dual choice only when both apply |
-| Comments map (right rail) | `c` toggles; lists open threads with `L` / `Lstart–Lend` labels |
-| Inline comments | Source: gutter + / line selection; Read: text highlight → Add comment; multi-line ranges with optional severity (paused while live-editing) |
-| Read mode threads | Comments render inline under the matching section (React-owned; survives mode switches) |
-| Comment cards | Collapsible thread; collapsible source preview inside the card |
-| Submit review | Verdict that unblocks `plan await` |
-
-Plans may be versioned; comments are version-anchored when the human browses history. Human in-page edits use `PUT` (same version) unless they explicitly Save as new version.
+- The human reviews at `/plan` or `/plan/<id>` and finishes with **Submit review** — the verdict that unblocks `plan await`.
+- Humans comment inline on Source or Read with multi-line ranges and optional severity.
+- Human live-edit autosaves the current version in place; only an explicit "Save as new version" bumps the version, and comments stay version-anchored.

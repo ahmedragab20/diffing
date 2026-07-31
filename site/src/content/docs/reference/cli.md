@@ -139,7 +139,7 @@ Token-efficient alternative to dumping the full patch. Mirrors MCP `diff_*` tool
 ### plan
 
 ```bash
-diffing plan submit [<file>|-] [--title T] [--source S] [--model M] [--id ID] [--wait] [--timeout N] [--save-source]
+diffing plan submit [<file>|-] [--title T] [--source S] [--model M] [--id ID] [--wait] [--timeout N] [--save-source|-S]
 diffing plan await [--timeout N]
 diffing plan list [--json]
 diffing plan show [<id>] [--version n] [--json]
