@@ -1,5 +1,6 @@
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
+import { unified } from '@astrojs/markdown-remark';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -40,11 +41,14 @@ export default defineConfig({
   trailingSlash: 'always',
   integrations: [sitemap()],
   markdown: {
+    // Astro 7 defaults to Sätteri; keep remark pipeline for base-path link rewriting.
+    processor: unified({
+      remarkPlugins: [remarkPrefixBase],
+    }),
     shikiConfig: {
       theme: 'rose-pine',
       wrap: true,
     },
-    remarkPlugins: [remarkPrefixBase],
   },
   vite: {
     define: {

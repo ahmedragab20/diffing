@@ -14,9 +14,11 @@ pnpm dev
 
 ```bash
 pnpm build
-# → dist/  (also generates llms.txt + llms-full.txt)
+# → dist/ including prerendered llms.txt + llms-full.txt
 pnpm preview
 ```
+
+`llms.txt` / `llms-full.txt` are Astro endpoints (`src/pages/llms*.txt.ts`), so they work in **dev and production** (not only after a separate post-build script).
 
 Environment:
 

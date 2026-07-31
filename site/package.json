@@ -6,14 +6,15 @@
   "packageManager": "pnpm@11.6.0",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build && node scripts/generate-llms.mjs",
+    "build": "astro build",
     "preview": "astro preview",
     "check": "astro check"
   },
   "dependencies": {
-    "@astrojs/check": "^0.9.4",
-    "@astrojs/sitemap": "^3.4.1",
-    "astro": "^5.11.0",
-    "typescript": "^5.8.3"
+    "@astrojs/check": "^0.9.10",
+    "@astrojs/markdown-remark": "^7.2.2",
+    "@astrojs/sitemap": "^3.7.3",
+    "astro": "^7.1.6",
+    "typescript": "^5.9.3"
   }
 }
