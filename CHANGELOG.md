@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.13.0
+
+### Minor Changes
+
+- Add a first-run setup wizard and onboarding UX: postinstall banner, TTY
+  first-run gate, interactive `diffing setup` (doctor, default mode, skills,
+  MCP), and colored CLI chrome for the welcome flow.
+- Improve post-palette search navigation and unify palette keymaps across the
+  web UI and native TUI so search results hand off into the active review more
+  consistently.
+
+### Patch Changes
+
+- Accept `--save-source` (and keep `-S` / `--saveSource`) on `diffing plan
+  submit` so docs, skills, and CLI parseArgs agree.
+- Audit and tighten agent skills (router, plan-review, PR-address) for accuracy
+  against the current MCP/CLI surface and lower token waste.
+- Ship a Gridline-styled public docs site and minimal landing on GitHub Pages
+  (Astro), with `llms.txt` / `llms-full.txt` for agents, plus README/docs links
+  to npm and the published site.
+
 ## 0.12.0
 
 ### Minor Changes
