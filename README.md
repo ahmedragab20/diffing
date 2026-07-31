@@ -8,7 +8,7 @@
 
 Open your changes in a GitHub-like web UI (or an experimental native TUI), leave inline comments, hand them to your coding agent over CLI/MCP, and review **implementation plans** the same way before any code is written. Everything binds to loopback by default — no account, no cloud.
 
-**Docs:** [ahmedragab20.github.io/diffing](https://ahmedragab20.github.io/diffing/) · **Agents:** [llms.txt](https://ahmedragab20.github.io/diffing/llms.txt)
+**npm:** [npmjs.com/package/diffing](https://www.npmjs.com/package/diffing) · **Docs:** [ahmedragab20.github.io/diffing](https://ahmedragab20.github.io/diffing/) · **Agents:** [llms.txt](https://ahmedragab20.github.io/diffing/llms.txt)
 
 ---
 
@@ -93,6 +93,12 @@ pnpm docs:dev
 ```
 
 ---
+
+## Links
+
+- **npm:** https://www.npmjs.com/package/diffing
+- **GitHub:** https://github.com/ahmedragab20/diffing
+- **Docs:** https://ahmedragab20.github.io/diffing/
 
 ## License
 
