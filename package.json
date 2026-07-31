@@ -48,9 +48,9 @@
     "verify:release-bundle": "node scripts/verify-tui-bundle.mjs",
     "prepublishOnly": "pnpm run verify:release-bundle",
     "version-packages": "changeset version",
-    "docs:dev": "pnpm --dir site --ignore-workspace dev",
-    "docs:build": "pnpm --dir site --ignore-workspace build",
-    "docs:preview": "pnpm --dir site --ignore-workspace preview"
+    "docs:dev": "pnpm --dir site dev",
+    "docs:build": "pnpm --dir site build",
+    "docs:preview": "pnpm --dir site preview"
   },
   "dependencies": {
     "@base-ui-components/react": "1.0.0-rc.0",

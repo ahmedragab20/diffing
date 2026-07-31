@@ -1,0 +1,9 @@
+packages:
+  - '.'
+
+# Static docs site — allow newly published transitive deps in CI.
+minimumReleaseAge: 0
+
+allowBuilds:
+  esbuild: true
+  sharp: true

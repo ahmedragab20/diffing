@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "version": "0.0.0",
+  "packageManager": "pnpm@11.6.0",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build && node scripts/generate-llms.mjs",
@@ -14,11 +15,5 @@
     "@astrojs/sitemap": "^3.4.1",
     "astro": "^5.11.0",
     "typescript": "^5.8.3"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "sharp"
-    ]
   }
 }

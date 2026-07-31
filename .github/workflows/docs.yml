@@ -28,7 +28,9 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.34.1
+          # Match root packageManager; site/.npmrc relaxes release-age for CI.
+          version: 11.6.0
+          package_json_file: site/package.json
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -39,9 +41,8 @@ jobs:
 
       - name: Install site deps
         working-directory: site
-        # Site is intentionally outside the product workspace packages list.
-        # minimum-release-age is relaxed via site/.npmrc for static docs CI.
-        run: pnpm install --frozen-lockfile --ignore-workspace
+        # site/ has its own pnpm-workspace.yaml (isolated from the product monorepo).
+        run: pnpm install --frozen-lockfile
 
       - name: Build site
         working-directory: site
