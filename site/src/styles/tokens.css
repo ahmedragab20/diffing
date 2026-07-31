@@ -1,0 +1,97 @@
+/* Gridline site tokens — mirrored from product rose-pine / nord themes */
+
+:root,
+[data-theme='rose-pine'] {
+  --bg-primary: #191724;
+  --bg-secondary: #1f1d2e;
+  --bg-tertiary: #26233a;
+  --text-primary: #e0def4;
+  --text-secondary: #908caa;
+  --text-muted: #6e6a86;
+  --border-color: #26233a;
+  --border-focus: #c4a7e7;
+  --primary: #c4a7e7;
+  --primary-hover: #ebbcba;
+  --accent: #ebbcba;
+  --success: #9ccfd8;
+  --danger: #eb6f92;
+  --warning: #f6c177;
+  --accent-subtle: rgba(235, 188, 186, 0.15);
+  --border-weak: #26233a;
+  --border-normal: #403d52;
+  --border-strong: #c4a7e7;
+  --feedback-success-text: #9ccfd8;
+  --feedback-danger-text: #eb6f92;
+  --feedback-warning-text: #f6c177;
+  --feedback-info-text: #c4a7e7;
+
+  --gl-canvas: var(--bg-primary);
+  --gl-surface: var(--bg-secondary);
+  --gl-raised: color-mix(in srgb, var(--text-primary) 2%, var(--bg-secondary));
+  --gl-element: color-mix(in srgb, var(--text-primary) 3%, var(--bg-secondary));
+  --gl-hover: color-mix(in srgb, var(--text-primary) 6%, var(--bg-primary));
+  --gl-selected: var(--accent-subtle);
+  --gl-text: var(--text-primary);
+  --gl-text-subtle: color-mix(in srgb, var(--text-secondary) 12%, var(--text-primary));
+  --gl-muted: color-mix(in srgb, var(--text-secondary) 18%, var(--text-primary));
+  --gl-code: var(--text-primary);
+  --gl-gutter: var(--text-muted);
+  --gl-rule-subtle: var(--border-weak);
+  --gl-rule: var(--border-normal);
+  --gl-focus: var(--border-focus);
+  --gl-accent: var(--primary);
+  --gl-positive: var(--feedback-success-text);
+  --gl-warning: var(--feedback-warning-text);
+  --gl-negative: var(--feedback-danger-text);
+  --gl-info: var(--feedback-info-text);
+
+  --gl-unit: 4px;
+  --gl-inline-pad: 12px;
+  --gl-section-gap: 8px;
+  --gl-bar-height: 44px;
+  --gl-control-height: 28px;
+  --gl-radius-control: 2px;
+  --gl-radius-surface: 2px;
+  --gl-radius-overlay: 4px;
+
+  --font-sans: 'Geist Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 28px;
+  --leading-tight: 1.3;
+  --leading-normal: 1.55;
+  --content-width: 720px;
+  --docs-sidebar: 240px;
+  --docs-toc: 200px;
+}
+
+[data-theme='nord'] {
+  --bg-primary: #2e3440;
+  --bg-secondary: #242933;
+  --bg-tertiary: #3b4252;
+  --text-primary: #eceff4;
+  --text-secondary: #e5e9f0;
+  --text-muted: #d8dee9;
+  --border-color: #3b4252;
+  --border-focus: #88c0d0;
+  --primary: #88c0d0;
+  --primary-hover: #8fbcbb;
+  --accent: #b48ead;
+  --success: #a3be8c;
+  --danger: #bf616a;
+  --warning: #ebcb8b;
+  --accent-subtle: rgba(136, 192, 208, 0.12);
+  --border-weak: #3b4252;
+  --border-normal: #434c5e;
+  --border-strong: #88c0d0;
+  --feedback-success-text: #a3be8c;
+  --feedback-danger-text: #bf616a;
+  --feedback-warning-text: #ebcb8b;
+  --feedback-info-text: #88c0d0;
+}

@@ -1,0 +1,82 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description?: string;
+  bodyClass?: string;
+}
+
+const { title, description = 'diffing — local-first git diff review for humans and AI agents', bodyClass = '' } = Astro.props;
+const version = typeof __DIFFING_VERSION__ !== 'undefined' ? __DIFFING_VERSION__ : '0.12.0';
+const base = import.meta.env.BASE_URL;
+const path = Astro.url.pathname;
+const isDocs = path.includes('/docs');
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+---
+
+<!doctype html>
+<html lang="en" data-theme="rose-pine">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <meta name="generator" content={Astro.generator} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>{title}</title>
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+  </head>
+  <body class={bodyClass}>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="site-shell">
+      <header class="status-strip" role="banner">
+        <div class="status-left">
+          <a class="brand" href={base}>▰ DIFFING</a>
+          <span class="sep" aria-hidden="true">│</span>
+          <span class="meta">v{version}</span>
+          <span class="sep hide-sm" aria-hidden="true">│</span>
+          <span class="meta hide-sm">LOCAL-FIRST · MIT</span>
+        </div>
+        <div class="status-right">
+          <a
+            class="nav-link"
+            href={`${base}docs/`}
+            aria-current={isDocs ? 'page' : undefined}
+          >
+            Docs
+          </a>
+          <a class="nav-link" href={`${base}llms.txt`}>llms.txt</a>
+          <a
+            class="nav-link"
+            href="https://github.com/ahmedragab20/diffing"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            GitHub
+          </a>
+        </div>
+      </header>
+
+      <main id="main" class="site-main">
+        <slot />
+      </main>
+
+      <footer class="site-footer">
+        <span>diffing v{version} · MIT · Made for people who read diffs.</span>
+        <span>
+          <a href="https://github.com/ahmedragab20/diffing">github.com/ahmedragab20/diffing</a>
+        </span>
+      </footer>
+    </div>
+  </body>
+</html>

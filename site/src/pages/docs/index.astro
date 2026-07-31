@@ -1,0 +1,37 @@
+---
+import { getCollection, render } from 'astro:content';
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import { NAV_SECTIONS } from '../../lib/nav';
+
+const docs = await getCollection('docs');
+const index = docs.find((d) => d.id === 'index');
+if (!index) throw new Error('Missing docs index content');
+
+const { Content, headings } = await render(index);
+
+const ordered = [...docs].sort((a, b) => {
+  const sa = NAV_SECTIONS.findIndex((s) => s.id === a.data.section);
+  const sb = NAV_SECTIONS.findIndex((s) => s.id === b.data.section);
+  if (sa !== sb) return sa - sb;
+  return a.data.order - b.data.order || a.data.title.localeCompare(b.data.title);
+});
+const next = ordered.find((d) => d.id !== 'index');
+const base = import.meta.env.BASE_URL;
+---
+
+<DocsLayout
+  title={index.data.title}
+  description={index.data.description}
+  headings={headings}
+  prev={null}
+  next={
+    next
+      ? {
+          href: `${base}docs/${next.id}/`,
+          title: next.data.title,
+        }
+      : null
+  }
+>
+  <Content />
+</DocsLayout>

@@ -1,0 +1,53 @@
+---
+import { getCollection, render } from 'astro:content';
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import { NAV_SECTIONS } from '../../lib/nav';
+
+export async function getStaticPaths() {
+  const docs = await getCollection('docs');
+  const ordered = [...docs].sort((a, b) => {
+    const sa = NAV_SECTIONS.findIndex((s) => s.id === a.data.section);
+    const sb = NAV_SECTIONS.findIndex((s) => s.id === b.data.section);
+    if (sa !== sb) return sa - sb;
+    return a.data.order - b.data.order || a.data.title.localeCompare(b.data.title);
+  });
+
+  // index is handled by docs/index.astro
+  return ordered
+    .filter((entry) => entry.id !== 'index')
+    .map((entry) => {
+      const i = ordered.findIndex((d) => d.id === entry.id);
+      const prev = ordered[i - 1];
+      const next = ordered[i + 1];
+      const base = import.meta.env.BASE_URL || '/';
+      const hrefOf = (slug: string) =>
+        slug === 'index' ? `${base}docs/` : `${base}docs/${slug}/`;
+
+      return {
+        params: { slug: entry.id },
+        props: {
+          entry,
+          prev: prev
+            ? { href: hrefOf(prev.id), title: prev.data.title }
+            : null,
+          next: next
+            ? { href: hrefOf(next.id), title: next.data.title }
+            : null,
+        },
+      };
+    });
+}
+
+const { entry, prev, next } = Astro.props;
+const { Content, headings } = await render(entry);
+---
+
+<DocsLayout
+  title={entry.data.title}
+  description={entry.data.description}
+  headings={headings}
+  prev={prev}
+  next={next}
+>
+  <Content />
+</DocsLayout>

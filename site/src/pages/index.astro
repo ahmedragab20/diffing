@@ -1,0 +1,184 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const version = typeof __DIFFING_VERSION__ !== 'undefined' ? __DIFFING_VERSION__ : '0.12.0';
+const base = import.meta.env.BASE_URL;
+---
+
+<BaseLayout
+  title="diffing — git diff, reimagined as a review workspace"
+  description="Local-first CLI for reviewing git diffs with humans and AI agents. Web UI or native TUI, plan review, MCP, no cloud."
+>
+  <div class="landing">
+    <section class="panel" aria-labelledby="hero-h">
+      <div class="panel-bar">
+        <span class="panel-title">┤ HERO ├</span>
+        <span>git diff → diffing</span>
+      </div>
+      <div class="panel-body">
+        <p class="eyebrow">LOCAL-FIRST · NO ACCOUNT · NO CLOUD · MIT</p>
+        <h1 id="hero-h" class="headline">git diff, reimagined as a review workspace.</h1>
+        <p class="subhead">
+          <code>diffing</code> is a local-first CLI that opens your changes in a
+          GitHub-like web UI or a native TUI — comment, hand off to your AI agent,
+          and review plans before any code is written. Everything stays on loopback.
+        </p>
+        <div class="cta-row">
+          <button type="button" class="btn btn-primary copy-cmd" data-copy="npm install -g diffing">
+            $ npm install -g diffing
+          </button>
+          <a class="btn" href={`${base}docs/getting-started/`}>Get started →</a>
+          <a class="btn btn-ghost" href={`${base}docs/guides/agent-handoff/`}>For agents</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="install-h">
+      <div class="panel-bar">
+        <span class="panel-title">┤ INSTALL ├</span>
+        <span>Node 20+ · git on PATH</span>
+      </div>
+      <div class="panel-body install-block">
+        <div class="install-line">
+          <code>npm install -g diffing</code>
+          <button type="button" class="btn btn-ghost" data-copy="npm install -g diffing">copy</button>
+        </div>
+        <div class="install-line">
+          <code>cd your-repo && diffing</code>
+          <button type="button" class="btn btn-ghost" data-copy="diffing">copy</button>
+        </div>
+        <div class="install-line">
+          <code>diffing setup</code>
+          <button type="button" class="btn btn-ghost" data-copy="diffing setup">copy</button>
+        </div>
+        <div class="install-line">
+          <code>diffing mode tui</code>
+          <button type="button" class="btn btn-ghost" data-copy="diffing mode tui">copy</button>
+        </div>
+        <p style="color: var(--gl-muted); font-size: var(--text-sm); margin-top: 4px;">
+          TTY opens the preferred interactive UI (web by default). Pipe/redirect prints a unified patch like <code>git diff</code>.
+        </p>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="props-h">
+      <div class="panel-bar">
+        <span class="panel-title">┤ WHY ├</span>
+        <span>v{version}</span>
+      </div>
+      <div class="panel-body ledger" id="props-h">
+        <div class="ledger-row">
+          <div class="ledger-key">drop-in</div>
+          <div class="ledger-val">
+            Same revisions, pathspecs, and 60+ git-compatible flags. Swap
+            <code>git diff</code> → <code>diffing</code>. Web UI or experimental native TUI.
+          </div>
+        </div>
+        <div class="ledger-row">
+          <div class="ledger-key">human ↔ agent</div>
+          <div class="ledger-val">
+            Inline comments, plan sign-off, MCP (37 tools), and CLI handoff —
+            agent replies and resolves on loopback without leaving the repo.
+          </div>
+        </div>
+        <div class="ledger-row">
+          <div class="ledger-key">local-first</div>
+          <div class="ledger-val">
+            Binds <code>127.0.0.1</code> by default. State under
+            <code>~/.diffing/</code>. No account, no telemetry, no cloud.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="docs-h">
+      <div class="panel-bar">
+        <span class="panel-title">┤ DOCS ├</span>
+        <span>human + AI friendly</span>
+      </div>
+      <div class="panel-body">
+        <h2 id="docs-h" class="visually-hidden" style="position:absolute;width:1px;height:1px;overflow:hidden">
+          Documentation
+        </h2>
+        <div class="card-grid">
+          <a class="card" href={`${base}docs/getting-started/`}>
+            <h3>Getting started</h3>
+            <p>Install, setup wizard, first review in five minutes.</p>
+          </a>
+          <a class="card" href={`${base}docs/guides/agent-handoff/`}>
+            <h3>Agent handoff</h3>
+            <p>Async park/resume, await-review, exit codes, MCP loop.</p>
+          </a>
+          <a class="card" href={`${base}docs/guides/plan-review/`}>
+            <h3>Plan review</h3>
+            <p>Approve architecture before the agent writes code.</p>
+          </a>
+          <a class="card" href={`${base}docs/reference/cli/`}>
+            <h3>CLI reference</h3>
+            <p>Every subcommand, flag group, and session control.</p>
+          </a>
+          <a class="card" href={`${base}docs/reference/mcp/`}>
+            <h3>MCP tools</h3>
+            <p>All 37 tools grouped for agents and IDE configs.</p>
+          </a>
+          <a class="card" href={`${base}llms.txt`}>
+            <h3>llms.txt</h3>
+            <p>Machine-readable map of the full documentation set.</p>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-bar">
+        <span class="panel-title">┤ FACTS ├</span>
+        <span>verified against source</span>
+      </div>
+      <div class="panel-body ledger">
+        <div class="ledger-row">
+          <div class="ledger-key">package</div>
+          <div class="ledger-val">diffing · v{version} · MIT</div>
+        </div>
+        <div class="ledger-row">
+          <div class="ledger-key">themes</div>
+          <div class="ledger-val">52 built-in · default rose-pine · picker <kbd>g</kbd> <kbd>t</kbd></div>
+        </div>
+        <div class="ledger-row">
+          <div class="ledger-key">MCP</div>
+          <div class="ledger-val">37 tools · <code>diffing mcp</code></div>
+        </div>
+        <div class="ledger-row">
+          <div class="ledger-key">bind</div>
+          <div class="ledger-val">127.0.0.1 · random free port (or <code>--port</code>)</div>
+        </div>
+        <div class="ledger-row">
+          <div class="ledger-key">storage</div>
+          <div class="ledger-val"><code>~/.diffing/&lt;repo&gt;-&lt;hash&gt;/</code> · settings <code>~/.config/diffing/</code></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script is:inline>
+    document.querySelectorAll('[data-copy]').forEach(function (el) {
+      el.addEventListener('click', async function () {
+        var text = el.getAttribute('data-copy') || '';
+        try {
+          await navigator.clipboard.writeText(text);
+          var prev = el.textContent;
+          if (el.classList.contains('copy-cmd')) {
+            el.textContent = '✓ copied';
+            setTimeout(function () {
+              el.textContent = prev;
+            }, 1200);
+          } else {
+            el.textContent = 'copied';
+            setTimeout(function () {
+              el.textContent = prev;
+            }, 1200);
+          }
+        } catch (_) {}
+      });
+    });
+  </script>
+</BaseLayout>

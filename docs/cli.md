@@ -1,5 +1,8 @@
 # Diffing CLI Reference Manual
 
+> **Public docs:** this long-form manual is retained for contributors during cutover.
+> Canonical navigable documentation: [CLI reference on the docs site](https://ahmedragab20.github.io/diffing/docs/reference/cli/) · [full site](https://ahmedragab20.github.io/diffing/).
+
 This manual provides a detailed technical reference for the `diffing` command-line interface, its Model Context Protocol (MCP) server, and the underlying agent-user handoff protocol.
 
 ---

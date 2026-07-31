@@ -47,7 +47,10 @@
     "verify:tui-bundle": "vitest run src/__tests__/native-bundle.test.ts src/__tests__/find-tui-binary.test.ts",
     "verify:release-bundle": "node scripts/verify-tui-bundle.mjs",
     "prepublishOnly": "pnpm run verify:release-bundle",
-    "version-packages": "changeset version"
+    "version-packages": "changeset version",
+    "docs:dev": "pnpm --dir site --ignore-workspace dev",
+    "docs:build": "pnpm --dir site --ignore-workspace build",
+    "docs:preview": "pnpm --dir site --ignore-workspace preview"
   },
   "dependencies": {
     "@base-ui-components/react": "1.0.0-rc.0",

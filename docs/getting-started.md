@@ -1,5 +1,7 @@
 # Getting Started with diffing
 
+> **Public docs:** [Getting started on the docs site](https://ahmedragab20.github.io/diffing/docs/getting-started/).
+
 A five-minute path from install to your first review — plus migration and troubleshooting.
 
 **Requirements:** Node.js 20+, `git` on your PATH, and a Git repository when you want to review code.

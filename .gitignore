@@ -5,6 +5,10 @@ dist
 .playwright-mcp
 # Rust TUI build artefacts (workspace lives in ./crates)
 target/
+# Docs site (Astro)
+site/dist
+site/.astro
+site/node_modules
 # OS / editor noise
 .DS_Store
 *.swp

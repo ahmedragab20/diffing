@@ -1,0 +1,137 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from './BaseLayout.astro';
+import { NAV_SECTIONS } from '../lib/nav';
+
+interface Props {
+  title: string;
+  description: string;
+  headings?: { depth: number; slug: string; text: string }[];
+  prev?: { href: string; title: string } | null;
+  next?: { href: string; title: string } | null;
+}
+
+const { title, description, headings = [], prev, next } = Astro.props;
+const base = import.meta.env.BASE_URL;
+const currentPath = Astro.url.pathname.replace(/\/$/, '') || '/';
+
+const docs = await getCollection('docs');
+const bySection = new Map<string, { slug: string; title: string; order: number }[]>();
+
+for (const entry of docs) {
+  const list = bySection.get(entry.data.section) ?? [];
+  list.push({
+    slug: entry.id,
+    title: entry.data.title,
+    order: entry.data.order,
+  });
+  bySection.set(entry.data.section, list);
+}
+
+for (const list of bySection.values()) {
+  list.sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
+}
+
+function hrefFor(slug: string) {
+  const path = slug === 'index' ? 'docs/' : `docs/${slug}/`;
+  return `${base}${path}`.replace(/\/{2,}/g, '/').replace(':/', '://');
+}
+
+// Fix base joining: base is /diffing/
+function docHref(slug: string) {
+  if (slug === 'index') return `${base}docs/`;
+  return `${base}docs/${slug}/`;
+}
+
+function isCurrent(slug: string) {
+  const target = docHref(slug).replace(/\/$/, '');
+  return currentPath === target || currentPath.endsWith(`/docs/${slug}`) || (slug === 'index' && currentPath.endsWith('/docs'));
+}
+
+const toc = headings.filter((h) => h.depth >= 2 && h.depth <= 3);
+---
+
+<BaseLayout title={`${title} · diffing`} description={description}>
+  <div class="docs-layout">
+    <button
+      type="button"
+      class="btn mobile-nav-toggle"
+      id="mobile-nav-btn"
+      aria-expanded="false"
+      aria-controls="docs-sidebar"
+      style="position: fixed; bottom: 16px; left: 16px; z-index: 45;"
+    >
+      Menu
+    </button>
+    <aside class="docs-sidebar" id="docs-sidebar" aria-label="Documentation">
+      {
+        NAV_SECTIONS.map((section) => {
+          const items = bySection.get(section.id) ?? [];
+          if (!items.length) return null;
+          return (
+            <div>
+              <h2>{section.label}</h2>
+              {items.map((item) => (
+                <a
+                  href={docHref(item.slug)}
+                  aria-current={isCurrent(item.slug) ? 'page' : undefined}
+                >
+                  {item.title}
+                </a>
+              ))}
+            </div>
+          );
+        })
+      }
+    </aside>
+
+    <div class="docs-content">
+      <article class="docs-article">
+        <header>
+          <h1>{title}</h1>
+          <p>{description}</p>
+        </header>
+        <div class="docs-prose">
+          <slot />
+        </div>
+        {
+          (prev || next) && (
+            <nav class="docs-nav-footer" aria-label="Page">
+              {prev ? (
+                <a href={prev.href}>← {prev.title}</a>
+              ) : (
+                <span />
+              )}
+              {next ? <a href={next.href}>{next.title} →</a> : <span />}
+            </nav>
+          )
+        }
+      </article>
+    </div>
+
+    {
+      toc.length > 0 && (
+        <nav class="docs-toc" aria-label="On this page">
+          <h2>On this page</h2>
+          {toc.map((h) => (
+            <a class={`depth-${h.depth}`} href={`#${h.slug}`}>
+              {h.text}
+            </a>
+          ))}
+        </nav>
+      )
+    }
+  </div>
+
+  <script is:inline>
+    (function () {
+      var btn = document.getElementById('mobile-nav-btn');
+      var side = document.getElementById('docs-sidebar');
+      if (!btn || !side) return;
+      btn.addEventListener('click', function () {
+        var open = side.classList.toggle('open');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+    })();
+  </script>
+</BaseLayout>
