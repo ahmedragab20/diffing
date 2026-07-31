@@ -21,6 +21,8 @@ import { useViewed } from '../hooks/useViewed'
 import { useDiffSearch } from '../hooks/useDiffSearch'
 import { HapticsProvider } from '../hooks/useHaptics'
 import { useDiffReviewKeymaps } from '../hooks/useDiffReviewKeymaps'
+import { useSearchSession } from '../hooks/useSearchSession'
+import { buildChangedLineKeys, buildDiffFileSet } from '../lib/diffIndex'
 import { parseExtensionFilter, matchesExtensionFilter, normalizeExtensions } from '../lib/extensionFilter'
 import type { FileTreeChipFilter } from './FileTree'
 import type { Scope } from '../lib/searchTypes'
@@ -79,7 +81,12 @@ export function PrReviewApp() {
     const stored = getUiStateItem('diffing-pr-chip-filter')
     return stored === 'unviewed' || stored === 'has-comments' ? stored : 'all'
   })
-  const [palette, setPalette] = useState<{ open: boolean; scope: Scope }>({ open: false, scope: 'files' })
+  const [palette, setPalette] = useState<{ open: boolean; scope: Scope; changedOnly: boolean }>({
+    open: false,
+    scope: 'files',
+    changedOnly: false,
+  })
+  const lastChangedOnlyRef = useRef(true)
   const [themeModalOpen, setThemeModalOpen] = useState(false)
   const [uiFontModalOpen, setUiFontModalOpen] = useState(false)
   const [monoFontModalOpen, setMonoFontModalOpen] = useState(false)
@@ -149,6 +156,15 @@ export function PrReviewApp() {
   }, [comments])
 
   const diffSearchEntries = useDiffSearch(filteredFiles)
+  const searchNavContext = useMemo(
+    () => ({
+      diffFileSet: buildDiffFileSet(filteredFiles),
+      changedKeys: buildChangedLineKeys(diffSearchEntries),
+      customMode: true,
+      staged: false,
+    }),
+    [filteredFiles, diffSearchEntries],
+  )
   const monoFontFamily = useMemo(() => resolveMonoFont(settings.monoFont), [settings.monoFont])
   const emptyUntracked = useMemo(() => new Set<string>(), [])
 
@@ -314,6 +330,27 @@ export function PrReviewApp() {
     handleViewedChange(activeFile, !viewedFiles.has(activeFile))
   }, [activeFile, handleViewedChange, viewedFiles])
 
+  const { setSnapshot: setSearchSnapshot, nextHit, prevHit, statusMessage: searchStatusMessage } =
+    useSearchSession(searchNavContext, handleFileClick)
+
+  const openPalette = useCallback((scope: Scope) => {
+    // Match TUI: shortcut opens start changed-only (`/` → All, `f`/`gs` scoped).
+    setPalette({ open: true, scope, changedOnly: true })
+  }, [])
+
+  const togglePalette = useCallback(() => {
+    setPalette((value) =>
+      value.open
+        ? { ...value, open: false }
+        : { open: true, scope: 'all', changedOnly: lastChangedOnlyRef.current },
+    )
+  }, [])
+
+  const handleChangedOnlyPreference = useCallback((changedOnly: boolean) => {
+    lastChangedOnlyRef.current = changedOnly
+    setPalette((value) => ({ ...value, changedOnly }))
+  }, [])
+
   const keymapActions = useMemo(() => ({
     onNavigateFile: navigateFile,
     onToggleViewed: toggleActiveViewed,
@@ -333,8 +370,10 @@ export function PrReviewApp() {
       const order: Settings['lineDiffType'][] = ['word', 'word-alt', 'char', 'none']
       updateSettings({ lineDiffType: order[(order.indexOf(settings.lineDiffType) + 1) % order.length] })
     },
-    onOpenPalette: (scope: Scope) => setPalette({ open: true, scope }),
-    onTogglePalette: () => setPalette((value) => value.open ? { ...value, open: false } : { open: true, scope: 'all' }),
+    onOpenPalette: openPalette,
+    onTogglePalette: togglePalette,
+    onNextSearchHit: nextHit,
+    onPrevSearchHit: prevHit,
     onOpenTheme: () => setThemeModalOpen(true),
     onOpenShortcuts: () => setShortcutsHelpOpen(true),
   }), [
@@ -347,6 +386,10 @@ export function PrReviewApp() {
     settings.showLineNumbers,
     toggleActiveViewed,
     updateSettings,
+    openPalette,
+    togglePalette,
+    nextHit,
+    prevHit,
   ])
   useDiffReviewKeymaps(keymapActions)
 
@@ -514,6 +557,9 @@ export function PrReviewApp() {
           isOpen={palette.open}
           onClose={() => setPalette((value) => ({ ...value, open: false }))}
           initialScope={palette.scope}
+          initialChangedOnly={palette.changedOnly}
+          onChangedOnlyPreference={handleChangedOnlyPreference}
+          onSessionSnapshot={setSearchSnapshot}
           files={filteredFiles}
           changedEntries={diffSearchEntries}
           customMode
@@ -527,7 +573,13 @@ export function PrReviewApp() {
           showLineNumbers={settings.showLineNumbers}
           lineHoverHighlight={settings.lineHoverHighlight}
         />
-        <VimStatusBar activeFile={activeFile} onShowHelp={() => setShortcutsHelpOpen(true)} visible={settings.showStatusBar} placeholder="No active PR file (J/K to jump)" />
+        <VimStatusBar
+          activeFile={activeFile}
+          onShowHelp={() => setShortcutsHelpOpen(true)}
+          visible={settings.showStatusBar}
+          statusMessage={searchStatusMessage}
+          placeholder="No active PR file (J/K to jump)"
+        />
         <ShortcutsHelpModal isOpen={shortcutsHelpOpen} onClose={() => setShortcutsHelpOpen(false)} mode="pr" />
         <ThemeModal open={themeModalOpen} activeTheme={settings.theme || 'rose-pine'} onThemeChange={(theme) => update({ theme })} onClose={() => setThemeModalOpen(false)} />
         <FontPickerModal open={uiFontModalOpen} title="Select UI Font" defaultLabel="Default (Geist Mono, from CDN)" activeFont={settings.uiFont} onFontChange={(uiFont) => update({ uiFont })} onClose={() => setUiFontModalOpen(false)} />

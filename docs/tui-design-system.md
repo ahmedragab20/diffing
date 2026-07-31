@@ -151,8 +151,15 @@ border; one boundary should occupy one cell.
 
 - Put the editable query first, followed by one compact row for scope and
   optional toggles. Do not repeat the active scope in the modal title.
+- Open defaults: `/` → All + changed-only; `f` → Files + changed-only;
+  `gs` → Symbols + changed-only (review mode keeps bare `s` for comment-status
+  cycling).
 - Keep keyboard bindings visible in the controls or the single modal footer;
   the dimmed application status strip stays quiet while search is active.
+- Palette keys: `Ctrl-U` pages the result selection up (±8 rows); `Ctrl-L`
+  clears the query (`Ctrl-W` still deletes a word). `Alt-Enter` peeks the file
+  preview without jumping; `Esc` unfocuses a peeked preview before closing the
+  palette. After the palette closes, `n` / `N` traverse the active result set.
 - Use one subtle rule between controls and results. Wide layouts split results
   and preview with one vertical rule; compact layouts give the full width to
   results.

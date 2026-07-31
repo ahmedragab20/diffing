@@ -147,7 +147,7 @@ Full keyboard-driven navigation with vim-like motions and a modal status bar:
 | `J` / `K` | Jump to next/previous file |
 | `v` | Toggle file viewed/unviewed |
 | `b` | Toggle sidebar visibility |
-| `/` | Open text search |
+| `/` | Open all-scope search (changed-only) |
 | `s` | Open symbol search |
 | `g` `v` | Open file browser |
 | `g` `t` | Open theme picker |

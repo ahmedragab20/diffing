@@ -61,9 +61,12 @@ describe('ShortcutsHelpModal', () => {
       expect(screen.getByText('Commit Walk')).toBeInTheDocument()
       expect(screen.getByText(/Next commit \(diffing show multi-commit\)/i)).toBeInTheDocument()
       expect(screen.getByText(/Previous commit \(diffing show multi-commit\)/i)).toBeInTheDocument()
-      // g f opens all-scope palette (not Files); g v is Files.
+      // `/` and g f open all-scope palette; g v is Files.
+      expect(screen.getByText(/Open Search Palette \(All scopes, changed files only\)/i)).toBeInTheDocument()
       expect(screen.getAllByText(/Open Search Palette \(all scopes\)/i).length).toBeGreaterThanOrEqual(1)
-      expect(screen.getByText(/Browse any file in the repo \(Files scope\)/i)).toBeInTheDocument()
+      expect(screen.getByText(/Browse files \(Files scope, changed files only\)/i)).toBeInTheDocument()
+      expect(screen.getByText(/Toggle Line Numbers \(same as #\)/i)).toBeInTheDocument()
+      expect(screen.getByText(/Next search result \(after palette closes\)/i)).toBeInTheDocument()
       expect(screen.getByText(/Cycle Inline Diff Style \(word → word-alt → char → none\)/i)).toBeInTheDocument()
       expect(screen.getByText(/Collapse \/ expand the vim status bar/i)).toBeInTheDocument()
     })

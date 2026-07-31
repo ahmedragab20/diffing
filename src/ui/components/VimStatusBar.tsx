@@ -5,6 +5,8 @@ interface VimStatusBarProps {
   activeFile: string | null
   onShowHelp: () => void
   placeholder?: string
+  /** Ephemeral status line (e.g. search n/N with no active hits). */
+  statusMessage?: string | null
   /** When false, the bar is hidden entirely (no DOM). Defaults to true. */
   visible?: boolean
 }
@@ -13,6 +15,7 @@ export const VimStatusBar = memo(function VimStatusBar({
   activeFile,
   onShowHelp,
   placeholder = 'No active file (J/K to jump)',
+  statusMessage = null,
   visible = true,
 }: VimStatusBarProps) {
   if (!visible) return null
@@ -89,6 +92,8 @@ export const VimStatusBar = memo(function VimStatusBar({
                 <span className="vim-file-dir">{fileDir}</span>
                 <strong className="vim-file-name">{fileName}</strong>
               </span>
+            ) : statusMessage ? (
+              <span className="vim-status-placeholder vim-status-flash">{statusMessage}</span>
             ) : (
               <span className="vim-status-placeholder">{placeholder}</span>
             )}

@@ -24,6 +24,8 @@ function makeActions() {
     onCycleLineDiffType: vi.fn(),
     onOpenPalette: vi.fn<(scope: Scope) => void>(),
     onTogglePalette: vi.fn(),
+    onNextSearchHit: vi.fn(),
+    onPrevSearchHit: vi.fn(),
     onOpenTheme: vi.fn(),
     onOpenShortcuts: vi.fn(),
   }
@@ -44,7 +46,7 @@ describe('shared diff review keymaps', () => {
     const actions = makeActions()
     render(<Harness actions={actions} />)
 
-    for (const key of ['J', 'K', 'v', 'm', 't', 'b', 'w', 'n', 'i', 'I']) {
+    for (const key of ['J', 'K', 'v', 'm', 't', 'b', 'w', 'i', 'I']) {
       fireEvent.keyDown(window, { key })
     }
 
@@ -55,9 +57,30 @@ describe('shared diff review keymaps', () => {
     expect(actions.onCycleTabSize).toHaveBeenCalledOnce()
     expect(actions.onToggleSidebar).toHaveBeenCalledOnce()
     expect(actions.onToggleLineWrap).toHaveBeenCalledOnce()
-    expect(actions.onToggleLineNumbers).toHaveBeenCalledOnce()
     expect(actions.onCycleDiffIndicators).toHaveBeenCalledOnce()
     expect(actions.onCycleLineDiffType).toHaveBeenCalledOnce()
+  })
+
+  it('cycles search hits with n and N', () => {
+    const actions = makeActions()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'n' })
+    fireEvent.keyDown(window, { key: 'N' })
+
+    expect(actions.onNextSearchHit).toHaveBeenCalledOnce()
+    expect(actions.onPrevSearchHit).toHaveBeenCalledOnce()
+  })
+
+  it('toggles line numbers with gn and #', () => {
+    const actions = makeActions()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'g' })
+    fireEvent.keyDown(window, { key: 'n' })
+    fireEvent.keyDown(window, { key: '#' })
+
+    expect(actions.onToggleLineNumbers).toHaveBeenCalledTimes(2)
   })
 
   it('supports the same search and theme sequences as local review', () => {
@@ -65,6 +88,7 @@ describe('shared diff review keymaps', () => {
     render(<Harness actions={actions} />)
 
     fireEvent.keyDown(window, { key: '/' })
+    fireEvent.keyDown(window, { key: 'f' })
     fireEvent.keyDown(window, { key: 's' })
     fireEvent.keyDown(window, { key: 'g' })
     fireEvent.keyDown(window, { key: 'f' })
@@ -74,10 +98,11 @@ describe('shared diff review keymaps', () => {
     fireEvent.keyDown(window, { key: 't' })
     fireEvent.keyDown(window, { key: 'k', metaKey: true })
 
-    expect(actions.onOpenPalette).toHaveBeenNthCalledWith(1, 'text')
-    expect(actions.onOpenPalette).toHaveBeenNthCalledWith(2, 'symbols')
-    expect(actions.onOpenPalette).toHaveBeenNthCalledWith(3, 'all')
-    expect(actions.onOpenPalette).toHaveBeenNthCalledWith(4, 'files')
+    expect(actions.onOpenPalette).toHaveBeenNthCalledWith(1, 'all')
+    expect(actions.onOpenPalette).toHaveBeenNthCalledWith(2, 'files')
+    expect(actions.onOpenPalette).toHaveBeenNthCalledWith(3, 'symbols')
+    expect(actions.onOpenPalette).toHaveBeenNthCalledWith(4, 'all')
+    expect(actions.onOpenPalette).toHaveBeenNthCalledWith(5, 'files')
     expect(actions.onOpenTheme).toHaveBeenCalledOnce()
     expect(actions.onTogglePalette).toHaveBeenCalledOnce()
   })

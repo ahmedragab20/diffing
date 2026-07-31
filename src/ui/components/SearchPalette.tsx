@@ -15,6 +15,12 @@ import {
   extractSymbolsFromDiff,
 } from '../lib/diffIndex'
 import type { Scope, FileHit, ContentHit, SymbolHit, MatchRange } from '../lib/searchTypes'
+import {
+  defaultChangedOnlyForScope,
+  rowsToNavHits,
+  type SearchPaletteRow,
+  type SearchSessionSnapshot,
+} from '../lib/searchSession'
 import { scrollToLine, fileName, SHIKI_THEME_MAP, highlightLineInElement } from '../utils'
 import { Modal } from '../primitives/Modal'
 
@@ -22,6 +28,12 @@ interface SearchPaletteProps {
   isOpen: boolean
   onClose: () => void
   initialScope: Scope
+  /** When omitted, `true` for text/files/symbols and `false` for all. */
+  initialChangedOnly?: boolean
+  /** Persist the user's Changed toggle (all-scope / ⌘K reopen). */
+  onChangedOnlyPreference?: (changedOnly: boolean) => void
+  /** Cache hits + cursor when the palette closes or a result is activated. */
+  onSessionSnapshot?: (snapshot: SearchSessionSnapshot) => void
   files: FileDiffMetadata[]
   changedEntries: DiffLineEntry[]
   customMode: boolean
@@ -150,6 +162,9 @@ export function SearchPalette({
   isOpen,
   onClose,
   initialScope,
+  initialChangedOnly,
+  onChangedOnlyPreference,
+  onSessionSnapshot,
   files,
   changedEntries,
   customMode,
@@ -172,6 +187,7 @@ export function SearchPalette({
 
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const wasOpenRef = useRef(false)
 
   const diffFileSet = useMemo(() => buildDiffFileSet(files), [files])
   const changedKeys = useMemo(() => buildChangedLineKeys(changedEntries), [changedEntries])
@@ -201,11 +217,11 @@ export function SearchPalette({
       setQuery('')
       setScope(initialScope)
       setRegex(false)
-      setChangedOnly(false)
+      setChangedOnly(initialChangedOnly ?? defaultChangedOnlyForScope(initialScope))
       setFocusedIndex(0)
       setPreview(null)
     }
-  }, [isOpen, initialScope])
+  }, [isOpen, initialScope, initialChangedOnly])
 
   useEffect(() => {
     if (isOpen) inputRef.current?.focus()
@@ -313,6 +329,31 @@ export function SearchPalette({
     el?.scrollIntoView({ block: 'nearest' })
   }, [focusedIndex, rows])
 
+  const snapshotSession = useCallback(
+    (index: number) => {
+      if (!onSessionSnapshot || rows.length === 0) return
+      onSessionSnapshot({
+        hits: rowsToNavHits(rows as SearchPaletteRow[], query),
+        index,
+        query: query.trim(),
+      })
+    },
+    [onSessionSnapshot, rows, query],
+  )
+
+  const clearQuery = useCallback(() => {
+    setQuery('')
+    setPreview(null)
+  }, [])
+
+  // Snapshot on any close path (Esc, backdrop, ⌘K toggle, parent unmount).
+  useEffect(() => {
+    if (wasOpenRef.current && !isOpen) {
+      snapshotSession(focusedIndex)
+    }
+    wasOpenRef.current = isOpen
+  }, [isOpen, snapshotSession, focusedIndex])
+
   // ── Navigation ───────────────────────────────────────────────────
   const navContext = useMemo(
     () => ({ diffFileSet, changedKeys, customMode, staged }),
@@ -334,6 +375,7 @@ export function SearchPalette({
         }
         const action = classifyNavigation({ kind: 'file', path }, navContext)
         if (action.type === 'scrollFile') {
+          snapshotSession(rowIndex)
           onClose()
           requestAnimationFrame(() => onNavigateFile(path))
         } else {
@@ -351,13 +393,14 @@ export function SearchPalette({
       }
       const action = classifyNavigation({ kind: 'line', path, line, match }, navContext)
       if (action.type === 'scrollLine') {
+        snapshotSession(rowIndex)
         onClose()
         requestAnimationFrame(() => scrollToLine(path, action.line, action.side, action.match))
       } else {
         setPreview({ path, line, match })
       }
     },
-    [rows, query, navContext, onClose, onNavigateFile],
+    [rows, query, navContext, onClose, onNavigateFile, snapshotSession],
   )
 
   // ── Keyboard model ───────────────────────────────────────────────
@@ -431,21 +474,37 @@ export function SearchPalette({
       } else if (e.ctrlKey && e.key === 'u') {
         e.preventDefault()
         move(-8)
+      } else if (e.ctrlKey && e.key === 'g') {
+        e.preventDefault()
+        setChangedOnly((v) => {
+          const next = !v
+          onChangedOnlyPreference?.(next)
+          return next
+        })
+      } else if (e.ctrlKey && e.key === 'r' && scope === 'text') {
+        e.preventDefault()
+        setRegex((v) => !v)
+      } else if (e.ctrlKey && e.key === 'l') {
+        e.preventDefault()
+        clearQuery()
       } else if (e.key === 'Enter') {
         e.preventDefault()
         activate(focusedIndex, e.metaKey || e.ctrlKey)
       }
       // Escape is handled by Base UI -> onOpenChange -> handleDismiss (two-stage).
     },
-    [cycleScope, rows.length, activate, focusedIndex],
+    [cycleScope, rows.length, activate, focusedIndex, scope, onChangedOnlyPreference, clearQuery],
   )
 
   // Two-stage dismiss: a preview closes back to the list; otherwise the palette
   // closes. Routed through the Modal's onClose so both Esc and backdrop honour it.
   const handleDismiss = useCallback(() => {
     if (preview) setPreview(null)
-    else onClose()
-  }, [preview, onClose])
+    else {
+      snapshotSession(focusedIndex)
+      onClose()
+    }
+  }, [preview, onClose, snapshotSession, focusedIndex])
 
   const count = data?.total ?? rows.length
   const showSpinner = (search.isFetching || search.pending) && search.enabled
@@ -489,7 +548,7 @@ export function SearchPalette({
           />
           {showSpinner && <Loader2 size={14} className="searchpalette-spinner spin" />}
           {query && (
-            <button className="searchpalette-clear" onClick={() => setQuery('')} aria-label="Clear search">
+            <button className="searchpalette-clear" onClick={clearQuery} aria-label="Clear search">
               <X size={14} />
             </button>
           )}
@@ -526,7 +585,13 @@ export function SearchPalette({
             )}
             <button
               className={`searchpalette-toggle ${changedOnly ? 'is-active' : ''}`}
-              onClick={() => setChangedOnly((v) => !v)}
+              onClick={() => {
+                setChangedOnly((v) => {
+                  const next = !v
+                  onChangedOnlyPreference?.(next)
+                  return next
+                })
+              }}
               title="Limit to files in the current diff"
               aria-pressed={changedOnly}
             >
@@ -571,6 +636,7 @@ export function SearchPalette({
             onClose={() => setPreview(null)}
             inDiff={diffFileSet.has(preview.path)}
             onGoToDiff={() => {
+              snapshotSession(focusedIndex)
               onClose()
               if (preview.line) {
                 requestAnimationFrame(() => scrollToLine(preview.path, preview.line!, 'additions', preview.match))
@@ -587,7 +653,24 @@ export function SearchPalette({
           <kbd>Tab</kbd> scope
         </span>
         <span>
+          <kbd>Ctrl</kbd>+<kbd>G</kbd> changed
+        </span>
+        {scope === 'text' && (
+          <span>
+            <kbd>Ctrl</kbd>+<kbd>R</kbd> regex
+          </span>
+        )}
+        <span>
+          <kbd>Ctrl</kbd>+<kbd>L</kbd> clear
+        </span>
+        <span>
+          <kbd>Ctrl</kbd>+<kbd>U</kbd>/<kbd>D</kbd> page
+        </span>
+        <span>
           <kbd>↑↓</kbd> move
+        </span>
+        <span>
+          <kbd>n</kbd>/<kbd>N</kbd> after close
         </span>
         <span>
           <kbd>↵</kbd> {preview && diffFileSet.has(preview.path) ? 'view in diff' : 'open'}
@@ -601,7 +684,7 @@ export function SearchPalette({
           </span>
         )}
         <span>
-          <kbd>esc</kbd> {preview ? 'back' : 'close'}
+          <kbd>esc</kbd> {preview ? 'unfocus preview' : 'close'}
         </span>
       </div>
     </Modal>

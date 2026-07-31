@@ -26,7 +26,7 @@ use crate::diff::highlight::highlight_line;
 use crate::diff_context::DiffContext;
 use crate::editorconfig::EditorConfigCache;
 use crate::handoff::{CommentsWatcher, RepoWatcher};
-use crate::keys::{help_text, viewer_help_text, Action, Command, Keymap};
+use crate::keys::{classify_search_special, help_text, viewer_help_text, Action, Command, Keymap, SearchSpecialAction};
 use crate::lsp::{
     character_column_from_utf16, utf16_column, DefinitionTarget, LanguageResponse, LspManager,
     RequestKind, RequestToken, ServerState,
@@ -419,6 +419,7 @@ pub struct App {
     search_preview_loading: bool,
     search_preview_error: Option<String>,
     search_preview_scroll: usize,
+    search_preview_focused: bool,
     preview_request_id: u64,
     preview_request_tx: Sender<PreviewRequest>,
     preview_result_rx: Receiver<PreviewEvent>,
@@ -901,6 +902,7 @@ impl App {
             search_preview_loading: false,
             search_preview_error: None,
             search_preview_scroll: 0,
+            search_preview_focused: false,
             preview_request_id: 0,
             preview_request_tx,
             preview_result_rx,
@@ -2299,26 +2301,9 @@ impl App {
                 self.help_scroll = 0;
                 self.clear_modal_input();
             }
-            Action::OpenSearch => {
-                self.mode = Mode::Search;
-                self.clear_modal_input();
-                self.search_scope = SearchScope::All;
-                self.search_changed_only = true;
-                self.search_regex = false;
-                self.search_cursor = 0;
-                self.clear_search_preview();
-                self.queue_repo_search();
-            }
-            Action::OpenFileFilter => {
-                self.mode = Mode::Search;
-                self.clear_modal_input();
-                self.search_scope = SearchScope::Files;
-                self.search_changed_only = true;
-                self.search_regex = false;
-                self.search_cursor = 0;
-                self.clear_search_preview();
-                self.queue_repo_search();
-            }
+            Action::OpenSearch => self.open_search_palette(SearchScope::All),
+            Action::OpenFileFilter => self.open_search_palette(SearchScope::Files),
+            Action::OpenSymbolSearch => self.open_search_palette(SearchScope::Symbols),
             Action::CycleFileFilter => {
                 self.file_filter_mode = self.file_filter_mode.next();
                 self.apply_file_filter();
@@ -2330,6 +2315,10 @@ impl App {
             }
             Action::OpenImagePreview => self.open_image_preview(),
             Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::ToggleLineNumbers => {
+                self.line_numbers = !self.line_numbers;
+                self.persist_settings();
+            }
             Action::OpenSettings => self.open_settings(),
             Action::LanguageHover => self.request_language(RequestKind::Hover),
             Action::LanguageDefinition => self.request_language(RequestKind::Definition),
@@ -2607,18 +2596,50 @@ impl App {
         ));
     }
 
+    fn open_search_palette(&mut self, scope: SearchScope) {
+        self.mode = Mode::Search;
+        self.clear_modal_input();
+        self.search_scope = scope;
+        self.search_changed_only = true;
+        self.search_regex = false;
+        self.search_cursor = 0;
+        self.search_preview_focused = false;
+        self.clear_search_preview();
+        self.queue_repo_search();
+    }
+
     fn handle_search_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
+        if let Some(special) = classify_search_special(&key, self.search_preview_focused) {
+            match special {
+                SearchSpecialAction::ClosePalette => {
+                    self.mode = Mode::Normal;
+                    self.clear_modal_input();
+                    self.search_preview_focused = false;
+                    self.clear_search_preview();
+                }
+                SearchSpecialAction::UnfocusPreview => {
+                    self.search_preview_focused = false;
+                }
+                SearchSpecialAction::PeekPreview => {
+                    self.search_preview_focused = true;
+                    self.queue_search_preview();
+                }
+                SearchSpecialAction::ClearQuery => {
+                    self.clear_modal_input();
+                    self.search_cursor = 0;
+                    self.search_preview_focused = false;
+                    self.queue_repo_search();
+                }
+                SearchSpecialAction::PageSelectionUp => self.move_search_cursor(-8),
+            }
+            return;
+        }
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let preview_scroll = key
             .modifiers
             .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT);
         match key.code {
-            KeyCode::Esc => {
-                self.mode = Mode::Normal;
-                self.clear_modal_input();
-                self.clear_search_preview();
-            }
             KeyCode::Enter => self.activate_repo_search_hit(),
             KeyCode::Tab => {
                 self.search_scope = self.search_scope.next(1);
@@ -2626,6 +2647,7 @@ impl App {
                     self.search_regex = false;
                 }
                 self.search_cursor = 0;
+                self.search_preview_focused = false;
                 self.queue_repo_search();
             }
             KeyCode::BackTab => {
@@ -2634,6 +2656,7 @@ impl App {
                     self.search_regex = false;
                 }
                 self.search_cursor = 0;
+                self.search_preview_focused = false;
                 self.queue_repo_search();
             }
             KeyCode::Down if preview_scroll => {
@@ -2663,14 +2686,10 @@ impl App {
             KeyCode::Char('n' | 'j') if control => self.move_search_cursor(1),
             KeyCode::Char('p' | 'k') if control => self.move_search_cursor(-1),
             KeyCode::Char('d') if control => self.move_search_cursor(8),
-            KeyCode::Char('u') if control => {
-                self.clear_modal_input();
-                self.search_cursor = 0;
-                self.queue_repo_search();
-            }
             KeyCode::Char('w') if control => {
                 self.delete_modal_word();
                 self.search_cursor = 0;
+                self.search_preview_focused = false;
                 self.queue_repo_search();
             }
             KeyCode::Char('a') if control => self.modal_cursor = 0,
@@ -2688,16 +2707,19 @@ impl App {
             KeyCode::Backspace => {
                 self.delete_modal_back();
                 self.search_cursor = 0;
+                self.search_preview_focused = false;
                 self.queue_repo_search();
             }
             KeyCode::Delete => {
                 self.delete_modal_forward();
                 self.search_cursor = 0;
+                self.search_preview_focused = false;
                 self.queue_repo_search();
             }
             KeyCode::Char(character) if !control && !key.modifiers.contains(KeyModifiers::ALT) => {
                 self.insert_modal_text(&character.to_string());
                 self.search_cursor = 0;
+                self.search_preview_focused = false;
                 self.queue_repo_search();
             }
             _ => {}
@@ -6355,8 +6377,12 @@ impl App {
             Span::styled(state, Style::default().fg(state_color).bg(tokens.raised)),
             Span::styled("  ·  ", Style::default().fg(tokens.rule).bg(tokens.raised)),
         ]);
-        let footer_hint = if inner.width >= 88 {
-            "Tab scope · ↑↓/Pg select · ⇧↑↓ preview · ^U clear · Enter open · Esc close".to_string()
+        let footer_hint = if inner.width >= 96 {
+            "Tab scope · ↑↓/Pg select · ⇧↑↓ preview · ^L clear · ^U page · Alt-Enter peek · Enter open · Esc close/unfocus"
+                .to_string()
+        } else if inner.width >= 88 {
+            "Tab scope · ↑↓/Pg select · ⇧↑↓ preview · ^L clear · ^U page · Alt-Enter peek · Enter open · Esc close"
+                .to_string()
         } else {
             let source = if self.search_changed_only {
                 "^G repository"
@@ -7790,6 +7816,24 @@ mod tests {
             query_match_ranges("file_tree_render.rs", "ftr", true),
             vec![(0, 1), (5, 7)]
         );
+    }
+
+    #[test]
+    fn search_open_defaults_use_all_files_and_symbols_with_changed_only() {
+        use crate::keys::Action;
+
+        fn scope_for(action: Action) -> Option<SearchScope> {
+            match action {
+                Action::OpenSearch => Some(SearchScope::All),
+                Action::OpenFileFilter => Some(SearchScope::Files),
+                Action::OpenSymbolSearch => Some(SearchScope::Symbols),
+                _ => None,
+            }
+        }
+
+        assert_eq!(scope_for(Action::OpenSearch), Some(SearchScope::All));
+        assert_eq!(scope_for(Action::OpenFileFilter), Some(SearchScope::Files));
+        assert_eq!(scope_for(Action::OpenSymbolSearch), Some(SearchScope::Symbols));
     }
 
     #[test]

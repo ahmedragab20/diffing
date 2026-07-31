@@ -31,11 +31,13 @@ pub enum Action {
     FocusTracker,
     ToggleSidebar,
     ToggleWrap,
+    ToggleLineNumbers,
     ToggleLayout,
     OpenImagePreview,
     OpenHelp,
     OpenSearch,
     OpenFileFilter,
+    OpenSymbolSearch,
     CycleFileFilter,
     OpenCommand,
     ToggleViewed,
@@ -105,6 +107,8 @@ impl Keymap {
                 ('g', KeyCode::Char('g')) => Some(Action::ScrollTop),
                 ('g', KeyCode::Char('h')) => Some(Action::LanguageHover),
                 ('g', KeyCode::Char('d')) => Some(Action::LanguageDefinition),
+                ('g', KeyCode::Char('s')) => Some(Action::OpenSymbolSearch),
+                ('g', KeyCode::Char('n')) => Some(Action::ToggleLineNumbers),
                 (']', KeyCode::Char('h')) => Some(Action::NextHunk),
                 ('[', KeyCode::Char('h')) => Some(Action::PrevHunk),
                 (']', KeyCode::Char('c')) => Some(Action::NextComment),
@@ -153,7 +157,7 @@ impl Keymap {
 
     pub fn pending_hint(&self) -> Option<&'static str> {
         match self.pending {
-            Some('g') => Some("g: top · h: hover · d: definition"),
+            Some('g') => Some("g: top · h: hover · d: definition · s: symbols · n: line numbers"),
             Some(']') => Some("]h: next hunk · ]c: next comment"),
             Some('[') => Some("[h: previous hunk · [c: previous comment"),
             Some('z') => Some("zz: center cursor"),
@@ -174,6 +178,32 @@ impl Keymap {
         };
         self.clear();
         command
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchSpecialAction {
+    ClosePalette,
+    UnfocusPreview,
+    PeekPreview,
+    ClearQuery,
+    PageSelectionUp,
+}
+
+/// Search-palette keys that differ from normal modal editing (Esc staging, peek, paging).
+pub fn classify_search_special(key: &KeyEvent, preview_focused: bool) -> Option<SearchSpecialAction> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Esc => Some(if preview_focused {
+            SearchSpecialAction::UnfocusPreview
+        } else {
+            SearchSpecialAction::ClosePalette
+        }),
+        KeyCode::Enter if alt && !ctrl => Some(SearchSpecialAction::PeekPreview),
+        KeyCode::Char('u') if ctrl => Some(SearchSpecialAction::PageSelectionUp),
+        KeyCode::Char('l') if ctrl => Some(SearchSpecialAction::ClearQuery),
+        _ => None,
     }
 }
 
@@ -198,6 +228,7 @@ pub fn classify(key: &KeyEvent) -> Action {
         KeyCode::BackTab if !ctrl => Action::FocusDiff,
         KeyCode::Char('b') if !ctrl => Action::ToggleSidebar,
         KeyCode::Char('w') if !ctrl => Action::ToggleWrap,
+        KeyCode::Char('#') if !ctrl => Action::ToggleLineNumbers,
         KeyCode::Enter if !ctrl => Action::ExpandContext,
         KeyCode::Char('+' | '=') if !ctrl => Action::ExpandContext,
         KeyCode::Char('-') if !ctrl => Action::CollapseContext,
@@ -259,16 +290,18 @@ pub fn help_text() -> &'static str {
   zz             center cursor
 
 SEARCH · POWERED BY FFF
-  / / f          all-scope / file search
+  / / f / gs     all / files / symbols search (changed-only)
   Tab/Shift-Tab  cycle scope
   Ctrl-g/r       whole repo / text regex
   ↑/↓, Ctrl-n/p  select result
   PgUp/PgDn      page result list
   Shift-↑/↓      scroll preview
   ←/→, Home/End  edit query cursor
-  Ctrl-w/u       delete word / clear query
+  Ctrl-w/l       delete word / clear query
+  Ctrl-u/d       page selection up/down (±8)
   Enter          jump to selected match
-  n / N          next/previous result
+  Alt-Enter      peek preview (Esc unfocuses first)
+  n / N          next/previous result (after close)
 
 REVIEW
   c / C          line / file comment
@@ -293,6 +326,7 @@ LAYOUT & TOOLS
   a              all/unviewed/commented files
   :              command line
   ,              settings
+  # / gn         toggle line numbers (, settings too)
   Space e / b    toggle file sidebar
   t / w          theme / wrap
   Tab/Shift-Tab  cycle pane focus
@@ -315,7 +349,7 @@ pub fn viewer_help_text() -> &'static str {
   zz             center cursor
 
 SEARCH · POWERED BY FFF
-  / / f          diff-local / file search
+  / / f / gs     all / files / symbols search (changed-only)
   Tab/Shift-Tab  cycle scope
   Ctrl-g         include/exclude whole repository
   Ctrl-r         regex in Text scope
@@ -323,9 +357,11 @@ SEARCH · POWERED BY FFF
   PgUp/PgDn      page result list
   Shift-↑/↓      scroll file preview
   ←/→, Home/End  edit query cursor
-  Ctrl-w/u       delete word / clear query
+  Ctrl-w/l       delete word / clear query
+  Ctrl-u/d       page selection up/down (±8)
   Enter          jump when present in diff
-  n / N          next/previous result
+  Alt-Enter      peek preview (Esc unfocuses first)
+  n / N          next/previous result (after close)
 
 CODE & IMAGES
   e              open line in $EDITOR
@@ -341,6 +377,7 @@ LAYOUT & TOOLS
   m              split/unified diff
   Space e / b    toggle file sidebar
   w              toggle line wrap
+  # / gn         toggle line numbers (, settings too)
   t              choose theme
   ,              settings
   Tab/Shift-Tab  cycle pane focus
@@ -562,6 +599,85 @@ mod tests {
         assert_eq!(
             keymap.pending_hint(),
             Some("]h: next hunk · ]c: next comment")
+        );
+    }
+
+    #[test]
+    fn gs_opens_symbol_search() {
+        let mut keymap = Keymap::default();
+        assert!(keymap
+            .feed(&key(KeyCode::Char('g'), KeyModifiers::NONE))
+            .is_none());
+        assert_eq!(
+            keymap.feed(&key(KeyCode::Char('s'), KeyModifiers::NONE)),
+            Some(Command {
+                action: Action::OpenSymbolSearch,
+                count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn hash_toggles_line_numbers() {
+        assert_eq!(
+            classify(&key(KeyCode::Char('#'), KeyModifiers::NONE)),
+            Action::ToggleLineNumbers
+        );
+    }
+
+    #[test]
+    fn gn_toggles_line_numbers() {
+        let mut keymap = Keymap::default();
+        assert!(keymap
+            .feed(&key(KeyCode::Char('g'), KeyModifiers::NONE))
+            .is_none());
+        assert_eq!(
+            keymap.feed(&key(KeyCode::Char('n'), KeyModifiers::NONE)),
+            Some(Command {
+                action: Action::ToggleLineNumbers,
+                count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn search_special_esc_is_two_stage_when_preview_focused() {
+        assert_eq!(
+            classify_search_special(&key(KeyCode::Esc, KeyModifiers::NONE), true),
+            Some(SearchSpecialAction::UnfocusPreview)
+        );
+        assert_eq!(
+            classify_search_special(&key(KeyCode::Esc, KeyModifiers::NONE), false),
+            Some(SearchSpecialAction::ClosePalette)
+        );
+    }
+
+    #[test]
+    fn search_special_ctrl_u_pages_up_and_ctrl_l_clears() {
+        assert_eq!(
+            classify_search_special(
+                &key(KeyCode::Char('u'), KeyModifiers::CONTROL),
+                false
+            ),
+            Some(SearchSpecialAction::PageSelectionUp)
+        );
+        assert_eq!(
+            classify_search_special(
+                &key(KeyCode::Char('l'), KeyModifiers::CONTROL),
+                false
+            ),
+            Some(SearchSpecialAction::ClearQuery)
+        );
+    }
+
+    #[test]
+    fn search_special_alt_enter_peeks_preview() {
+        assert_eq!(
+            classify_search_special(
+                &key(KeyCode::Enter, KeyModifiers::ALT),
+                false
+            ),
+            Some(SearchSpecialAction::PeekPreview)
         );
     }
 

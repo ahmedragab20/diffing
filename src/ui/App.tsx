@@ -15,7 +15,9 @@ import type {
     HunkSeparatorStyle,
     LineHoverHighlight,
 } from "./hooks/useSettings";
-import { useHotkeySequence } from "@tanstack/react-hotkeys";
+import { useDiffReviewKeymaps } from "./hooks/useDiffReviewKeymaps";
+import { useSearchSession } from "./hooks/useSearchSession";
+import { buildChangedLineKeys, buildDiffFileSet } from "./lib/diffIndex";
 import { SHIKI_THEME_MAP } from "./utils";
 import type { ReviewComment } from "../lib/types";
 import { useDiff } from "./hooks/useDiff";
@@ -27,7 +29,7 @@ import { useSettings, resolveMonoFont } from "./hooks/useSettings";
 import { useApplyFonts } from "./hooks/useApplyFonts";
 import { useViewed } from "./hooks/useViewed";
 import { useScrollToNextFile } from "./hooks/useScrollToNextFile";
-import { HapticsProvider, playSound, fireFeedback } from "./hooks/useHaptics";
+import { HapticsProvider, fireFeedback } from "./hooks/useHaptics";
 import {
     parseExtensionFilter,
     matchesExtensionFilter,
@@ -232,18 +234,31 @@ export function App() {
         document.body.style.userSelect = 'none';
     }, []);
 
-    const [palette, setPalette] = useState<{ open: boolean; scope: Scope }>({
+    const [palette, setPalette] = useState<{ open: boolean; scope: Scope; changedOnly: boolean }>({
         open: false,
         scope: "files",
+        changedOnly: false,
     });
-    const openPalette = useCallback(
-        (scope: Scope) => setPalette({ open: true, scope }),
-        [],
-    );
+    const lastChangedOnlyRef = useRef(true);
+    const openPalette = useCallback((scope: Scope) => {
+        // Match TUI: shortcut opens start changed-only (`/` → All, `f`/`gs` scoped).
+        setPalette({ open: true, scope, changedOnly: true });
+    }, []);
+    const togglePalette = useCallback(() => {
+        setPalette((p) =>
+            p.open
+                ? { ...p, open: false }
+                : { open: true, scope: "all", changedOnly: lastChangedOnlyRef.current },
+        );
+    }, []);
     const closePalette = useCallback(
         () => setPalette((p) => ({ ...p, open: false })),
         [],
     );
+    const handleChangedOnlyPreference = useCallback((changedOnly: boolean) => {
+        lastChangedOnlyRef.current = changedOnly;
+        setPalette((p) => ({ ...p, changedOnly }));
+    }, []);
     const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
     const [themeModalOpen, setThemeModalOpen] = useState(false);
     const [uiFontModalOpen, setUiFontModalOpen] = useState(false);
@@ -304,23 +319,6 @@ export function App() {
     }, [commentPanelHeight]);
     const { viewedFiles, setViewed } = useViewed();
     const diffViewerRef = useRef<HTMLDivElement>(null);
-
-    useHotkeySequence(['G', 'S'], () => openPalette('symbols'));
-    useHotkeySequence(['G', 'F'], () => openPalette('all'));
-    useHotkeySequence(['G', 'V'], () => openPalette('files'));
-
-    // Cmd/Ctrl+K opens the search palette from anywhere (including text fields),
-    // matching the universal command-palette convention.
-    useEffect(() => {
-        const onKeyDown = (e: KeyboardEvent) => {
-            if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
-                e.preventDefault();
-                setPalette((p) => (p.open ? { ...p, open: false } : { open: true, scope: 'all' }));
-            }
-        };
-        window.addEventListener('keydown', onKeyDown);
-        return () => window.removeEventListener('keydown', onKeyDown);
-    }, []);
 
     useEffect(() => {
         try {
@@ -476,6 +474,16 @@ export function App() {
     const scrollToNextFile = useScrollToNextFile(sortedFiles);
 
     const diffSearchEntries = useDiffSearch(sortedFiles);
+
+    const searchNavContext = useMemo(
+        () => ({
+            diffFileSet: buildDiffFileSet(filteredFiles),
+            changedKeys: buildChangedLineKeys(diffSearchEntries),
+            customMode,
+            staged: settings.staged,
+        }),
+        [filteredFiles, diffSearchEntries, customMode, settings.staged],
+    );
 
     const diffStats = useMemo(() => {
         let additions = 0;
@@ -770,13 +778,15 @@ export function App() {
         void result.resolved;
     }, [resolveAllOpen, fireFeedback]);
 
+    const toggleLineNumbers = useCallback(() => {
+        startTransition(() => {
+            updateSettings({ showLineNumbers: !settings.showLineNumbers });
+        });
+    }, [updateSettings, settings.showLineNumbers]);
+
     const toggleLineWrap = useCallback(() => {
         handleLineWrapChange(!settings.lineWrap);
     }, [settings.lineWrap, handleLineWrapChange]);
-
-    const toggleLineNumbers = useCallback(() => {
-        handleShowLineNumbersChange(!settings.showLineNumbers);
-    }, [settings.showLineNumbers, handleShowLineNumbersChange]);
 
     const cycleDiffIndicators = useCallback(() => {
         const order: DiffIndicators[] = ["classic", "bars", "none"];
@@ -849,200 +859,48 @@ export function App() {
         handleToggleCollapse();
     }, [handleToggleCollapse]);
 
-    useEffect(() => {
-        let keyBuffer = '';
-        let bufferTimeout: NodeJS.Timeout;
-        let lastNavSound = 0;
+    const { setSnapshot: setSearchSnapshot, nextHit, prevHit, statusMessage: searchStatusMessage } =
+        useSearchSession(searchNavContext, handleFileClick);
 
-        const handleGlobalKeyDown = (e: KeyboardEvent) => {
-            const active = document.activeElement;
-            if (active) {
-                const tag = active.tagName.toLowerCase();
-                if (
-                    tag === 'input' ||
-                    tag === 'textarea' ||
-                    active.hasAttribute('contenteditable')
-                ) {
-                    return;
-                }
-            }
-
-            clearTimeout(bufferTimeout);
-            const key = e.key;
-
-            // ⌘? / Ctrl+? — open shortcuts guide
-            if (
-                (e.metaKey || e.ctrlKey) &&
-                (key === '?' || (key === '/' && e.shiftKey) || (e.code === 'Slash' && e.shiftKey))
-            ) {
-                e.preventDefault();
-                setShortcutsHelpOpen(true);
-                fireFeedback('medium', 'open');
-                keyBuffer = '';
-                return;
-            }
-
-            if (e.ctrlKey) {
-                if (key === 'd') {
-                    e.preventDefault();
-                    window.scrollBy({ top: window.innerHeight / 2, behavior: 'auto' });
-                    fireFeedback('selection', 'navigate');
-                    keyBuffer = '';
-                } else if (key === 'u') {
-                    e.preventDefault();
-                    window.scrollBy({ top: -window.innerHeight / 2, behavior: 'auto' });
-                    fireFeedback('selection', 'navigate');
-                    keyBuffer = '';
-                }
-                return;
-            }
-
-            if (key.length > 1 && key !== 'Escape' && key !== 'Enter') return;
-
-            keyBuffer += key;
-            bufferTimeout = setTimeout(() => {
-                keyBuffer = '';
-            }, 800);
-
-            if (keyBuffer === 'j') {
-                e.preventDefault();
-                window.scrollBy({ top: 100, behavior: 'auto' });
-                const now = Date.now();
-                if (now - lastNavSound > 80) { playSound('navigate'); lastNavSound = now; }
-                keyBuffer = '';
-            } else if (keyBuffer === 'k') {
-                e.preventDefault();
-                window.scrollBy({ top: -100, behavior: 'auto' });
-                const now = Date.now();
-                if (now - lastNavSound > 80) { playSound('navigate'); lastNavSound = now; }
-                keyBuffer = '';
-            } else if (keyBuffer === 'gg') {
-                e.preventDefault();
-                window.scrollTo({ top: 0, behavior: 'auto' });
-                fireFeedback('selection', 'navigate');
-                keyBuffer = '';
-            } else if (keyBuffer === 'G') {
-                e.preventDefault();
-                window.scrollTo({
-                    top: document.documentElement.scrollHeight,
-                    behavior: 'auto',
-                });
-                fireFeedback('selection', 'navigate');
-                keyBuffer = '';
-            } else if (keyBuffer === 'J') {
-                e.preventDefault();
-                navigateFile('next');
-                fireFeedback('selection', 'navigate');
-                keyBuffer = '';
-            } else if (keyBuffer === 'K') {
-                e.preventDefault();
-                navigateFile('prev');
-                fireFeedback('selection', 'navigate');
-                keyBuffer = '';
-            } else if (keyBuffer === ']') {
-                e.preventDefault();
-                navigateCommit('next');
-                fireFeedback('selection', 'navigate');
-                keyBuffer = '';
-            } else if (keyBuffer === '[') {
-                e.preventDefault();
-                navigateCommit('prev');
-                fireFeedback('selection', 'navigate');
-                keyBuffer = '';
-            } else if (keyBuffer === 'v') {
-                e.preventDefault();
-                toggleActiveFileViewed();
-                fireFeedback('selection', 'toggle');
-                keyBuffer = '';
-            } else if (keyBuffer === 'm') {
-                e.preventDefault();
-                toggleDiffStyle();
-                fireFeedback('selection', 'toggle');
-                keyBuffer = '';
-            } else if (keyBuffer === 't') {
-                e.preventDefault();
-                cycleTabSize();
-                fireFeedback('selection', 'toggle');
-                keyBuffer = '';
-            } else if (keyBuffer === 'b') {
-                e.preventDefault();
-                toggleSidebar();
-                fireFeedback('selection', 'toggle');
-                keyBuffer = '';
-            } else if (keyBuffer === 'w') {
-                e.preventDefault();
-                toggleLineWrap();
-                fireFeedback('selection', 'toggle');
-                keyBuffer = '';
-            } else if (keyBuffer === 'n') {
-                e.preventDefault();
-                toggleLineNumbers();
-                fireFeedback('selection', 'toggle');
-                keyBuffer = '';
-            } else if (keyBuffer === 'i') {
-                e.preventDefault();
-                cycleDiffIndicators();
-                fireFeedback('selection', 'toggle');
-                keyBuffer = '';
-            } else if (keyBuffer === 'I') {
-                e.preventDefault();
-                cycleLineDiffType();
-                fireFeedback('selection', 'toggle');
-                keyBuffer = '';
-            } else if (keyBuffer === '/') {
-                e.preventDefault();
-                openPalette('text');
-                fireFeedback('medium', 'open');
-                keyBuffer = '';
-            } else if (keyBuffer === 's') {
-                e.preventDefault();
-                openPalette('symbols');
-                fireFeedback('medium', 'open');
-                keyBuffer = '';
-            } else if (keyBuffer === 'gv') {
-                e.preventDefault();
-                openPalette('files');
-                fireFeedback('medium', 'open');
-                keyBuffer = '';
-            } else if (keyBuffer === 'gt') {
-                e.preventDefault();
-                setThemeModalOpen(true);
-                fireFeedback('medium', 'open');
-                keyBuffer = '';
-            } else if (keyBuffer === '?') {
-                e.preventDefault();
-                setShortcutsHelpOpen(true);
-                fireFeedback('medium', 'open');
-                keyBuffer = '';
-            } else if (keyBuffer.length >= 2) {
-                keyBuffer = '';
-            }
-        };
-
-        window.addEventListener('keydown', handleGlobalKeyDown);
-        return () => {
-            window.removeEventListener('keydown', handleGlobalKeyDown);
-            clearTimeout(bufferTimeout);
-        };
-    }, [
-        files,
-        activeFile,
-        viewedFiles,
-        settings.diffStyle,
-        settings.defaultTabSize,
-        navigateFile,
-        navigateCommit,
-        toggleActiveFileViewed,
-        toggleDiffStyle,
-        cycleTabSize,
-        toggleSidebar,
-        toggleLineWrap,
-        toggleLineNumbers,
-        cycleDiffIndicators,
-        cycleLineDiffType,
-        setThemeModalOpen,
-    ]);
-
+    const keymapActions = useMemo(
+        () => ({
+            onNavigateFile: navigateFile,
+            onNavigateCommit: showMode && commits.length > 1 ? navigateCommit : undefined,
+            onToggleViewed: toggleActiveFileViewed,
+            onToggleDiffStyle: toggleDiffStyle,
+            onCycleTabSize: cycleTabSize,
+            onToggleSidebar: toggleSidebar,
+            onToggleLineWrap: toggleLineWrap,
+            onToggleLineNumbers: toggleLineNumbers,
+            onCycleDiffIndicators: cycleDiffIndicators,
+            onCycleLineDiffType: cycleLineDiffType,
+            onOpenPalette: openPalette,
+            onTogglePalette: togglePalette,
+            onNextSearchHit: nextHit,
+            onPrevSearchHit: prevHit,
+            onOpenTheme: () => setThemeModalOpen(true),
+            onOpenShortcuts: () => setShortcutsHelpOpen(true),
+        }),
+        [
+            navigateFile,
+            showMode,
+            commits.length,
+            navigateCommit,
+            toggleActiveFileViewed,
+            toggleDiffStyle,
+            cycleTabSize,
+            toggleSidebar,
+            toggleLineWrap,
+            toggleLineNumbers,
+            cycleDiffIndicators,
+            cycleLineDiffType,
+            openPalette,
+            togglePalette,
+            nextHit,
+            prevHit,
+        ],
+    );
+    useDiffReviewKeymaps(keymapActions);
 
     const diffOptions = useMemo(
         () => ({
@@ -1458,6 +1316,9 @@ export function App() {
                 isOpen={palette.open}
                 onClose={closePalette}
                 initialScope={palette.scope}
+                initialChangedOnly={palette.changedOnly}
+                onChangedOnlyPreference={handleChangedOnlyPreference}
+                onSessionSnapshot={setSearchSnapshot}
                 files={filteredFiles}
                 changedEntries={diffSearchEntries}
                 customMode={customMode}
@@ -1475,6 +1336,7 @@ export function App() {
                 activeFile={activeFile}
                 onShowHelp={() => setShortcutsHelpOpen(true)}
                 visible={settings.showStatusBar ?? true}
+                statusMessage={searchStatusMessage}
                 placeholder={
                     showMode && commits.length > 1
                         ? 'No active file (J/K files · [ / ] commits)'

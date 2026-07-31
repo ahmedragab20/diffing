@@ -803,15 +803,19 @@ intelligence setting (Auto by default).
 
 The `/` palette uses the same `@ff-labs/fff-node` engine, watcher, and
 repository-scoped frecency databases as the web UI. `All`, `Files`, `Text`,
-and `Symbols` scopes are available with `Tab` / `Shift+Tab`. Results search
-the current diff by default and render beside a syntax-highlighted file
+and `Symbols` scopes are available with `Tab` / `Shift+Tab`. `/` opens All
+scope with changed-only filtering; `f` opens Files the same way; `gs` opens
+Symbols (bare `s` stays the comment-status cycle in review mode). Results
+search the current diff by default and render beside a syntax-highlighted file
 preview; `Ctrl-G` opts into or out of whole-repository results,
 and `Ctrl-R` toggles regular expressions in Text scope. `Enter` jumps when the
 selected file or line is present in the diff and otherwise keeps its preview
-open. Arrow keys and `Ctrl-N/P/J/K` move through results; Page Up/Down pages
-the result list; `Shift`/`Alt` + arrows or Page Up/Down scroll the preview.
-Left/Right, Home/End, `Ctrl-W`, bracketed paste, and `Ctrl-U` provide normal
-query editing. The Node launcher owns a
+open; `Alt-Enter` peeks the preview without jumping. Arrow keys and `Ctrl-N/P/J/K`
+move through results; `Ctrl-U` / `Ctrl-D` page the result list by eight rows;
+Page Up/Down pages the result list; `Shift`/`Alt` + arrows or Page Up/Down scroll
+the preview. Left/Right, Home/End, `Ctrl-W`, `Ctrl-L`, bracketed paste, and
+Esc (two-stage when a preview is focused) provide normal query editing. The Node
+launcher owns a
 random-port, capability-scoped loopback bridge while the Rust renderer is
 open. Symbols immediately browse definitions added by the current diff; type
 at least two characters to run the wider file-level/repository symbol search.
@@ -830,9 +834,11 @@ diffing --view main...feature       # Flag form for scripts and aliases
 
 Viewer keys are intentionally small: `j/k`, `gg/G`, `Ctrl-d/u`, `J/K`,
 `]h/[h`, `h/l`, and `zz` navigate; `Enter`/`+` and `-` expand/collapse context;
-`e` opens the focused line in `$VISUAL`/`$EDITOR`; `/` opens diff-local search; `f` opens file
-search; `n/N` traverses the active search results; the palette uses `Tab`,
-`Ctrl-G`, arrows, and `Enter` for scope, Changed-only filtering, selection,
+`e` opens the focused line in `$VISUAL`/`$EDITOR`; `/` opens all-scope search
+(changed-only); `f` opens file search; `gs` opens symbol search; `n/N` traverses
+the active search results after the palette closes; the palette uses `Tab`,
+`Ctrl-G`, `Ctrl-L` (clear query), `Ctrl-U` (page selection up), arrows, `Alt-Enter`
+(peek), and `Enter` for scope, Changed-only filtering, selection,
 and navigation; `m`, `w`, and `t` control diff layout, wrapping, and theme;
 `i` opens changed-image comparison inline in the diff pane; press `i` again
 (or `Esc`) to exit thin fullscreen while keeping zoom, pan, and mode;
@@ -1009,13 +1015,22 @@ shows valid completions while a multi-key sequence is pending.
 | `Tab` / `Shift+Tab` | Cycle files, diff, and review focus |
 | `Space e` / `b` | Toggle the file sidebar |
 | `w` | Toggle line wrap |
+| `#` / `gn` | Toggle line numbers (`,` settings too) |
 | `t` | Open the theme picker |
 | `,` | Open Settings |
 | `m` | Toggle split / unified view |
 | `i` | Fullscreen for the selected changed image (`Esc` exits; inline review uses `Tab`, `1`–`4`, zoom, and pan without a modal) |
 | `Enter` / `+` / `-` | Expand / expand / collapse diff context |
-| `/` | Open the repository search palette |
-| `f` | Open the search palette in Files scope |
+| `/` | Open the search palette in All scope (changed-only) |
+| `f` | Open the search palette in Files scope (changed-only) |
+| `gs` | Open the search palette in Symbols scope (changed-only) |
+| `n` / `N` | Next / previous search result (after palette closes) |
+| `Tab` | Cycle search scope (while palette is open) |
+| `Ctrl+g` | Toggle changed-only / whole-repo filter (in palette) |
+| `Ctrl+r` | Toggle regex mode in Text scope (in palette) |
+| `Ctrl+l` | Clear search query (in palette) |
+| `Ctrl+u` / `Ctrl+d` | Page result list up / down (in palette) |
+| `Alt+Enter` | Peek preview in palette (Esc unfocuses preview first) |
 | `:` | Open the command prompt (`Tab` completes visible commands) |
 | `a` | Cycle all / unviewed / commented files |
 | `?` | Open shortcuts help |
@@ -1058,7 +1073,7 @@ controls as well as `Ctrl-S`/`Esc`.
 The diff review gutter distinguishes open, resolved, blocking, question, nit,
 and praise threads without relying on color alone. The review drawer can be
 filtered by status and severity; the file rail cycles all/unviewed/commented
-scopes while `/` and `f` handle repository and path search.
+scopes while `/`, `f`, and `gs` handle text, path, and symbol search.
 
 The TUI watches `comments.json` (120ms debounce) and broadcasts every
 change through the same atomic-write protocol the web server uses, so a

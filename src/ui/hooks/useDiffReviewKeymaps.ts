@@ -10,11 +10,13 @@ interface DiffReviewKeymapActions {
   onCycleTabSize: () => void
   onToggleSidebar: () => void
   onToggleLineWrap: () => void
-  onToggleLineNumbers: () => void
+  onToggleLineNumbers?: () => void
   onCycleDiffIndicators: () => void
   onCycleLineDiffType: () => void
   onOpenPalette: (scope: Scope) => void
   onTogglePalette?: () => void
+  onNextSearchHit?: () => void
+  onPrevSearchHit?: () => void
   onOpenTheme: () => void
   onOpenShortcuts: () => void
 }
@@ -115,14 +117,20 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
         handled(actions.onToggleSidebar)
       } else if (keyBuffer === 'w') {
         handled(actions.onToggleLineWrap)
+      } else if (keyBuffer === 'gn' || keyBuffer === '#') {
+        handled(() => actions.onToggleLineNumbers?.())
       } else if (keyBuffer === 'n') {
-        handled(actions.onToggleLineNumbers)
+        handled(() => actions.onNextSearchHit?.(), 'navigate')
+      } else if (keyBuffer === 'N') {
+        handled(() => actions.onPrevSearchHit?.(), 'navigate')
       } else if (keyBuffer === 'i') {
         handled(actions.onCycleDiffIndicators)
       } else if (keyBuffer === 'I') {
         handled(actions.onCycleLineDiffType)
       } else if (keyBuffer === '/') {
-        handled(() => actions.onOpenPalette('text'), 'open')
+        handled(() => actions.onOpenPalette('all'), 'open')
+      } else if (keyBuffer === 'f') {
+        handled(() => actions.onOpenPalette('files'), 'open')
       } else if (keyBuffer === 's' || keyBuffer === 'gs') {
         handled(() => actions.onOpenPalette('symbols'), 'open')
       } else if (keyBuffer === 'gf') {

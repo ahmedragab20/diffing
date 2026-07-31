@@ -150,7 +150,7 @@ npx skills add ahmedragab20/diffing
 | `i` | Cycle diff indicators (classic → bars → none) |
 | `I` | Cycle inline diff type (word → word-alt → char → none) |
 | `b` | Toggle sidebar |
-| `/` | Text search palette |
+| `/` | All-scope search palette |
 | `s` | Symbol search palette |
 | `g v` | File browser palette |
 | `g t` | Theme picker |
