@@ -179,4 +179,4 @@ See [Exit codes](/docs/reference/exit-codes/).
 
 ## Source
 
-Deep historical manual: repository `docs/cli.md` (superseded by this site for public docs; retained for cutover). Verified against CLI sources for v0.12.x.
+Deep historical manual: repository `docs/cli.md` (superseded by this site for public docs; retained for cutover). Verified against CLI sources for v0.13.x.
