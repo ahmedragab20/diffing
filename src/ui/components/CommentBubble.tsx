@@ -13,6 +13,7 @@ import {
 import type { ReviewComment } from '../../lib/types'
 import { timeAgo } from '../utils'
 import { Markdown } from './Markdown'
+import { SeverityBadge } from './SeverityBadge'
 import { useComments } from '../hooks/useComments'
 import { CommentForm } from './CommentForm'
 import { NoticeDialog } from '../primitives/NoticeDialog'
@@ -97,9 +98,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
         </span>
       )}
       {comment.severity && comment.severity !== 'none' && (
-        <span className="comment-severity-badge" data-severity={comment.severity}>
-          {comment.severity}
-        </span>
+        <SeverityBadge severity={comment.severity} />
       )}
       {comment.startLineNumber && comment.startLineNumber !== comment.lineNumber && (
         <span className="comment-range-chip">
@@ -198,9 +197,7 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
                   </span>
                 )}
                 {comment.severity && comment.severity !== 'none' && (
-                  <span className="comment-severity-badge" data-severity={comment.severity}>
-                    {comment.severity}
-                  </span>
+                  <SeverityBadge severity={comment.severity} />
                 )}
                 {comment.startLineNumber && comment.startLineNumber !== comment.lineNumber && (
                   <span className="comment-range-chip">
@@ -489,6 +486,24 @@ export function CommentBubble({ comment, onDelete }: CommentBubbleProps) {
 
       {/* Footer (Reply trigger and Resolve toggle) */}
       <div className="comment-canvas-footer">
+        {!isReplying &&
+          ((comment.severity && comment.severity !== 'none') || comment.outdated) && (
+          <div className="comment-canvas-footer-meta">
+            {comment.severity && comment.severity !== 'none' && (
+              <SeverityBadge severity={comment.severity} />
+            )}
+            {comment.outdated && (
+              <span
+                className="comment-outdated-badge"
+                title="Anchored code no longer matches the current diff"
+              >
+                <AlertTriangle size={10} aria-hidden="true" />
+                outdated
+              </span>
+            )}
+          </div>
+        )}
+
         {!isReplying && (
           <div className="comment-canvas-footer-row">
             <button
