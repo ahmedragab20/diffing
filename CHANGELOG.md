@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.13.1
+
+### Patch Changes
+
+- feat(lib): add fileContentFromPatch to reconstruct file content from unified patches
+  feat(ui): add SeverityBadge component with soft severity pill styles
+  feat(ui): add outdated badge and footer meta to CommentBubble; replace inline severity badges with SeverityBadge
+  feat(ui): use SeverityBadge in CommentTracker
+  feat(ui): add resolvePlanSelectionLines for robust plan selection mapping
+  feat(ui): use resolvePlanSelectionLines in PlanReview for accurate line mapping
+  fix(app): use per-file haystacks from fileContentFromPatch for outdated comment detection
+
 ## 0.13.0
 
 ### Minor Changes
@@ -14,7 +26,7 @@
 ### Patch Changes
 
 - Accept `--save-source` (and keep `-S` / `--saveSource`) on `diffing plan
-  submit` so docs, skills, and CLI parseArgs agree.
+submit` so docs, skills, and CLI parseArgs agree.
 - Audit and tighten agent skills (router, plan-review, PR-address) for accuracy
   against the current MCP/CLI surface and lower token waste.
 - Ship a Gridline-styled public docs site and minimal landing on GitHub Pages
