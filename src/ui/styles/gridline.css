@@ -960,6 +960,26 @@ file-tree,
   min-width: 0;
 }
 
+/* Minimal severity + outdated meta row above the reply field. Kept to a single
+   slim line so an open comment card stays compact. */
+.comment-canvas-footer-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+
+/* Align the Resolve/Hide/Unresolve buttons with the Reply trigger's height
+   (the trigger uses 8px 14px / 13px; btn-sm is shorter by default). */
+.comment-canvas-footer-row .btn-sm,
+.comment-canvas-footer-actions .btn-sm {
+  padding: 8px 14px;
+  font-size: 13px;
+  border-radius: var(--gl-radius-control);
+  line-height: 1.4;
+}
 .comment-canvas-footer-row .comment-reply-trigger {
   flex: 1 1 240px;
   width: auto;

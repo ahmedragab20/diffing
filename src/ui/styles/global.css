@@ -8892,6 +8892,9 @@ button.toolbar-last-send-btn:hover {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.3px;
+    /* Match .comment-sev-badge-soft so the two chips share one box height
+       wherever they sit together (header chips, footer meta, sidebar). */
+    line-height: 1.2;
 }
 .comment-severity-badge {
     display: inline-flex;
@@ -8917,6 +8920,49 @@ button.toolbar-last-send-btn:hover {
 }
 .comment-severity-badge[data-severity="praise"] {
     color: var(--success);
+}
+/* Soft, icon-led severity pill — mirrors .comment-outdated-badge so the two
+   chips read as siblings wherever they sit together. Filled tinted background
+   + subtle same-hue border (not a hard neutral outline) + a per-severity icon. */
+.comment-sev-badge-soft {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    /* Same as .comment-outdated-badge so the sibling chips match height. */
+    line-height: 1.2;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    background: transparent;
+}
+.comment-sev-badge-soft[data-severity="blocking"] {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 18%, transparent);
+    border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.comment-sev-badge-soft[data-severity="nit"] {
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+    border-color: color-mix(in srgb, var(--text-muted) 38%, transparent);
+}
+.comment-sev-badge-soft[data-severity="question"] {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 18%, transparent);
+    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+.comment-sev-badge-soft[data-severity="praise"] {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 18%, transparent);
+    border-color: color-mix(in srgb, var(--success) 45%, transparent);
+}
+.comment-sev-badge-soft[data-severity="none"] {
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--text-muted) 14%, transparent);
 }
 .comment-form-actions {
     display: flex;
