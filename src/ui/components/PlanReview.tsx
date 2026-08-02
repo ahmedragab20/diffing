@@ -42,7 +42,7 @@ import { Select } from '../primitives/Select'
 import { Tooltip } from '../primitives/Tooltip'
 import { buildPlanOutline } from '../lib/planOutline'
 import {
-  mapSelectionToLines,
+  resolvePlanSelectionLines,
   selectionIntersectsRoot,
   selectionRangeInRoot,
 } from '../lib/planSelection'
@@ -1173,10 +1173,14 @@ export function PlanReview({
         return
       }
 
-      // Prefer mapped source lines; if mapping fails, still show the chip
-      // so highlight → Add comment always has a path forward.
+      // Map the rendered selection back onto plan source lines. Uses the
+      // `.plan-read-segment` source-range metadata + scoped text match so the
+      // comment anchors on the actual selected line/section instead of the
+      // plan's `# Title` (the old whole-body match collapsed to L1 whenever the
+      // selected text — often polluted by the heading's `#` anchor glyph —
+      // failed to substring-match the body).
       const mapped =
-        mapSelectionToLines(displayBody, text) ??
+        resolvePlanSelectionLines(displayBody, text, range) ??
         ({
           text: text.replace(/\s+/g, ' ').trim(),
           startLine: 1,
