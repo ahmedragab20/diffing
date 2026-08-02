@@ -3,6 +3,8 @@
  * line numbers so we can open a line-anchored comment form.
  */
 
+import { extractPlanLines } from '../../lib/plan-format'
+
 export interface PlanTextSelection {
   text: string
   startLine: number
@@ -164,6 +166,93 @@ export function mapSelectionToLines(body: string, selectedText: string): PlanTex
     }
   }
 
+  return null
+}
+
+/**
+ * The rendered plan wraps each outline section in a `.plan-read-segment` carrying
+ * `data-plan-source-start` / `data-plan-source-end` (1-based inclusive source
+ * line range of that section's markdown). Find the segment owning a selection
+ * node so we can scope line resolution instead of searching the whole body.
+ */
+function planSegmentForNode(node: Node | null): HTMLElement | null {
+  if (!node) return null
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    return (node as HTMLElement).closest('.plan-read-segment') as HTMLElement | null
+  }
+  const parent = node.parentElement
+  return parent ? (parent.closest('.plan-read-segment') as HTMLElement | null) : null
+}
+
+function lineAttr(el: HTMLElement | null, attr: 'planSourceStart' | 'planSourceEnd'): number | null {
+  if (!el) return null
+  const raw = (el.dataset as DOMStringMap)[attr]
+  const n = raw == null ? NaN : Number(raw)
+  return Number.isFinite(n) && n >= 1 ? n : null
+}
+
+/**
+ * Resolve a rendered-DOM selection onto plan source line numbers robustly.
+ *
+ * Pure whole-body text matching (the old approach) silently collapsed to
+ * `startLine:1` whenever the selected text didn't substring-match the source.
+ * The two main failure modes were:
+ *  1. The rendered heading injects a `#` anchor glyph (`.md-heading-anchor`) as
+ *     a real text node before the heading content; selections that brush a
+ *     heading end up prefixed with `#`, which never matches body text.
+ *  2. Rendered-vs-source whitespace/structure differences fall through every
+ *     fuzzy stage of {@link mapSelectionToLines} and return null.
+ *
+ * This resolver (a) strips the stray anchor `#`, (b) scopes matching to the
+ * containing `.plan-read-segment`'s source slice (far fewer collisions, and
+ * offsets map cleanly back to body line numbers), and (c) falls back to the
+ * section's own source range — the section heading at worst — instead of the
+ * document's top-level `# Title`. Whole-body matching is only the last resort
+ * for selections outside any segment (e.g. select-all on the root).
+ */
+export function resolvePlanSelectionLines(
+  body: string,
+  selectedText: string,
+  range: Range,
+): PlanTextSelection | null {
+  const raw = normalizePlanText(selectedText)
+  if (!raw) return null
+
+  // The "#" heading-anchor glyph is UI chrome, not plan source. A selection that
+  // touches a heading picks it up as a leading "#"; strip it for matching and
+  // for the saved quote so the user never sees the anchor as their highlight.
+  const stripped = raw.replace(/^#\s*/, '')
+  const candidates: string[] = []
+  if (stripped && stripped !== raw) candidates.push(stripped)
+  candidates.push(raw)
+
+  const startSeg = planSegmentForNode(range.startContainer)
+  const endSeg = range.collapsed ? startSeg : planSegmentForNode(range.endContainer)
+  const segStart = lineAttr(startSeg, 'planSourceStart')
+  const segEnd = lineAttr(endSeg, 'planSourceEnd')
+
+  if (segStart != null && segEnd != null) {
+    const slice = extractPlanLines(body, segStart, segEnd)
+    for (const needle of candidates) {
+      const local = mapSelectionToLines(slice, needle)
+      if (local) {
+        return {
+          text: needle,
+          startLine: segStart + local.startLine - 1,
+          endLine: segStart + local.endLine - 1,
+        }
+      }
+    }
+    // Could not pinpoint within the section — anchor to the section's own range
+    // (its heading line), never the document's `# Title`.
+    return { text: candidates[0] ?? raw, startLine: segStart, endLine: Math.max(segStart, segEnd) }
+  }
+
+  // No segment metadata available (legacy render path / selection spans root).
+  for (const needle of candidates) {
+    const m = mapSelectionToLines(body, needle)
+    if (m) return m
+  }
   return null
 }
 

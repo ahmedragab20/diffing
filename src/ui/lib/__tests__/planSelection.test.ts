@@ -4,6 +4,7 @@ import {
   mapSelectionToLines,
   measureQuoteInRoot,
   normalizePlanText,
+  resolvePlanSelectionLines,
   selectionIntersectsRoot,
 } from '../planSelection'
 
@@ -110,5 +111,107 @@ describe('measureQuoteInRoot', () => {
 
     const agentLeak = measureQuoteInRoot(root, 'Hi Agent! should not match')
     expect(agentLeak).toEqual([])
+  })
+})
+
+describe('resolvePlanSelectionLines', () => {
+  const body = `# Title
+
+## Details
+
+Specific line content here
+
+`
+
+  // Helper: build a range selecting across two text nodes by setStart/setEnd.
+  function makeRange(
+    startNode: Node,
+    startOffset: number,
+    endNode: Node,
+    endOffset: number,
+  ): Range {
+    const range = document.createRange()
+    range.setStart(startNode, startOffset)
+    range.setEnd(endNode, endOffset)
+    return range
+  }
+
+  // Minimal react-markdown-style segment: `#` anchor glyph as a real text node
+  // inside the heading, followed by the raw heading/paragraph text.
+  function renderSegment(): void {
+    document.body.innerHTML = `
+      <div class="plan-rendered">
+        <div class="plan-read-segment" data-plan-source-start="3" data-plan-source-end="6">
+          <h2><a class="md-heading-anchor">#</a>Details</h2>
+          <p>Specific line content here</p>
+        </div>
+      </div>
+    `
+  }
+
+  it('strips the heading-anchor # glyph and maps onto the paragraph line', () => {
+    renderSegment()
+    const anchor = document.querySelector('.md-heading-anchor')!
+    const para = document.querySelector('.plan-read-segment p')!
+    const range = makeRange(anchor.firstChild!, 0, para.firstChild!, para.textContent!.length)
+    // Selection brushed the heading, so toString() picks up a leading "#".
+    const sel = resolvePlanSelectionLines(body, '#Specific line content here', range)
+    expect(sel).toEqual({ text: 'Specific line content here', startLine: 5, endLine: 5 })
+  })
+
+  it('maps a clean in-segment selection without touching the heading', () => {
+    renderSegment()
+    const para = document.querySelector('.plan-read-segment p')!
+    const range = makeRange(para.firstChild!, 0, para.firstChild!, para.textContent!.length)
+    const sel = resolvePlanSelectionLines(body, 'Specific line content here', range)
+    expect(sel).toEqual({ text: 'Specific line content here', startLine: 5, endLine: 5 })
+  })
+
+  it('falls back to whole-body matching for selections outside any segment', () => {
+    const body = `# Title
+
+Phase one does the thing.
+
+## Details
+
+- item a
+- item b
+`
+    document.body.innerHTML = `<div id="root"><p>Phase one does the thing.</p></div>`
+    const p = document.querySelector('#root p')!
+    const range = makeRange(p.firstChild!, 0, p.firstChild!, p.textContent!.length)
+    const sel = resolvePlanSelectionLines(body, 'Phase one does the thing.', range)
+    expect(sel).toEqual({ text: 'Phase one does the thing.', startLine: 3, endLine: 3 })
+  })
+
+  it('anchors to the section range when segment text cannot be matched', () => {
+    renderSegment()
+    const para = document.querySelector('.plan-read-segment p')!
+    const range = makeRange(para.firstChild!, 0, para.firstChild!, para.textContent!.length)
+    const sel = resolvePlanSelectionLines(body, 'zzzznomatch', range)
+    expect(sel).toEqual({ text: 'zzzznomatch', startLine: 3, endLine: 6 })
+  })
+
+  it('strips only a leading # and resolves to the heading line', () => {
+    const body = `# Title
+
+## Title
+
+Specific line content here
+
+`
+    document.body.innerHTML = `
+      <div class="plan-rendered">
+        <div class="plan-read-segment" data-plan-source-start="3" data-plan-source-end="6">
+          <h2><a class="md-heading-anchor">#</a>Title</h2>
+          <p>Specific line content here</p>
+        </div>
+      </div>
+    `
+    const anchor = document.querySelector('.md-heading-anchor')!
+    const para = document.querySelector('.plan-read-segment p')!
+    const range = makeRange(anchor.firstChild!, 0, para.firstChild!, para.textContent!.length)
+    const sel = resolvePlanSelectionLines(body, '#Title', range)
+    expect(sel).toEqual({ text: 'Title', startLine: 3, endLine: 3 })
   })
 })
