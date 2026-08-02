@@ -15,6 +15,7 @@ import {
 import type { ReviewComment, CommentReply, CommentSeverity } from '../../lib/types'
 import { timeAgo, fileName, scrollToLine } from '../utils'
 import { Markdown } from './Markdown'
+import { SeverityBadge } from './SeverityBadge'
 import { AlertTriangle } from 'lucide-react'
 
 interface CommentTrackerProps {
@@ -229,9 +230,7 @@ function CommentCard({
           <span className="cmt-loc-line">{lineLabel}</span>
         </button>
         {comment.severity && comment.severity !== 'none' && (
-          <span className="comment-severity-badge" data-severity={comment.severity}>
-            {comment.severity}
-          </span>
+          <SeverityBadge severity={comment.severity} />
         )}
         {comment.outdated && (
           <span className="comment-outdated-badge" title="Anchored code no longer matches">
