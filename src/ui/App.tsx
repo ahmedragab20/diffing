@@ -51,7 +51,7 @@ import { AgentActivityToast } from "./components/AgentActivityToast";
 import { ThemeModal } from "./components/ThemeModal"
 import { FontPickerModal } from "./components/FontPickerModal";
 import { AlertTriangle } from "lucide-react";
-import { markOutdatedComments } from "../lib/comment-outdated";
+import { fileContentFromPatch, markOutdatedComments } from "../lib/comment-outdated";
 import { parsePermalink } from "./lib/permalink";
 import { scrollToLine } from "./utils";
 import { CommitWalkBar, stepCommitWalk } from "./components/CommitWalkBar";
@@ -88,12 +88,18 @@ export function App() {
     const { comments: rawComments, addComment, removeComment, resolveComment, unresolveComment, addReply, editComment, editReply, removeReply, copyAllComments, copyAllCommentsMarkdown, agentActivity, clearAgentActivity, sendToAgent, sending, agentWaiting, waitingAgents, resolveAllOpen, lastSend } =
         useComments();
     // Badge-only outdated detection: if the comment's line snapshot is no longer
-    // present in the live patch, flag it. No auto-remap.
+    // present in the live file content reconstructed from the patch, flag it.
+    // No auto-remap. Per-file haystacks are built from the unified patch by
+    // stripping diff markers (added/context kept, removed dropped) — feeding the
+    // raw patch left `+`/`-` prefixes on every line, which false-positived any
+    // multi-line comment as outdated the moment it was created.
     const comments = useMemo(() => {
         if (!patch) return rawComments
         const map = new Map<string, string>()
         for (const c of rawComments) {
-            if (!map.has(c.filePath)) map.set(c.filePath, patch)
+            if (map.has(c.filePath)) continue
+            const content = fileContentFromPatch(patch, c.filePath)
+            if (content !== undefined) map.set(c.filePath, content)
         }
         return markOutdatedComments(rawComments, map)
     }, [rawComments, patch])
