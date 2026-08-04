@@ -11,7 +11,7 @@ Authoritative reference: repository `docs/cli.md`, root `AGENTS.md`, and the cur
 
 ## First 60 seconds
 
-1. Identify the target Git repository; never infer it from an unrelated current directory.
+1. Identify the **consumer** target Git repository (the project you are implementing for). Never infer it from an unrelated current directory or from MCP “bound to …/diffing” product checkout. Never `cd` into the diffing product tree to submit/start/await plans for other work.
 2. Prefer `review_session_status`. Read `repository`, `serverState`, `mode`, `diffArgs`, and `nextAction` before calling another MCP tool. When the active mode or scope does not match the request, inspect `diffing sessions --json` before starting or stopping anything.
 3. Select the focused workflow from **Route by intent** below.
 4. Reuse a compatible session. Treat "active" as the routing target for agent commands, not as the only allowed session. Select by mode and scope only when the user's intent is clear; never stop or replace a user-owned session without explicit approval.
@@ -21,8 +21,8 @@ Authoritative reference: repository `docs/cli.md`, root `AGENTS.md`, and the cur
 Use the strongest available integration without asking the user to choose plumbing:
 
 1. **Native diffing MCP tools**: call `review_session_status` first and follow its `mode` / `nextAction`. Call `start_review_session` only when no compatible session exists; it starts a loopback web session, not the TUI.
-2. **Shell CLI**: run `diffing` commands from the target repository; commands discover the active port via `server.json`. Use `diffing sessions` to manage concurrent web/TUI/PR sessions.
-3. **Loopback HTTP**: use the URL from `diffing url` only when the needed operation has no MCP/CLI mirror. Never expose a TUI session's capability-bearing API URL.
+2. **Shell CLI**: run `diffing` commands from the **consumer** target repository; commands discover the active port via `server.json`. Use `diffing sessions` to manage concurrent web/TUI/PR sessions. For plans, stdin or `~/.diffing/<consumer>/plan-sources/` only — not the diffing product checkout.
+3. **Loopback HTTP**: use the URL from `diffing url` only when the needed operation has no MCP/CLI mirror. Keep TUI capabilities secret.
 4. **Offline handoff**: act on pasted `<code-review-comments>` or `<plan-review>` XML when live tools are unavailable.
 
 Never guess the repository or hard-code a port. For global MCP clients, bind the server explicitly with `diffing mcp --repo <absolute-path>`.
@@ -64,7 +64,7 @@ diffing sessions stop <id>|active|all   # explicit lifecycle action
 
 Choose inspection tools from the active session mode:
 
-- **All modes**: start with `diff_summary`, page `diff_files` via `nextCursor`, then inspect relevant files with `diff_hunks` and bounded `diff_slice` calls.
+- **All modes**: start with `diff_summary`, page `diff_files` via `nextCursor`, then inspect relevant files with `diff_hunks` and bounded `diff_slice` calls. TUI uses its sparse disk-backed index; web and PR sessions use an in-process patch index.
 - Carry the `generation` returned by `diff_summary` into `diff_hunks`, `diff_slice`, and `diff_search`. If a call reports a stale generation (HTTP 409 through CLI/API), rerun `diff_summary` and restart that traversal; never combine rows from different generations.
 - Continue `diff_search` with both `nextFile` and `nextRow`. Keep default or smaller line/byte budgets unless more context is necessary.
 - **`mode: web`**: use repository-local reads/search for surrounding source. Keep `get_diff` as an escape hatch when a consumer needs the complete patch.
@@ -96,7 +96,7 @@ If the harness does not expose named skills, apply those workflows from this rou
 | Plan | `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment` |
 | GitHub PR | `gh_overview`, `gh_list_threads`, `gh_list_reviews`, `gh_list_draft_comments`, `gh_create_draft_comment`, `gh_refresh`, `gh_submit_review` |
 
-MCP also exposes prompts `review_local_changes` / `submit_plan_for_review` and resource `diffing://agent-guide`; the focused skills and tool schemas remain authoritative.
+MCP also advertises workflow prompts `review_local_changes` and `submit_plan_for_review`, plus resource `diffing://agent-guide`. They aid discovery but do not replace the focused skills or tool schemas.
 
 ## Complete CLI map
 
@@ -137,6 +137,8 @@ Shared by code review and plan review agent XML:
 | Severity (optional) | `blocking` \| `nit` \| `question` \| `praise`; omit = untriaged |
 | Body / code context | Markdown body + optional `<code>` / quote / source snapshot |
 
+UI supports multi-line selection, range adjust, collapsible threads, and severity dropdown. Plan Read mode shows inline comments under sections; `c` toggles comments map; `z` toggles zen Read; `m` cycles Source/Read/Split; `e` live-edits the plan (autosave PUT / Save as new version POST; Esc discard).
+
 ## Behavioral contract
 
 - **Async handoff is the default** after submitting a plan or opening a review for later: share the URL, end the turn, resume when the human says ready.
@@ -151,3 +153,4 @@ Shared by code review and plan review agent XML:
 - Send replies/resolutions as work completes so the human UI stays live; await another round only when the user wants the loop to continue.
 - In web mode, prefer `report_progress` / `diffing progress` for long-running apply work so the human sees a toast.
 - Keep agent scratch (plans, notes) under `~/.diffing/`, never in the consumer project tree.
+- **Plans:** prefer MCP `submit_plan` with inline `body`. MCP binding to the product repo is not cwd. If MCP `--repo` mismatches the consumer, use CLI in the consumer — never `cd` into the product to “fix” repo scope.

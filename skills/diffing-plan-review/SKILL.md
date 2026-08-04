@@ -13,11 +13,13 @@ Prefer MCP when available:
 
 1. Call `review_session_status`. Plan tools require `mode: web`. If another mode is active, use `diffing sessions --json` to select a compatible web session, or start `diffing --web --no-open` as a concurrent session; do not end the TUI/PR review merely to submit a plan. Reconnect MCP after `sessions use` so the new connection discovers the selected web session.
 2. Call `start_review_session` only for `mode: none` or to idempotently reuse/pin a matching web scope. It never creates a plan-specific session and never launches, stops, or replaces TUI/PR sessions.
-3. `submit_plan` with complete markdown body, title, and model/source when known.
+3. `submit_plan` with complete markdown in the inline `body` field, plus title and model/source when known. No shell, no `cd`, no scratch file required.
 4. **Async handoff (default):** share the plan URL returned by `submit_plan`, tell the human to review, and **end your turn**. Do not call status or fetch the plan just to rediscover that URL. Call `await_plan_review` only when they are reviewing now or explicitly asked you to wait.
 5. On `await_plan_review` timeout (`disposition=park`): park again — do **not** silent-loop. At most one extra await if they asked you to keep waiting. When they say a verdict is ready, call `await_plan_review` once (or `get_plan` / `list_plans`).
 
-CLI fallback:
+**Consumer repo, not product checkout:** plan submit/start/await targets the **consumer** repository (the project you are implementing for). MCP “bound to …/diffing” names the product checkout the server runs from — it is **not** an instruction to `cd` there. Never `cd` into the diffing product tree to run plan commands for foreign work. If MCP `--repo` mismatches the consumer, use CLI from the consumer workspace instead of “fixing” cwd in the product.
+
+CLI fallback (always from the **consumer** workspace):
 
 ```bash
 diffing sessions --json
@@ -31,7 +33,7 @@ diffing plan await [--timeout N]                         # sync / resume
 # or: cat PLAN.md | diffing plan submit --model "..."
 ```
 
-Keep temporary plan files in **`~/.diffing/<repo>/plan-sources/`** — never in the consumer project tree. Use `--save-source` (or `-S`) to copy the submitted body there. Prefer stdin for zero working-tree footprint. Always resubmit revisions with the original plan **`--id`** so history stays one conversation.
+Keep temporary plan files in **`~/.diffing/<repo>/plan-sources/`** — never in the consumer project tree. Use `--save-source` / `-S` to copy the submitted body there. Prefer stdin for zero working-tree footprint. Always resubmit revisions with the original plan **`--id`** so history stays one conversation.
 
 Useful reads:
 
@@ -46,6 +48,21 @@ Minimize duplicate reads: `await_plan_review` already returns the reviewed plan 
 Use plan CLI/MCP/API operations instead of editing `plans.json`; the file-backed store, version snapshots, comment anchors, and `plan-sources/<id>.md` mirror are implementation-owned state under per-repository `~/.diffing/` storage.
 
 MCP intentionally exposes reply and resolve for plan comments, but not edit/delete/reply-edit operations. When correcting a mis-posted plan thread and no native command exists, use the documented loopback `/api/plans/:id/comments*` endpoints; deletion is destructive and requires clear intent.
+
+## Anti-pattern: do not cd into the product
+
+```bash
+# BAD — side-effect cwd + wrong repo host
+cd /path/to/diffing-product && diffing plan submit …
+
+# GOOD — MCP inline (preferred)
+submit_plan({ title, body, model })
+
+# GOOD — CLI from consumer repo
+printf '%s' "$PLAN" | diffing plan submit --model "…"
+```
+
+MCP binding ≠ cwd. The harness may report “bound to …/diffing” for the product checkout; that does not mean plans for another repo belong there. Stay in the consumer workspace (or use MCP inline) for foreign plans.
 
 ## Obey the verdict
 
@@ -79,8 +96,20 @@ Human comments on the plan appear in `<plan-review>` XML with:
 
 Treat **blocking** as must-fix before resubmit; **nit** as optional; **question** as needing a reply (usually leave open); **praise** as no change required. Missing severity = untriaged normal request.
 
-## Human UI facts (so agents set expectations)
+## Human UI notes (so agents set expectations)
 
-- The human reviews at `/plan` or `/plan/<id>` and finishes with **Submit review** — the verdict that unblocks `plan await`.
-- Humans comment inline on Source or Read with multi-line ranges and optional severity.
-- Human live-edit autosaves the current version in place; only an explicit "Save as new version" bumps the version, and comments stay version-anchored.
+The human reviews at `/plan` or `/plan/<id>`:
+
+| Feature | Behavior |
+|---------|----------|
+| Source / Read / Split | `m` cycles modes; toolbar switches the same modes |
+| Zen Read | `z` toggles full-width focus (switches to Read if needed); Esc exits zen when not editing |
+| Live edit | `e` / pencil: edit current version markdown + title; autosave `PUT` (no version bump); Save as new version = `POST` same id; Esc opens Discard |
+| Discard | Recent = this session; original = first enter for this version (survives exit/re-enter). Dual choice only when both apply |
+| Comments map (right rail) | `c` toggles; lists open threads with `L` / `Lstart–Lend` labels |
+| Inline comments | Source: gutter + / line selection; Read: text highlight → Add comment; multi-line ranges with optional severity (paused while live-editing) |
+| Read mode threads | Comments render inline under the matching section (React-owned; survives mode switches) |
+| Comment cards | Collapsible thread; collapsible source preview inside the card |
+| Submit review | Verdict that unblocks `plan await` |
+
+Plans may be versioned; comments are version-anchored when the human browses history. Human in-page edits use `PUT` (same version) unless they explicitly Save as new version.
