@@ -25,7 +25,7 @@ describe('computeEditMarkers', () => {
       severity: 'warning',
       message: 'Trailing whitespace',
       source: SOURCE,
-      start: { line: 0, character: 12 },
+      start: { line: 0, character: 10 },
       end: { line: 0, character: 14 },
     })
   })
@@ -37,7 +37,7 @@ describe('computeEditMarkers', () => {
       severity: 'error',
       message: 'File does not end with a newline',
       source: SOURCE,
-      start: { line: 0, character: 7 },
+      start: { line: 0, character: 5 },
       end: { line: 0, character: 8 },
     })
   })
@@ -86,7 +86,7 @@ describe('computeEditMarkers', () => {
     })
     expect(bySeverity(markers, 'warning')[0]).toMatchObject({
       message: 'Trailing whitespace',
-      start: { line: 0, character: 4 },
+      start: { line: 0, character: 1 },
       end: { line: 0, character: 6 },
     })
   })
@@ -97,7 +97,7 @@ describe('computeEditMarkers', () => {
     expect(markers[0]).toMatchObject({
       severity: 'warning',
       message: 'Trailing whitespace',
-      start: { line: 0, character: 1 },
+      start: { line: 0, character: 0 },
       end: { line: 0, character: 3 },
     })
   })
@@ -111,12 +111,12 @@ describe('computeEditMarkers', () => {
     expect(error).toHaveLength(1)
     expect(warning[0]).toMatchObject({
       message: 'Trailing whitespace',
-      start: { line: 1, character: 3 },
+      start: { line: 1, character: 0 },
       end: { line: 1, character: 5 },
     })
     expect(error[0]).toMatchObject({
       message: 'File does not end with a newline',
-      start: { line: 2, character: 4 },
+      start: { line: 2, character: 0 },
       end: { line: 2, character: 5 },
     })
   })

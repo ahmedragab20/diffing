@@ -17,6 +17,25 @@ export interface EditMarker {
   end: { line: number; character: number }
 }
 
+/**
+ * Start position for a line-end marker, extended back to the beginning of the
+ * last non-whitespace run ("word").
+ *
+ * The editor's hover popover only triggers when the hovered character is a
+ * TOKEN START inside the marker range. Trailing whitespace / the final CR is
+ * usually merged into the preceding token, so a range covering only the
+ * whitespace can never pop — the token's start lies far to the left. Covering
+ * the last word puts a real token start (e.g. the identifier or number after
+ * punctuation) inside the range in the common case, so hovering that word
+ * shows the message. The squiggle grows by at most one word, which reads as
+ * "this segment ends badly" — an acceptable trade for working hovers.
+ */
+function lineEndMarkerStart(line: string, fromIndex: number): number {
+  let runStart = fromIndex
+  while (runStart > 0 && !/[ \t]/.test(line[runStart - 1])) runStart--
+  return runStart
+}
+
 /** Marker severity for each check. Keep hints under errors so the user can tell them apart. */
 const TRAILING_WS_SEVERITY = 'warning'
 const FINAL_NEWLINE_SEVERITY = 'error'
@@ -47,7 +66,7 @@ export function computeEditMarkers(content: string, _filePath: string): EditMark
         severity: CRLF_SEVERITY,
         message: 'CRLF line ending (the saved file will keep what the editor writes)',
         source: 'diffing',
-        start: { line: i, character: Math.max(0, text.length - 1) },
+        start: { line: i, character: lineEndMarkerStart(text, text.length) },
         end: { line: i, character: Math.max(1, text.length) },
       })
     }
@@ -57,7 +76,7 @@ export function computeEditMarkers(content: string, _filePath: string): EditMark
         severity: TRAILING_WS_SEVERITY,
         message: 'Trailing whitespace',
         source: 'diffing',
-        start: { line: i, character: ws.index ?? Math.max(0, line.length - 1) },
+        start: { line: i, character: lineEndMarkerStart(line, ws.index ?? 0) },
         end: { line: i, character: line.length },
       })
     }
@@ -79,7 +98,7 @@ export function computeEditMarkers(content: string, _filePath: string): EditMark
       severity: FINAL_NEWLINE_SEVERITY,
       message: 'File does not end with a newline',
       source: 'diffing',
-      start: { line: lastLine, character: Math.max(0, len - 1) },
+      start: { line: lastLine, character: lineEndMarkerStart(lines[lastLine] ?? '', len) },
       end: { line: lastLine, character: Math.max(1, len) },
     })
   }
