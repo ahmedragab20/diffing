@@ -33,6 +33,8 @@ export interface ReviewSettingsPopoverProps {
   showStatusBar: boolean
   ignoreSpaceChange?: boolean
   ignoreAllSpace?: boolean
+  /** Opt-in inline diagnostics while editing in place. */
+  editDiagnostics: boolean
   onDiffStyleChange: (style: 'split' | 'unified') => void
   onDiffOptionsChange?: (options: DiffOptions) => void
   onDefaultTabSizeChange: (size: number) => void
@@ -54,6 +56,7 @@ export interface ReviewSettingsPopoverProps {
   onShowStatusBarChange: (v: boolean) => void
   onIgnoreSpaceChange?: (v: boolean) => void
   onIgnoreAllSpaceChange?: (v: boolean) => void
+  onEditDiagnosticsChange: (v: boolean) => void
   onOpenUiFontModal: () => void
   onOpenMonoFontModal: () => void
   showSource?: boolean
@@ -135,6 +138,7 @@ export function ReviewSettingsPopover({
   requireViewAllBeforeSend = false,
   showStatusBar,
   ignoreSpaceChange = false,
+  editDiagnostics = false,
   ignoreAllSpace = false,
   onDiffStyleChange,
   onDiffOptionsChange,
@@ -157,6 +161,7 @@ export function ReviewSettingsPopover({
   onShowStatusBarChange,
   onIgnoreSpaceChange,
   onIgnoreAllSpaceChange,
+  onEditDiagnosticsChange,
   onOpenUiFontModal,
   onOpenMonoFontModal,
   showSource = true,
@@ -338,6 +343,16 @@ export function ReviewSettingsPopover({
         <label className="settings-item">
           <input type="checkbox" checked={sounds} onChange={(event) => onSoundsChange(event.target.checked)} />
           Sound effects
+        </label>
+
+        <div className="settings-section-label">Editing</div>
+        <label className="settings-item" title="Inline diagnostics (whitespace, missing final newline, tabs) while editing a file in place. Off by default for a noise-free review.">
+          <input
+            type="checkbox"
+            checked={editDiagnostics}
+            onChange={(event) => onEditDiagnosticsChange(event.target.checked)}
+          />
+          Edit diagnostics
         </label>
       </div>
     </Popover>

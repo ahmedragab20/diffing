@@ -1,4 +1,4 @@
-import { SESSION_TOKEN_HEADER, SESSION_TOKEN_QUERY } from '../lib/server-auth.js'
+import { SESSION_TOKEN_HEADER, SESSION_TOKEN_QUERY } from '../lib/session-token.js'
 
 const SESSION_STORAGE_KEY = 'diffing-session-token'
 
@@ -90,6 +90,19 @@ export function installSessionAuth(): void {
   }
 }
 
+/**
+ * URL for the shared `/api/live` SSE bus.
+ *
+ * `EventSource` cannot send custom headers, so the session token cannot ride
+ * the same header channel as `fetch`. Production pages get an HttpOnly cookie
+ * from the backend's HTML response, but dev-mode pages (vite) and any browser
+ * that rejects the cookie would land on a 401 and never receive `change`
+ * events — which is exactly the "diff is stale until reload" symptom. The
+ * server accepts the token as a query param, so attach it here when one is
+ * known. The URL is only used for the background SSE request, never for
+ * navigation, so it never enters history or the address bar.
+ */
 export function liveEventSourceUrl(): string {
-  return '/api/live'
+  const token = resolveSessionToken()
+  return token ? `/api/live?${SESSION_TOKEN_QUERY}=${encodeURIComponent(token)}` : '/api/live'
 }

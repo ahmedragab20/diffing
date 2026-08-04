@@ -15,6 +15,7 @@ vi.mock('@pierre/diffs/react', () => ({
     setRenderOptions: vi.fn(() => Promise.resolve()),
     preloadHighlighter: vi.fn(() => Promise.resolve()),
   }),
+  EditProvider: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 }))
 
 vi.mock('../hooks/useDiff', () => ({

@@ -155,6 +155,15 @@ describe('server-lock', () => {
     expect(readServerLock()).toBeNull()
   })
 
+  it('removes an owned lock even when the liveness probe fails (self-shutdown)', async () => {
+    const { writeServerLock, readServerLock, removeServerLockIfOwned } = await loadModule()
+    mockProbeLockServerSync.mockReturnValue(false)
+    writeServerLock(makeLock({ ownerId: 'session-a' }))
+
+    expect(removeServerLockIfOwned('/tmp/test-repo', process.pid, 'session-a')).toBe(true)
+    expect(readServerLock()).toBeNull()
+  })
+
   it('keeps concurrent sessions and elects a fallback when the active one exits', async () => {
     const {
       writeServerLock,

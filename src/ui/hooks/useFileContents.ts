@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 export interface FileContentsState {
   loading: boolean
@@ -39,6 +39,7 @@ export function useFileContents(filePath: string, enabled: boolean, oldFilePath 
     oldContent: null,
     newContent: null,
   })
+  const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => {
     if (!enabled || !filePath) return
@@ -64,7 +65,16 @@ export function useFileContents(filePath: string, enabled: boolean, oldFilePath 
     return () => {
       cancelled = true
     }
-  }, [filePath, oldFilePath, enabled])
+  }, [filePath, oldFilePath, enabled, refreshKey])
 
-  return state
+  /**
+   * Re-fetch both versions. Used when the working tree changed under an
+   * expanded/editing card (e.g. an edit session save or a reverted hunk) so
+   * the full-context render never shows content from before the mutation.
+   */
+  const refetch = useCallback(() => {
+    setRefreshKey((k) => k + 1)
+  }, [])
+
+  return { ...state, refetch }
 }

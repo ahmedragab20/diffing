@@ -41,6 +41,7 @@ const defaultSettings = {
   savedReplies: [],
   ignoreSpaceChange: false,
   ignoreAllSpace: false,
+  editDiagnostics: false,
 }
 
 describe('useSettings', () => {

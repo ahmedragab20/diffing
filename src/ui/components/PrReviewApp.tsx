@@ -423,6 +423,9 @@ export function PrReviewApp() {
     density: settings.density,
     autoCollapseLineThreshold: settings.autoCollapseLineThreshold,
     showStatusBar: settings.showStatusBar,
+    // PR reviews are read-only: editing is a local working-tree feature.
+    editDiagnostics: false,
+    onEditDiagnosticsChange: () => {},
     onDiffStyleChange: (value: 'split' | 'unified') => update({ diffStyle: value }),
     onDefaultTabSizeChange: (value: number) => update({ defaultTabSize: value }),
     onOpenThemeModal: () => setThemeModalOpen(true),

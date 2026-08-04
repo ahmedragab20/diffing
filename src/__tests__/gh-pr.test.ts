@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { createHash } from "node:crypto";
 import type { Hono } from "hono";
 import type { CommentStore } from "../lib/comments.js";
 import { InMemoryPrSessionStore, type PrSession } from "../lib/pr-session.js";
@@ -235,8 +236,8 @@ describe("gh-pr endpoints (integration)", () => {
         const oldRes = await app.fetch(new Request("http://localhost/api/file-text?path=src%2FOld.vue&version=old"));
         const newRes = await app.fetch(new Request("http://localhost/api/file-text?path=src%2FNew.vue&version=new"));
 
-        expect(await oldRes.json()).toEqual({ content: "old vue source", missing: false });
-        expect(await newRes.json()).toEqual({ content: "new vue source", missing: false });
+        expect(await oldRes.json()).toEqual({ content: "old vue source", missing: false, hash: createHash("sha256").update("old vue source").digest("hex") });
+        expect(await newRes.json()).toEqual({ content: "new vue source", missing: false, hash: createHash("sha256").update("new vue source").digest("hex") });
         expect(githubMocks.fetchPrFileContent).toHaveBeenNthCalledWith(
             1,
             expect.objectContaining({ owner: "acme", repo: "widget" }),

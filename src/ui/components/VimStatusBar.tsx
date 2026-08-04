@@ -9,6 +9,11 @@ interface VimStatusBarProps {
   statusMessage?: string | null
   /** When false, the bar is hidden entirely (no DOM). Defaults to true. */
   visible?: boolean
+  /** Number of files with unsaved in-place edits (drives the dirty indicator). */
+  editDirtyCount?: number
+  /** Whether saving dirty edit sessions is currently possible (working-tree scope). */
+  editSaveEnabled?: boolean
+  onSaveAllEdits?: () => void
 }
 
 export const VimStatusBar = memo(function VimStatusBar({
@@ -17,6 +22,9 @@ export const VimStatusBar = memo(function VimStatusBar({
   placeholder = 'No active file (J/K to jump)',
   statusMessage = null,
   visible = true,
+  editDirtyCount = 0,
+  editSaveEnabled = false,
+  onSaveAllEdits,
 }: VimStatusBarProps) {
   if (!visible) return null
 
@@ -108,6 +116,21 @@ export const VimStatusBar = memo(function VimStatusBar({
             <span>Shortcuts</span>
             <kbd className="vim-kbd-small">?</kbd>
           </button>
+
+          {editDirtyCount > 0 && (
+            <button
+              className="vim-status-edit-save"
+              onClick={onSaveAllEdits}
+              disabled={!editSaveEnabled}
+              title={editSaveEnabled ? 'Save all unsaved edits (Cmd/Ctrl+S)' : 'Editing unavailable in this review scope'}
+            >
+              <span className="vim-edit-dirty-dot" aria-hidden="true" />
+              <span>
+                {editDirtyCount} file{editDirtyCount === 1 ? '' : 's'} edited
+              </span>
+              <kbd className="vim-kbd-small">⌘S</kbd>
+            </button>
+          )}
         </>
       )}
 

@@ -8,7 +8,8 @@ import {
 } from "react";
 import { parsePatchFiles, preloadHighlighter } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
-import { useWorkerPool } from "@pierre/diffs/react";
+import { EditProvider, useWorkerPool } from "@pierre/diffs/react";
+import { useEditSessions } from "./hooks/useEditSessions";
 import type {
     LineDiffType,
     DiffIndicators,
@@ -50,11 +51,12 @@ import { ShortcutsHelpModal } from "./components/ShortcutsHelpModal";
 import { AgentActivityToast } from "./components/AgentActivityToast";
 import { ThemeModal } from "./components/ThemeModal"
 import { FontPickerModal } from "./components/FontPickerModal";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import { fileContentFromPatch, markOutdatedComments } from "../lib/comment-outdated";
 import { parsePermalink } from "./lib/permalink";
 import { scrollToLine } from "./utils";
 import { CommitWalkBar, stepCommitWalk } from "./components/CommitWalkBar";
+import { ConfirmDialog } from "./primitives/ConfirmDialog";
 import { AgentProgressToast } from "./components/AgentProgressToast";
 import { useSinceLastRound } from "./hooks/useSinceLastRound";
 
@@ -87,6 +89,98 @@ export function App() {
     );
     const { comments: rawComments, addComment, removeComment, resolveComment, unresolveComment, addReply, editComment, editReply, removeReply, copyAllComments, copyAllCommentsMarkdown, agentActivity, clearAgentActivity, sendToAgent, sending, agentWaiting, waitingAgents, resolveAllOpen, lastSend } =
         useComments();
+
+    // In-place edit sessions (working-tree reviews only). The EditProvider
+    // factory stays stable across renders; the editor module is lazy-loaded
+    // on the first enterEdit.
+    const {
+        sessions: editSessions,
+        dirtyCount: editDirtyCount,
+        enterEdit,
+        handleEditChange,
+        handleEditAttach,
+        saveEdit,
+        saveAllDirty,
+        discardEdit,
+        exitEdit,
+        createEditor,
+    } = useEditSessions({
+        diagnosticsEnabled: settings.editDiagnostics === true,
+    });
+
+    // Scope gate: in-place edits mutate the working tree, so they are only
+    // offered when the review IS the working tree (no revision range, no
+    // commit walk, no staged-only view). PR mode is covered by customMode.
+    const canEditScope = !customMode && !showMode && !settings.staged;
+
+    const [editConfirm, setEditConfirm] = useState<
+        { kind: "exit" | "discard"; path: string } | null
+    >(null);
+    const [editNotice, setEditNotice] = useState<string | null>(null);
+    useEffect(() => {
+        if (!editNotice) return;
+        const id = setTimeout(() => setEditNotice(null), 6000);
+        return () => clearTimeout(id);
+    }, [editNotice]);
+
+    const handleEditExit = useCallback(
+        (path: string) => {
+            const session = editSessions.get(path);
+            if (session?.dirty) {
+                setEditConfirm({ kind: "exit", path });
+            } else {
+                exitEdit(path);
+            }
+        },
+        [editSessions, exitEdit],
+    );
+
+    const handleEditDiscard = useCallback(
+        (path: string) => {
+            const session = editSessions.get(path);
+            if (session?.dirty) {
+                setEditConfirm({ kind: "discard", path });
+            } else {
+                discardEdit(path);
+            }
+        },
+        [editSessions, discardEdit],
+    );
+
+    const confirmEditAction = useCallback(() => {
+        if (!editConfirm) return;
+        if (editConfirm.kind === "exit") exitEdit(editConfirm.path);
+        else discardEdit(editConfirm.path);
+        setEditConfirm(null);
+    }, [editConfirm, exitEdit, discardEdit]);
+
+    const toggleEditForFile = useCallback(
+        (path: string) => {
+            if (editSessions.has(path)) {
+                handleEditExit(path);
+            } else {
+                enterEdit(path).catch((err: Error) => {
+                    // Keymap path has no card to show the error; surface it
+                    // as a transient notice instead of failing silently.
+                    console.error("Failed to enter edit mode:", err);
+                    setEditNotice(`Failed to enter edit mode: ${err.message}`);
+                });
+            }
+        },
+        [editSessions, handleEditExit, enterEdit],
+    );
+
+    // Never lose unsaved edits to a tab close or reload.
+    useEffect(() => {
+        if (editDirtyCount === 0) return;
+        const handler = (e: BeforeUnloadEvent) => {
+            e.preventDefault();
+            e.returnValue = "";
+        };
+        window.addEventListener("beforeunload", handler);
+        return () => window.removeEventListener("beforeunload", handler);
+    }, [editDirtyCount]);
+
     // Badge-only outdated detection: if the comment's line snapshot is no longer
     // present in the live file content reconstructed from the patch, flag it.
     // No auto-remap. Per-file haystacks are built from the unified patch by
@@ -886,6 +980,9 @@ export function App() {
             onPrevSearchHit: prevHit,
             onOpenTheme: () => setThemeModalOpen(true),
             onOpenShortcuts: () => setShortcutsHelpOpen(true),
+            onToggleEdit:
+                canEditScope && activeFile ? () => toggleEditForFile(activeFile) : undefined,
+            onSaveAll: editDirtyCount > 0 ? saveAllDirty : undefined,
         }),
         [
             navigateFile,
@@ -904,6 +1001,11 @@ export function App() {
             togglePalette,
             nextHit,
             prevHit,
+            canEditScope,
+            activeFile,
+            toggleEditForFile,
+            editDirtyCount,
+            saveAllDirty,
         ],
     );
     useDiffReviewKeymaps(keymapActions);
@@ -1084,6 +1186,7 @@ export function App() {
     }
 
     return (
+        <EditProvider createEditor={createEditor}>
         <HapticsProvider enabled={settings.haptics ?? true} soundsEnabled={settings.sounds ?? true}>
         <div
             className="app"
@@ -1099,6 +1202,20 @@ export function App() {
                 Skip to diff
             </a>
             {refreshing && <div className="refresh-bar" role="status" aria-live="polite" aria-label="Refreshing diff" />}
+            {editNotice && (
+                <div className="edit-entry-notice" role="alert">
+                    <AlertTriangle size={12} />
+                    {editNotice}
+                    <button
+                        type="button"
+                        className="edit-entry-notice-close"
+                        onClick={() => setEditNotice(null)}
+                        aria-label="Dismiss"
+                    >
+                        <X size={12} />
+                    </button>
+                </div>
+            )}
             <div
                 className="sidebar-resize-guide"
                 ref={sidebarGuideRef}
@@ -1159,12 +1276,14 @@ export function App() {
                 showStatusBar={settings.showStatusBar ?? true}
                 ignoreSpaceChange={settings.ignoreSpaceChange ?? false}
                 ignoreAllSpace={settings.ignoreAllSpace ?? false}
+                editDiagnostics={settings.editDiagnostics === true}
                 onDensityChange={handleDensityChange}
                 onAutoCollapseLineThresholdChange={handleAutoCollapseChange}
                 onRequireViewAllBeforeSendChange={handleRequireViewAllChange}
                 onShowStatusBarChange={handleShowStatusBarChange}
                 onIgnoreSpaceChange={handleIgnoreSpaceChange}
                 onIgnoreAllSpaceChange={handleIgnoreAllSpaceChange}
+                onEditDiagnosticsChange={(v) => updateSettings({ editDiagnostics: v })}
                 onResolveAllOpen={handleResolveAllOpen}
                 onOpenUiFontModal={() => setUiFontModalOpen(true)}
                 onOpenMonoFontModal={() => setMonoFontModalOpen(true)}
@@ -1315,6 +1434,14 @@ export function App() {
                         onAddComment={addComment}
                         onDeleteComment={removeComment}
                         onCardToggleCollapse={handleCardToggleCollapse}
+                        canEdit={canEditScope}
+                        editSessions={editSessions}
+                        onRequestEdit={enterEdit}
+                        onEditChange={handleEditChange}
+                        onEditAttach={handleEditAttach}
+                        onEditSave={saveEdit}
+                        onEditDiscard={handleEditDiscard}
+                        onEditExit={handleEditExit}
                     />
                 </main>
             </div>
@@ -1348,6 +1475,9 @@ export function App() {
                         ? 'No active file (J/K files · [ / ] commits)'
                         : undefined
                 }
+                editDirtyCount={editDirtyCount}
+                editSaveEnabled={canEditScope}
+                onSaveAllEdits={saveAllDirty}
             />
             <ShortcutsHelpModal
                 isOpen={shortcutsHelpOpen}
@@ -1381,7 +1511,21 @@ export function App() {
                 onJump={handleFileClick}
             />
             <AgentProgressToast />
+            <ConfirmDialog
+                open={editConfirm !== null}
+                title={editConfirm?.kind === "exit" ? "Exit edit mode?" : "Discard edits?"}
+                description={
+                    editConfirm?.kind === "exit"
+                        ? "This file has unsaved changes. Discard them and exit edit mode?"
+                        : "Discard all changes to this file since the last save?"
+                }
+                confirmLabel="Discard"
+                variant="danger"
+                onConfirm={confirmEditAction}
+                onCancel={() => setEditConfirm(null)}
+            />
         </div>
         </HapticsProvider>
+        </EditProvider>
     );
 }

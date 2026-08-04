@@ -138,9 +138,9 @@ describe('useComments', () => {
     mockFetch.mockImplementation((url: string | URL, options?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url.toString()
       if (urlStr.startsWith('/api/comments/') && options?.method === 'PUT') {
-        return Promise.resolve({ json: () => Promise.resolve(updatedComment) })
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(updatedComment) })
       }
-      return Promise.resolve({ json: () => Promise.resolve(sampleComments) })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(sampleComments) })
     })
 
     const { result } = renderHook(() => useComments(), { wrapper: createWrapper() })
@@ -163,9 +163,9 @@ describe('useComments', () => {
     mockFetch.mockImplementation((url: string | URL, options?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url.toString()
       if (urlStr.startsWith('/api/comments/') && options?.method === 'PUT') {
-        return Promise.resolve({ json: () => Promise.resolve(resolvedComment) })
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(resolvedComment) })
       }
-      return Promise.resolve({ json: () => Promise.resolve(sampleComments) })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(sampleComments) })
     })
 
     const { result } = renderHook(() => useComments(), { wrapper: createWrapper() })

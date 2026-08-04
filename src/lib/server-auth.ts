@@ -1,11 +1,14 @@
 import { randomBytes } from 'node:crypto'
 import type { Context, Next } from 'hono'
 import { getCookie } from 'hono/cookie'
+import {
+  SESSION_TOKEN_COOKIE,
+  SESSION_TOKEN_HEADER,
+  SESSION_TOKEN_QUERY,
+} from './session-token.js'
 
 /** Header, HttpOnly cookie, or legacy query param carrying the per-session review API token. */
-export const SESSION_TOKEN_HEADER = 'x-diffing-token'
-export const SESSION_TOKEN_QUERY = 'token'
-export const SESSION_TOKEN_COOKIE = 'diffing-token'
+export { SESSION_TOKEN_HEADER, SESSION_TOKEN_QUERY, SESSION_TOKEN_COOKIE }
 
 export interface ServerAuthConfig {
   bindHost: string

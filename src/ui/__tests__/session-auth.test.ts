@@ -24,6 +24,12 @@ describe('session-auth', () => {
     window.history.replaceState(null, '', '/plan/foo')
     const mod = await import('../session-auth')
     mod.installSessionAuth()
+    expect(mod.liveEventSourceUrl()).toBe('/api/live?token=stored-token')
+  })
+
+  it('returns bare /api/live when no token is available', async () => {
+    const mod = await import('../session-auth')
+    mod.installSessionAuth()
     expect(mod.liveEventSourceUrl()).toBe('/api/live')
   })
 

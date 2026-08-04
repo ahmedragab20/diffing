@@ -1,6 +1,7 @@
-import { readFile, writeFile, mkdir, readdir, stat, rm } from 'node:fs/promises'
-import { join, extname, resolve, basename } from 'node:path'
+import { readFile, writeFile, mkdir, readdir, stat, rm, rename } from 'node:fs/promises'
+import { join, extname, resolve, basename, dirname } from 'node:path'
 import { watch, existsSync, mkdirSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
@@ -485,6 +486,8 @@ export function createApp(
   // Text-friendly file-content endpoint used by the hunk-expansion feature
   // (Phase B). Returns JSON { content, missing } where `missing` indicates the
   // version didn't exist (new file → old missing, deleted → new missing).
+  // Also returns `hash` (sha256 of the exact on-disk bytes) so edit sessions
+  // can detect external changes at save time (conflict check).
   app.get('/api/file-text', async (c) => {
     const path = c.req.query('path')
     const version = c.req.query('version') as 'old' | 'new'
@@ -502,7 +505,8 @@ export function createApp(
         return c.json({ error: 'Binary file' }, 415)
       }
     }
-    return c.json({ content: buffer.toString('utf-8'), missing: false })
+    const hash = createHash('sha256').update(buffer).digest('hex')
+    return c.json({ content: buffer.toString('utf-8'), missing: false, hash })
   })
 
   app.post('/api/open-file', async (c) => {
@@ -732,6 +736,92 @@ export function createApp(
         }
       }
       return c.json({ ok: true })
+    } catch (err: any) {
+      return c.json({ error: `Failed to save file: ${err.message}` }, 500)
+    }
+  })
+
+  /**
+   * Save an in-place edit session's document.
+   *
+   * - Whole-file atomic write (temp file + rename) — never a partial patch.
+   * - Optional `baseHash` conflict check: the sha256 of the file as it was
+   *   when the edit session started. A changed on-disk file returns 409 so
+   *   external edits are never silently clobbered.
+   * - Optional `anchorUpdates` persist remapped comment coordinates with the
+   *   write, so threads follow the edited code in the refreshed diff instead
+   *   of being marked outdated.
+   *
+   * The file watcher broadcasts the `change` SSE event automatically, which
+   * refreshes the diff in every connected review surface.
+   */
+  app.post('/api/edit-save', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as {
+      filePath?: string
+      content?: string
+      baseHash?: string
+      anchorUpdates?: {
+        id: string
+        side?: 'deletions' | 'additions'
+        lineNumber: number
+        startLineNumber?: number
+      }[]
+    } | null
+    if (!body || typeof body.filePath !== 'string' || typeof body.content !== 'string') {
+      return c.json({ error: 'Missing filePath or content' }, 400)
+    }
+    // In-place editing mutates the working tree; PR sessions and revision
+    // comparisons have no writable working-tree diff backing their view.
+    if (prMode || customMode) {
+      return c.json({ error: 'Editing is not available in this review scope' }, 403)
+    }
+    try {
+      const root = getRepoRoot()
+      const relPath = toSafeRelativePath(body.filePath, root)
+      if (!relPath) {
+        return c.json({ error: 'Forbidden file path' }, 403)
+      }
+      const absolutePath = resolve(root, relPath)
+
+      if (typeof body.baseHash === 'string' && body.baseHash.length > 0) {
+        const current = existsSync(absolutePath) ? await readFile(absolutePath) : null
+        const currentHash = current
+          ? createHash('sha256').update(current).digest('hex')
+          : null
+        if (currentHash !== body.baseHash) {
+          return c.json(
+            {
+              error: 'The file changed on disk since this edit session started. Reload and retry, or discard.',
+              conflict: true,
+            },
+            409,
+          )
+        }
+      }
+
+      const tmpPath = join(
+        dirname(absolutePath),
+        `.diffing-edit-${process.pid}-${Date.now()}.tmp`,
+      )
+      await writeFile(tmpPath, body.content, 'utf-8')
+      await rename(tmpPath, absolutePath)
+
+      if (Array.isArray(body.anchorUpdates) && body.anchorUpdates.length > 0) {
+        for (const anchor of body.anchorUpdates) {
+          if (!anchor || typeof anchor.id !== 'string' || typeof anchor.lineNumber !== 'number') {
+            continue
+          }
+          await store.update(anchor.id, {
+            side: anchor.side === 'deletions' ? 'deletions' : 'additions',
+            lineNumber: anchor.lineNumber,
+            startLineNumber:
+              typeof anchor.startLineNumber === 'number' ? anchor.startLineNumber : undefined,
+          })
+        }
+      }
+
+      const savedHash = createHash('sha256').update(body.content).digest('hex')
+      return c.json({ ok: true, hash: savedHash })
     } catch (err: any) {
       return c.json({ error: `Failed to save file: ${err.message}` }, 500)
     }

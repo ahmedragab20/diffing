@@ -324,14 +324,36 @@ export function removeServerSession(lock: ServerLock): void {
   else removeServerLock(lock.repoRoot)
 }
 
-/** Unregister live sessions owned by one exact CLI/MCP process identity. */
+/**
+ * Unregister live sessions owned by one exact CLI/MCP process identity.
+ *
+ * Matches by pid + ownerId against the raw lock files, never via the liveness
+ * probe. This runs during our own shutdown (SIGINT/SIGTERM): the probe
+ * synchronously spawns a child that HTTP-asks this very process, but the
+ * blocked event loop cannot answer, so the probe fails and the lock is
+ * skipped as "stale" — leaving `server.json` behind on every clean exit.
+ */
 export function removeServerLockIfOwned(repoRoot: string, pid: number, ownerId: string): boolean {
   const cleanupLease = acquireServerStartupLease(repoRoot, `cleanup-${ownerId}`)
   if (!cleanupLease) return false
   try {
-    const owned = listServerLocks(repoRoot).filter(
-      (lock) => lock.pid === pid && lock.ownerId === ownerId,
-    )
+    const owned: ServerLock[] = []
+    const active = readServerLock(repoRoot)
+    if (active && active.pid === pid && active.ownerId === ownerId) owned.push(active)
+    const directory = sessionsPath(repoRoot)
+    try {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+        try {
+          const candidate = JSON.parse(readFileSync(join(directory, entry.name), 'utf-8')) as ServerLock
+          if (candidate.pid === pid && candidate.ownerId === ownerId) owned.push(candidate)
+        } catch {
+          // Malformed session record — not ours to repair here.
+        }
+      }
+    } catch {
+      // A repository with no registry yet simply has no sessions directory.
+    }
     if (owned.length === 0) return false
     for (const lock of owned) removeServerSession(lock)
     return true

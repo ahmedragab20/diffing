@@ -1,9 +1,11 @@
 import { memo } from 'react'
 import { GitCompare } from 'lucide-react'
-import type { FileDiffMetadata, DiffLineAnnotation, AnnotationSide } from '@pierre/diffs'
+import type { FileDiffMetadata, DiffLineAnnotation, AnnotationSide, FileContents } from '@pierre/diffs'
+import type { Editor } from '@pierre/diffs/edit'
 import type { ReviewComment } from '../../lib/types'
 import type { PrExistingComment } from '../../lib/pr-session'
 import type { BinaryFileInfo } from '../hooks/useDiff'
+import type { EditAnnotation, EditSessionView } from '../hooks/useEditSessions'
 import type {
   LineDiffType,
   DiffIndicators,
@@ -60,6 +62,16 @@ interface DiffViewerProps {
    * drive the auto-advance-to-next-file scroll.
    */
   onCardToggleCollapse?: (filePath: string, willCollapse: boolean) => void
+  /** Working-tree scope gate for in-place editing (hidden for staged/revision/PR). */
+  canEdit?: boolean
+  /** Active in-place edit sessions keyed by file path. */
+  editSessions?: ReadonlyMap<string, EditSessionView>
+  onRequestEdit?: (filePath: string) => Promise<void>
+  onEditChange?: (filePath: string, file: FileContents, annotations?: EditAnnotation[]) => void
+  onEditAttach?: (filePath: string, editor: Editor<import('../hooks/useEditSessions').EditSessionMetadata>) => void
+  onEditSave?: (filePath: string) => void
+  onEditDiscard?: (filePath: string) => void
+  onEditExit?: (filePath: string) => void
 }
 
 const emptyAnnotations: DiffLineAnnotation<ReviewComment>[] = []
@@ -123,6 +135,14 @@ export const DiffViewer = memo(function DiffViewer({
   onSetExistingResolved,
   allowLocalActions = true,
   onCardToggleCollapse,
+  canEdit = false,
+  editSessions,
+  onRequestEdit,
+  onEditChange,
+  onEditAttach,
+  onEditSave,
+  onEditDiscard,
+  onEditExit,
 }: DiffViewerProps) {
   // Callers (App) already sort with sortFilesByName — re-sorting here was pure
   // CPU cost on every parent re-render of large diffs.
@@ -190,6 +210,14 @@ export const DiffViewer = memo(function DiffViewer({
             onSetExistingResolved={onSetExistingResolved}
             allowLocalActions={allowLocalActions}
             onCardToggleCollapse={onCardToggleCollapse}
+            canEdit={canEdit}
+            editSession={editSessions?.get(filePath) ?? null}
+            onRequestEdit={onRequestEdit}
+            onEditChange={onEditChange}
+            onEditAttach={onEditAttach}
+            onEditSave={onEditSave}
+            onEditDiscard={onEditDiscard}
+            onEditExit={onEditExit}
           />
         )
       })}

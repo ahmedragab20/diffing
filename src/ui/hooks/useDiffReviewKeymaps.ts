@@ -19,6 +19,10 @@ interface DiffReviewKeymapActions {
   onPrevSearchHit?: () => void
   onOpenTheme: () => void
   onOpenShortcuts: () => void
+  /** Toggle in-place edit mode on the active file (working-tree reviews only). */
+  onToggleEdit?: () => void
+  /** Save all dirty edit sessions (Cmd/Ctrl+S). */
+  onSaveAll?: () => void
 }
 
 /** Shared keyboard model for local and GitHub diff review surfaces. */
@@ -39,6 +43,19 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
         event.preventDefault()
         if (actions.onTogglePalette) actions.onTogglePalette()
         else actions.onOpenPalette('all')
+        resetBuffer()
+        return
+      }
+
+      // Save-all stays global too: the edit surface is contenteditable, and we
+      // must swallow the browser's default "save page" for Cmd/Ctrl+S.
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === 's' &&
+        actions.onSaveAll
+      ) {
+        event.preventDefault()
+        actions.onSaveAll()
         resetBuffer()
         return
       }
@@ -109,6 +126,8 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
         handled(() => actions.onNavigateCommit?.('prev'), 'navigate')
       } else if (keyBuffer === 'v') {
         handled(actions.onToggleViewed)
+      } else if (keyBuffer === 'e' && actions.onToggleEdit) {
+        handled(actions.onToggleEdit)
       } else if (keyBuffer === 'm') {
         handled(actions.onToggleDiffStyle)
       } else if (keyBuffer === 't') {

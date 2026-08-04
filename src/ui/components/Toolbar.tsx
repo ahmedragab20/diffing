@@ -65,6 +65,8 @@ interface ToolbarProps {
   showStatusBar: boolean
   ignoreSpaceChange: boolean
   ignoreAllSpace: boolean
+  /** Opt-in inline diagnostics while editing in place. */
+  editDiagnostics: boolean
   onDiffStyleChange: (style: 'split' | 'unified') => void
   onDiffOptionsChange: (options: DiffOptions) => void
   onDefaultTabSizeChange: (size: number) => void
@@ -86,6 +88,7 @@ interface ToolbarProps {
   onShowStatusBarChange: (v: boolean) => void
   onIgnoreSpaceChange: (v: boolean) => void
   onIgnoreAllSpaceChange: (v: boolean) => void
+  onEditDiagnosticsChange: (v: boolean) => void
   onResolveAllOpen: () => void | Promise<void>
   onOpenUiFontModal: () => void
   onOpenMonoFontModal: () => void
@@ -202,6 +205,7 @@ export const Toolbar = memo(function Toolbar({
   showStatusBar,
   ignoreSpaceChange,
   ignoreAllSpace,
+  editDiagnostics,
   onDiffStyleChange,
   onDiffOptionsChange,
   onDefaultTabSizeChange,
@@ -223,6 +227,7 @@ export const Toolbar = memo(function Toolbar({
   onShowStatusBarChange,
   onIgnoreSpaceChange,
   onIgnoreAllSpaceChange,
+  onEditDiagnosticsChange,
   onResolveAllOpen,
   onOpenUiFontModal,
   onOpenMonoFontModal,
@@ -349,6 +354,7 @@ export const Toolbar = memo(function Toolbar({
           showStatusBar={showStatusBar}
           ignoreSpaceChange={ignoreSpaceChange}
           ignoreAllSpace={ignoreAllSpace}
+          editDiagnostics={editDiagnostics}
           onDiffStyleChange={onDiffStyleChange}
           onDiffOptionsChange={onDiffOptionsChange}
           onDefaultTabSizeChange={onDefaultTabSizeChange}
@@ -370,6 +376,7 @@ export const Toolbar = memo(function Toolbar({
           onShowStatusBarChange={onShowStatusBarChange}
           onIgnoreSpaceChange={onIgnoreSpaceChange}
           onIgnoreAllSpaceChange={onIgnoreAllSpaceChange}
+          onEditDiagnosticsChange={onEditDiagnosticsChange}
           onOpenUiFontModal={onOpenUiFontModal}
           onOpenMonoFontModal={onOpenMonoFontModal}
           showSource={!customMode}

@@ -9,7 +9,11 @@ const COMMENTS_KEY = ['comments']
 
 async function fetchComments(): Promise<ReviewComment[]> {
   const res = await fetch('/api/comments')
-  return res.json()
+  if (!res.ok) return []
+  const data: unknown = await res.json()
+  // The API returns `{ error }` on failure (e.g. missing session token) — a
+  // non-array body must not crash consumers that iterate `comments`.
+  return Array.isArray(data) ? (data as ReviewComment[]) : []
 }
 
 export interface AgentActivity {

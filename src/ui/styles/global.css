@@ -5639,6 +5639,152 @@ file-tree,
     font-size: 11px;
 }
 
+/* ---- In-place edit surface (P1) ---- */
+.file-diff-edit-dirty {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: var(--radius-md);
+    background: var(--accent-subtle, rgba(214, 171, 120, 0.14));
+    color: var(--primary, #d6ab78);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.file-diff-edit-dirty::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+}
+.file-diff-save-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: var(--primary, #d6ab78);
+    color: var(--bg-canvas, #191724);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity var(--transition-fast);
+}
+.file-diff-save-btn:hover:not(:disabled) {
+    opacity: 0.88;
+}
+.file-diff-save-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.file-diff-edit-error {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    margin: 0 12px;
+    border-radius: var(--radius-md);
+    background: var(--danger-subtle, rgba(235, 111, 146, 0.12));
+    color: var(--danger, #eb6f92);
+    font-size: 12px;
+}
+/* Floating selection-action popover inside the edit surface. The library
+   positions the element; we only style it. */
+.edit-selection-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border-radius: var(--radius-md);
+    background: var(--bg-raised, #26233a);
+    border: 1px solid var(--gl-rule, rgba(255, 255, 255, 0.08));
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    z-index: 60;
+}
+.edit-selection-action-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-primary, #e0def4);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: calc(var(--radius-md) - 2px);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.edit-selection-action-btn:hover {
+    background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
+    color: var(--primary, #d6ab78);
+}
+/* Status-bar dirty-edits indicator */
+.vim-status-edit-save {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    background: var(--bg-raised, #26233a);
+    color: var(--text-primary, #e0def4);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.vim-status-edit-save:hover:not(:disabled) {
+    background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
+}
+.vim-status-edit-save:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+.vim-edit-dirty-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--primary, #d6ab78);
+    flex-shrink: 0;
+}
+/* Transient error notice for keymap-initiated edit failures */
+.edit-entry-notice {
+    position: fixed;
+    top: 52px;
+    right: 16px;
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 420px;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    background: var(--bg-raised, #26233a);
+    border: 1px solid var(--gl-rule, rgba(255, 255, 255, 0.08));
+    color: var(--danger, #eb6f92);
+    font-size: 12px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.edit-entry-notice-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text-muted, #908caa);
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+}
+.edit-entry-notice-close:hover {
+    color: var(--text-primary, #e0def4);
+    background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
+}
+
 .file-diff-collapsed .file-diff-card-header {
     border-bottom: none;
     border-bottom-left-radius: var(--radius-lg);

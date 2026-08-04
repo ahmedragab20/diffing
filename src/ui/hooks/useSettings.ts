@@ -50,6 +50,11 @@ export interface Settings {
   savedReplies: SavedReply[]
   ignoreSpaceChange: boolean
   ignoreAllSpace: boolean
+  /**
+   * Opt-in inline diagnostics (markers) on the in-place edit surface.
+   * Off by default so users who want a noise-free review never see them.
+   */
+  editDiagnostics: boolean
 }
 
 export interface SavedReply {
@@ -87,6 +92,7 @@ const DEFAULTS: Settings = {
   savedReplies: [],
   ignoreSpaceChange: false,
   ignoreAllSpace: false,
+  editDiagnostics: false,
 }
 
 const MONO_FALLBACK = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace'

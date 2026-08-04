@@ -3,10 +3,26 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { getRepoRoot, getProjectStorageDir } from './git.js'
 import type { ReviewComment, CommentReply } from './types.js'
 
+export interface CommentUpdateFields {
+  body?: string
+  status?: ReviewComment['status']
+  /**
+   * Anchor remap after an in-place edit session saves: the comment's diff
+   * coordinates are updated to where the edited document left them, so the
+   * refreshed diff re-anchors threads at their live position instead of
+   * marking them outdated.
+   */
+  side?: ReviewComment['side']
+ lineNumber?: number;
+
+ startLineNumber?: number;
+
+}
+
 export interface CommentStore {
   getAll(): Promise<ReviewComment[]>
   add(comment: ReviewComment): Promise<ReviewComment>
-  update(id: string, fields: { body?: string; status?: ReviewComment['status'] }): Promise<ReviewComment | null>
+  update(id: string, fields: CommentUpdateFields): Promise<ReviewComment | null>
   /** Resolve every open comment in one write. Returns how many were updated. */
   resolveAllOpen(): Promise<number>
   remove(id: string): Promise<boolean>
@@ -27,11 +43,14 @@ export class InMemoryCommentStore implements CommentStore {
     return comment
   }
 
-  async update(id: string, fields: { body?: string; status?: ReviewComment['status'] }): Promise<ReviewComment | null> {
+  async update(id: string, fields: CommentUpdateFields): Promise<ReviewComment | null> {
     const comment = this.comments.find((c) => c.id === id)
     if (!comment) return null
     if (fields.body !== undefined) comment.body = fields.body
     if (fields.status !== undefined) comment.status = fields.status
+    if (fields.side !== undefined) comment.side = fields.side
+    if (fields.lineNumber !== undefined) comment.lineNumber = fields.lineNumber
+    if (fields.startLineNumber !== undefined) comment.startLineNumber = fields.startLineNumber
     return comment
   }
 
@@ -139,7 +158,7 @@ export class FileCommentStore implements CommentStore {
     })
   }
 
-  async update(id: string, fields: { body?: string; status?: ReviewComment['status'] }): Promise<ReviewComment | null> {
+  async update(id: string, fields: CommentUpdateFields): Promise<ReviewComment | null> {
     return this.enqueueMutation(async () => {
       const comments = await this.getAll()
       const index = comments.findIndex((c) => c.id === id)
@@ -147,6 +166,9 @@ export class FileCommentStore implements CommentStore {
       const comment = comments[index]
       if (fields.body !== undefined) comment.body = fields.body
       if (fields.status !== undefined) comment.status = fields.status
+      if (fields.side !== undefined) comment.side = fields.side
+      if (fields.lineNumber !== undefined) comment.lineNumber = fields.lineNumber
+      if (fields.startLineNumber !== undefined) comment.startLineNumber = fields.startLineNumber
       await this.save(comments)
       return comment
     })
