@@ -39,7 +39,7 @@
     "changeset": "changeset",
     "dev": "concurrently --names server,client --prefix-colors cyan,magenta --kill-others \"pnpm dev:server\" \"pnpm dev:client\"",
     "dev:client": "vite",
-    "dev:server": "tsx src/cli.ts --no-open --port 3433",
+    "dev:server": "tsx src/cli.ts --web --no-open --port 3433",
     "dev:tui": "cargo run --release --manifest-path crates/diffing-tui/Cargo.toml --",
     "test": "vitest run && pnpm run test:tui",
     "test:ts": "vitest run",
