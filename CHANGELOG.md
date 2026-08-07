@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.14.0
+
+### Minor Changes
+
+- Zen mode for the web diffs page: `z` toggles an immersive diffs-only view (no
+  sidebar or full toolbar — just a minimal bar with the branch and diff summary:
+  files + additions/deletions), `Esc` exits it, and the preference persists
+  across reloads. All existing keymaps keep working, and zen applies uniformly
+  across split/unified, commit walk, staged/untracked, and custom revision modes.
+
+  `Cmd/Ctrl+Enter` opens the Send-review flow from anywhere: the toolbar popover
+  outside zen, and a new centered, resizable dialog in zen where the toolbar is
+  hidden. The popover and dialog share one panel implementation, size presets,
+  and resize state; initial focus lands on the Approve verdict.
+
+  Also fixes `pnpm dev`: the dev server script now forces web mode so the dev
+  loop no longer falls into terminal diff mode under concurrently's piped
+  stdout and exits immediately.
+
 ## 0.13.1
 
 ### Patch Changes
