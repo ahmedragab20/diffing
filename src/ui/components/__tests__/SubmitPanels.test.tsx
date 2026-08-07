@@ -168,6 +168,21 @@ describe('SendReviewPopover', () => {
     expect(buttons).toHaveLength(4)
   })
 
+  it('supports controlled mode: open=true renders the panel and Cancel reports close', async () => {
+    const onOpenChange = vi.fn()
+    renderSend(true, { open: true, onOpenChange })
+
+    // The panel content is visible while controlled-open.
+    expect(screen.getByRole('radiogroup', { name: /verdict/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Send review$/ })).toBeInTheDocument()
+
+    // The internal Cancel handler routes through onOpenChange so the App can
+    // sync its own ⌘Enter state back to closed.
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
   it('uses an in-app dialog before sending with unviewed files', async () => {
     const user = userEvent.setup()
     const onSend = vi.fn().mockResolvedValue(undefined)

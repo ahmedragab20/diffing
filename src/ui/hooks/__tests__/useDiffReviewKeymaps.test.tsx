@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Scope } from '../../lib/searchTypes'
 
@@ -28,12 +28,21 @@ function makeActions() {
     onPrevSearchHit: vi.fn(),
     onOpenTheme: vi.fn(),
     onOpenShortcuts: vi.fn(),
+    onToggleZen: vi.fn(),
+    onExitZen: vi.fn(),
+    onOpenSendReview: vi.fn(),
   }
 }
 
-function Harness({ actions }: { actions: ReturnType<typeof makeActions> }) {
+function Harness({
+  actions,
+  children,
+}: {
+  actions: Parameters<typeof useDiffReviewKeymaps>[0]
+  children?: React.ReactNode
+}) {
   useDiffReviewKeymaps(actions)
-  return null
+  return <>{children}</>
 }
 
 describe('shared diff review keymaps', () => {
@@ -121,5 +130,60 @@ describe('shared diff review keymaps', () => {
     expect(actions.onNavigateCommit).toHaveBeenCalledWith('next')
     expect(actions.onNavigateCommit).toHaveBeenCalledWith('prev')
     expect(actions.onOpenShortcuts).toHaveBeenCalledOnce()
+  })
+
+  it('toggles zen mode with z', () => {
+    const actions = makeActions()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'z' })
+
+    expect(actions.onToggleZen).toHaveBeenCalledOnce()
+  })
+
+  it('Escape exits zen only when onExitZen is wired', () => {
+    const withExit = makeActions()
+    render(<Harness actions={withExit} />)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(withExit.onExitZen).toHaveBeenCalledOnce()
+
+    // A second harness whose actions omit onExitZen — Escape must be inert
+    // (no crash, nothing fired) because only App wires it while zen is active.
+    const withoutExit = makeActions()
+    delete withoutExit.onExitZen
+    render(<Harness actions={withoutExit} />)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(withoutExit.onOpenShortcuts).not.toHaveBeenCalled()
+    expect(withoutExit.onToggleZen).not.toHaveBeenCalled()
+    expect(withoutExit.onOpenSendReview).not.toHaveBeenCalled()
+  })
+
+  it('opens the send-review dialog with Cmd/Ctrl+Enter', () => {
+    const actions = makeActions()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'Enter', metaKey: true })
+
+    expect(actions.onOpenSendReview).toHaveBeenCalledOnce()
+  })
+
+  it('does not open send-review from an input field', () => {
+    const actions = makeActions()
+    render(
+      <Harness actions={actions}>
+        <input data-testid="in" />
+      </Harness>,
+    )
+
+    const input = screen.getByTestId('in')
+    input.focus()
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true })
+    expect(actions.onOpenSendReview).not.toHaveBeenCalled()
+
+    input.blur()
+    fireEvent.keyDown(window, { key: 'Enter', metaKey: true })
+    expect(actions.onOpenSendReview).toHaveBeenCalledOnce()
   })
 })

@@ -49,6 +49,15 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       ],
     },
     {
+      title: 'Zen Mode',
+      icon: <Eye size={15} />,
+      items: [
+        { keys: ['z'], description: 'Toggle Zen mode — diffs only (no sidebar or toolbar)' },
+        { keys: ['Esc'], description: 'Exit Zen mode (when no dialog is open)' },
+        { keys: ['⌘', '↵'], description: 'Open Send-review (toolbar popover, or centered dialog in Zen)' },
+      ],
+    },
+    {
       title: 'Commit Walk',
       icon: <GitCommit size={15} />,
       items: [
@@ -206,6 +215,7 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
 
   const prCategories: ShortcutCategory[] = diffCategories
     .filter((category) => category.title !== 'Commit Walk')
+    .filter((category) => category.title !== 'Zen Mode')
     .map((category) => category.title === 'Review & Comments'
       ? {
           ...category,
@@ -227,7 +237,7 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       ? 'Vim-style keybindings for plan review. Cycle Source / Read / Split with m, jump plans with J/K, and comment from line selection or text highlight.'
       : mode === 'pr'
         ? 'The same Vim-style diff keybindings used by local review, scoped to GitHub PR navigation, formatting, search, and comments.'
-      : 'Vim-style keybindings for reviewing diffs. Jump files with J/K, walk commits with [ / ], and open search with ⌘K.'
+      : 'Vim-style keybindings for reviewing diffs. Jump files with J/K, walk commits with [ / ], open search with ⌘K, and toggle Zen mode with z.'
 
   return (
     <Modal open={isOpen} onClose={onClose} className="shortcuts-modal" ariaLabel="Keyboard shortcuts">

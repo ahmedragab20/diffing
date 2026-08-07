@@ -37,8 +37,11 @@ import {
     normalizeExtensions,
 } from "./lib/extensionFilter";
 import { getUiStateItem, setUiStateItem } from "./utils/uiState";
+import { DIFF_UI, readZenMode } from "./lib/diffUiState";
 import { useDiffSearch } from "./hooks/useDiffSearch";
 import { Toolbar } from "./components/Toolbar";
+import { ZenBar } from "./components/ZenBar";
+import { SendReviewModal } from "./components/SendReviewModal";
 import { DiffOverviewBanner } from "./components/DiffOverviewBanner";
 import { DiffViewer, sortFilesByName } from "./components/DiffViewer";
 import { MergeConflictResolver } from "./components/MergeConflictResolver";
@@ -219,6 +222,13 @@ export function App() {
             return 320;
         }
     });
+    /** Zen mode: diffs only — no sidebar, no full toolbar, just the ZenBar. */
+    const [zenMode, setZenMode] = useState(() => readZenMode());
+    useEffect(() => {
+        try {
+            setUiStateItem(DIFF_UI.zenMode, String(zenMode));
+        } catch {}
+    }, [zenMode]);
     /** Applied multi-select extensions (normalized). Empty = show all. */
     const [appliedExtensions, setAppliedExtensions] = useState<string[]>(() => {
         try {
@@ -363,6 +373,19 @@ export function App() {
     const [themeModalOpen, setThemeModalOpen] = useState(false);
     const [uiFontModalOpen, setUiFontModalOpen] = useState(false);
     const [monoFontModalOpen, setMonoFontModalOpen] = useState(false);
+    /** Send-review surface open state: the toolbar popover (⌘Enter outside zen)
+     *  or the centered dialog (⌘Enter in zen, where the toolbar is hidden). */
+    const [sendOpen, setSendOpen] = useState(false);
+
+    /** Any overlay that must swallow Esc / ⌘Enter before the global keymap. */
+    const overlayOpen =
+        palette.open ||
+        shortcutsHelpOpen ||
+        themeModalOpen ||
+        uiFontModalOpen ||
+        monoFontModalOpen ||
+        editConfirm !== null ||
+        sendOpen;
 
     const [commentPanelHeight, setCommentPanelHeight] = useState(() => {
         try {
@@ -959,6 +982,14 @@ export function App() {
         handleToggleCollapse();
     }, [handleToggleCollapse]);
 
+    /** z — immersive diffs-only view; works in every diffs-page mode. */
+    const toggleZenMode = useCallback(() => {
+        setZenMode((z) => !z);
+        // Entering zen unmounts the toolbar and its Send popover; close any
+        // open send surface so the centered dialog doesn't pop in mid-toggle.
+        setSendOpen(false);
+    }, []);
+
     const { setSnapshot: setSearchSnapshot, nextHit, prevHit, statusMessage: searchStatusMessage } =
         useSearchSession(searchNavContext, handleFileClick);
 
@@ -983,6 +1014,14 @@ export function App() {
             onToggleEdit:
                 canEditScope && activeFile ? () => toggleEditForFile(activeFile) : undefined,
             onSaveAll: editDirtyCount > 0 ? saveAllDirty : undefined,
+            onToggleZen: toggleZenMode,
+            // Escape exits zen only when no overlay is open — overlays handle
+            // their own Escape (palette two-stage, dialog close, etc.).
+            onExitZen: zenMode && !overlayOpen ? () => setZenMode(false) : undefined,
+            // ⌘Enter opens the Send-review surface: the toolbar popover outside
+            // zen, the centered dialog in zen. Suppressed while an overlay is
+            // open so its own ⌘Enter handling (e.g. palette peek) keeps working.
+            onOpenSendReview: !overlayOpen ? () => setSendOpen(true) : undefined,
         }),
         [
             navigateFile,
@@ -1006,6 +1045,9 @@ export function App() {
             toggleEditForFile,
             editDirtyCount,
             saveAllDirty,
+            toggleZenMode,
+            zenMode,
+            overlayOpen,
         ],
     );
     useDiffReviewKeymaps(keymapActions);
@@ -1100,12 +1142,17 @@ export function App() {
                     } as React.CSSProperties
                 }
             >
+            {zenMode ? (
+                <div className="zen-bar zen-bar-skeleton" aria-hidden="true" />
+            ) : (
                 <header className="skeleton-toolbar">
                     <div className="skeleton-item skeleton-logo"></div>
                     <div className="skeleton-item skeleton-stats"></div>
                     <div className="skeleton-item skeleton-actions"></div>
                 </header>
+            )}
                 <div className="app-body">
+                    {!zenMode && (
                     <aside className={`sidebar skeleton-sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
                         {!sidebarCollapsed && (
                             <>
@@ -1132,7 +1179,8 @@ export function App() {
                             </>
                         )}
                     </aside>
-                    {!sidebarCollapsed && (
+                    )}
+                    {!zenMode && !sidebarCollapsed && (
                         <div className="sidebar-resize-handle" style={{ cursor: "default" }} />
                     )}
                     <main className="main skeleton-main">
@@ -1189,7 +1237,7 @@ export function App() {
         <EditProvider createEditor={createEditor}>
         <HapticsProvider enabled={settings.haptics ?? true} soundsEnabled={settings.sounds ?? true}>
         <div
-            className="app"
+            className={`app ${zenMode ? "app-zen" : ""}`}
             ref={appRef}
             style={
                 {
@@ -1221,6 +1269,19 @@ export function App() {
                 ref={sidebarGuideRef}
                 aria-hidden="true"
             />
+            {zenMode ? (
+                <ZenBar
+                    repoName={repoName}
+                    branch={branch}
+                    fileCount={filteredFiles.length}
+                    totalFileCount={files.length}
+                    additions={diffStats.additions}
+                    deletions={diffStats.deletions}
+                    showMode={showMode}
+                    showCommitCount={commits.length}
+                    onExit={() => setZenMode(false)}
+                />
+            ) : (
             <Toolbar
                 repoName={repoName}
                 branch={branch}
@@ -1298,8 +1359,13 @@ export function App() {
                 viewedFileCount={viewedFiles.size}
                 onEditComment={editComment}
                 onDeleteComment={removeComment}
+                zenMode={zenMode}
+                onToggleZen={toggleZenMode}
+                sendReviewOpen={sendOpen}
+                onSendReviewOpenChange={setSendOpen}
             />
-            {!sidebarCollapsed && (
+            )}
+            {!zenMode && !sidebarCollapsed && (
                 <div
                     className="sidebar-mobile-backdrop"
                     onClick={handleToggleCollapse}
@@ -1307,6 +1373,7 @@ export function App() {
                 />
             )}
             <div className="app-body">
+                {!zenMode && (
                 <aside
                     ref={sidebarRef}
                     className={`sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
@@ -1358,7 +1425,8 @@ export function App() {
                     )}
 
                 </aside>
-                {!sidebarCollapsed && (
+                )}
+                {!zenMode && !sidebarCollapsed && (
                     <div
                         className="sidebar-resize-handle"
                         onMouseDown={handleSidebarResizeStart}
@@ -1465,24 +1533,44 @@ export function App() {
                 showLineNumbers={settings.showLineNumbers}
                 lineHoverHighlight={settings.lineHoverHighlight}
             />
-            <VimStatusBar
-                activeFile={activeFile}
-                onShowHelp={() => setShortcutsHelpOpen(true)}
-                visible={settings.showStatusBar ?? true}
-                statusMessage={searchStatusMessage}
-                placeholder={
-                    showMode && commits.length > 1
-                        ? 'No active file (J/K files · [ / ] commits)'
-                        : undefined
-                }
-                editDirtyCount={editDirtyCount}
-                editSaveEnabled={canEditScope}
-                onSaveAllEdits={saveAllDirty}
-            />
+            {!zenMode && (
+                <VimStatusBar
+                    activeFile={activeFile}
+                    onShowHelp={() => setShortcutsHelpOpen(true)}
+                    visible={settings.showStatusBar ?? true}
+                    statusMessage={searchStatusMessage}
+                    placeholder={
+                        showMode && commits.length > 1
+                            ? 'No active file (J/K files · [ / ] commits)'
+                            : undefined
+                    }
+                    editDirtyCount={editDirtyCount}
+                    editSaveEnabled={canEditScope}
+                    onSaveAllEdits={saveAllDirty}
+                />
+            )}
             <ShortcutsHelpModal
                 isOpen={shortcutsHelpOpen}
                 onClose={() => setShortcutsHelpOpen(false)}
             />
+            {zenMode && sendOpen && (
+                <SendReviewModal
+                    open={sendOpen}
+                    onClose={() => setSendOpen(false)}
+                    comments={comments}
+                    totalFileCount={files.length}
+                    viewedFileCount={viewedFiles.size}
+                    requireViewAllBeforeSend={settings.requireViewAllBeforeSend}
+                    onEditComment={editComment}
+                    onDeleteComment={removeComment}
+                    onSend={sendToAgent}
+                    sending={sending}
+                    agentWaiting={agentWaiting}
+                    waitingAgents={waitingAgents}
+                    onCopyComments={copyAllComments}
+                    onCopyMarkdown={copyAllCommentsMarkdown}
+                />
+            )}
             <ThemeModal
                 open={themeModalOpen}
                 activeTheme={settings.theme || "rose-pine"}

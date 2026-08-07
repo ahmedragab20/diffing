@@ -140,8 +140,9 @@ vi.mock('lucide-react', () => {
   const Stub = () => null
   const keys = [
     'AlertTriangle', 'Search', 'GitBranch', 'Settings', 'Palette', 'ClipboardList',
-    'Type', 'Menu', 'LayoutGrid', 'Sparkles', 'CheckCheck', 'History', 'FileCode2',
+    'Type', 'Menu', 'LayoutGrid', 'ShieldAlert', 'Sparkles', 'CheckCheck', 'History', 'FileCode2',
     'Bot', 'X', 'ChevronLeft', 'ChevronRight', 'GitCommit', 'MessageSquare',
+    'MessageSquareWarning', 'Minimize2',
     'Check', 'RotateCcw', 'CornerUpLeft', 'Pencil', 'Trash2', 'ChevronDown',
     'ChevronUp', 'Eye', 'EyeOff', 'PanelLeftClose', 'PanelLeftOpen', 'Filter',
     'Copy', 'CheckCircle2', 'Loader2', 'GitCompare', 'GitPullRequest', 'ExternalLink',

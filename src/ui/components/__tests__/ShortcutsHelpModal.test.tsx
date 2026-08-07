@@ -79,6 +79,25 @@ describe('ShortcutsHelpModal', () => {
       expect(screen.getByText(/Suggest change/i)).toBeInTheDocument()
       expect(screen.getByText(/deep permalink/i)).toBeInTheDocument()
     })
+
+    it('documents zen mode and the submit-review dialog binding', () => {
+      render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} />)
+
+      expect(screen.getByText('Zen Mode')).toBeInTheDocument()
+      expect(screen.getByText(/Toggle Zen mode/)).toBeInTheDocument()
+    })
+  })
+
+  describe('pr mode', () => {
+    it('omits zen-mode shortcuts', () => {
+      render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} mode="pr" />)
+
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'GitHub PR Review Shortcuts' }),
+      ).toBeInTheDocument()
+      expect(screen.queryByText('Zen Mode')).not.toBeInTheDocument()
+      expect(screen.queryByText(/Toggle Zen mode/)).not.toBeInTheDocument()
+    })
   })
 
   describe('plan mode', () => {

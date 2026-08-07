@@ -23,6 +23,12 @@ interface DiffReviewKeymapActions {
   onToggleEdit?: () => void
   /** Save all dirty edit sessions (Cmd/Ctrl+S). */
   onSaveAll?: () => void
+  /** Toggle immersive diffs-only zen mode (z). */
+  onToggleZen?: () => void
+  /** Exit zen mode (Escape). Present only while zen is active and no overlay is open. */
+  onExitZen?: () => void
+  /** Open the centered Submit-review dialog (Cmd/Ctrl+Enter). */
+  onOpenSendReview?: () => void
 }
 
 /** Shared keyboard model for local and GitHub diff review surfaces. */
@@ -73,6 +79,30 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
         event.preventDefault()
         actions.onOpenShortcuts()
         fireFeedback('medium', 'open')
+        resetBuffer()
+        return
+      }
+
+      // Submit-review dialog: Cmd/Ctrl+Enter. Lives after the input-focus guard
+      // so the overall-comment field keeps its local ⌘Enter-to-send binding.
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key === 'Enter' &&
+        actions.onOpenSendReview
+      ) {
+        event.preventDefault()
+        actions.onOpenSendReview()
+        fireFeedback('medium', 'open')
+        resetBuffer()
+        return
+      }
+
+      // Escape exits zen when active (and no overlay is open — the App only
+      // wires onExitZen in that state). Overlays like the palette and dialogs
+      // handle their own Escape first.
+      if (event.key === 'Escape' && actions.onExitZen) {
+        event.preventDefault()
+        actions.onExitZen()
         resetBuffer()
         return
       }
@@ -158,6 +188,8 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
         handled(() => actions.onOpenPalette('files'), 'open')
       } else if (keyBuffer === 'gt') {
         handled(actions.onOpenTheme, 'open')
+      } else if (keyBuffer === 'z' && actions.onToggleZen) {
+        handled(actions.onToggleZen)
       } else if (keyBuffer === '?') {
         handled(actions.onOpenShortcuts, 'open')
       } else if (keyBuffer.length >= 2) {

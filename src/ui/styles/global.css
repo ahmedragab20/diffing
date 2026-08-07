@@ -13587,3 +13587,112 @@ button.toolbar-last-send-btn:hover {
 }
 
 /* Loader mark already has its own .boot-loader-mark rule above. */
+
+/* ============ Zen mode (diffs page) ============ */
+
+/* Belt-and-suspenders: the App already skips rendering the sidebar, handles,
+   and mobile backdrop in zen — these rules cover the skeleton and any stray
+   mount so zen is always diffs-only. */
+.app-zen .sidebar,
+.app-zen .sidebar-resize-handle,
+.app-zen .sidebar-mobile-backdrop {
+    display: none;
+}
+
+/* Minimal chrome: active branch + diff count + exit. Mirrors .plan-zen-bar. */
+.zen-bar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    height: var(--toolbar-height);
+    padding: 0 20px;
+    box-sizing: border-box;
+    border-bottom: 1px solid var(--border-weak);
+    background: color-mix(in srgb, var(--primary) 8%, var(--bg-secondary));
+    box-shadow: var(--shadow-sm);
+}
+.zen-bar-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+}
+.zen-bar-branch svg {
+    color: var(--primary);
+    flex-shrink: 0;
+}
+.zen-bar-branch-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.zen-bar-count {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 10px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--border-weak);
+    background: var(--bg-tertiary);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+.zen-bar-hint {
+    flex: 1;
+    text-align: right;
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.zen-bar-exit {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: var(--radius-pill);
+    border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+    background: var(--accent-subtle);
+    color: var(--primary);
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.zen-bar-exit:hover {
+    border-color: var(--primary);
+}
+.zen-bar-skeleton {
+    background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+}
+
+/* Toolbar zen toggle (visible only when zen is off). */
+.toolbar-zen-btn.is-active {
+    color: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+    background: var(--accent-subtle);
+}
+
+/* Centered Submit-review dialog (⌘Enter, zen mode). Reuses the .srp panel
+   styles 1:1. CRITICAL: keep .srp's own width/height CSS vars authoritative —
+   `flex: 1` here (flex-basis 0) would collapse the panel to its head+footer
+   and empty the scroll area. `flex: none` lets the panel's explicit
+   --submit-panel-width/height size the dialog exactly like the popover. */
+.ui-modal-popup.send-review-modal {
+    padding: 0;
+    width: auto;
+    max-width: calc(100vw - var(--space-8));
+}
+.send-review-modal .srp {
+    flex: none;
+    max-height: 82vh;
+}

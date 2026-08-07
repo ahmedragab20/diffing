@@ -16,6 +16,8 @@ interface PopoverProps {
   align?: 'start' | 'center' | 'end'
   className?: string
   ariaLabel?: string
+  /** Element to receive focus on open (Base UI initialFocus). */
+  initialFocus?: React.RefObject<HTMLElement | null>
 }
 
 /**
@@ -32,13 +34,18 @@ export function Popover({
   align = 'end',
   className,
   ariaLabel,
+  initialFocus,
 }: PopoverProps) {
   return (
     <BasePopover.Root open={open} onOpenChange={onOpenChange}>
       <BasePopover.Trigger render={trigger} />
       <BasePopover.Portal>
         <BasePopover.Positioner className="ui-popover-positioner" side={side} align={align} sideOffset={8}>
-          <BasePopover.Popup className={`ui-popover ${className ?? ''}`} aria-label={ariaLabel}>
+          <BasePopover.Popup
+            className={`ui-popover ${className ?? ''}`}
+            aria-label={ariaLabel}
+            initialFocus={initialFocus}
+          >
             {children}
           </BasePopover.Popup>
         </BasePopover.Positioner>

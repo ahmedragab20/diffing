@@ -5,6 +5,8 @@ import {
   ClipboardList,
   Menu,
   CheckCheck,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react'
 import type { DiffOptions } from '../hooks/useDiff'
 import type {
@@ -105,6 +107,12 @@ interface ToolbarProps {
   onDeleteComment: (id: string) => void
   sidebarCollapsed?: boolean
   onToggleSidebar?: () => void
+  /** Zen mode: toolbar hidden; this button is the entry point while off. */
+  zenMode?: boolean
+  onToggleZen?: () => void
+  /** Controlled Send-review popover open state (⌘Enter outside zen). */
+  sendReviewOpen?: boolean
+  onSendReviewOpenChange?: (open: boolean) => void
 }
 
 export function ResolveAllControl({
@@ -244,6 +252,10 @@ export const Toolbar = memo(function Toolbar({
   onDeleteComment,
   sidebarCollapsed,
   onToggleSidebar,
+  zenMode,
+  onToggleZen,
+  sendReviewOpen,
+  onSendReviewOpenChange,
 }: ToolbarProps) {
   const filesLabel = showMode
     ? `${showCommitCount} commit${showCommitCount === 1 ? '' : 's'}`
@@ -297,6 +309,18 @@ export const Toolbar = memo(function Toolbar({
       </div>
 
       <div className="toolbar-right">
+        {onToggleZen && (
+          <button
+            className={`btn btn-sm toolbar-zen-btn ${zenMode ? 'is-active' : ''}`}
+            onClick={onToggleZen}
+            aria-pressed={zenMode === true}
+            title="Zen mode — diffs only, no sidebar or toolbar (z)"
+            aria-label={zenMode ? 'Exit zen mode' : 'Enter zen mode'}
+          >
+            {zenMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            <span className="btn-label">{zenMode ? 'Exit zen' : 'Zen'}</span>
+          </button>
+        )}
         <button
           className="btn btn-sm toolbar-search-btn"
           onClick={onOpenSearch}
@@ -394,6 +418,8 @@ export const Toolbar = memo(function Toolbar({
           waitingAgents={waitingAgents}
           onCopyComments={onCopyComments}
           onCopyMarkdown={onCopyMarkdown}
+          open={sendReviewOpen}
+          onOpenChange={onSendReviewOpenChange}
         />
       </div>
     </header>
