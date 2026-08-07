@@ -39,6 +39,13 @@
   --gl-negative: var(--feedback-danger-text);
   --gl-added-surface: color-mix(in srgb, var(--gl-positive) 20%, var(--gl-canvas));
   --gl-removed-surface: color-mix(in srgb, var(--gl-negative) 20%, var(--gl-canvas));
+  /*
+   * How far syntax tokens on added/removed diff lines mix toward
+   * --text-primary before rendering. The tinted diff wash (above) can sink
+   * muted theme colours below readable contrast; themes tune this per palette
+   * (e.g. rose-pine sets 45%). 0% leaves every theme untouched.
+   */
+  --gl-diff-text-lift: 0%;
 
   /* Four-pixel geometry with deliberately shallow browser corners. */
   --gl-unit: 4px;

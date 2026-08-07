@@ -1458,6 +1458,13 @@ export function buildUnsafeCSS(tabSize: number, fontSize: number, fontFamily: st
       background-color: var(--gl-removed-surface) !important;
       box-shadow: inset 2px 0 var(--gl-negative) !important;
     }
+    /* Lift syntax tokens toward --text-primary on changed lines so muted
+       theme colours (e.g. rose-pine comments) stay readable on the tinted
+       diff wash. Themes tune --gl-diff-text-lift; 0% = unchanged. */
+    [data-line][data-line-type="addition"] *,
+    [data-line][data-line-type="deletion"] * {
+      color: color-mix(in srgb, var(--text-primary) var(--gl-diff-text-lift, 0%), currentColor) !important;
+    }
     [data-line].selected-line {
       outline: 1px solid var(--gl-focus) !important;
       outline-offset: -1px !important;

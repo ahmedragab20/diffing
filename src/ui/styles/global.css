@@ -1437,7 +1437,9 @@ textarea,
    love #eb6f92  gold #f6c177  rose #ebbcba  pine #31748f  foam #9ccfd8  iris #c4a7e7
    Diff colours: additions → foam (mint), deletions → love (rose/red) so the
    added/removed line tint inherits the Rosé Pine character instead of a flat
-   green/red. */
+   green/red. --gl-diff-text-lift 45% mixes syntax tokens toward --text-primary
+   on changed lines, keeping every Rosé Pine hue while lifting the muted
+   palette (comments #6e6a86, pine #31748f) above readable contrast on the tint. */
 [data-theme="rose-pine"] {
     --bg-primary: #191724;
     --bg-secondary: #1f1d2e;
@@ -1470,6 +1472,7 @@ textarea,
     --feedback-warning-bg: rgba(246, 193, 119, 0.15);
     --feedback-warning-border: #f6c177;
     --feedback-warning-text: #f6c177;
+    --gl-diff-text-lift: 45%;
 }
 
 /* Rosé Pine Moon — official palette tuned for diff review.
@@ -1507,6 +1510,7 @@ textarea,
     --feedback-warning-bg: rgba(246, 193, 119, 0.15);
     --feedback-warning-border: #f6c177;
     --feedback-warning-text: #f6c177;
+    --gl-diff-text-lift: 45%;
 }
 
 /* Rosé Pine Dawn — official palette (rosepineetheme.com).
@@ -1546,6 +1550,7 @@ textarea,
     --feedback-warning-bg: rgba(234, 157, 52, 0.08);
     --feedback-warning-border: #ea9d34;
     --feedback-warning-text: #c07a1c;
+    --gl-diff-text-lift: 45%;
 }
 
 /* Slack Dark */
