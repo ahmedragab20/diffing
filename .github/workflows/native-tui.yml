@@ -187,14 +187,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
       - uses: actions/download-artifact@v4
         with:
           name: diffing-root
           path: target/root-tarball
+      # Publish via npm trusted publishing (OIDC): no long-lived token. Requires a
+      # trusted publisher for ahmedragab20/diffing in the npm package settings.
       - run: npm publish target/root-tarball/*.tgz --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   verify-published:
     name: Verify npm install
