@@ -34,7 +34,10 @@ import {
   Check,
   Save,
   RotateCcw,
+  Search,
 } from 'lucide-react'
+import type { FileSearchSession } from '../hooks/useFileSearch'
+import { FileSearchBar } from './FileSearchBar'
 import { Modal } from '../primitives/Modal'
 import { Tooltip } from '../primitives/Tooltip'
 import { EMBEDDED_COMMENT_STYLES } from '../lib/embeddedCommentStyles'
@@ -192,6 +195,14 @@ interface FileDiffCardProps {
   onEditSave?: (filePath: string) => void
   onEditDiscard?: (filePath: string) => void
   onEditExit?: (filePath: string) => void
+  /**
+   * Active file-scoped search session. The card renders its find-in-file bar
+   * only when `fileSearch.filePath` matches this card's file. Undefined (or a
+   * session targeting another file) hides the bar.
+   */
+  fileSearch?: FileSearchSession | null
+  /** Open the find-in-file bar on this file (from the header search button). */
+  onOpenFileSearch?: (filePath: string) => void
 }
 
 export const FileDiffCard = memo(function FileDiffCard({
@@ -234,6 +245,8 @@ export const FileDiffCard = memo(function FileDiffCard({
   onEditSave,
   onEditDiscard,
   onEditExit,
+  fileSearch,
+  onOpenFileSearch,
 }: FileDiffCardProps) {
   const [pending, setPending] = useState<PendingComment | null>(null)
   /**
@@ -768,6 +781,31 @@ export const FileDiffCard = memo(function FileDiffCard({
         </div>
 
         <div className="file-diff-header-right" onClick={(e) => e.stopPropagation()}>
+          {onOpenFileSearch && (
+            <Tooltip
+              content={
+                fileSearch?.filePath === filePath ? 'Close find in file' : 'Find in file (⌘F)'
+              }
+              side="bottom"
+            >
+              <button
+                className={`file-diff-icon-btn ${fileSearch?.filePath === filePath ? 'is-active' : ''}`}
+                onClick={() => {
+                  if (fileSearch?.filePath === filePath) {
+                    fileSearch.close()
+                  } else {
+                    setCollapsed(false)
+                    onOpenFileSearch(filePath)
+                  }
+                }}
+                aria-label={
+                  fileSearch?.filePath === filePath ? 'Close find in file' : 'Find in file'
+                }
+              >
+                <Search size={13} />
+              </button>
+            </Tooltip>
+          )}
           {canExpandContext && !editing && (
             <Tooltip
               content={contextExpanded ? 'Hide unchanged context' : 'Expand full-file context'}
@@ -884,6 +922,21 @@ export const FileDiffCard = memo(function FileDiffCard({
           </label>
         </div>
       </div>
+
+      {fileSearch?.filePath === filePath && (
+        <div className="file-search-bar-wrap" onClick={(e) => e.stopPropagation()}>
+          <FileSearchBar
+            filePath={filePath}
+            query={fileSearch.query}
+            hits={fileSearch.hits}
+            index={fileSearch.index}
+            onQueryChange={fileSearch.setQuery}
+            onNext={fileSearch.next}
+            onPrev={fileSearch.prev}
+            onClose={fileSearch.close}
+          />
+        </div>
+      )}
 
       {((editing && editSession?.error) || editEntryError) && (
         <div className="file-diff-edit-error" role="alert" onClick={(e) => e.stopPropagation()}>

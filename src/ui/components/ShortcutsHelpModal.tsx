@@ -72,6 +72,8 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       items: [
         { keys: ['⌘', 'K'], description: 'Open Search Palette (all scopes)' },
         { keys: ['g', 'f'], description: 'Open Search Palette (all scopes, same as ⌘K)' },
+        { keys: ['⌘', 'F'], description: 'Find in the active file (changed + context lines)' },
+        { keys: ['F'], description: 'Find in the active file (same as ⌘F)' },
         { keys: ['/'], description: 'Open Search Palette (All scopes, changed files only)' },
         { keys: ['f'], description: 'Browse files (Files scope, changed files only)' },
         { keys: ['g', 'v'], description: 'Browse files (same as f)' },
@@ -115,7 +117,7 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
       items: [
         { keys: ['UI'], description: 'Select lines or gutter + to start an inline comment' },
         { keys: ['v'], description: 'Toggle Viewed on the active file (collapses card)' },
-        { keys: ['UI'], description: 'File header icons: expand context · edit · file comment' },
+        { keys: ['UI'], description: 'File header icons: find in file · expand context · edit · file comment' },
         { keys: ['UI'], description: 'Round badge → open review history timeline' },
         { keys: ['UI'], description: 'File-tree chips: Unviewed · Comments · Since last' },
         { keys: ['UI'], description: 'Comment form “Suggest change” inserts ```suggestion fence' },

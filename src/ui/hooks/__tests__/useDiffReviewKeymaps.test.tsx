@@ -27,6 +27,7 @@ function makeActions() {
     onNextSearchHit: vi.fn(),
     onPrevSearchHit: vi.fn(),
     onOpenTheme: vi.fn(),
+    onOpenFileSearch: vi.fn(),
     onOpenShortcuts: vi.fn(),
     onToggleZen: vi.fn(),
     onExitZen: vi.fn(),
@@ -185,5 +186,52 @@ describe('shared diff review keymaps', () => {
     input.blur()
     fireEvent.keyDown(window, { key: 'Enter', metaKey: true })
     expect(actions.onOpenSendReview).toHaveBeenCalledOnce()
+  })
+
+  it('opens file search with Cmd/Ctrl+F, never the palette', () => {
+    const actions = makeActions()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'f', metaKey: true })
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+
+    expect(actions.onOpenFileSearch).toHaveBeenCalledTimes(2)
+    expect(actions.onOpenPalette).not.toHaveBeenCalled()
+  })
+
+  it('opens file search with F', () => {
+    const actions = makeActions()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'F' })
+
+    expect(actions.onOpenFileSearch).toHaveBeenCalledOnce()
+    expect(actions.onOpenPalette).not.toHaveBeenCalled()
+  })
+
+  it('opens file search from an input field via Cmd+F (global branch precedes the focus guard)', () => {
+    const actions = makeActions()
+    render(
+      <Harness actions={actions}>
+        <input data-testid="in" />
+      </Harness>,
+    )
+
+    const input = screen.getByTestId('in')
+    input.focus()
+    fireEvent.keyDown(input, { key: 'f', metaKey: true })
+
+    expect(actions.onOpenFileSearch).toHaveBeenCalledOnce()
+    expect(actions.onOpenPalette).not.toHaveBeenCalled()
+  })
+
+  it('plain f opens the file palette instead of file search', () => {
+    const actions = makeActions()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'f' })
+
+    expect(actions.onOpenFileSearch).not.toHaveBeenCalled()
+    expect(actions.onOpenPalette).toHaveBeenCalledWith('files')
   })
 })

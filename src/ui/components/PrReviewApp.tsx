@@ -18,7 +18,8 @@ import { usePrCommentSync, usePrComments, usePrSession, useRefreshPrSession, typ
 import { resolveMonoFont, useSettings, type Settings } from '../hooks/useSettings'
 import { useApplyFonts } from '../hooks/useApplyFonts'
 import { useViewed } from '../hooks/useViewed'
-import { useDiffSearch } from '../hooks/useDiffSearch'
+import { useDiffSearch, buildFileSearchCorpus } from '../hooks/useDiffSearch'
+import { useFileSearch } from '../hooks/useFileSearch'
 import { HapticsProvider } from '../hooks/useHaptics'
 import { useDiffReviewKeymaps } from '../hooks/useDiffReviewKeymaps'
 import { useSearchSession } from '../hooks/useSearchSession'
@@ -156,6 +157,16 @@ export function PrReviewApp() {
   }, [comments])
 
   const diffSearchEntries = useDiffSearch(filteredFiles)
+  // Find-in-file corpus: changed lines + unchanged context lines.
+  const fileSearchCorpus = useMemo(
+    () => buildFileSearchCorpus(filteredFiles),
+    [filteredFiles],
+  )
+  const fileSearch = useFileSearch(fileSearchCorpus)
+  const openFileSearch = useCallback(
+    (path: string) => fileSearch.open(path),
+    [fileSearch],
+  )
   const searchNavContext = useMemo(
     () => ({
       diffFileSet: buildDiffFileSet(filteredFiles),
@@ -372,6 +383,7 @@ export function PrReviewApp() {
     },
     onOpenPalette: openPalette,
     onTogglePalette: togglePalette,
+    onOpenFileSearch: activeFile ? () => fileSearch.open(activeFile) : undefined,
     onNextSearchHit: nextHit,
     onPrevSearchHit: prevHit,
     onOpenTheme: () => setThemeModalOpen(true),
@@ -388,6 +400,8 @@ export function PrReviewApp() {
     updateSettings,
     openPalette,
     togglePalette,
+    activeFile,
+    fileSearch,
     nextHit,
     prevHit,
   ])
@@ -543,6 +557,8 @@ export function PrReviewApp() {
                 viewedFiles={viewedFiles}
                 settings={settings}
                 monoFontFamily={monoFontFamily}
+                fileSearch={fileSearch}
+                onOpenFileSearch={openFileSearch}
                 onAddComment={(params) => addComment(params)}
                 onDeleteComment={removeComment}
                 onViewedChange={handleViewedChange}
@@ -600,6 +616,8 @@ function PrDiffSurface({
   viewedFiles,
   settings,
   monoFontFamily,
+  fileSearch,
+  onOpenFileSearch,
   onAddComment,
   onDeleteComment,
   onViewedChange,
@@ -615,6 +633,8 @@ function PrDiffSurface({
   viewedFiles: Set<string>
   settings: Settings
   monoFontFamily: string
+  fileSearch: ReturnType<typeof useFileSearch>
+  onOpenFileSearch: (filePath: string) => void
   onAddComment: (params: { filePath: string; side: ReviewComment['side']; lineNumber: number; startLineNumber?: number; lineContent: string; body: string }) => void
   onDeleteComment: (id: string) => void
   onViewedChange: (filePath: string, viewed: boolean) => void
@@ -661,6 +681,8 @@ function PrDiffSurface({
               onSetExistingResolved={onSetExistingResolved}
               onCardToggleCollapse={onCardToggleCollapse}
               allowLocalActions={false}
+              fileSearch={fileSearch}
+              onOpenFileSearch={onOpenFileSearch}
             />
           </div>
         )

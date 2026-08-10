@@ -15,6 +15,8 @@ interface DiffReviewKeymapActions {
   onCycleLineDiffType: () => void
   onOpenPalette: (scope: Scope) => void
   onTogglePalette?: () => void
+  /** Open the file-scoped find-in-file bar on the active file (⌘F / F). */
+  onOpenFileSearch?: () => void
   onNextSearchHit?: () => void
   onPrevSearchHit?: () => void
   onOpenTheme: () => void
@@ -49,6 +51,20 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
         event.preventDefault()
         if (actions.onTogglePalette) actions.onTogglePalette()
         else actions.onOpenPalette('all')
+        resetBuffer()
+        return
+      }
+
+      // Find-in-file stays global too: the user expects ⌘F to work everywhere,
+      // including while an edit session has focus (diff content is shadow-DOM,
+      // so the browser's native find cannot reach it).
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === 'f' &&
+        actions.onOpenFileSearch
+      ) {
+        event.preventDefault()
+        actions.onOpenFileSearch()
         resetBuffer()
         return
       }
@@ -172,6 +188,8 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
         handled(() => actions.onNextSearchHit?.(), 'navigate')
       } else if (keyBuffer === 'N') {
         handled(() => actions.onPrevSearchHit?.(), 'navigate')
+      } else if (keyBuffer === 'F') {
+        handled(() => actions.onOpenFileSearch?.(), 'open')
       } else if (keyBuffer === 'i') {
         handled(actions.onCycleDiffIndicators)
       } else if (keyBuffer === 'I') {

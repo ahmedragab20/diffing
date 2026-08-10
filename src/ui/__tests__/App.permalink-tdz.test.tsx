@@ -117,6 +117,7 @@ vi.mock('../hooks/useScrollToNextFile', () => ({
 
 vi.mock('../hooks/useDiffSearch', () => ({
   useDiffSearch: () => [],
+  buildFileSearchCorpus: () => [],
 }))
 
 vi.mock('../hooks/useHaptics', () => ({

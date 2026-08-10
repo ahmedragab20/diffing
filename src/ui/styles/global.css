@@ -5630,6 +5630,78 @@ file-tree,
 .file-diff-header-right .viewed-label:hover {
     background: var(--bg-tertiary);
 }
+/* Find-in-file bar (file-scoped search session on the active card) */
+.file-search-bar-wrap {
+    border-bottom: 1px solid var(--border-weak);
+    background: var(--bg-secondary);
+}
+.file-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    min-height: 32px;
+    user-select: none;
+}
+.file-search-bar-icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+.file-search-bar-input {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--border-weak);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 12.5px;
+    font-family: var(--font-sans);
+    padding: 3px 8px;
+    outline: none;
+    height: 24px;
+}
+.file-search-bar-input:focus {
+    border-color: var(--accent);
+}
+.file-search-bar-input::placeholder {
+    color: var(--text-muted);
+}
+.file-search-bar-count {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 52px;
+    text-align: right;
+}
+.file-search-bar-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+.file-search-bar-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 22px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+}
+.file-search-bar-btn:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+}
+.file-search-bar-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
 .file-diff-hunk-actions-meta {
     display: flex;
     align-items: center;

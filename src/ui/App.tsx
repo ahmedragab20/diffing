@@ -39,6 +39,8 @@ import {
 import { getUiStateItem, setUiStateItem } from "./utils/uiState";
 import { DIFF_UI, readZenMode } from "./lib/diffUiState";
 import { useDiffSearch } from "./hooks/useDiffSearch";
+import { buildFileSearchCorpus } from "./hooks/useDiffSearch";
+import { useFileSearch } from "./hooks/useFileSearch";
 import { Toolbar } from "./components/Toolbar";
 import { ZenBar } from "./components/ZenBar";
 import { SendReviewModal } from "./components/SendReviewModal";
@@ -598,6 +600,16 @@ export function App() {
 
     const diffSearchEntries = useDiffSearch(sortedFiles);
 
+    // Find-in-file corpus: changed lines + unchanged context lines.
+    const fileSearchCorpus = useMemo(
+        () => buildFileSearchCorpus(sortedFiles),
+        [sortedFiles],
+    );
+    const fileSearch = useFileSearch(fileSearchCorpus);
+    const openFileSearch = useCallback((path: string) => {
+        fileSearch.open(path);
+    }, [fileSearch]);
+
     const searchNavContext = useMemo(
         () => ({
             diffFileSet: buildDiffFileSet(filteredFiles),
@@ -1007,6 +1019,7 @@ export function App() {
             onCycleLineDiffType: cycleLineDiffType,
             onOpenPalette: openPalette,
             onTogglePalette: togglePalette,
+            onOpenFileSearch: activeFile ? () => openFileSearch(activeFile) : undefined,
             onNextSearchHit: nextHit,
             onPrevSearchHit: prevHit,
             onOpenTheme: () => setThemeModalOpen(true),
@@ -1038,6 +1051,8 @@ export function App() {
             cycleLineDiffType,
             openPalette,
             togglePalette,
+            openFileSearch,
+            activeFile,
             nextHit,
             prevHit,
             canEditScope,
@@ -1510,6 +1525,8 @@ export function App() {
                         onEditSave={saveEdit}
                         onEditDiscard={handleEditDiscard}
                         onEditExit={handleEditExit}
+                        fileSearch={fileSearch}
+                        onOpenFileSearch={openFileSearch}
                     />
                 </main>
             </div>

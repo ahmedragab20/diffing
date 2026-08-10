@@ -14,6 +14,7 @@ import type {
 } from '../hooks/useSettings'
 import { FileDiffCard } from './FileDiffCard'
 import { BinaryFileDiff } from './BinaryFileDiff'
+import type { FileSearchSession } from '../hooks/useFileSearch'
 
 interface DiffViewerProps {
   files: FileDiffMetadata[]
@@ -72,6 +73,10 @@ interface DiffViewerProps {
   onEditSave?: (filePath: string) => void
   onEditDiscard?: (filePath: string) => void
   onEditExit?: (filePath: string) => void
+  /** Active file-scoped search session (bar renders on the matching card). */
+  fileSearch?: FileSearchSession | null
+  /** Open the find-in-file bar on a specific file (header search button). */
+  onOpenFileSearch?: (filePath: string) => void
 }
 
 const emptyAnnotations: DiffLineAnnotation<ReviewComment>[] = []
@@ -143,6 +148,8 @@ export const DiffViewer = memo(function DiffViewer({
   onEditSave,
   onEditDiscard,
   onEditExit,
+  fileSearch,
+  onOpenFileSearch,
 }: DiffViewerProps) {
   // Callers (App) already sort with sortFilesByName — re-sorting here was pure
   // CPU cost on every parent re-render of large diffs.
@@ -218,6 +225,8 @@ export const DiffViewer = memo(function DiffViewer({
             onEditSave={onEditSave}
             onEditDiscard={onEditDiscard}
             onEditExit={onEditExit}
+            fileSearch={fileSearch?.filePath === filePath ? fileSearch : null}
+            onOpenFileSearch={onOpenFileSearch}
           />
         )
       })}
