@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { fireFeedback, playSound } from './useHaptics'
+import { isTypingInFocus } from '../utils'
 
 export interface PlanReviewKeymapActions {
   onNavigatePlan: (direction: 'next' | 'prev') => void
@@ -28,13 +29,10 @@ export function usePlanReviewKeymaps(actions: PlanReviewKeymapActions) {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
-      const active = document.activeElement
-      if (active) {
-        const tag = active.tagName.toLowerCase()
-        if (tag === 'input' || tag === 'textarea' || active.hasAttribute('contenteditable')) {
-          return
-        }
-      }
+      // Never fire shortcuts while typing, including in contenteditable
+      // surfaces inside shadow roots (document.activeElement retargets to the
+      // shadow host there, so the check must descend).
+      if (isTypingInFocus()) return
 
       // Never steal browser chords (⌘C copy, ⌥ shortcuts, etc.). Ctrl+D/U
       // page-scroll is handled below; other Ctrl chords also bail out there.

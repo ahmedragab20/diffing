@@ -95,6 +95,31 @@ function findElementInElOrShadow(root: Element | ShadowRoot, selector: string): 
 }
 
 /**
+ * True when the currently focused element is a text-entry target: an
+ * <input>, <textarea>, or contenteditable region — including when focus
+ * lives inside a shadow root (e.g. the @pierre/diffs in-place edit surface).
+ * `document.activeElement` retargets such focus to the shadow host, so a
+ * naive tagName/contenteditable check on it misses the real editable node;
+ * this descends into `shadowRoot.activeElement` at each level of the chain.
+ */
+export function isTypingInFocus(): boolean {
+  let active: Element | null = document.activeElement
+  while (active) {
+    const tag = active.tagName.toLowerCase()
+    if (tag === 'input' || tag === 'textarea' || active.hasAttribute('contenteditable')) {
+      return true
+    }
+    const inner = active.shadowRoot?.activeElement ?? null
+    if (inner && inner !== active) {
+      active = inner
+      continue
+    }
+    active = active.parentElement
+  }
+  return false
+}
+
+/**
  * Apply a temporary gold flash to a mounted line element (or, when
  * `highlightText` matches, to the specific child span). Inline styles bypass
  * shadow-DOM encapsulation. Shared by the diff-view jump and the preview pane.

@@ -84,4 +84,29 @@ describe('plan review keymaps', () => {
     expect(actions.onNavigatePlan).toHaveBeenNthCalledWith(2, 'prev')
     expect(actions.onOpenShortcuts).toHaveBeenCalledOnce()
   })
+
+  it('does not toggle zen while a contenteditable inside a shadow root has focus', () => {
+    const actions = makeActions()
+    const { container } = render(<Harness actions={actions} />)
+
+    const host = document.createElement('div')
+    if (typeof host.attachShadow !== 'function') {
+      // jsdom without shadow-DOM support — nothing to assert.
+      return
+    }
+    const shadow = host.attachShadow({ mode: 'open' })
+    const editable = document.createElement('div')
+    editable.setAttribute('contenteditable', 'true')
+    shadow.appendChild(editable)
+    container.appendChild(host)
+
+    editable.focus()
+
+    // document.activeElement retargets to the shadow host, so a guard that
+    // only inspects the top-level active element misses the editable node.
+    expect(document.activeElement).toBe(host)
+
+    fireEvent.keyDown(window, { key: 'z' })
+    expect(actions.onToggleZenMode).not.toHaveBeenCalled()
+  })
 })

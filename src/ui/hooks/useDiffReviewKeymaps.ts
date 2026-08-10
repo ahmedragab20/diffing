@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import type { Scope } from '../lib/searchTypes'
 import { fireFeedback, playSound } from './useHaptics'
+import { isTypingInFocus } from '../utils'
 
 interface DiffReviewKeymapActions {
   onNavigateFile: (direction: 'next' | 'prev') => void
@@ -82,11 +83,10 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
         return
       }
 
-      const active = document.activeElement
-      if (active) {
-        const tag = active.tagName.toLowerCase()
-        if (tag === 'input' || tag === 'textarea' || active.hasAttribute('contenteditable')) return
-      }
+      // The focus guard must also see contenteditable surfaces inside shadow
+      // roots (the @pierre/diffs edit surface), where document.activeElement
+      // retargets to the shadow host.
+      if (isTypingInFocus()) return
 
       if (
         (event.metaKey || event.ctrlKey) &&

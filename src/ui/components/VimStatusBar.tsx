@@ -1,5 +1,6 @@
 import { useState, useEffect, memo, useRef, useCallback } from 'react'
 import { Terminal, HelpCircle, ChevronLeft, ChevronRight } from 'lucide-react'
+import { isTypingInFocus } from '../utils'
 
 interface VimStatusBarProps {
   activeFile: string | null
@@ -34,17 +35,10 @@ export const VimStatusBar = memo(function VimStatusBar({
 
   useEffect(() => {
     const checkMode = () => {
-      const active = document.activeElement
-      if (active) {
-        const tag = active.tagName.toLowerCase()
-        const isEditing =
-          tag === 'input' ||
-          tag === 'textarea' ||
-          active.hasAttribute('contenteditable')
-        setIsInsertMode(isEditing)
-      } else {
-        setIsInsertMode(false)
-      }
+      // Shadow-aware: the in-place edit surface is contenteditable inside the
+      // @pierre/diffs shadow root, where document.activeElement retargets to
+      // the host — the naive tagName check used to miss insert mode.
+      setIsInsertMode(isTypingInFocus())
     }
 
     document.addEventListener('focusin', checkMode)

@@ -188,6 +188,31 @@ describe('shared diff review keymaps', () => {
     expect(actions.onOpenSendReview).toHaveBeenCalledOnce()
   })
 
+  it('does not open send-review while a contenteditable inside a shadow root has focus', () => {
+    const actions = makeActions()
+    const { container } = render(<Harness actions={actions} />)
+
+    const host = document.createElement('div')
+    if (typeof host.attachShadow !== 'function') {
+      // jsdom without shadow-DOM support — nothing to assert.
+      return
+    }
+    const shadow = host.attachShadow({ mode: 'open' })
+    const editable = document.createElement('div')
+    editable.setAttribute('contenteditable', 'true')
+    shadow.appendChild(editable)
+    container.appendChild(host)
+
+    editable.focus()
+
+    // document.activeElement retargets to the shadow host, so a guard that
+    // only inspects the top-level active element misses the editable node.
+    expect(document.activeElement).toBe(host)
+
+    fireEvent.keyDown(window, { key: 'Enter', metaKey: true })
+    expect(actions.onOpenSendReview).not.toHaveBeenCalled()
+  })
+
   it('opens file search with Cmd/Ctrl+F, never the palette', () => {
     const actions = makeActions()
     render(<Harness actions={actions} />)
