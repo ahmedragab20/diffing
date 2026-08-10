@@ -421,6 +421,95 @@ export async function detectCwdRepo(): Promise<DetectedRepo | null> {
 }
 
 /**
+ * True only when a `gh pr diff` failure is GitHub's "diff too large" refusal
+ * (HTTP 406 / `PullRequest.diff too large` / "exceeded the maximum number of
+ * files (300)"). Every other failure (auth, 404, network) returns false so
+ * the caller's fail-hard semantics stay intact for them.
+ */
+export function isPrDiffTooLargeError(err: unknown): boolean {
+  if (!err) return false
+  const e = err as { stderr?: string; message?: string }
+  const text = `${e.stderr ?? ''} ${e.message ?? ''}`
+  return (
+    /PullRequest\.diff too large/i.test(text) ||
+    /exceeded the maximum number of files/i.test(text)
+  )
+}
+
+/**
+ * Build one `diff --git …` block from a GitHub "List pull request files"
+ * item. The envelope matches what `lib/git.ts` synthesizes for new files
+ * and what the codebase's diff parsers expect (`diff --git a/<p> b/<p>`):
+ * no quoting — `git.ts` and the parsers rely on the raw unquoted form.
+ * Binary / per-file-oversized entries (`patch == null`) become a
+ * `Binary files … differ` stub so the file still appears in the overview.
+ */
+function assembleFileDiffBlock(file: any): string | null {
+  if (!file || typeof file.filename !== 'string') return null
+  const status = String(file.status ?? 'modified')
+  const filename = file.filename
+  const prev = typeof file.previous_filename === 'string' ? file.previous_filename : filename
+  const patch = typeof file.patch === 'string' ? file.patch : null
+  const lines: string[] = [`diff --git a/${prev} b/${filename}`]
+  if (status === 'added') lines.push('new file mode 100644')
+  else if (status === 'removed') lines.push('deleted file mode 100644')
+  if (patch === null) {
+    if (status === 'added') {
+      lines.push(`Binary files /dev/null and b/${filename} differ`)
+    } else if (status === 'removed') {
+      lines.push(`Binary files a/${filename} and /dev/null differ`)
+    } else {
+      lines.push(`Binary files a/${prev} and b/${filename} differ`)
+    }
+  } else {
+    if (status === 'added') {
+      lines.push('--- /dev/null')
+      lines.push(`+++ b/${filename}`)
+    } else if (status === 'removed') {
+      lines.push(`--- a/${filename}`)
+      lines.push('+++ /dev/null')
+    } else {
+      lines.push(`--- a/${prev}`)
+      lines.push(`+++ b/${filename}`)
+    }
+    lines.push(patch)
+  }
+  return lines.join('\n')
+}
+
+/**
+ * Fallback diff source for PRs above GitHub's 300-file cap: paginate the
+ * "List pull request files" REST endpoint via `gh api --paginate` (the same
+ * transport `fetchExistingReviewsViaGh` / `fetchExistingCommentsViaGh` use)
+ * and concatenate a unified diff from each item's `patch`. Effective cap is
+ * ~30,000 files (100/page × 300 pages). Throws on transport failure so the
+ * caller can surface it; a per-file `patch == null` is not fatal.
+ */
+export async function fetchPrDiffViaFilesApi(resolved: ResolvedPr): Promise<string> {
+  const endpoint = `repos/${resolved.owner}/${resolved.repo}/pulls/${resolved.pullNumber}/files?per_page=100`
+  let files: any[]
+  try {
+    const { stdout } = await execFileAsync(
+      'gh',
+      ['api', ...ghHostnameArgs(resolved), endpoint, '--paginate'],
+      // 100 MB: a 30k-file PR's per-file metadata can dwarf `gh pr diff`.
+      { encoding: 'utf-8', maxBuffer: 100 * 1024 * 1024 },
+    )
+    const parsed = JSON.parse(stdout)
+    files = Array.isArray(parsed) ? parsed : []
+  } catch (err: any) {
+    const stderr = err?.stderr || err?.message || 'unknown error'
+    throw new Error(`gh api files failed: ${stderr.trim()}`)
+  }
+  const blocks: string[] = []
+  for (const file of files) {
+    const block = assembleFileDiffBlock(file)
+    if (block) blocks.push(block)
+  }
+  return blocks.join('\n')
+}
+
+/**
  * Fetch PR metadata + diff + existing review comments using `gh`.
  * Throws with a user-readable message on failure.
  */
@@ -459,8 +548,17 @@ export async function fetchPrMetadataViaGh(resolved: ResolvedPr): Promise<PrMeta
     )
     diff = stdout
   } catch (err: any) {
-    const stderr = err?.stderr || err?.message || 'unknown error'
-    throw new Error(`gh pr diff failed: ${stderr.trim()}`)
+    if (isPrDiffTooLargeError(err)) {
+      // GitHub refuses the unified-diff endpoint above 300 files (HTTP 406 /
+      // `PullRequest.diff too large`). Fall back to paginating the "List
+      // pull request files" API and synthesizing the diff per file using
+      // the same envelope `lib/git.ts` emits. Only this signature triggers
+      // the fallback; every other failure re-throws to keep fail-hard intact.
+      diff = await fetchPrDiffViaFilesApi(resolved)
+    } else {
+      const stderr = err?.stderr || err?.message || 'unknown error'
+      throw new Error(`gh pr diff failed: ${stderr.trim()}`)
+    }
   }
 
   // Reviews / comments / submit always target the *base* repository (where
