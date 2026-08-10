@@ -15,6 +15,7 @@ import {
 import type { Plan, PlanDecision } from '../../lib/plan-types'
 import { timeAgo } from '../utils'
 import { Tooltip } from '../primitives/Tooltip'
+import { ConfirmDialog } from '../primitives/ConfirmDialog'
 import { getUiStateItem, setUiStateItem } from '../utils/uiState'
 import { PLAN_UI } from '../lib/planUiState'
 
@@ -58,6 +59,8 @@ export function PlanList({ plans, activeId, onSelect, onDelete, collapsed, onTog
   const [filter, setFilter] = useState('')
   const [decisionFilter, setDecisionFilter] = useState<DecisionFilter>(readDecisionFilter)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  // Plan awaiting delete confirmation in the confirm dialog.
+  const [planToDelete, setPlanToDelete] = useState<Plan | null>(null)
 
   const handleDecisionFilter = useCallback((next: DecisionFilter) => {
     setDecisionFilter(next)
@@ -223,7 +226,7 @@ export function PlanList({ plans, activeId, onSelect, onDelete, collapsed, onTog
                     aria-label="Delete plan"
                     onClick={(e) => {
                       e.stopPropagation()
-                      onDelete(plan.id)
+                      setPlanToDelete(plan)
                     }}
                   >
                     <Trash2 size={12} aria-hidden="true" />
@@ -247,6 +250,20 @@ export function PlanList({ plans, activeId, onSelect, onDelete, collapsed, onTog
           })}
         </div>
       </div>
+      <ConfirmDialog
+        open={planToDelete !== null}
+        title="Delete plan?"
+        description="This permanently removes the plan and all of its comments. This cannot be undone."
+        detail={planToDelete?.title}
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={() => {
+          if (!planToDelete) return
+          onDelete(planToDelete.id)
+          setPlanToDelete(null)
+        }}
+        onCancel={() => setPlanToDelete(null)}
+      />
     </div>
   )
 }

@@ -91,7 +91,7 @@ vi.mock('lucide-react', () => {
   const Stub = () => null
   const mod: Record<string, unknown> = {}
   for (const name of [
-    'ArrowLeft', 'Palette', 'ClipboardList', 'Settings', 'Code2', 'FileText', 'Columns2', 'Menu',
+    'AlertTriangle', 'ArrowLeft', 'Palette', 'ClipboardList', 'Settings', 'Code2', 'FileText', 'Columns2', 'Menu',
     'Search', 'PanelLeftClose', 'PanelLeftOpen', 'Check', 'X', 'MessageSquareWarning', 'Clock',
     'Trash2', 'Bot', 'MessageSquare', 'Copy', 'Loader2',
   ]) {
