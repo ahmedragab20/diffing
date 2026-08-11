@@ -20,12 +20,15 @@ graph TD
 ```
 
 ### Output Mode Auto-Detection
+
 The primary `diffing` command determines how to output diff results based on whether stdout is interactive (a TTY) or a pipe/redirect:
+
 - **Preferred interactive mode** (Default: Web): Uses the `web` or `tui` preference stored in `~/.config/diffing/settings.json`. Change it with `diffing mode <web|tui>`.
 - **Terminal Mode** (Default for pipes, redirects, or non-TTY outputs): Behaves exactly like `git diff`. The command outputs standard patch text directly to stdout and exits.
 - **Viewer Mode** (Explicit `view` / `--view`): Opens a focused, read-only native TUI for browsing an interactive diff. This mode is intended as the ergonomic replacement for an interactive `git diff`.
 
 You can explicitly select a mode using a command or flag:
+
 - `--web`: Forces the launching of the web review server.
 - `--terminal`: Forces standard `git diff` output to terminal.
 - `view` / `--view`: Opens the read-only native diff viewer.
@@ -52,7 +55,9 @@ The newest launch becomes active. Use `diffing sessions use <id>` to retarget
 session.
 
 ### The Lockfile Location
+
 The storage directory is computed by hashing the absolute path of the repository root:
+
 ```text
 ~/.diffing/<repo-name>-<sha256(repo-root-path).slice(0, 8)>/
 ├── server.json                 # active-session pointer
@@ -60,6 +65,7 @@ The storage directory is computed by hashing the absolute path of the repository
 ```
 
 ### Lockfile Schema
+
 ```json
 {
   "port": 3433,
@@ -80,7 +86,9 @@ The storage directory is computed by hashing the absolute path of the repository
 - `prRef` — present only when `mode === "gh-pr"`. The original `gh pr <ref>` input as the user typed it, for diagnostic round-trips.
 
 ### Self-Healing & Validation
+
 To ensure stale lockfiles from terminated or crashed server processes do not block the CLI, client subcommands check the lock's validity via `isLockAlive`:
+
 1. It probes the process using `process.kill(pid, 0)` (which checks for process existence without sending a termination signal).
 2. It validates that the repository path registered in the lockfile matches the repository context of the executing CLI process.
 
@@ -100,6 +108,7 @@ diffing [options] [<revision>...] [-- <path>...]
 ```
 
 #### Diffing Server Options
+
 - `--port <port>`: The port to bind the server to. If omitted, it automatically requests a random available port.
 - `--host <host>`: Host address to bind the server to (default: `127.0.0.1`). Loopback binds generate a per-session API token stored in the server lockfile; the web UI authenticates via an HttpOnly cookie (set when HTML is served) and optional `x-diffing-token` header on fetch. CLI and MCP read the token from the lockfile and send the header. Browseable URLs never include `?token=`. To expose the dashboard on your LAN, pass `0.0.0.0` together with `--insecure-no-auth` (disables API authentication).
 - `--insecure-no-auth`: Required when binding to `0.0.0.0` or `::`. Allows LAN clients to reach the API without a token. Ignored on loopback binds.
@@ -143,6 +152,7 @@ Bypass the gate with `--skip-setup`. CI and non-TTY environments never show the
 prompt. See **[getting-started.md](getting-started.md)** and **`setup`** below.
 
 #### Git-Compatible Flags Supported
+
 - **Revisions / Range**: `--staged`, `--cached`, `--merge`
 - **Diff Algorithms**: `--diff-algorithm=<algo>` (`minimal`, `patience`, `histogram`, `myers`), `--indent-heuristic`, `--no-indent-heuristic`, `--anchored=<text>`
 - **Whitespace Controls**: `-b`/`--ignore-space-change`, `-w`/`--ignore-all-space`, `--ignore-blank-lines`, `--ignore-cr-at-eol`, `--ws-error-highlight=<kind>`
@@ -160,7 +170,7 @@ prompt. See **[getting-started.md](getting-started.md)** and **`setup`** below.
 A specialized suite of subcommands is integrated into the `diffing` binary to coordinate handoffs and synchronize review cycles. These commands automatically discover the active server via the lockfile.
 
 | Subcommand | Role |
-|------------|------|
+| ------------ | ------ |
 | `await-review` | Block until human **Send to agent** |
 | `comments` | Snapshot comments (XML / JSON / Markdown) |
 | `reply` / `resolve` / `unresolve` | Thread lifecycle |
@@ -210,6 +220,7 @@ interactive and no explicit `--web`, `--tui`, `--view`, or `--terminal` flag is
 present. Pipes and redirects continue to emit standard terminal diff output.
 
 ### `await-review`
+
 **Sync** wait: blocks until the user clicks **"Send to agent"**, then streams review comments as XML to `stdout`.
 
 Prefer **async handoff** when the human may take a while: share `diffing url` / the UI link, end the agent turn, and resume later with one `await-review` (or `diffing comments --open`) when they say the review is ready. Use this blocking command when they are reviewing now or explicitly asked you to wait.
@@ -233,6 +244,7 @@ diffing await-review [options]
 ---
 
 ### `comments`
+
 Dumps the current review comments database.
 
 ```bash
@@ -250,6 +262,7 @@ diffing comments [options]
 ---
 
 ### `reply`
+
 Appends a conversation reply to an existing comment thread.
 
 ```bash
@@ -269,6 +282,7 @@ diffing reply <commentId> [options]
 ---
 
 ### `resolve`
+
 Marks a review comment thread as `"resolved"`. Resolving comments in the database updates the browser UI in real time.
 
 ```bash
@@ -284,6 +298,7 @@ diffing resolve <commentId>
 ---
 
 ### `unresolve`
+
 Re-opens a previously resolved comment thread (`status: "open"`).
 
 ```bash
@@ -299,6 +314,7 @@ diffing unresolve <commentId>
 ---
 
 ### `comment edit` / `comment delete`
+
 Edit or permanently delete a comment thread (body or whole thread).
 
 ```bash
@@ -316,6 +332,7 @@ Prefer `reply` for conversation turns. Use `comment edit` only when correcting a
 ---
 
 ### `progress`
+
 Report live agent status so the human UI can show a progress toast while work is underway.
 
 ```bash
@@ -329,6 +346,7 @@ diffing progress --message "Addressing L42…" [--model <name>] [--pct <0-100>] 
 ---
 
 ### `url`
+
 Outputs the base URL of the active review server. Highly useful for external scripts making direct curl or HTTP requests.
 
 ```bash
@@ -350,7 +368,7 @@ diffing setup [skills|mcp] [options]
 ```
 
 | Flag | Description |
-|------|-------------|
+| ------ | ------------- |
 | `-y`, `--yes` | Non-interactive: install skills, print MCP JSON (no IDE writes) |
 | `--check` | Preflight only (Node, git, config dir, setup marker) |
 | `--reset` | Clear `setupCompletedAt` in settings |
@@ -374,6 +392,7 @@ stdout is not a TTY, or `TERM=dumb`.
 ---
 
 ### `doctor`
+
 Environment and installation self-check for the current machine/repository.
 
 ```bash
@@ -386,6 +405,7 @@ diffing doctor
 ---
 
 ### `completion`
+
 Emit shell completion scripts for interactive CLIs.
 
 ```bash
@@ -399,6 +419,7 @@ diffing completion <bash|zsh|fish>
 ---
 
 ### `inspect`
+
 Read **bounded** diff data from any running web, native TUI, or GitHub PR session without transferring the full patch.
 
 ```bash
@@ -417,7 +438,7 @@ diffing inspect search <text>|--query <text> [--file N] [--row N] [--limit N] [-
 The loopback HTTP contract is shared across modes:
 
 | Route | Purpose |
-|-------|---------|
+| ------- | --------- |
 | `GET /api/diff/summary` | Generation, completion, totals, kind counts, and PR identity when applicable |
 | `GET /api/diff/files?cursor&limit` | Paged file metadata |
 | `GET /api/diff/hunks?file&cursor&limit&generation` | Paged hunk metadata with stale-generation protection |
@@ -427,6 +448,7 @@ The loopback HTTP contract is shared across modes:
 ---
 
 ### `update`
+
 Check npm for a newer `diffing` package and print install guidance when one exists.
 
 ```bash
@@ -444,6 +466,7 @@ submit, share the URL, park. Use `--wait` / `plan await` only for short sync
 waits. All actions are port-agnostic (resolved from the lockfile).
 
 ### `plan submit`
+
 Submit (or resubmit) a markdown plan for review.
 
 ```bash
@@ -466,6 +489,7 @@ cat PLAN.md | diffing plan submit                 # body via stdin (omit <file> 
   stderr; source path on stderr when `--save-source` is used.
 
 ### `plan await`
+
 **Sync** wait until the human decides, then print the `<plan-review>` XML.
 
 ```bash
@@ -479,6 +503,7 @@ diffing plan await [--timeout N]
 - stderr carries `DIFFING_PLAN_DECISION=<verdict>` and `DIFFING_PLAN_ROUND=<n>`.
 
 ### `plan list`
+
 List submitted plans.
 
 ```bash
@@ -489,6 +514,7 @@ diffing plan list [--json]
 - `--json`: the raw plan array.
 
 ### `plan show`
+
 Print a single plan.
 
 ```bash
@@ -499,6 +525,7 @@ diffing plan show [<id>] [--json] [--version <n>]      # latest plan if <id> omi
 - `--version <n>`: when supported by the server, print a historical body instead of the current version.
 
 ### `plan versions`
+
 List version history for a plan (id, version numbers, timestamps).
 
 ```bash
@@ -506,6 +533,7 @@ diffing plan versions <id> [--json]
 ```
 
 ### `plan reply`
+
 Reply to an inline plan comment (the owning plan is resolved automatically).
 
 ```bash
@@ -513,6 +541,7 @@ diffing plan reply <commentId> --body "..." [--model <name>]
 ```
 
 ### `plan resolve`
+
 Mark a plan comment resolved.
 
 ```bash
@@ -570,6 +599,7 @@ parsing, so the `pr` keyword never collides with a `git diff` revision.
 The `--gh-pr` flag form is parsed by `parseDiffOptions` and merged.
 
 On startup, the CLI:
+
 1. Detects the PR session, sets `mode: "gh-pr"` and `prRef` in the lockfile.
 2. Calls `gh pr view <ref> --json …` for metadata (title, author, base/head
    SHAs, additions/deletions/changedFiles, url).
@@ -722,9 +752,11 @@ diffing gh pr-review --decision <approve|comment|request-changes|draft> [--body 
     comments` section in the overall review body. Resolved comments are
     excluded.
 - **Response on success**:
+
   ```text
   Review submitted via gh: <review-url>
   ```
+
   `--json` prints the complete response object. A successful `--dry-run`
   prints a validation message without touching GitHub.
 - **Exit codes**:
@@ -739,7 +771,7 @@ diffing gh pr-review --decision <approve|comment|request-changes|draft> [--body 
 For each in-progress `ReviewComment`:
 
 | `diffing` field | GitHub field | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `comment.filePath` | `path` | Stripped of any `a/` or `b/` prefix. |
 | `comment.lineNumber` | `line` | Inclusive end line of the anchor. |
 | `comment.startLineNumber` | `start_line` | Inclusive range start when present. |
@@ -1061,7 +1093,7 @@ current mode and position on the left, contextual shortcuts on the right, and
 shows valid completions while a multi-key sequence is pending.
 
 | Key | Action |
-|---|---|
+| --- | --- |
 | `j` / `k` | Scroll down / up |
 | `gg` / `G` | Jump to top / bottom of diff |
 | `Ctrl+d` / `Ctrl+u` | Half-page down / up |
@@ -1186,6 +1218,24 @@ checks. Tagged releases build every supported target and publish those native
 packages before the root `diffing` package, so `npm install -g diffing`
 receives the right executable without compiling Rust during installation.
 
+### Releasing
+
+```bash
+pnpm release --patch    # or --minor / --major (default: patch)
+```
+
+The script preflights (clean tree, on `main`, in sync with `origin`), bumps
+the version in `package.json`, `Cargo.toml`/`Cargo.lock`, and the site version
+strings, generates the `CHANGELOG.md` section from `feat`/`fix` commits since
+the last tag, builds and runs the full test suite, then commits, tags, and
+pushes. Pass `--no-verify` to skip the build/test step or `--dry-run` to
+preview everything without changing anything.
+
+Pushing the `vX.Y.Z` tag triggers the `native-tui.yml` workflow: it builds all
+seven native TUI binaries, packs and publishes the npm package (OIDC trusted
+publishing), and — only after the publish is verified — creates the GitHub
+release from the changelog section.
+
 ---
 
 `diffing` bundles a self-describing MCP server over standard I/O (stdio).
@@ -1194,6 +1244,7 @@ guide resource let unfamiliar agents discover both review loops without relying
 on vendor-specific setup.
 
 ### Launching the MCP Server
+
 ```bash
 diffing mcp
 diffing mcp --repo /absolute/path/to/repository
@@ -1201,6 +1252,7 @@ diffing mcp --help
 ```
 
 ### Client Configuration Example
+
 Add the server configuration to your MCP settings file (e.g. `claude_desktop_config.json` or Cursor's MCP configurations):
 
 ```json
@@ -1227,7 +1279,7 @@ and read operations are marked read-only, while mutation retry semantics are
 declared explicitly.
 
 | Area | Tools | Purpose |
-|------|-------|---------|
+| ------ | ------- | --------- |
 | Session | `review_session_status`, `start_review_session` | Inspect the bound repository and live server; idempotently start or reuse a loopback session |
 | Diff inspection | `get_diff`, `diff_summary`, `diff_files`, `diff_hunks`, `diff_slice`, `diff_search` | Full patch **or** bounded file/hunk/slice/search reads for large diffs |
 | Diff review | `create_comment` | Post typed inline findings (path, side, line/range, body, optional severity) |
@@ -1260,7 +1312,7 @@ to end the turn (async resume) rather than silent-loop. Released results include
 CLI mirrors for the expanded tool surface:
 
 | MCP | CLI |
-|-----|-----|
+| ----- | ----- |
 | `await_review` | `diffing await-review` |
 | `list_comments` | `diffing comments [--open] [--format xml\|json\|md]` |
 | `reply_to_comment` / `resolve_comment` / `unresolve_comment` | `diffing reply` / `resolve` / `unresolve` |
@@ -1326,6 +1378,7 @@ Timeout on a sync wait is a **park** signal (`disposition=park`), not an order t
 retry forever. Re-await only when the human asked you to keep waiting.
 
 ### The Long-Polling Synchronization Mechanism
+
 Synchronizing an offline/local agent process with a browser-based UI is achieved via a dedicated long-polling server controller, backed by a monotonic sequence:
 
 1. **State Machine (`ReviewSession`)**:
@@ -1352,6 +1405,7 @@ Synchronizing an offline/local agent process with a browser-based UI is achieved
    - Broadcasts the `agent-status` event via SSE to inform the UI that the waiting agent has been released (updating the toolbar connection dot).
 
 ### Live Bidirectional Synchronization
+
 - **Server-Sent Events (SSE)**:
   Connected UI browser clients listen to the `/api/live` event stream. When the agent posts replies or marks comments resolved (via the CLI or MCP tools), the server broadcasts a `comments` update event.
 - **File Watching (`comments.json`)**:
@@ -1362,6 +1416,7 @@ Synchronizing an offline/local agent process with a browser-based UI is achieved
 ## 7. Practical Integration Patterns
 
 ### Custom Developer Shell Alias
+
 For developers who want an incredibly fast git workflow, you can add this alias to your shell profile (`.zshrc` or `.bashrc`):
 
 ```bash
@@ -1376,6 +1431,7 @@ alias gda="diffing & diffing await-review"
 ```
 
 ### Git Alias Configuration
+
 You can register `diffing` as a native git custom subcommand by placing the following in your `~/.gitconfig`:
 
 ```ini
@@ -1392,21 +1448,26 @@ Now, running `git review` inside any repository will spin up the interactive bro
 `diffing` bundles a high-performance, native code search engine powered by `@ff-labs/fff-node` (a native Rust fuzzy file finder and live grep module). Because it runs natively inside Node.js as a Rust addon, it performs exceptionally fast searches across large codebases.
 
 ### Architectural Strategy
+
 1. **Platform Independence & Isolation**: The native Rust binary is loaded dynamically via ES import hooks within the server's search initializer. If a platform is incompatible or the binary is missing, search capabilities degrade gracefully (reporting search as unavailable via API) instead of crashing the primary `diffing` Hono web server.
 2. **SQLite-Backed Frecency & History**: Search history is preserved across restarts inside the `~/.diffing/<repo-name>-<sha256(repo-root-path).slice(0, 8)>/fff/` database directory using two lightweight databases (`frecency.db` and `history.db`).
 3. **Automatic Watchers**: `@ff-labs/fff-node` handles its own high-efficiency file system watcher, ensuring search indices stay fully up-to-date in real time as files change in the repository working tree during code review.
 
 ### Search Scopes
+
 The engine exposes four powerful search scopes via its JSON query payload:
+
 - **Files Fuzzy Search** (`scope: 'files'`): Perform rapid, error-tolerant fuzzy matching on workspace paths.
 - **Text Grep Search** (`scope: 'text'`): Search across all workspace lines using raw case-insensitive strings or high-performance Rust regular expressions.
 - **Symbols Search** (`scope: 'symbols'`): Locates method declarations, class definitions, and variable identifiers, which are syntactically classified server-side based on their language patterns (JavaScript, TypeScript, Go, Rust, Python, and PHP).
 - **Concurrently Unified Search** (`scope: 'all'`): Query all three indexes concurrently to return a mixed list of fuzzy file matches, text greps, and symbol hits.
 
 ### The Search HTTP API (`POST /api/search`)
+
 Used by connected review tools to query the engine.
 
 - **Payload Schema**:
+
 ```json
 {
   "scope": "all | files | text | symbols",
@@ -1504,6 +1565,7 @@ User-specific preferences, layout options, editor choices, and themes are persis
 
 - **Storage Location**: `~/.config/diffing/settings.json`
 - **JSON Configuration Schema & Default Settings**:
+
 ```json
 {
   "defaultMode": "web",            // Interactive review mode ("web" or "tui")
@@ -1537,14 +1599,19 @@ The local server exposes a powerful REST HTTP API to allow the web frontend dash
 ### 1. Handoff & Synchronization Loop
 
 #### `POST /api/review/send`
+
 Releases all waiting agent processes (blocked in `/api/review/await`) by incrementing the monotonic `round` sequence and broadcasting the snapshots.
+
 - **Payload Schema**:
+
   ```json
   {
     "generalComment": "Optional high-level markdown text summarizing this review round"
   }
   ```
+
 - **Response Schema**:
+
   ```json
   {
     "ok": true,
@@ -1555,11 +1622,14 @@ Releases all waiting agent processes (blocked in `/api/review/await`) by increme
   ```
 
 #### `GET /api/review/await`
+
 A long-poll endpoint used by CLI subcommands and MCP tools to block until a review is released.
+
 - **Query Parameters**:
   - `sinceRound` (number, required): The last round processed by the client.
   - `timeoutMs` (number, default: `25000`): Maximum server hold time. Server caps this to `50000`ms to prevent intermediate proxy dropouts.
 - **Response Schema (on release)**:
+
   ```json
   {
     "status": "released",
@@ -1574,8 +1644,11 @@ A long-poll endpoint used by CLI subcommands and MCP tools to block until a revi
   ```
 
 #### `GET /api/review/status`
+
 Queries a snapshot of the current review session state.
+
 - **Response Schema**:
+
   ```json
   {
     "round": 4,
@@ -1589,12 +1662,17 @@ Queries a snapshot of the current review session state.
 ### 2. Comments & Replies System
 
 #### `GET /api/comments`
+
 Fetches a list of all current code review comment threads.
+
 - **Response Schema**: Array of `ReviewComment` objects.
 
 #### `POST /api/comments`
+
 Opens a new inline comment thread on a line of code (or multi-line range).
+
 - **Payload Schema**:
+
   ```json
   {
     "filePath": "src/lib/git.ts",
@@ -1606,12 +1684,15 @@ Opens a new inline comment thread on a line of code (or multi-line range).
     "severity": "blocking | nit | question | praise | none"  // optional triage label
   }
   ```
+
 - **Side / line anchoring (web UI)**: comments attach to the selected **side** (`additions` / `deletions`) and line number(s). Same-side selections use `side` only (not a default of `additions`). The composer anchors under the bottom line of a multi-line selection; ranges are **inclusive** (`startLineNumber`–`lineNumber` → `line="A-B"` in handoff XML). Optional **severity** is stored and emitted on handoff / MCP.
 
-
 #### `PUT /api/comments/:id`
+
 Updates an existing comment thread body or toggles its status.
+
 - **Payload Schema**:
+
   ```json
   {
     "body": "Updated markdown comment message",
@@ -1620,14 +1701,19 @@ Updates an existing comment thread body or toggles its status.
   ```
 
 #### `DELETE /api/comments/:id`
+
 Permanently deletes a comment thread.
 
 #### `POST /api/comments/resolve-all`
+
 Marks every open comment as `resolved` in one request. Used by the web **Resolve all** toolbar control.
 
 #### `POST /api/comments/:id/replies`
+
 Appends a conversation reply to an existing comment thread.
+
 - **Payload Schema**:
+
   ```json
   {
     "body": "Reply message body",
@@ -1637,15 +1723,19 @@ Appends a conversation reply to an existing comment thread.
   ```
 
 #### `PUT /api/comments/:id/replies/:replyId`
+
 Updates the body text of a comment reply.
 
 #### `DELETE /api/comments/:id/replies/:replyId`
+
 Deletes a comment reply.
 
 #### `POST /api/comments/:id/apply-suggestion`
+
 Parses a Markdown ```suggestion code block inside the comment body, applies the proposed lines of code to the physical working tree file (including multi-line suggestions), and marks the comment thread as `resolved`.
 
 #### `POST /api/agent/progress`
+
 Agent → human live status for the progress toast.
 
 ```json
@@ -1659,9 +1749,11 @@ Agent → human live status for the progress toast.
 ```
 
 #### `GET /api/agent/progress`
+
 Latest progress snapshot (if any).
 
 #### `GET /api/review/history`
+
 Multi-round handoff history (rounds, timestamps, verdicts) for the review history popover / `get_review_history` MCP tool.
 
 ---
@@ -1669,19 +1761,24 @@ Multi-round handoff history (rounds, timestamps, verdicts) for the review histor
 ### 3. File Attachments & Media
 
 #### `POST /api/attachments`
+
 Uploads a pasted image file from the clipboard or file picker.
+
 - **Payload**: Multi-part Form Data containing a `file` field.
 - **Response Schema**:
+
   ```json
   {
     "url": "/api/attachments/pasted_image_de4f55-bc11...png"
   }
   ```
+
   Draft comments keep this **loopback** URL so the local UI can preview the
   image. On GitHub publish (review submit, reply, or edit), diffing rewrites
   these to repo-scoped raw blob URLs (see below).
 
 #### `GET /api/attachments/:filename`
+
 Serves an uploaded attachment file. Uploads are strictly isolated and stored inside `~/.diffing/<repo-name>-<hash>/attachments/`.
 
 #### GitHub publish rewrite (private / GHE safe)
@@ -1713,8 +1810,11 @@ https://<host>/<owner>/<repo>/raw/<commitSha>/<hash>.<ext>
 ### 4. Git Operations & IDE Integration
 
 #### `POST /api/open-file`
+
 Launches the developer's preferred editor to target the specified file.
+
 - **Payload Schema**:
+
   ```json
   {
     "filePath": "src/server.ts",
@@ -1723,8 +1823,11 @@ Launches the developer's preferred editor to target the specified file.
   ```
 
 #### `POST /api/revert-hunk`
+
 Performs hunk-level reverts. The server extracts the hunk patch from the working tree, constructs a minimal patch, and applies it in reverse (`git apply --reverse`).
+
 - **Payload Schema**:
+
   ```json
   {
     "filePath": "src/server.ts",
@@ -1733,15 +1836,20 @@ Performs hunk-level reverts. The server extracts the hunk patch from the working
   ```
 
 #### `GET /api/hunk-history`
+
 Gathers context regarding deleted lines. Retrieves `git blame` annotations for the target deletion range and extracts the last 5 commits affecting the file to locate who authored the code and when it was introduced.
+
 - **Query Parameters**:
   - `filePath` (string, required): File path relative to repo root.
   - `deletionStart` (number, required): Line number index where the deleted block started.
   - `deletionCount` (number, required): Total count of deleted lines.
 
 #### `POST /api/save-file`
+
 Writes updated code to disk and optionally stages it in git.
+
 - **Payload Schema**:
+
   ```json
   {
     "filePath": "src/lib/git.ts",
@@ -1751,8 +1859,11 @@ Writes updated code to disk and optionally stages it in git.
   ```
 
 #### `GET /api/merge-status`
+
 Probes if the working tree has merge conflicts (`.git/MERGE_HEAD` exists) and returns a list of files currently in conflict state.
+
 - **Response Schema**:
+
   ```json
   {
     "inMerge": true,
@@ -1761,15 +1872,19 @@ Probes if the working tree has merge conflicts (`.git/MERGE_HEAD` exists) and re
   ```
 
 #### `GET /api/repo-files`
+
 Returns a sorted list of all active files under the repository working tree (tracked + untracked), excluding paths specified in `.gitignore`.
 
 #### `GET /api/file-text`
+
 Retrieves a file version as text. Includes a `missing` indicator in the JSON output if the requested revision version is missing (such as deleted files or new files).
+
 - **Query Parameters**:
   - `path` (string, required)
   - `version` (string, required): `"old" | "new"`
 
 #### `GET /api/settings` / `PUT /api/settings`
+
 Retrieves or overwrites the global user configuration stored in `~/.config/diffing/settings.json`.
 
 ### 5. Plan Review
@@ -1779,13 +1894,17 @@ Plans are persisted to `plans.json` in the per-repo storage dir (watched for liv
 the `PlanReviewSession` and a separate long-poll endpoint.
 
 #### `GET /api/plans` / `GET /api/plans/:id`
+
 Returns all plans, or a single plan (404 if unknown). Each plan carries
 `{ id, title, body, source?, model?, version, decision, decisionComment?, decidedAt?, createdAt, updatedAt, comments[] }`.
 
 #### `POST /api/plans`
+
 Creates a plan, or revises one when `id` matches an existing plan (version bump,
 verdict reset to `pending`). Returns the plan (201).
+
 - **Payload Schema**:
+
   ```json
   {
     "body": "# My Plan\n## Phase 1\n…",   // required (markdown)
@@ -1797,6 +1916,7 @@ verdict reset to `pending`). Returns the plan (201).
   ```
 
 #### `PUT /api/plans/:id` / `DELETE /api/plans/:id`
+
 Updates a plan's `title`/`body`/`source`/`model` **in place**, or deletes a plan.
 
 `PUT` is the live plan-page editor path: it mutates the current version only
@@ -1806,11 +1926,14 @@ uses **`POST /api/plans` with the same `id`** for an explicit “Save as new
 version” (version bump + decision → `pending`), matching agent resubmit.
 
 #### `POST /api/plans/:id/comments`
+
 Adds an inline comment. `lineNumber: 0` marks a whole-plan comment; `startLineNumber`
 makes it a range (inclusive with `lineNumber`). When `lineContent`/`sectionTitle` are omitted, the server derives
 them from the plan body (the anchored text and nearest preceding heading). Returns
 the updated plan (201).
+
 - **Payload Schema**:
+
   ```json
   {
     "lineNumber": 4,                 // 0 = whole-plan comment
@@ -1823,15 +1946,20 @@ the updated plan (201).
   ```
 
 #### `PUT /api/plans/:id/comments/:commentId` / `DELETE …`
+
 Edits a comment's `body`/`status`, or deletes it.
 
 #### `POST /api/plans/:id/comments/:commentId/replies` / `PUT … /replies/:replyId` / `DELETE … /replies/:replyId`
+
 Adds, edits, or deletes a reply. A `model` in the payload attributes the reply to `role: "agent"`.
 
 #### `POST /api/plans/:id/decision`
+
 The human's verdict. Records the decision on the plan **and** releases every agent
 blocked on `/api/plan-review/await`.
+
 - **Payload Schema**:
+
   ```json
   {
     "decision": "approved | rejected | changes-requested | comment-only",   // required
@@ -1839,15 +1967,18 @@ blocked on `/api/plan-review/await`.
     "mode": "standard | comment-only"   // optional agent behavior override
   }
   ```
+
 - **Response**: `{ ok, round, decision, openCommentCount, waiters }`.
 
 #### `GET /api/plan-review/await`
+
 Long-poll for the next plan decision. Same `sinceRound` / `timeoutMs` mechanics as
 `/api/review/await`. Returns `{ status: "released", payload }` (payload includes
 `reviewXml`, `decision`, `decisionComment`, `planId`, `openCommentCount`, `plan`)
 or `{ status: "keep-waiting", round }`.
 
 #### `GET /api/plan-review/status`
+
 Returns `{ round, waiters, lastDecidedAt }` for the plan handoff session.
 
 ---
@@ -1882,8 +2013,11 @@ Returns a page of submitted review events. Supports numeric `cursor` / `limit`,
 `state`, `bodyMaxChars`, `fullBody=true`, and `format=json|xml`.
 
 #### `GET /api/gh/session`
+
 Returns the active `PrSession` (sans the large `diff` string) for client hydration.
+
 - **Response Schema**:
+
   ```json
   {
     "prMode": true,
@@ -1911,12 +2045,17 @@ Returns the active `PrSession` (sans the large `diff` string) for client hydrati
   ```
 
 #### `POST /api/gh/pr/init`
+
 Initialise a PR session from a `ref` (programmatic equivalent of `diffing --gh-pr <ref>`).
+
 - **Payload Schema**:
+
   ```json
   { "ref": "https://github.com/ahmedragab20/diffing/pull/1234" }
   ```
+
 - **Response Schema** (200):
+
   ```json
   {
     "ok": true,
@@ -1927,22 +2066,28 @@ Initialise a PR session from a `ref` (programmatic equivalent of `diffing --gh-p
     "url": "https://github.com/ahmedragab20/diffing/pull/1234"
   }
   ```
+
 - **Errors**: 400 if `ref` is missing; 500 on `gh` failure (with the GitHub error message).
 
 #### `POST /api/gh/pr/refresh`
+
 Re-fetches PR metadata, patch, published conversations, thread resolution, and
 review activity, then persists the result. Surfaces force-pushes by changing
 `headSha`.
+
 - **Response Schema** (200): `{ ok: true, headSha: "…" }`.
 
 #### `POST /api/gh/comments/sync`
+
 Lightweight GitHub synchronization without re-fetching the patch. Refreshes
 published comments/replies, ownership, resolve state, and review-level
 activity. The PR UI calls this on mount, focus, and every 30 seconds while the
 page is visible.
+
 - **Response Schema** (200): `{ ok: true, count: 4 }`.
 
 #### `GET /api/gh/checks`
+
 Returns check runs and commit status for the active PR head SHA. The PR summary
 uses this for its live checks popover.
 
@@ -1962,11 +2107,15 @@ replies, and resolution performed on GitHub appear in `diffing` after refresh,
 focus, or the background interval.
 
 #### `GET /api/gh/pr-session/comments`
+
 Returns the in-progress PR-mode `ReviewComment[]`. Mirrors `GET /api/comments` but reads from `pr-session.json`.
 
 #### `POST /api/gh/pr-session/comments`
+
 Append a new PR-mode inline comment.
+
 - **Payload Schema**:
+
   ```json
   {
     "filePath": "src/server.ts",
@@ -1978,18 +2127,23 @@ Append a new PR-mode inline comment.
     "severity": "blocking | nit | question | praise | none"
   }
   ```
+
 - **Response**: 201 with the saved comment.
 
 #### `PUT /api/gh/pr-session/comments/:id`
+
 Edit a PR-mode comment's `body` or `status` (open/resolved).
 
 #### `DELETE /api/gh/pr-session/comments/:id`
+
 Delete a PR-mode comment.
 
 #### `POST /api/gh/pr-session/comments/:id/replies`
+
 Append a reply to a PR-mode comment (same shape as `/api/comments/:id/replies`).
 
 #### `POST /api/gh/submit`
+
 Build the `POST /repos/{owner}/{repo}/pulls/{n}/reviews` payload from the
 current `pr-session.json` comments, POST it to GitHub, and on success
 record `submittedAt` / `submittedReviewId` / `submittedReviewUrl` on the
@@ -1997,7 +2151,9 @@ session. Local drafts are cleared, published threads are re-hydrated, and an
 optimistic `existingReviews` entry makes the overall review comment visible
 immediately while GitHub's reviews endpoint catches up. This is the server-side
 equivalent of `diffing gh pr-review`.
+
 - **Payload Schema**:
+
   ```json
   {
     "decision": "approve | comment | request-changes | draft",
@@ -2005,7 +2161,9 @@ equivalent of `diffing gh pr-review`.
     "dryRun": false
   }
   ```
+
 - **Response Schema** (200):
+
   ```json
   {
     "ok": true,
@@ -2016,6 +2174,7 @@ equivalent of `diffing gh pr-review`.
     "dryRun": false
   }
   ```
+
 - **Errors**: 400 on bad `decision`; 502 on GitHub failure; the response body
   always carries the error message + the auth source that was tried.
 
@@ -2024,7 +2183,9 @@ equivalent of `diffing gh pr-review`.
 When a PR session is active, `GET /api/diff` short-circuits to return the
 PR patch instead of the working-tree diff. The response gains a `prMode`
 flag plus PR metadata fields:
+
 - **Response Schema** (PR mode):
+
   ```json
   {
     "patch": "diff --git a/…",
@@ -2046,5 +2207,6 @@ flag plus PR metadata fields:
     "prBaseSha": "def456…"
   }
   ```
+
 In local mode, the response is byte-identical to the original (no `prMode`
 field), so the existing local review client is unaffected.
