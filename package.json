@@ -36,11 +36,6 @@
       "./extensions/pi"
     ]
   },
-  "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "typebox": "*"
-  },
   "scripts": {
     "build": "pnpm run build:ts && pnpm run build:tui && pnpm run bundle:tui",
     "build:ts": "tsdown && vite build",
