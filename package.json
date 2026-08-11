@@ -1,6 +1,6 @@
 {
   "name": "diffing",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "local-first CLI for reviewing, navigating, and discussing git diffs with AI",
   "type": "module",
   "license": "MIT",
@@ -20,7 +20,8 @@
     "git",
     "diff",
     "code-review",
-    "cli"
+    "cli",
+    "pi-package"
   ],
   "bin": {
     "diffing": "./dist/cli.mjs"
@@ -31,7 +32,14 @@
     "extensions/pi"
   ],
   "pi": {
-    "extensions": ["./extensions/pi"]
+    "extensions": [
+      "./extensions/pi"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "scripts": {
     "build": "pnpm run build:ts && pnpm run build:tui && pnpm run bundle:tui",

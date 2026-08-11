@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.0
+
+### Minor Changes
+
+- feat: add pi extension for deep pi-harness integration
+
 ## 0.15.0
 
 ### Minor Changes
