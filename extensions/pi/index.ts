@@ -137,11 +137,9 @@ function describe(result: RunResult, command: string): string {
 	const err = result.stderr.trim();
 	let hint = "";
 	if (result.exitCode === 127) {
-		hint =
-			"\n\n`diffing` was not found on PATH. Install it with `npm i -g diffing` or run `diffing setup`.";
+		hint = `\n\n\`diffing\` was not found on PATH (ran: diffing ${command}). Install it with \`npm i -g diffing\` or run \`diffing setup\`.`;
 	} else if (result.exitCode === 3) {
-		hint =
-			"\n\nNo diffing server is running for this repo. Start one with `diffing` (or the diffing_start_review tool).";
+		hint = `\n\nNo diffing server is running for this repo (ran: diffing ${command}). Start one with \`diffing\` (or the diffing_start_review tool).`;
 	}
 	return err ? `${err}${hint}` : `exit code ${result.exitCode}${hint}`;
 }
