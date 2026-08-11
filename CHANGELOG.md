@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.1
+
+### Patch Changes
+
+- fec0849: Add Ghostty as an option for opening files
+- 940b1f0: Include the failed command in diffing tool error hints
+
 ## 0.16.0
 
 ### Minor Changes
@@ -652,7 +659,7 @@ submit` so docs, skills, and CLI parseArgs agree.
 
   1. **Race in `startServer`**: the PR session was built in an unawaited IIFE, so the port-bound callback resolved with `prMode=false`. The lockfile was written as `mode: "web"` and the UI's first `/api/diff` call fell through to an (empty) local diff before the session landed in the store. Now `await prReady` before `serve()` binds the port.
 
-  2. **Quoted-form never matched**: the original PR-mode guard required `args.length >= 3` and `args[0] === 'gh'`, which only fires for the unquoted shell shape. With quotes the shell passes a single `"gh pr 1"` arg, the string was forwarded to `git diff` as a revision (silently swallowed by `getCustomGitDiffAsync` → empty patch), and the UI rendered an empty diff. The parser now detects the leading `gh pr ` / `gh pr-review ` / `gh pr-fetch ` prefix in the raw arg, so both quoted and unquoted forms work.
+  2. **Quoted-form never matched**: the original PR-mode guard required `args.length >= 3` and `args[0] === 'gh'`, which only fires for the unquoted shell shape. With quotes the shell passes a single `"gh pr 1"` arg, the string was forwarded to `git diff` as a revision (silently swallowed by `getCustomGitDiffAsync` → empty patch), and the UI rendered an empty diff. The parser now detects the leading `gh pr` / `gh pr-review` / `gh pr-fetch` prefix in the raw arg, so both quoted and unquoted forms work.
 
   3. **`parsePrRef` tight-constraint**: the parser required a digit-only ref segment and an optional `owner/repo#n` form, but GitHub URLs like `https://github.com/foo/bar/pull/42.atom` and `gh pr foo/bar` (no `#N`) were rejected. The new parser accepts numeric refs, `owner/repo#N`, and full GitHub PR URLs with arbitrary trailing path segments; the previous tests still pass.
 
