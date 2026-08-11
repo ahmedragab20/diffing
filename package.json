@@ -27,8 +27,12 @@
   },
   "files": [
     "dist",
-    "scripts/postinstall.mjs"
+    "scripts/postinstall.mjs",
+    "extensions/pi"
   ],
+  "pi": {
+    "extensions": ["./extensions/pi"]
+  },
   "scripts": {
     "build": "pnpm run build:ts && pnpm run build:tui && pnpm run bundle:tui",
     "build:ts": "tsdown && vite build",
