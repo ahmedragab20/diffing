@@ -56,6 +56,7 @@
     "verify:release-bundle": "node scripts/verify-tui-bundle.mjs",
     "prepublishOnly": "pnpm run verify:release-bundle",
     "version-packages": "changeset version",
+    "release": "node scripts/release.mjs",
     "docs:dev": "pnpm --dir site dev",
     "docs:build": "pnpm --dir site build",
     "docs:preview": "pnpm --dir site preview"

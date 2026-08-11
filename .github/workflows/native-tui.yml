@@ -75,10 +75,14 @@ jobs:
         run: cargo install cargo-zigbuild --locked
       - name: Build native binary
         if: ${{ !matrix.zig }}
-        run: cargo build --locked --release --target ${{ matrix.rust_target }} -p diffing-tui
+        run: >-
+          cargo build --locked --release --target ${{ matrix.rust_target }}
+          -p diffing-tui
       - name: Build static musl binary
         if: matrix.zig
-        run: cargo zigbuild --locked --release --target ${{ matrix.rust_target }} -p diffing-tui
+        run: >-
+          cargo zigbuild --locked --release --target ${{ matrix.rust_target }}
+          -p diffing-tui
       - name: Stage native binary
         shell: bash
         run: |
@@ -113,7 +117,9 @@ jobs:
       - name: Verify release tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
-        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+        run: >-
+          test "v$(node -p "require('./package.json').version")"
+          = "$GITHUB_REF_NAME"
       - uses: actions/download-artifact@v4
         with:
           pattern: tui-*
@@ -172,8 +178,10 @@ jobs:
           npm install --global --prefix "$install_prefix" "$root_archive"
           native_binary="$install_prefix/lib/node_modules/diffing/dist/native/tui-linux-x64-gnu/diffing-tui"
           "$native_binary" --version
-          NO_COLOR=1 "$install_prefix/bin/diffing" doctor | tee "$RUNNER_TEMP/diffing-doctor.txt"
-          grep -Eq '/diffing/dist/native/tui-linux-x64-gnu/diffing-tui$' "$RUNNER_TEMP/diffing-doctor.txt"
+          NO_COLOR=1 "$install_prefix/bin/diffing" doctor \
+            | tee "$RUNNER_TEMP/diffing-doctor.txt"
+          grep -Eq '/diffing/dist/native/tui-linux-x64-gnu/diffing-tui$' \
+            "$RUNNER_TEMP/diffing-doctor.txt"
 
   publish-root:
     name: Publish diffing
@@ -191,8 +199,8 @@ jobs:
         with:
           name: diffing-root
           path: target/root-tarball
-      # Publish via npm trusted publishing (OIDC): no long-lived token. Requires a
-      # trusted publisher for ahmedragab20/diffing in the npm package settings.
+      # Publish via npm trusted publishing (OIDC): no long-lived token.
+      # Requires a trusted publisher for ahmedragab20/diffing in npm settings.
       - run: npm publish target/root-tarball/*.tgz --access public --provenance
 
   verify-published:
@@ -218,10 +226,45 @@ jobs:
               && "$native_binary" --version \
               && NO_COLOR=1 "$install_prefix/bin/diffing" doctor \
                 | tee "$RUNNER_TEMP/diffing-registry-doctor.txt" \
-              && grep -Eq '/diffing/dist/native/tui-linux-x64-gnu/diffing-tui$' \
+              && grep -Eq \
+                '/diffing/dist/native/tui-linux-x64-gnu/diffing-tui$' \
                 "$RUNNER_TEMP/diffing-registry-doctor.txt"; then
               exit 0
             fi
             sleep 10
           done
           exit 1
+
+  create-release:
+    name: Create GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify-published
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create release from changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          prev="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)"
+          awk -v v="$version" \
+            'BEGIN{f=0} /^## /{if(f) exit; if($2==v) f=1} f' \
+            CHANGELOG.md > /tmp/release-notes.md
+          test -s /tmp/release-notes.md || {
+            echo "changelog section for $version not found" >&2
+            exit 1
+          }
+          if [ -n "$prev" ]; then
+            printf '\n**Full Changelog**: ' >> /tmp/release-notes.md
+            printf 'https://github.com/%s/compare/%s...%s\n' \
+              "$GITHUB_REPOSITORY" "$prev" "$tag" \
+              >> /tmp/release-notes.md
+          fi
+          gh release create "$tag" --title "$tag" \
+            --notes-file /tmp/release-notes.md
