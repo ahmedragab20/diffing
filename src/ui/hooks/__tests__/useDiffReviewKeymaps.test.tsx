@@ -161,6 +161,30 @@ describe('shared diff review keymaps', () => {
     expect(withoutExit.onOpenSendReview).not.toHaveBeenCalled()
   })
 
+  it('Escape closes the open file search instead of exiting zen', () => {
+    const actions = makeActions()
+    actions.onCloseFileSearch = vi.fn()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(actions.onCloseFileSearch).toHaveBeenCalledOnce()
+    expect(actions.onExitZen).not.toHaveBeenCalled()
+  })
+
+  it('Escape closes the file search even when zen is not wired', () => {
+    const actions = makeActions()
+    delete actions.onExitZen
+    actions.onCloseFileSearch = vi.fn()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(actions.onCloseFileSearch).toHaveBeenCalledOnce()
+    expect(actions.onToggleZen).not.toHaveBeenCalled()
+    expect(actions.onOpenSendReview).not.toHaveBeenCalled()
+  })
+
   it('opens the send-review dialog with Cmd/Ctrl+Enter', () => {
     const actions = makeActions()
     render(<Harness actions={actions} />)

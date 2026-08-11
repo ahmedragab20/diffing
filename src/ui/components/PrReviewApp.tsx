@@ -20,6 +20,7 @@ import { useApplyFonts } from '../hooks/useApplyFonts'
 import { useViewed } from '../hooks/useViewed'
 import { useDiffSearch, buildFileSearchCorpus } from '../hooks/useDiffSearch'
 import { useFileSearch } from '../hooks/useFileSearch'
+import { useViewportActiveFileTracking } from '../hooks/useViewportActiveFile'
 import { HapticsProvider } from '../hooks/useHaptics'
 import { useDiffReviewKeymaps } from '../hooks/useDiffReviewKeymaps'
 import { useSearchSession } from '../hooks/useSearchSession'
@@ -68,6 +69,13 @@ export function PrReviewApp() {
   const { viewedFiles, setViewed } = useViewed()
 
   const [activeFile, setActiveFile] = useState<string | null>(null)
+  /**
+   * Timestamp of the last *explicit* active-file selection (click, J/K) plus
+   * the programmatic smooth scrolls they trigger. Fed to
+   * `useViewportActiveFileTracking` so scroll-derived detection cannot
+   * flicker the active file mid-animation.
+   */
+  const explicitActiveFileRef = useRef(0)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const stored = getUiStateItem('diffing-sidebar-collapsed')
     if (stored != null) return stored === 'true'
@@ -146,6 +154,11 @@ export function PrReviewApp() {
     return next
   }, [files, appliedExtensions, chipFilter, viewedFiles, commentCounts])
 
+  // Keep the "active file" (⌘F target, tree highlight, status bar) in sync
+  // with the file the user is actually looking at: the card under the mouse,
+  // or the card with the most visible height in the viewport.
+  useViewportActiveFileTracking(filteredFiles, activeFile, setActiveFile, explicitActiveFileRef)
+
   const fileAnnotations = useMemo(() => {
     const map = new Map<string, Array<{ side: ReviewComment['side']; lineNumber: number; metadata: ReviewComment }>>()
     for (const comment of comments) {
@@ -180,6 +193,7 @@ export function PrReviewApp() {
   const emptyUntracked = useMemo(() => new Set<string>(), [])
 
   const handleFileClick = useCallback((filePath: string) => {
+    explicitActiveFileRef.current = Date.now()
     setActiveFile(filePath)
     document.getElementById(`file-${filePath}`)?.scrollIntoView({ block: 'start' })
   }, [])
@@ -195,7 +209,10 @@ export function PrReviewApp() {
 
   const handleViewedChange = useCallback((filePath: string, viewed: boolean) => {
     setViewed(filePath, viewed)
-    if (viewed) scrollToNextFile(filePath)
+    if (viewed) {
+      explicitActiveFileRef.current = Date.now()
+      scrollToNextFile(filePath)
+    }
   }, [setViewed, scrollToNextFile])
 
   const replyToExisting = useCallback(async (commentId: number, body: string) => {
@@ -384,6 +401,9 @@ export function PrReviewApp() {
     onOpenPalette: openPalette,
     onTogglePalette: togglePalette,
     onOpenFileSearch: activeFile ? () => fileSearch.open(activeFile) : undefined,
+    // Escape while a find-in-file bar is open closes ONLY the search — even
+    // when the bar's input is not focused — never anything else.
+    onCloseFileSearch: fileSearch.filePath ? fileSearch.close : undefined,
     onNextSearchHit: nextHit,
     onPrevSearchHit: prevHit,
     onOpenTheme: () => setThemeModalOpen(true),
@@ -402,6 +422,7 @@ export function PrReviewApp() {
     togglePalette,
     activeFile,
     fileSearch,
+    fileSearch.filePath,
     nextHit,
     prevHit,
   ])

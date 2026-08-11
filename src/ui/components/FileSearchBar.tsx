@@ -7,6 +7,12 @@ interface FileSearchBarProps {
   query: string
   hits: DiffLineEntry[]
   index: number
+  /**
+   * Bumped by the session each time the bar should grab focus — on mount and
+   * on every `open()` (⌘F re-press after the field blurred). The input is
+   * re-focused and its current text selected so retyping replaces the query.
+   */
+  focusNonce?: number
   onQueryChange: (query: string) => void
   onNext: () => void
   onPrev: () => void
@@ -22,6 +28,7 @@ export function FileSearchBar({
   query,
   hits,
   index,
+  focusNonce,
   onQueryChange,
   onNext,
   onPrev,
@@ -30,8 +37,15 @@ export function FileSearchBar({
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
+    const el = inputRef.current
+    if (!el) return
+    // preventScroll: the deliberate scroll below uses block:'nearest' and the
+    // input's scroll-margin-top, so the bar clears the sticky toolbar — the
+    // native focus scroll does not respect that margin.
+    el.focus({ preventScroll: true })
+    el.select()
+    el.scrollIntoView({ block: 'nearest', behavior: 'auto' })
+  }, [focusNonce])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -40,8 +54,23 @@ export function FileSearchBar({
       else onNext()
     } else if (e.key === 'Escape') {
       e.preventDefault()
+      // Swallow the stroke so the global keymap never sees it: the same Esc
+      // that closes the search would otherwise ALSO exit zen mode (the
+      // keymap's Escape branch fires for keydowns that bubble to window).
+      e.stopPropagation()
       onClose()
     }
+  }
+
+  /**
+   * Typing happens while the input still has focus after a match jump scrolled
+   * the card away (Enter never blurs). `block:'nearest'` brings the field back
+   * into view with the minimal scroll — and does nothing when it is already
+   * visible — so every keystroke keeps the search bar on screen.
+   */
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    onQueryChange(e.target.value)
+    inputRef.current?.scrollIntoView({ block: 'nearest', behavior: 'auto' })
   }
 
   const total = hits.length
@@ -61,7 +90,7 @@ export function FileSearchBar({
         className="file-search-bar-input"
         type="text"
         value={query}
-        onChange={(e) => onQueryChange(e.target.value)}
+        onChange={handleChange}
         placeholder="Find in file…"
         aria-label="Find in file"
         spellCheck={false}

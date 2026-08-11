@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { scrollToLine } from '../utils'
 import type { DiffLineEntry } from './useDiffSearch'
 
@@ -20,6 +20,12 @@ export interface FileSearchSession {
   hits: DiffLineEntry[]
   /** Index into `hits` of the current match (0 when the query has no hits). */
   index: number
+  /**
+   * Bumped on every `open()` call, even when re-opening the same file. The
+   * find bar watches it to re-focus (and select) its input — e.g. after the
+   * user blurred the field and presses ⌘F again.
+   */
+  focusNonce: number
   open: (filePath: string) => void
   close: () => void
   setQuery: (query: string) => void
@@ -31,6 +37,9 @@ export function useFileSearch(diffEntries: DiffLineEntry[]) {
   const [filePath, setFilePath] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(0)
+  const [focusNonce, setFocusNonce] = useState(0)
+  const filePathRef = useRef<string | null>(null)
+  filePathRef.current = filePath
 
   const hits = useMemo(() => {
     if (!filePath) return []
@@ -67,9 +76,15 @@ export function useFileSearch(diffEntries: DiffLineEntry[]) {
   const prev = useCallback(() => cycle(-1), [cycle])
 
   const open = useCallback((path: string) => {
-    setFilePath(path)
-    setQuery('')
-    setIndex(0)
+    // Always bump the nonce so an already-open bar re-focuses its input
+    // (⌘F after blur). Re-opening the SAME file keeps the query so the user
+    // can edit it; switching files starts a fresh session.
+    setFocusNonce((n) => n + 1)
+    if (filePathRef.current !== path) {
+      setFilePath(path)
+      setQuery('')
+      setIndex(0)
+    }
   }, [])
 
   const close = useCallback(() => {
@@ -88,6 +103,7 @@ export function useFileSearch(diffEntries: DiffLineEntry[]) {
     query,
     hits,
     index: clampedIndex,
+    focusNonce,
     open,
     close,
     setQuery: changeQuery,

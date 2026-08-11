@@ -76,7 +76,7 @@ export const SHIKI_THEME_MAP: Record<string, { themeName: string; type: 'dark' |
   dawnfox: { themeName: 'dawnfox', type: 'light' },
 }
 
-function findElementInElOrShadow(root: Element | ShadowRoot, selector: string): HTMLElement[] {
+export function findElementInElOrShadow(root: Element | ShadowRoot, selector: string): HTMLElement[] {
   const elements: HTMLElement[] = []
   
   // Query all in the current root

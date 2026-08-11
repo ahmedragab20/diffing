@@ -30,6 +30,7 @@ import { useSettings, resolveMonoFont } from "./hooks/useSettings";
 import { useApplyFonts } from "./hooks/useApplyFonts";
 import { useViewed } from "./hooks/useViewed";
 import { useScrollToNextFile } from "./hooks/useScrollToNextFile";
+import { useViewportActiveFileTracking } from "./hooks/useViewportActiveFile";
 import { HapticsProvider, fireFeedback } from "./hooks/useHaptics";
 import {
     parseExtensionFilter,
@@ -209,6 +210,13 @@ export function App() {
     );
     const { status: mergeStatus, refresh: refreshMergeStatus } = useMergeStatus(patch);
     const [activeFile, setActiveFile] = useState<string | null>(null);
+    /**
+     * Timestamp of the last *explicit* active-file selection (click, J/K,
+     * deep link) plus the programmatic smooth scrolls they trigger. Fed to
+     * `useViewportActiveFileTracking` so scroll-derived detection cannot
+     * flicker the active file mid-animation.
+     */
+    const explicitActiveFileRef = useRef(0);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
         try {
             const stored = getUiStateItem("diffing-sidebar-collapsed");
@@ -569,6 +577,11 @@ export function App() {
 
     const sortedFiles = useMemo(() => [...filteredFiles].sort(sortFilesByName), [filteredFiles]);
 
+    // Keep the "active file" (⌘F target, tree highlight, status bar) in sync
+    // with the file the user is actually looking at: the card under the mouse,
+    // or the card with the most visible height in the viewport.
+    useViewportActiveFileTracking(sortedFiles, activeFile, setActiveFile, explicitActiveFileRef);
+
     // Deep links: ?file=&line=&side=&comment= — MUST sit after sortedFiles is
     // declared (TDZ). Run once files are available.
     const permalinkApplied = useRef(false)
@@ -579,6 +592,7 @@ export function App() {
         if (!target.file && !target.comment) return
         permalinkApplied.current = true
         if (target.file) {
+            explicitActiveFileRef.current = Date.now();
             setActiveFile(target.file)
             if (target.line != null) {
                 requestAnimationFrame(() => {
@@ -691,6 +705,7 @@ export function App() {
     }, [comments]);
 
     const handleFileClick = useCallback((filePath: string) => {
+        explicitActiveFileRef.current = Date.now();
         setActiveFile(filePath);
         const el = document.getElementById(`file-${filePath}`);
         if (el) {
@@ -708,7 +723,10 @@ export function App() {
     const handleViewedChange = useCallback(
         (filePath: string, viewed: boolean) => {
             setViewed(filePath, viewed);
-            if (viewed) scrollToNextFile(filePath);
+            if (viewed) {
+                explicitActiveFileRef.current = Date.now();
+                scrollToNextFile(filePath);
+            }
         },
         [setViewed, scrollToNextFile],
     );
@@ -954,6 +972,7 @@ export function App() {
             : Math.max(currentIndex - 1, 0);
         const nextFile = sortedFiles[Math.max(0, nextIndex)]?.name;
         if (!nextFile) return;
+        explicitActiveFileRef.current = Date.now();
         setActiveFile(nextFile);
         const el = document.getElementById(`file-${nextFile}`);
         if (el) {
@@ -969,13 +988,17 @@ export function App() {
 
     const toggleActiveFileViewed = useCallback(() => {
         if (!activeFile) return;
+        explicitActiveFileRef.current = Date.now();
         const isCurrentlyViewed = viewedFiles.has(activeFile);
         setViewed(activeFile, !isCurrentlyViewed);
         if (!isCurrentlyViewed) scrollToNextFile(activeFile);
     }, [activeFile, viewedFiles, setViewed, scrollToNextFile]);
 
     const handleCardToggleCollapse = useCallback((filePath: string, willCollapse: boolean) => {
-        if (willCollapse) scrollToNextFile(filePath);
+        if (willCollapse) {
+            explicitActiveFileRef.current = Date.now();
+            scrollToNextFile(filePath);
+        }
     }, [scrollToNextFile]);
 
     const toggleDiffStyle = useCallback(() => {
@@ -1020,6 +1043,10 @@ export function App() {
             onOpenPalette: openPalette,
             onTogglePalette: togglePalette,
             onOpenFileSearch: activeFile ? () => openFileSearch(activeFile) : undefined,
+            // Escape while a find-in-file bar is open closes ONLY the search —
+            // even when the bar's input is not focused — never also exits zen.
+            onCloseFileSearch:
+                !overlayOpen && fileSearch.filePath ? fileSearch.close : undefined,
             onNextSearchHit: nextHit,
             onPrevSearchHit: prevHit,
             onOpenTheme: () => setThemeModalOpen(true),
@@ -1052,6 +1079,7 @@ export function App() {
             openPalette,
             togglePalette,
             openFileSearch,
+            fileSearch.filePath,
             activeFile,
             nextHit,
             prevHit,

@@ -32,7 +32,7 @@ describe('useFileSearch', () => {
     expect(result.current.index).toBe(0)
   })
 
-  it('open sets the file and clears any query and index', () => {
+  it('open on a new file sets the file and clears any query and index', () => {
     const { result } = renderHook(() => useFileSearch(diffEntries))
 
     act(() => {
@@ -45,13 +45,40 @@ describe('useFileSearch', () => {
     expect(result.current.index).toBe(1)
 
     act(() => {
+      result.current.open('src/b.ts')
+    })
+
+    expect(result.current.filePath).toBe('src/b.ts')
+    expect(result.current.query).toBe('')
+    expect(result.current.hits).toEqual([])
+    expect(result.current.index).toBe(0)
+  })
+
+  it('re-opening the same file keeps the query and bumps focusNonce', () => {
+    const { result } = renderHook(() => useFileSearch(diffEntries))
+
+    act(() => {
+      result.current.open('src/a.ts')
+      result.current.setQuery('foo')
+    })
+    act(() => {
+      result.current.next()
+    })
+    expect(result.current.index).toBe(1)
+    const nonceAfterOpen = result.current.focusNonce
+
+    // Simulate ⌘F after the field blurred: re-open the same file. The query
+    // and cursor must survive (so the input can select it for retyping) and
+    // the nonce must bump so the bar re-focuses its input.
+    act(() => {
       result.current.open('src/a.ts')
     })
 
     expect(result.current.filePath).toBe('src/a.ts')
-    expect(result.current.query).toBe('')
-    expect(result.current.hits).toEqual([])
-    expect(result.current.index).toBe(0)
+    expect(result.current.query).toBe('foo')
+    expect(result.current.hits.map((h) => h.lineNumber)).toEqual([1, 3])
+    expect(result.current.index).toBe(1)
+    expect(result.current.focusNonce).toBe(nonceAfterOpen + 1)
   })
 
   it('setQuery filters hits to the open file, case-insensitively and trimmed', () => {

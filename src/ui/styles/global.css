@@ -5659,6 +5659,9 @@ file-tree,
     padding: 3px 8px;
     outline: none;
     height: 24px;
+    /* Keep the bar clear of the sticky toolbar when typing (or ⌘F) scrolls it
+       back into view after a match jump — same offset the cards use. */
+    scroll-margin-top: 90px;
 }
 .file-search-bar-input:focus {
     border-color: var(--accent);

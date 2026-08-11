@@ -55,6 +55,7 @@ import { CommentBubble } from './CommentBubble'
 import { ExistingPrCommentBubble } from './ExistingPrCommentBubble'
 import { DiffMinimap } from './DiffMinimap'
 import { SHIKI_THEME_MAP, scrollToLine } from '../utils'
+import { clearFindHighlights, syncFindHighlights } from '../lib/findInFileHighlights'
 import type { EditAnnotation, EditSessionView } from '../hooks/useEditSessions'
 import {
   pendingFromSelection,
@@ -394,6 +395,31 @@ export const FileDiffCard = memo(function FileDiffCard({
     () => buildUnsafeCSS(tabSize, fontSize, monoFontFamily),
     [tabSize, fontSize, monoFontFamily],
   )
+
+  // Find-in-file persistent match highlights. Sync immediately, then reconcile
+  // on an interval: diff rows lazy-mount (IntersectionObserver) and rebuild
+  // (style/theme changes, context expansion) inside the shadow DOM, so a
+  // one-shot pass would miss rows that appear after the search opens.
+  const searchSessionActive = fileSearch?.filePath === filePath
+  const searchQuery = searchSessionActive ? fileSearch.query : ''
+  const searchHits = searchSessionActive ? fileSearch.hits : []
+  const searchIndex = searchSessionActive ? fileSearch.index : 0
+  useEffect(() => {
+    const card = cardRef.current
+    if (!card) return
+    if (!searchSessionActive || !searchQuery.trim()) {
+      clearFindHighlights(card)
+      return
+    }
+    syncFindHighlights(card, searchHits, searchIndex, searchQuery)
+    const timer = window.setInterval(() => {
+      syncFindHighlights(card, searchHits, searchIndex, searchQuery)
+    }, 300)
+    return () => {
+      window.clearInterval(timer)
+      clearFindHighlights(card)
+    }
+  }, [searchSessionActive, searchQuery, searchHits, searchIndex, bodyMounted, collapsed, editing])
 
   const getLineContent = (
     side: AnnotationSide,
@@ -930,6 +956,7 @@ export const FileDiffCard = memo(function FileDiffCard({
             query={fileSearch.query}
             hits={fileSearch.hits}
             index={fileSearch.index}
+            focusNonce={fileSearch.focusNonce}
             onQueryChange={fileSearch.setQuery}
             onNext={fileSearch.next}
             onPrev={fileSearch.prev}
@@ -1524,6 +1551,30 @@ export function buildUnsafeCSS(tabSize: number, fontSize: number, fontFamily: st
     }
     [data-line].selected-line:not([data-line-type="addition"]):not([data-line-type="deletion"]) {
       background-color: var(--gl-selected) !important;
+    }
+    /* Find-in-file persistent match highlights. Rows are matched and toggled
+       by syncFindHighlights; these rules live in the shadow root because the
+       app stylesheet cannot pierce it. Added/deleted rows keep their diff
+       tint (ring + glow only); context rows get a gold wash. */
+    [data-line].find-hit,
+    [data-line].find-hit-current {
+      box-shadow: inset 0 0 0 1.5px rgba(235, 186, 0, 0.55) !important;
+    }
+    [data-line].find-hit-current {
+      box-shadow: inset 0 0 0 2px rgba(235, 186, 0, 0.9),
+        inset 0 0 16px rgba(235, 186, 0, 0.3) !important;
+    }
+    [data-line].find-hit:not([data-line-type]),
+    [data-line].find-hit:not([data-line-type="addition"]):not([data-line-type="deletion"]):not([data-line-type="change-addition"]):not([data-line-type="change-deletion"]) {
+      background-color: rgba(235, 186, 0, 0.16) !important;
+    }
+    [data-line].find-hit-current:not([data-line-type="addition"]):not([data-line-type="deletion"]):not([data-line-type="change-addition"]):not([data-line-type="change-deletion"]) {
+      background-color: rgba(235, 186, 0, 0.4) !important;
+    }
+    [data-line] .find-hit-text {
+      background-color: rgba(235, 186, 0, 0.36) !important;
+      border-radius: 3px !important;
+      box-shadow: 0 0 0 1px rgba(235, 186, 0, 0.4) !important;
     }
     ${EMBEDDED_COMMENT_STYLES}
   `

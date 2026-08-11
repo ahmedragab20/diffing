@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import type { DiffLineEntry } from '../../hooks/useDiffSearch'
 
@@ -13,6 +13,24 @@ vi.mock('lucide-react', () => ({
 
 // ── Imports (after mocks) ──
 import { FileSearchBar } from '../FileSearchBar'
+
+// jsdom has no layout and does not implement scrollIntoView (calling it on a
+// real element would throw). Define a no-op on the prototype so renders work,
+// then reset it before each test so call-count assertions stay isolated.
+beforeEach(() => {
+  if (!Element.prototype.scrollIntoView) {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    })
+  }
+  vi.mocked(Element.prototype.scrollIntoView).mockClear()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 function makeHits(): DiffLineEntry[] {
   return [
@@ -106,6 +124,81 @@ describe('FileSearchBar', () => {
     expect(screen.getByRole('button', { name: 'Next match' })).toBeEnabled()
   })
 
+  it('re-focuses and selects the input when focusNonce bumps (⌘F after blur)', () => {
+    const props = {
+      filePath: 'src/a.ts',
+      query: 'foo',
+      hits: makeHits(),
+      index: 0,
+      focusNonce: 1,
+      onQueryChange: vi.fn(),
+      onNext: vi.fn(),
+      onPrev: vi.fn(),
+      onClose: vi.fn(),
+    }
+    const { rerender } = render(<FileSearchBar {...props} />)
+
+    const input = screen.getByRole('textbox', { name: 'Find in file' })
+    expect(input).toHaveFocus()
+
+    // Blur (user clicked elsewhere), then ⌘F re-opens → focusNonce bumps.
+    input.blur()
+    expect(input).not.toHaveFocus()
+
+    rerender(<FileSearchBar {...props} focusNonce={2} />)
+
+    expect(input).toHaveFocus()
+  })
+
+  it('scrolls the field back into view while typing (minimal, nearest scroll)', () => {
+    const { onQueryChange } = renderBar()
+    const input = screen.getByRole('textbox', { name: 'Find in file' })
+
+    // A match jump (Enter) left the field focused but scrolled off-screen.
+    const scrollSpy = vi.spyOn(input, 'scrollIntoView').mockImplementation(() => {})
+    fireEvent.change(input, { target: { value: 'foo' } })
+
+    expect(onQueryChange).toHaveBeenCalledWith('foo')
+    expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest', behavior: 'auto' })
+  })
+
+  it('re-scrolls the field into view on every keystroke, not just the first', () => {
+    const { onQueryChange } = renderBar()
+    const input = screen.getByRole('textbox', { name: 'Find in file' })
+
+    const scrollSpy = vi.spyOn(input, 'scrollIntoView').mockImplementation(() => {})
+    // vitest's spyOn records one install-time invocation when it patches the
+    // prototype method — drop it so the count reflects real calls only.
+    scrollSpy.mockClear()
+    fireEvent.change(input, { target: { value: 'f' } })
+    fireEvent.change(input, { target: { value: 'fo' } })
+    fireEvent.change(input, { target: { value: 'foo' } })
+
+    expect(onQueryChange).toHaveBeenCalledTimes(3)
+    expect(scrollSpy).toHaveBeenCalledTimes(3)
+  })
+
+  it('brings the field back into view when ⌘F refocuses it after a jump', () => {
+    const props = {
+      filePath: 'src/a.ts',
+      query: 'foo',
+      hits: makeHits(),
+      index: 0,
+      focusNonce: 1,
+      onQueryChange: vi.fn(),
+      onNext: vi.fn(),
+      onPrev: vi.fn(),
+      onClose: vi.fn(),
+    }
+    const { rerender } = render(<FileSearchBar {...props} />)
+    const input = screen.getByRole('textbox', { name: 'Find in file' })
+
+    const scrollSpy = vi.spyOn(input, 'scrollIntoView').mockImplementation(() => {})
+    rerender(<FileSearchBar {...props} focusNonce={2} />)
+
+    expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest', behavior: 'auto' })
+  })
+
   it('fires onPrev/onNext/onClose from the buttons', () => {
     const { onPrev, onNext, onClose } = renderBar({ hits: makeHits() })
 
@@ -136,6 +229,20 @@ describe('FileSearchBar', () => {
     fireEvent.keyDown(screen.getByRole('textbox', { name: 'Find in file' }), { key: 'Escape' })
 
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('Escape does not leak to the global keymap (would otherwise exit zen)', () => {
+    const { onClose } = renderBar()
+    const windowKeyDown = vi.fn()
+    window.addEventListener('keydown', windowKeyDown)
+
+    // A keydown inside the bar must close the search AND stop propagating, so
+    // the shared window keymap (zen-exit on Escape) never sees the stroke.
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Find in file' }), { key: 'Escape' })
+    fireEvent.keyDown(screen.getByRole('search'), { key: 'Escape' })
+
+    expect(onClose).toHaveBeenCalledTimes(2)
+    expect(windowKeyDown).not.toHaveBeenCalled()
   })
 
   it('handles Enter and Escape on the wrapper too', () => {

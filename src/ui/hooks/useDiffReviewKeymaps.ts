@@ -18,6 +18,13 @@ interface DiffReviewKeymapActions {
   onTogglePalette?: () => void
   /** Open the file-scoped find-in-file bar on the active file (⌘F / F). */
   onOpenFileSearch?: () => void
+  /**
+   * Close the file-scoped find-in-file bar. Wired while a search is open so
+   * Escape closes ONLY the search (never also exits zen) even when the bar's
+   * input is not the focus target (the user clicked the diff and then pressed
+   * Esc — the bar's own handler cannot see that stroke).
+   */
+  onCloseFileSearch?: () => void
   onNextSearchHit?: () => void
   onPrevSearchHit?: () => void
   onOpenTheme: () => void
@@ -113,14 +120,23 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
         return
       }
 
-      // Escape exits zen when active (and no overlay is open — the App only
-      // wires onExitZen in that state). Overlays like the palette and dialogs
-      // handle their own Escape first.
-      if (event.key === 'Escape' && actions.onExitZen) {
-        event.preventDefault()
-        actions.onExitZen()
-        resetBuffer()
-        return
+      // Escape closes the file-scoped find bar first — also when its input is
+      // not the focus target — then exits zen when active (and no overlay is
+      // open — the App only wires onExitZen in that state). Overlays like the
+      // palette and dialogs handle their own Escape first.
+      if (event.key === 'Escape') {
+        if (actions.onCloseFileSearch) {
+          event.preventDefault()
+          actions.onCloseFileSearch()
+          resetBuffer()
+          return
+        }
+        if (actions.onExitZen) {
+          event.preventDefault()
+          actions.onExitZen()
+          resetBuffer()
+          return
+        }
       }
 
       if (event.ctrlKey) {
