@@ -5,8 +5,9 @@
 ## Quick Start for Any Agent
 
 Prefer the diffing MCP tools when the harness exposes them: call
-`review_session_status`, then `start_review_session` when needed. The CLI is the
-portable fallback:
+`review_session_status`, then `start_review_session` when needed. When running
+inside the pi harness, prefer the built-in `diffing_*` extension tools
+(registered by extensions/pi). The CLI is the portable fallback:
 
 ```bash
 diffing                    # Start the preferred review UI for current repo
@@ -35,7 +36,7 @@ Full CLI/MCP contracts: `docs/cli.md`. Human onboarding: `docs/getting-started.m
 Load a skill when your task matches its trigger. All skills live in `.agents/skills/`.
 
 | Skill | Trigger / When to Use |
-|-------|----------------------|
+| ------- | ---------------------- |
 | `diffing` | Route any diffing request to the strongest available MCP, CLI, or offline workflow |
 | `diffing-plan-review` | Submitting a markdown plan for human review before non-trivial work; awaiting verdict; replying/resolving plan comments |
 | `diffing-review` | Performing a code review of local git changes; fetching diff/comments; posting inline comments; applying suggestions |
@@ -150,7 +151,7 @@ diffing plan resolve <comment-id>
 ### Decision Flow
 
 | Decision | Action |
-|----------|--------|
+| ---------- | -------- |
 | `approved` | Implement as planned |
 | `changes-requested` | Revise plan, `submit --id`, `await` again |
 | `rejected` | Stop; do not implement |
