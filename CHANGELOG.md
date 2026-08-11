@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.15.0
+
+### Minor Changes
+
+- GitHub PR review sessions no longer break on large pull requests. GitHub caps
+  `gh pr diff` output (~300 files / "diff too large" refusal), which previously
+  made oversized PRs fail to load. The app now detects that refusal and falls
+  back to paginating GitHub's "List pull request files" API, assembling a unified
+  diff from each file's patch. Binary or per-file-oversized entries render as
+  `Binary files … differ` stubs so every file still appears in the review
+  overview.
+
 ## 0.14.1
 
 ### Patch Changes
