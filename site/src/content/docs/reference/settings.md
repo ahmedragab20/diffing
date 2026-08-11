@@ -19,12 +19,12 @@ Per-repo UI session state (panel sizes, drafts, etc.) lives under `~/.diffing/<r
 Defaults may evolve; inspect your file or product source for the latest schema. Representative fields:
 
 | Key | Role |
-|-----|------|
+| ----- | ------ |
 | `defaultMode` | `"web"` \| `"tui"` interactive default |
 | `theme` | Theme id (default **`rose-pine`**) |
 | `diffStyle` | `"split"` \| `"unified"` |
 | `defaultTabSize` | Fallback tab width (editorconfig wins) |
-| `editorIDE` | `default` \| `vscode` \| `zed` \| `vim` \| `neovim` |
+| `editorIDE` | `default` \| `vscode` \| `zed` \| `vim` \| `neovim` \| `ghostty` |
 | `lineDiffType` | `word` \| `word-alt` \| `char` \| `none` |
 | `lineWrap` | boolean |
 | `diffIndicators` | `classic` \| `bars` \| `none` |
