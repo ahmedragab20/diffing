@@ -27,7 +27,7 @@ npx skills add ahmedragab20/diffing
 ```
 
 | Skill | When |
-|-------|------|
+| ------- | ------ |
 | `diffing` | Route any diffing request |
 | `diffing-start-review` | Launch UI for human |
 | `diffing-finish-review` | Process handoff comments |
@@ -40,7 +40,7 @@ npx skills add ahmedragab20/diffing
 
 ```bash
 pi install git:github.com/ahmedragab20/diffing
-pi install npm:diffing   # npm form, once published
+pi install npm:diffing
 ```
 
 The extension lives at `extensions/pi/index.ts` and registers 18 `diffing_*` tools mirroring the MCP catalog — status, start_review, comments, reply/resolve/unresolve, progress, await_review, plan submit/await/list/show/reply/resolve, url, sessions, gh_overview, and a CLI escape hatch. It also adds a `/diffing` command that opens or reuses the review UI and a footer status widget showing the active review session.

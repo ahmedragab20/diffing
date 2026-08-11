@@ -12,5 +12,6 @@
     "declaration": true,
     "types": ["node"]
   },
-  "include": ["src", "src/ui/env.d.ts"]
+  "include": ["src", "src/ui/env.d.ts"],
+  "exclude": ["extensions"]
 }

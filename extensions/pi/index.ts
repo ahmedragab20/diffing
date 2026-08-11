@@ -11,7 +11,8 @@
  *    `[Skill conflicts]` banner appears when pi runs inside the diffing repo.
  *
  * All tool executions spawn the `diffing` CLI in the consumer repo (ctx.cwd).
- * Install: `pi install git:github.com/ahmedragab20/diffing`, or symlink this
+ * Install: `pi install npm:diffing` (published on npm),
+ * `pi install git:github.com/ahmedragab20/diffing`, or symlink this
  * directory into `~/.pi/agent/extensions/diffing`.
  */
 
@@ -134,12 +135,14 @@ function describe(result: RunResult, command: string): string {
 		return out || "(no output)";
 	}
 	const err = result.stderr.trim();
-	const hint =
-		result.exitCode === 127
-			? "\n\n`diffing` was not found on PATH. Install it with `npm i -g diffing` or run `diffing setup`."
-			: result.exitCode === 3
-				? "\n\nNo diffing server is running for this repo. Start one with `diffing` (or the diffing_start_review tool)."
-				: "";
+	let hint = "";
+	if (result.exitCode === 127) {
+		hint =
+			"\n\n`diffing` was not found on PATH. Install it with `npm i -g diffing` or run `diffing setup`.";
+	} else if (result.exitCode === 3) {
+		hint =
+			"\n\nNo diffing server is running for this repo. Start one with `diffing` (or the diffing_start_review tool).";
+	}
 	return err ? `${err}${hint}` : `exit code ${result.exitCode}${hint}`;
 }
 
