@@ -297,10 +297,7 @@ mod tests {
             let stride = settings_row_stride(inner);
             let scroll = setting_scroll(state.cursor, visible_setting_rows(inner, stride));
             let row = inner.y + 1 + ((index - scroll) as u16) * stride;
-            assert_eq!(
-                settings_row_at(&state, area, inner.x + 3, row),
-                Some(index)
-            );
+            assert_eq!(settings_row_at(&state, area, inner.x + 3, row), Some(index));
         }
         assert_eq!(
             settings_row_at(&state, area, inner.x - 1, inner.y + 1),

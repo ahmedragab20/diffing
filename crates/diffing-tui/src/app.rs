@@ -26,13 +26,16 @@ use crate::diff::highlight::highlight_line;
 use crate::diff_context::DiffContext;
 use crate::editorconfig::EditorConfigCache;
 use crate::handoff::{CommentsWatcher, RepoWatcher};
-use crate::keys::{classify_search_special, help_text, viewer_help_text, Action, Command, Keymap, SearchSpecialAction};
+use crate::keys::{
+    classify_search_special, help_text, viewer_help_text, Action, Command, Keymap,
+    SearchSpecialAction,
+};
 use crate::lsp::{
     character_column_from_utf16, utf16_column, DefinitionTarget, LanguageResponse, LspManager,
     RequestKind, RequestToken, ServerState,
 };
-use crate::persistence::FileDisplay;
 use crate::path_safety;
+use crate::persistence::FileDisplay;
 use crate::search::{
     diff_first_search_hits, execute_search_request, interleave_search_hits, load_local_preview,
     SearchClient, SearchHit, SearchHitKind, SearchPreview, SearchRequest, SearchResponse,
@@ -40,7 +43,9 @@ use crate::search::{
 };
 use crate::themes::{Palette, ThemeName};
 use crate::ui::agent_activity_toast::{render_toast, Toast};
-use crate::ui::comment_form::{comment_form_regions, render_form, textarea_char_count, CommentFormState};
+use crate::ui::comment_form::{
+    comment_form_regions, render_form, textarea_char_count, CommentFormState,
+};
 use crate::ui::comment_thread::render_thread;
 use crate::ui::comment_tracker::{render_tracker, TrackerState};
 use crate::ui::file_diff_card::{render_card, DiffRenderCache};
@@ -705,8 +710,8 @@ fn spawn_search_worker(
                 while let Ok(newer) = request_rx.try_recv() {
                     request = newer;
                 }
-                let response = execute_search_request(&worker, &request)
-                    .map_err(|error| error.to_string());
+                let response =
+                    execute_search_request(&worker, &request).map_err(|error| error.to_string());
                 let _ = result_tx.send(SearchEvent {
                     id: request.id,
                     response,
@@ -1620,9 +1625,9 @@ impl App {
         if in_text_entry {
             let has_draft = self.text_entry_has_draft();
             let now = std::time::Instant::now();
-            let double_tap = self
-                .last_ctrl_c_at
-                .is_some_and(|previous| now.duration_since(previous) < std::time::Duration::from_secs(1));
+            let double_tap = self.last_ctrl_c_at.is_some_and(|previous| {
+                now.duration_since(previous) < std::time::Duration::from_secs(1)
+            });
             self.last_ctrl_c_at = Some(now);
             if has_draft && double_tap {
                 self.quit = true;
@@ -3766,7 +3771,9 @@ impl App {
         use crossterm::event::KeyCode;
         match key.code {
             KeyCode::Esc | KeyCode::Char(',') => self.mode = Mode::Normal,
-            KeyCode::Char('r') if self.settings_state.cursor == 9 || self.settings_state.cursor == 10 => {
+            KeyCode::Char('r')
+                if self.settings_state.cursor == 9 || self.settings_state.cursor == 10 =>
+            {
                 self.lsp.retry_failed_servers();
                 self.lsp_active_path = None;
                 self.lsp_last_state = if self.lsp.mode() == crate::lsp::IntelligenceMode::Off {
@@ -7833,7 +7840,10 @@ mod tests {
 
         assert_eq!(scope_for(Action::OpenSearch), Some(SearchScope::All));
         assert_eq!(scope_for(Action::OpenFileFilter), Some(SearchScope::Files));
-        assert_eq!(scope_for(Action::OpenSymbolSearch), Some(SearchScope::Symbols));
+        assert_eq!(
+            scope_for(Action::OpenSymbolSearch),
+            Some(SearchScope::Symbols)
+        );
     }
 
     #[test]

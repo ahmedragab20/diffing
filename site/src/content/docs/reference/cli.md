@@ -127,11 +127,11 @@ diffing url
 ### inspect
 
 ```bash
-diffing inspect summary
-diffing inspect files
-diffing inspect hunks --file <n>
-diffing inspect slice --file <n> [--start R] …
-diffing inspect search --query "…"
+diffing inspect summary [--exclude lockfiles]
+diffing inspect files [--path GLOB]
+diffing inspect hunks --file <n> | --path GLOB
+diffing inspect slice --file <n> | --path GLOB [--start R] …
+diffing inspect search --query "…" [--path GLOB]
 ```
 
 Token-efficient alternative to dumping the full patch. Mirrors MCP `diff_*` tools.

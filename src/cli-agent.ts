@@ -35,6 +35,22 @@ const EXIT_NO_SERVER = 3
 const EXIT_NOT_FOUND = 4
 const EXIT_USAGE = 5
 
+export function validateInspectSelectors(
+  resource: string,
+  file?: string,
+  path?: string,
+): string | null {
+  const hasFile = file != null && file !== ''
+  const hasPath = path != null && path !== ''
+  if ((resource === 'hunks' || resource === 'slice') && hasFile && hasPath) {
+    return `diffing inspect ${resource}: --path and --file are mutually exclusive`
+  }
+  if ((resource === 'hunks' || resource === 'slice') && !hasFile && !hasPath) {
+    return `diffing inspect ${resource}: --file or --path is required`
+  }
+  return null
+}
+
 let activeCapability: string | undefined
 let activeAuthToken: string | undefined
 
@@ -935,6 +951,8 @@ async function inspect(args: string[]): Promise<number> {
         cursor: { type: 'string' },
         limit: { type: 'string' },
         file: { type: 'string' },
+        path: { type: 'string' },
+        exclude: { type: 'string' },
         generation: { type: 'string' },
         start: { type: 'string' },
         row: { type: 'string' },
@@ -956,12 +974,13 @@ async function inspect(args: string[]): Promise<number> {
     console.error(`Usage: diffing inspect <summary|files|hunks|slice|search> [options]
 
 Read bounded data from a running session (web, TUI, or gh-pr) without transferring the full patch.
-  summary
-  files   [--cursor N] [--limit N]
-  hunks   --file N [--cursor N] [--limit N] [--generation N]
-  slice   --file N [--start N] [--max-lines N] [--max-bytes N] [--generation N]
-  search  <text>|--query <text> [--file N] [--row N] [--limit N] [--max-bytes N] [--generation N]
+  summary [--exclude lockfiles]
+  files   [--path GLOB] [--cursor N] [--limit N]
+  hunks   (--file N | --path GLOB) [--cursor N] [--limit N] [--generation N]
+  slice   (--file N | --path GLOB) [--start N] [--max-lines N] [--max-bytes N] [--generation N]
+  search  <text>|--query <text> [--path GLOB] [--file N] [--row N] [--limit N] [--max-bytes N] [--generation N]
 
+Filtered files nextCursor is an index into the filtered list, not a global file index.
 Add --pretty for indented JSON. Compact JSON is the token-efficient default.`)
     return parsed.values.help ? EXIT_OK : EXIT_USAGE
   }
@@ -998,8 +1017,17 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`)
     }
     params.set(parameter, value)
   }
-  if ((resource === 'hunks' || resource === 'slice') && !params.has('file')) {
-    console.error(`diffing inspect ${resource}: --file is required`)
+  const path = parsed.values.path
+  if (typeof path === 'string') params.set('path', path)
+  const exclude = parsed.values.exclude
+  if (typeof exclude === 'string') params.set('exclude', exclude)
+  const selectorError = validateInspectSelectors(
+    resource,
+    typeof parsed.values.file === 'string' ? parsed.values.file : undefined,
+    typeof path === 'string' ? path : undefined,
+  )
+  if (selectorError) {
+    console.error(selectorError)
     return EXIT_USAGE
   }
   if (resource === 'search') {

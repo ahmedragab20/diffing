@@ -271,8 +271,7 @@ pub fn save_settings(
 }
 
 fn settings_path() -> Option<PathBuf> {
-    directories::UserDirs::new()
-        .map(|dirs| dirs.home_dir().join(".config/diffing/settings.json"))
+    directories::UserDirs::new().map(|dirs| dirs.home_dir().join(".config/diffing/settings.json"))
 }
 
 fn read_object(path: &Path) -> Map<String, Value> {
@@ -301,7 +300,10 @@ fn read_object_for_update(path: &Path) -> std::io::Result<Map<String, Value>> {
         })
 }
 
-fn with_lock<T>(path: &Path, mut operation: impl FnMut(&mut Map<String, Value>) -> std::io::Result<T>) -> std::io::Result<T> {
+fn with_lock<T>(
+    path: &Path,
+    mut operation: impl FnMut(&mut Map<String, Value>) -> std::io::Result<T>,
+) -> std::io::Result<T> {
     let mut root = read_object_for_update(path)?;
     let result = operation(&mut root)?;
     write_object(path, root)?;

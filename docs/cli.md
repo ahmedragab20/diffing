@@ -423,27 +423,29 @@ diffing completion <bash|zsh|fish>
 Read **bounded** diff data from any running web, native TUI, or GitHub PR session without transferring the full patch.
 
 ```bash
-diffing inspect summary
-diffing inspect files [--cursor N] [--limit N]
-diffing inspect hunks --file N [--cursor N] [--limit N] [--generation N]
-diffing inspect slice --file N [--start N] [--max-lines N] [--max-bytes N] [--generation N]
-diffing inspect search <text>|--query <text> [--file N] [--row N] [--limit N] [--max-bytes N] [--generation N]
+diffing inspect summary [--exclude lockfiles]
+diffing inspect files [--path GLOB] [--cursor N] [--limit N]
+diffing inspect hunks (--file N | --path GLOB) [--cursor N] [--limit N] [--generation N]
+diffing inspect slice (--file N | --path GLOB) [--start N] [--max-lines N] [--max-bytes N] [--generation N]
+diffing inspect search <text>|--query <text> [--path GLOB] [--file N] [--row N] [--limit N] [--max-bytes N] [--generation N]
 # Add --pretty for indented JSON.
 ```
 
 - Web and PR sessions build an in-process index from their current patch; TUI sessions use the sparse disk-backed index.
 - Carry `generation` from `summary` into hunk, slice, and search requests. A `409` means the patch changed and traversal must restart.
+- `--path` is a git pathspec-ish glob (`src/lib/**`, `**/agent-diff-index.ts`). `files` pages the **filtered** list (`nextCursor` is not a global file index); each row still includes the stable global `index`. `hunks`/`slice` take `--path` **or** `--file` (exactly one file must match). Invalid globs return HTTP 400.
+- `--exclude lockfiles` on `summary` drops lock/generated basenames from **counts only**.
 - Prefer MCP `diff_summary` / `diff_files` / `diff_hunks` / `diff_slice` / `diff_search` when available — they target the same bounded data model.
 
 The loopback HTTP contract is shared across modes:
 
 | Route | Purpose |
 | ------- | --------- |
-| `GET /api/diff/summary` | Generation, completion, totals, kind counts, and PR identity when applicable |
-| `GET /api/diff/files?cursor&limit` | Paged file metadata |
-| `GET /api/diff/hunks?file&cursor&limit&generation` | Paged hunk metadata with stale-generation protection |
-| `GET /api/diff/slice?file&start&maxLines&maxBytes&generation` | Strictly bounded logical rows; continue with `nextRow` |
-| `GET /api/diff/search?q&file&row&limit&maxBytes&generation` | Literal case-insensitive path/content search; continue with `nextFile` + `nextRow` |
+| `GET /api/diff/summary?exclude` | Generation, completion, totals, kind counts, top-level directories, and PR identity when applicable |
+| `GET /api/diff/files?path&cursor&limit` | Paged file metadata; `path` filters first, then pages |
+| `GET /api/diff/hunks?file\|path&cursor&limit&generation` | Paged hunk metadata with stale-generation protection |
+| `GET /api/diff/slice?file\|path&start&maxLines&maxBytes&generation` | Strictly bounded logical rows; continue with `nextRow` |
+| `GET /api/diff/search?q&path&file&row&limit&maxBytes&generation` | Literal case-insensitive path/content search; continue with `nextFile` + `nextRow` |
 
 ---
 

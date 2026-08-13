@@ -272,6 +272,42 @@ describe('diffing MCP', () => {
     }
   })
 
+  it('passes path-scoped inspect queries to the session API', async () => {
+    const fetchCalls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = input instanceof Request ? input.url : String(input)
+      fetchCalls.push(url)
+      return new Response(JSON.stringify({ generation: 1, files: [] }), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+    const lock: ServerLock = {
+      port: 43126,
+      host: '127.0.0.1',
+      pid: process.pid,
+      repoRoot,
+      startedAt: Date.now(),
+      version: MCP_VERSION,
+      mode: 'web',
+    }
+    const session = await connect({
+      repoRoot,
+      readLock: () => lock,
+      lockIsAlive: () => true,
+    })
+    try {
+      await session.client.callTool({ name: 'diff_files', arguments: { path: 'src/**', limit: 20 } })
+      await session.client.callTool({ name: 'diff_slice', arguments: { path: 'src/lib/agent-diff-index.ts' } })
+      expect(fetchCalls[0]).toContain('/api/diff/files?')
+      expect(fetchCalls[0]).toContain('path=src%2F**')
+      expect(fetchCalls[1]).toContain('/api/diff/slice?')
+      expect(fetchCalls[1]).toContain('path=src%2Flib%2Fagent-diff-index.ts')
+      expect(fetchCalls[1]).not.toContain('file=')
+    } finally {
+      await session.close()
+    }
+  })
+
   it('exposes slim PR reads and local draft creation in gh-pr mode', async () => {
     const fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input)

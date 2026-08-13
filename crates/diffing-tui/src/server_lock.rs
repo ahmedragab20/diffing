@@ -166,7 +166,8 @@ fn write_json_atomically(path: &Path, lock: &ServerLock) -> Result<()> {
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(&temporary, json).with_context(|| format!("writing {}", temporary.display()))?;
+        std::fs::write(&temporary, json)
+            .with_context(|| format!("writing {}", temporary.display()))?;
     }
     std::fs::rename(&temporary, path).with_context(|| format!("publishing {}", path.display()))?;
     Ok(())
@@ -255,7 +256,8 @@ pub fn remove_server_lock_if_owned(repo_root: &str, owner: &ServerLock) -> Resul
     let normalized = normalized_lock(owner);
     let record_path = session_record_path(repo_root, &normalized);
     if let Ok(raw) = std::fs::read_to_string(&record_path) {
-        if serde_json::from_str::<ServerLock>(&raw).is_ok_and(|stored| same_session(&stored, &normalized))
+        if serde_json::from_str::<ServerLock>(&raw)
+            .is_ok_and(|stored| same_session(&stored, &normalized))
         {
             if let Ok(raw_again) = std::fs::read_to_string(&record_path) {
                 if serde_json::from_str::<ServerLock>(&raw_again)
@@ -324,10 +326,7 @@ fn probe_lock_server(lock: &ServerLock) -> bool {
     stream
         .set_write_timeout(Some(Duration::from_millis(400)))
         .ok();
-    let mut request = format!(
-        "GET /api/review/status HTTP/1.1\r\nHost: {}\r\n",
-        host
-    );
+    let mut request = format!("GET /api/review/status HTTP/1.1\r\nHost: {}\r\n", host);
     if let Some(capability) = &lock.capability {
         request.push_str(&format!("X-Diffing-Capability: {}\r\n", capability));
     }

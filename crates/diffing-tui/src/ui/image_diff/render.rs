@@ -231,17 +231,13 @@ fn render_side(
             tokens.canvas,
             buf,
         ),
-        ImageSide::Error(error) => centered_message(error, raster, tokens.warning, tokens.canvas, buf),
+        ImageSide::Error(error) => {
+            centered_message(error, raster, tokens.warning, tokens.canvas, buf)
+        }
     }
 }
 
-fn centered_message(
-    message: &str,
-    area: Rect,
-    color: Color,
-    background: Color,
-    buf: &mut Buffer,
-) {
+fn centered_message(message: &str, area: Rect, color: Color, background: Color, buf: &mut Buffer) {
     if area.width == 0 || area.height == 0 {
         return;
     }

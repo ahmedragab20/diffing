@@ -8,6 +8,16 @@
  */
 
 import { createHash } from 'node:crypto'
+import {
+  capPathMatches,
+  compilePathspecGlob,
+  displayPath,
+  fileMatchesPath,
+  isLockfileNoise,
+  parseExcludeList,
+  type InspectScopeError,
+  type PathMatcher,
+} from './inspect-scope.js'
 
 export type IndexedChangeKind =
   | 'modified'
@@ -115,6 +125,14 @@ export interface SearchPage {
   estimatedBytes: number
 }
 
+export interface DirectorySummary {
+  path: string
+  files: number
+  hunks: number
+  additions: number
+  deletions: number
+}
+
 export interface SummaryResponse {
   generation: number
   complete: boolean
@@ -125,6 +143,8 @@ export interface SummaryResponse {
   deletions: number
   patchBytes: number
   changes: Record<string, number>
+  directories: DirectorySummary[]
+  exclude?: string[]
   next: string[]
 }
 
@@ -132,6 +152,8 @@ export interface FilesPage {
   generation: number
   returned: number
   total: number
+  matched: number
+  path?: string
   nextCursor: number | null
   files: Array<{
     index: number
@@ -414,36 +436,144 @@ export function buildAgentDiffIndex(
   }
 }
 
-export function indexSummary(index: AgentDiffIndex): SummaryResponse {
+const DIRECTORY_CAP = 20
+
+export function indexSummary(
+  index: AgentDiffIndex,
+  excludeRaw?: string | string[],
+): SummaryResponse | InspectScopeError {
+  const exclude = parseExcludeList(excludeRaw)
+  if ('error' in exclude) return exclude
+  const skipLockfiles = exclude.includes('lockfiles')
+  const counted = skipLockfiles
+    ? index.files.filter((file) => !isLockfileNoise(displayPath(file.oldPath, file.newPath)))
+    : index.files
+
   const changes: Record<string, number> = {}
-  for (const file of index.files) {
+  let hunks = 0
+  let rows = 0
+  let additions = 0
+  let deletions = 0
+  for (const file of counted) {
     changes[file.kind] = (changes[file.kind] ?? 0) + 1
+    hunks += file.hunks.length
+    rows += file.rowCount
+    additions += file.additions
+    deletions += file.deletions
   }
-  return {
+
+  const summary: SummaryResponse = {
     generation: index.generation,
     complete: index.complete,
-    files: index.files.length,
-    hunks: index.totalHunks,
-    rows: index.totalRows,
-    additions: index.additions,
-    deletions: index.deletions,
+    files: counted.length,
+    hunks,
+    rows,
+    additions,
+    deletions,
     patchBytes: index.patchBytes,
     changes,
+    directories: summarizeDirectories(counted),
     next: ['diff_files', 'diff_search', 'diff_slice'],
   }
+  if (exclude.length > 0) summary.exclude = exclude
+  return summary
+}
+
+function summarizeDirectories(files: IndexedFile[]): DirectorySummary[] {
+  const buckets = new Map<string, DirectorySummary>()
+  for (const file of files) {
+    const path = displayPath(file.oldPath, file.newPath)
+    const slash = path.indexOf('/')
+    const dir = slash < 0 ? '.' : path.slice(0, slash)
+    const bucket = buckets.get(dir) ?? { path: dir, files: 0, hunks: 0, additions: 0, deletions: 0 }
+    bucket.files += 1
+    bucket.hunks += file.hunks.length
+    bucket.additions += file.additions
+    bucket.deletions += file.deletions
+    buckets.set(dir, bucket)
+  }
+  const ranked = [...buckets.values()].sort((a, b) => {
+    if (b.files !== a.files) return b.files - a.files
+    return b.additions + b.deletions - (a.additions + a.deletions)
+  })
+  if (ranked.length <= DIRECTORY_CAP) return ranked
+  const head = ranked.slice(0, DIRECTORY_CAP)
+  const rest = ranked.slice(DIRECTORY_CAP)
+  const other: DirectorySummary = { path: '+other', files: 0, hunks: 0, additions: 0, deletions: 0 }
+  for (const bucket of rest) {
+    other.files += bucket.files
+    other.hunks += bucket.hunks
+    other.additions += bucket.additions
+    other.deletions += bucket.deletions
+  }
+  head.push(other)
+  return head
+}
+
+function scopedFiles(
+  index: AgentDiffIndex,
+  path: string | undefined,
+): { matcher?: PathMatcher; entries: Array<{ index: number; file: IndexedFile }> } | InspectScopeError {
+  if (path == null || path === '') {
+    return { entries: index.files.map((file, i) => ({ index: i, file })) }
+  }
+  const matcher = compilePathspecGlob(path)
+  if ('error' in matcher) return matcher
+  const entries = index.files.flatMap((file, i) =>
+    fileMatchesPath(matcher, file.oldPath, file.newPath) ? [{ index: i, file }] : [],
+  )
+  return { matcher, entries }
+}
+
+export function resolveInspectFile(
+  index: AgentDiffIndex,
+  file: number | undefined,
+  path: string | undefined,
+): { fileIndex: number } | InspectScopeError {
+  const hasFile = file != null
+  const hasPath = path != null && path !== ''
+  if (hasFile && hasPath) {
+    return { error: 'path and file are mutually exclusive', status: 400, path }
+  }
+  if (!hasFile && !hasPath) {
+    return { error: 'file or path is required', status: 400 }
+  }
+  if (hasFile) return { fileIndex: file }
+  const scoped = scopedFiles(index, path)
+  if ('error' in scoped) return scoped
+  if (scoped.entries.length === 0) {
+    return { error: 'path matched no files', status: 404, path }
+  }
+  if (scoped.entries.length > 1) {
+    return {
+      error: 'path matched multiple files; narrow the glob or pass file',
+      status: 409,
+      path,
+      matches: capPathMatches(
+        scoped.entries.map(({ index, file }) => ({
+          index,
+          path: displayPath(file.oldPath, file.newPath),
+        })),
+      ),
+    }
+  }
+  return { fileIndex: scoped.entries[0].index }
 }
 
 export function indexFiles(
   index: AgentDiffIndex,
   cursor = 0,
   limit = 100,
-): FilesPage {
+  path?: string,
+): FilesPage | InspectScopeError {
+  const scoped = scopedFiles(index, path)
+  if ('error' in scoped) return scoped
   const safeLimit = clamp(limit, 1, MAX_PAGE_LINES)
   const start = Math.max(0, cursor)
-  const end = Math.min(index.files.length, start + safeLimit)
-  const files = index.files.slice(start, end).map((file, offset) => ({
-    index: start + offset,
-    path: file.newPath ?? file.oldPath ?? '',
+  const end = Math.min(scoped.entries.length, start + safeLimit)
+  const files = scoped.entries.slice(start, end).map(({ index, file }) => ({
+    index,
+    path: displayPath(file.oldPath, file.newPath),
     oldPath: file.oldPath,
     newPath: file.newPath,
     kind: file.kind,
@@ -453,13 +583,16 @@ export function indexFiles(
     additions: file.additions,
     deletions: file.deletions,
   }))
-  return {
+  const page: FilesPage = {
     generation: index.generation,
     returned: files.length,
     total: index.files.length,
-    nextCursor: end < index.files.length ? end : null,
+    matched: scoped.entries.length,
+    nextCursor: end < scoped.entries.length ? end : null,
     files,
   }
+  if (path) page.path = path
+  return page
 }
 
 export function indexHunks(
@@ -468,7 +601,7 @@ export function indexHunks(
   cursor = 0,
   limit = 100,
   generation?: number,
-): HunksPage | { error: string; status: number } {
+): HunksPage | InspectScopeError {
   if (generation !== undefined && generation !== index.generation) {
     return {
       error: `stale generation ${generation}; current generation is ${index.generation}`,
@@ -563,12 +696,20 @@ export function indexSearch(
   limit = 100,
   maxBytes = DEFAULT_MAX_BYTES,
   generation?: number,
-): SearchPage | { error: string; status: number } {
+  path?: string,
+): SearchPage | InspectScopeError {
   if (generation !== undefined && generation !== index.generation) {
     return {
       error: `stale generation ${generation}; current generation is ${index.generation}`,
       status: 409,
     }
+  }
+
+  let matcher: PathMatcher | undefined
+  if (path) {
+    const compiled = compilePathspecGlob(path)
+    if ('error' in compiled) return compiled
+    matcher = compiled
   }
 
   const q = query.toLowerCase()
@@ -592,6 +733,7 @@ export function indexSearch(
 
   outer: for (let fi = Math.max(0, fileStart); fi < index.files.length; fi++) {
     const file = index.files[fi]
+    if (matcher && !fileMatchesPath(matcher, file.oldPath, file.newPath)) continue
     const path = file.newPath ?? file.oldPath ?? ''
     const pathMatch = path.toLowerCase().includes(q)
     const rowBegin = fi === fileStart ? Math.max(0, rowStart) : 0

@@ -793,33 +793,43 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
   server.registerTool('diff_summary', {
     title: 'Summarize the active diff (bounded)',
     description:
-      'Return bounded totals and change-kind counts without transferring the patch. ' +
+      'Return bounded totals, top-level directory buckets, and change-kind counts without transferring the patch. ' +
+      'Optional exclude=["lockfiles"] drops lock/generated basenames from counts only. ' +
       'Works for web, TUI, and GitHub PR sessions. Prefer this over get_diff.',
-    inputSchema: {},
+    inputSchema: {
+      exclude: z.array(z.enum(['lockfiles'])).optional(),
+    },
     outputSchema: { result: z.unknown() },
     annotations: READ_ONLY,
-  }, async () => {
+  }, async ({ exclude } = {}) => {
     const session = requireInspectSession()
-    const result = await requestSessionJson<Record<string, unknown>>(session, '/api/diff/summary')
+    const query = new URLSearchParams()
+    if (exclude?.length) query.set('exclude', exclude.join(','))
+    const suffix = query.size ? `?${query}` : ''
+    const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/summary${suffix}`)
     return textResult(JSON.stringify(result), { result })
   })
 
   server.registerTool('diff_files', {
     title: 'Page changed files (bounded)',
     description:
-      'Return a bounded page of changed-file metadata with an opaque numeric continuation cursor. ' +
+      'Return a bounded page of changed-file metadata. Optional path is a git pathspec-ish glob ' +
+      '(src/lib/**, **/foo.ts). cursor/nextCursor index the filtered list; each row still has the global file index. ' +
       'Works for web, TUI, and GitHub PR sessions.',
     inputSchema: {
       cursor: z.number().int().nonnegative().optional(),
       limit: z.number().int().positive().max(1000).optional(),
+      path: z.string().min(1).optional(),
     },
     outputSchema: { result: z.unknown() },
     annotations: READ_ONLY,
-  }, async ({ cursor = 0, limit = 100 }) => {
+  }, async ({ cursor = 0, limit = 100, path }) => {
     const session = requireInspectSession()
+    const query = new URLSearchParams({ cursor: String(cursor), limit: String(limit) })
+    if (path) query.set('path', path)
     const result = await requestSessionJson<Record<string, unknown>>(
       session,
-      `/api/diff/files?cursor=${cursor}&limit=${limit}`,
+      `/api/diff/files?${query}`,
     )
     return textResult(JSON.stringify(result), { result })
   })
@@ -827,19 +837,22 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
   server.registerTool('diff_hunks', {
     title: 'Page hunk metadata (bounded)',
     description:
-      'Return bounded hunk metadata for one file index. Pass generation from diff_summary to reject stale navigation. ' +
-      'Works for web, TUI, and GitHub PR sessions.',
+      'Return bounded hunk metadata for one file. Pass path (glob resolving to exactly one file) or file (global index), not both. ' +
+      'Pass generation from diff_summary to reject stale navigation. Works for web, TUI, and GitHub PR sessions.',
     inputSchema: {
-      file: z.number().int().nonnegative(),
+      file: z.number().int().nonnegative().optional(),
+      path: z.string().min(1).optional(),
       generation: z.number().int().nonnegative().optional(),
       cursor: z.number().int().nonnegative().optional(),
       limit: z.number().int().positive().max(1000).optional(),
     },
     outputSchema: { result: z.unknown() },
     annotations: READ_ONLY,
-  }, async ({ file, generation, cursor = 0, limit = 100 }) => {
+  }, async ({ file, path, generation, cursor = 0, limit = 100 }) => {
     const session = requireInspectSession()
-    const query = new URLSearchParams({ file: String(file), cursor: String(cursor), limit: String(limit) })
+    const query = new URLSearchParams({ cursor: String(cursor), limit: String(limit) })
+    if (file !== undefined) query.set('file', String(file))
+    if (path) query.set('path', path)
     if (generation !== undefined) query.set('generation', String(generation))
     const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/hunks?${query}`)
     return textResult(JSON.stringify(result), { result })
@@ -849,9 +862,11 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     title: 'Read a bounded diff slice',
     description:
       'Read exact logical rows for one file with strict line and byte budgets; use nextRow to continue. ' +
+      'Pass path (glob resolving to exactly one file) or file (global index), not both. ' +
       'Works for web, TUI, and GitHub PR sessions. Prefer this over get_diff.',
     inputSchema: {
-      file: z.number().int().nonnegative(),
+      file: z.number().int().nonnegative().optional(),
+      path: z.string().min(1).optional(),
       start: z.number().int().nonnegative().optional(),
       generation: z.number().int().nonnegative().optional(),
       maxLines: z.number().int().positive().max(1000).optional(),
@@ -859,11 +874,13 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     },
     outputSchema: { result: z.unknown() },
     annotations: READ_ONLY,
-  }, async ({ file, start = 0, generation, maxLines = 120, maxBytes = 256 * 1024 }) => {
+  }, async ({ file, path, start = 0, generation, maxLines = 120, maxBytes = 256 * 1024 }) => {
     const session = requireInspectSession()
     const query = new URLSearchParams({
-      file: String(file), start: String(start), maxLines: String(maxLines), maxBytes: String(maxBytes),
+      start: String(start), maxLines: String(maxLines), maxBytes: String(maxBytes),
     })
+    if (file !== undefined) query.set('file', String(file))
+    if (path) query.set('path', path)
     if (generation !== undefined) query.set('generation', String(generation))
     const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/slice?${query}`)
     return textResult(JSON.stringify(result), { result })
@@ -873,9 +890,11 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     title: 'Search the active diff (bounded)',
     description:
       'Search changed paths and content with bounded hits/bytes and generation-safe continuation coordinates. ' +
+      'Optional path glob limits hits to matching files (in addition to file+row continuation). ' +
       'Works for web, TUI, and GitHub PR sessions.',
     inputSchema: {
       query: z.string().min(1),
+      path: z.string().min(1).optional(),
       generation: z.number().int().nonnegative().optional(),
       file: z.number().int().nonnegative().optional(),
       row: z.number().int().nonnegative().optional(),
@@ -884,11 +903,12 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     },
     outputSchema: { result: z.unknown() },
     annotations: READ_ONLY,
-  }, async ({ query, generation, file = 0, row = 0, limit = 100, maxBytes = 256 * 1024 }) => {
+  }, async ({ query, path, generation, file = 0, row = 0, limit = 100, maxBytes = 256 * 1024 }) => {
     const session = requireInspectSession()
     const params = new URLSearchParams({
       q: query, file: String(file), row: String(row), limit: String(limit), maxBytes: String(maxBytes),
     })
+    if (path) params.set('path', path)
     if (generation !== undefined) params.set('generation', String(generation))
     const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/search?${params}`)
     return textResult(JSON.stringify(result), { result })

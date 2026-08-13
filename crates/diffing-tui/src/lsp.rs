@@ -421,11 +421,7 @@ pub struct ResolvedCommand {
 }
 
 impl LspManager {
-    pub fn new(
-        repo_root: PathBuf,
-        mode: IntelligenceMode,
-        trust_repo_local_bin: bool,
-    ) -> Self {
+    pub fn new(repo_root: PathBuf, mode: IntelligenceMode, trust_repo_local_bin: bool) -> Self {
         Self {
             repo_root,
             mode,
@@ -798,8 +794,7 @@ fn resolve_command(
     trust_repo_local: bool,
 ) -> Option<ResolvedCommand> {
     if let Some(path) = std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .find_map(|directory| executable_in(&directory, command))
+        std::env::split_paths(&paths).find_map(|directory| executable_in(&directory, command))
     }) {
         return Some(ResolvedCommand {
             path,
@@ -1187,11 +1182,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                &local_executable,
-                std::fs::Permissions::from_mode(0o755),
-            )
-            .unwrap();
+            std::fs::set_permissions(&local_executable, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
         }
 
         let path_dir = tempfile::tempdir().unwrap();

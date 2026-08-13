@@ -43,6 +43,7 @@ import {
   indexHunks,
   indexSlice,
   indexSearch,
+  resolveInspectFile,
 } from './lib/agent-diff-index.js'
 import {
   formatPrReviewThreads,
@@ -370,10 +371,24 @@ export function createApp(
     return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : fallback
   }
 
+  function optionalUInt(value: string | undefined): number | undefined {
+    if (value == null || value === '') return undefined
+    const n = Number(value)
+    return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : undefined
+  }
+
+  function inspectError(c: any, result: { error: string; status: number; path?: string; matches?: unknown }) {
+    const body: Record<string, unknown> = { error: result.error }
+    if (result.path != null) body.path = result.path
+    if (result.matches != null) body.matches = result.matches
+    return c.json(body, result.status as 400 | 404 | 409)
+  }
+
   app.get('/api/diff/summary', async (c) => {
     const patch = await resolveAgentPatch()
     const index = agentDiffCache.getOrBuild(patch)
-    const summary = indexSummary(index)
+    const summary = indexSummary(index, c.req.query('exclude'))
+    if ('status' in summary) return inspectError(c, summary)
     if (!prMode) return c.json(summary)
     const session = await prStore.get()
     if (!session) return c.json(summary)
@@ -395,44 +410,48 @@ export function createApp(
     const index = agentDiffCache.getOrBuild(patch)
     const cursor = parseUInt(c.req.query('cursor'), 0)
     const limit = parseUInt(c.req.query('limit'), 100)
-    return c.json(indexFiles(index, cursor, limit))
+    const result = indexFiles(index, cursor, limit, c.req.query('path'))
+    if ('status' in result) return inspectError(c, result)
+    return c.json(result)
   })
 
   app.get('/api/diff/hunks', async (c) => {
     const patch = await resolveAgentPatch()
     const index = agentDiffCache.getOrBuild(patch)
-    const file = parseUInt(c.req.query('file'), 0)
+    const resolved = resolveInspectFile(index, optionalUInt(c.req.query('file')), c.req.query('path'))
+    if ('status' in resolved) return inspectError(c, resolved)
     const cursor = parseUInt(c.req.query('cursor'), 0)
     const limit = parseUInt(c.req.query('limit'), 100)
     const generationRaw = c.req.query('generation')
     const result = indexHunks(
       index,
-      file,
+      resolved.fileIndex,
       cursor,
       limit,
       generationRaw != null && generationRaw !== '' ? parseUInt(generationRaw, 0) : undefined,
     )
-    if ('status' in result) return c.json({ error: result.error }, result.status as 404 | 409)
+    if ('status' in result) return inspectError(c, result)
     return c.json(result)
   })
 
   app.get('/api/diff/slice', async (c) => {
     const patch = await resolveAgentPatch()
     const index = agentDiffCache.getOrBuild(patch)
-    const file = parseUInt(c.req.query('file'), 0)
+    const resolved = resolveInspectFile(index, optionalUInt(c.req.query('file')), c.req.query('path'))
+    if ('status' in resolved) return inspectError(c, resolved)
     const start = parseUInt(c.req.query('start'), 0)
     const maxLines = parseUInt(c.req.query('maxLines'), 120)
     const maxBytes = parseUInt(c.req.query('maxBytes'), 256 * 1024)
     const generationRaw = c.req.query('generation')
     const result = indexSlice(
       index,
-      file,
+      resolved.fileIndex,
       start,
       maxLines,
       maxBytes,
       generationRaw != null && generationRaw !== '' ? parseUInt(generationRaw, 0) : undefined,
     )
-    if ('status' in result) return c.json({ error: result.error }, result.status as 409)
+    if ('status' in result) return inspectError(c, result)
     return c.json(result)
   })
 
@@ -453,8 +472,9 @@ export function createApp(
       limit,
       maxBytes,
       generationRaw != null && generationRaw !== '' ? parseUInt(generationRaw, 0) : undefined,
+      c.req.query('path'),
     )
-    if ('status' in result) return c.json({ error: result.error }, result.status as 409)
+    if ('status' in result) return inspectError(c, result)
     return c.json(result)
   })
 

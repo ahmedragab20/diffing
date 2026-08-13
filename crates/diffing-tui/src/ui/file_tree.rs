@@ -65,9 +65,7 @@ impl FileTree {
             .iter()
             .position(|n| n.kind == FileNodeKind::File)
             .unwrap_or(0);
-        let anchor_file = nodes
-            .get(cursor)
-            .and_then(|node| node.file_diff_idx);
+        let anchor_file = nodes.get(cursor).and_then(|node| node.file_diff_idx);
         let mut tree = Self {
             all_nodes: nodes.clone(),
             nodes,
@@ -105,7 +103,8 @@ impl FileTree {
         let child_path = &node.path;
         (0..index).rev().find_map(|candidate| {
             let parent = self.nodes.get(candidate)?;
-            (parent.depth < child_depth && child_path.starts_with(&parent.path)).then_some(candidate)
+            (parent.depth < child_depth && child_path.starts_with(&parent.path))
+                .then_some(candidate)
         })
     }
 
@@ -167,9 +166,7 @@ impl FileTree {
         }
         let len = visible_files.len() as isize;
         let start = if let Some(file_idx) = self.selected_file_idx() {
-            visible_files
-                .iter()
-                .position(|index| *index == file_idx)? as isize
+            visible_files.iter().position(|index| *index == file_idx)? as isize
         } else if delta > 0 {
             let first_after = self
                 .nodes

@@ -42,11 +42,11 @@ Prefer bounded tools over `get_diff` for large trees.
 | Tool | Purpose |
 |------|---------|
 | `get_diff` | Full patch (use sparingly) |
-| `diff_summary` | High-level change summary |
-| `diff_files` | Paged file list |
-| `diff_hunks` | Hunks for a file |
-| `diff_slice` | Exact row window with budgets |
-| `diff_search` | Search within the diff |
+| `diff_summary` | High-level change summary (optional `exclude: ["lockfiles"]`) |
+| `diff_files` | Paged file list (optional `path` glob; `nextCursor` is filtered) |
+| `diff_hunks` | Hunks for a file (`path` XOR `file`) |
+| `diff_slice` | Exact row window with budgets (`path` XOR `file`) |
+| `diff_search` | Search within the diff (optional `path` glob) |
 
 ## Comments & handoff
 

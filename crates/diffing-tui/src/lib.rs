@@ -9,6 +9,7 @@ pub mod diff;
 pub mod diff_context;
 pub mod editorconfig;
 pub mod handoff;
+pub mod inspect_scope;
 pub mod keys;
 pub mod lsp;
 pub mod path_safety;

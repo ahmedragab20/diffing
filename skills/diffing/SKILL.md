@@ -64,7 +64,7 @@ diffing sessions stop <id>|active|all   # explicit lifecycle action
 
 Choose inspection tools from the active session mode:
 
-- **All modes**: start with `diff_summary`, page `diff_files` via `nextCursor`, then inspect relevant files with `diff_hunks` and bounded `diff_slice` calls. TUI uses its sparse disk-backed index; web and PR sessions use an in-process patch index.
+- **All modes**: start with `diff_summary`, page `diff_files` via `nextCursor` (optional `path` glob), then inspect relevant files with `diff_hunks` and bounded `diff_slice` (`path` XOR numeric `file`). TUI uses its sparse disk-backed index; web and PR sessions use an in-process patch index.
 - Carry the `generation` returned by `diff_summary` into `diff_hunks`, `diff_slice`, and `diff_search`. If a call reports a stale generation (HTTP 409 through CLI/API), rerun `diff_summary` and restart that traversal; never combine rows from different generations.
 - Continue `diff_search` with both `nextFile` and `nextRow`. Keep default or smaller line/byte budgets unless more context is necessary.
 - **`mode: web`**: use repository-local reads/search for surrounding source. Keep `get_diff` as an escape hatch when a consumer needs the complete patch.

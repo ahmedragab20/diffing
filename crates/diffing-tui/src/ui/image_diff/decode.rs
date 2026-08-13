@@ -1634,8 +1634,12 @@ pub(crate) mod tests {
 
     #[test]
     fn paths_and_object_ids_are_constrained() {
-        assert!(crate::path_safety::safe_relative_path(Path::new("assets/image.png")));
-        assert!(!crate::path_safety::safe_relative_path(Path::new("../secret.png")));
+        assert!(crate::path_safety::safe_relative_path(Path::new(
+            "assets/image.png"
+        )));
+        assert!(!crate::path_safety::safe_relative_path(Path::new(
+            "../secret.png"
+        )));
         assert!(valid_oid("abcdef12"));
         assert!(!valid_oid("HEAD:secret"));
     }

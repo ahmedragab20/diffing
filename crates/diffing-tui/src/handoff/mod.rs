@@ -206,7 +206,10 @@ mod tests {
     #[test]
     fn repo_watch_path_skips_git_and_ignored_dirs() {
         let root = PathBuf::from("/tmp/repo");
-        assert!(!repo_watch_path_is_relevant(&root, &root.join(".git/config")));
+        assert!(!repo_watch_path_is_relevant(
+            &root,
+            &root.join(".git/config")
+        ));
         assert!(!repo_watch_path_is_relevant(
             &root,
             &root.join("node_modules/pkg/index.js")

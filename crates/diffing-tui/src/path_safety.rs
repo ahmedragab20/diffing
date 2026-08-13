@@ -21,9 +21,9 @@ pub fn resolve_within_repo(repo_root: &Path, relative: &Path) -> Result<PathBuf>
     }
     let canonical_repo = repo_root.canonicalize().context("resolving repository")?;
     let candidate = repo_root.join(relative);
-    let canonical = candidate.canonicalize().with_context(|| {
-        format!("resolving path {}", relative.display())
-    })?;
+    let canonical = candidate
+        .canonicalize()
+        .with_context(|| format!("resolving path {}", relative.display()))?;
     if !canonical.starts_with(&canonical_repo) {
         bail!("path escapes the repository");
     }
@@ -56,9 +56,9 @@ pub fn open_file_within_repo(repo_root: &Path, relative: &Path) -> Result<File> 
 
     #[cfg(not(unix))]
     {
-        let resolved = candidate.canonicalize().with_context(|| {
-            format!("resolving path {}", relative.display())
-        })?;
+        let resolved = candidate
+            .canonicalize()
+            .with_context(|| format!("resolving path {}", relative.display()))?;
         if !resolved.starts_with(&canonical_repo) {
             bail!("path escapes the repository");
         }
@@ -90,7 +90,10 @@ fn canonicalize_open_file(file: &File) -> Result<PathBuf> {
         if status == -1 {
             return Err(io::Error::last_os_error()).context("canonicalizing open file");
         }
-        let len = buffer.iter().position(|&byte| byte == 0).unwrap_or(buffer.len());
+        let len = buffer
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(buffer.len());
         return Ok(PathBuf::from(
             String::from_utf8_lossy(&buffer[..len]).into_owned(),
         ));

@@ -72,10 +72,10 @@ diffing url
 diffing comments --json
 # Bounded reads (web, TUI, or PR session):
 diffing inspect summary
-diffing inspect files --cursor 0 --limit 50
-diffing inspect hunks --file 0 --generation <generation>
-diffing inspect slice --file 0 --start 0 --max-lines 120 --generation <generation>
-diffing inspect search "literal" --generation <generation> --limit 25
+diffing inspect files --path "src/**" --cursor 0 --limit 50
+diffing inspect hunks --path src/lib/foo.ts --generation <generation>
+diffing inspect slice --path src/lib/foo.ts --start 0 --max-lines 120 --generation <generation>
+diffing inspect search "literal" --path "src/**" --generation <generation> --limit 25
 ```
 
 Follow `nextCursor`, `nextRow`, or the `nextFile` + `nextRow` pair until null. Compact JSON is the token-efficient default; omit `--pretty`.

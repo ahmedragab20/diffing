@@ -191,7 +191,10 @@ pub enum SearchSpecialAction {
 }
 
 /// Search-palette keys that differ from normal modal editing (Esc staging, peek, paging).
-pub fn classify_search_special(key: &KeyEvent, preview_focused: bool) -> Option<SearchSpecialAction> {
+pub fn classify_search_special(
+    key: &KeyEvent,
+    preview_focused: bool,
+) -> Option<SearchSpecialAction> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     match key.code {
@@ -655,17 +658,11 @@ mod tests {
     #[test]
     fn search_special_ctrl_u_pages_up_and_ctrl_l_clears() {
         assert_eq!(
-            classify_search_special(
-                &key(KeyCode::Char('u'), KeyModifiers::CONTROL),
-                false
-            ),
+            classify_search_special(&key(KeyCode::Char('u'), KeyModifiers::CONTROL), false),
             Some(SearchSpecialAction::PageSelectionUp)
         );
         assert_eq!(
-            classify_search_special(
-                &key(KeyCode::Char('l'), KeyModifiers::CONTROL),
-                false
-            ),
+            classify_search_special(&key(KeyCode::Char('l'), KeyModifiers::CONTROL), false),
             Some(SearchSpecialAction::ClearQuery)
         );
     }
@@ -673,10 +670,7 @@ mod tests {
     #[test]
     fn search_special_alt_enter_peeks_preview() {
         assert_eq!(
-            classify_search_special(
-                &key(KeyCode::Enter, KeyModifiers::ALT),
-                false
-            ),
+            classify_search_special(&key(KeyCode::Enter, KeyModifiers::ALT), false),
             Some(SearchSpecialAction::PeekPreview)
         );
     }

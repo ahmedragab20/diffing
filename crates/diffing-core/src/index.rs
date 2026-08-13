@@ -403,6 +403,18 @@ impl DiffIndex {
         max_hits: usize,
         max_bytes: usize,
     ) -> Result<SearchPage, IndexError> {
+        self.search_literal_filtered(query, start_file, start_row, max_hits, max_bytes, None)
+    }
+
+    pub fn search_literal_filtered(
+        &self,
+        query: &str,
+        start_file: usize,
+        start_row: u64,
+        max_hits: usize,
+        max_bytes: usize,
+        allowed_files: Option<&HashSet<usize>>,
+    ) -> Result<SearchPage, IndexError> {
         let needle = query.to_lowercase();
         if needle.is_empty() || max_hits == 0 {
             return Ok(SearchPage {
@@ -417,6 +429,11 @@ impl DiffIndex {
         let mut hits = Vec::new();
         let mut estimated_bytes = 0usize;
         for file_index in start_file..self.files.len() {
+            if let Some(allowed) = allowed_files {
+                if !allowed.contains(&file_index) {
+                    continue;
+                }
+            }
             let file = &self.files[file_index];
             let path = file.display_path().to_string_lossy().into_owned();
             let mut row = if file_index == start_file {

@@ -37,6 +37,16 @@ All endpoints are on the session base URL from `diffing url` (loopback). Authent
 }
 ```
 
+## Bounded diff inspect
+
+| Method | Path | Role |
+|--------|------|------|
+| `GET` | `/api/diff/summary?exclude` | Totals, kind counts, top-level directories. `exclude=lockfiles` drops lock/generated basenames from counts only |
+| `GET` | `/api/diff/files?path&cursor&limit` | Paged file metadata. `path` is a git pathspec-ish glob; `nextCursor` indexes the filtered list |
+| `GET` | `/api/diff/hunks?file\|path&cursor&limit&generation` | Hunk metadata. `path` XOR `file`; 0 matches → 404, many → 409 |
+| `GET` | `/api/diff/slice?file\|path&start&maxLines&maxBytes&generation` | Bounded logical rows |
+| `GET` | `/api/diff/search?q&path&file&row&limit&maxBytes&generation` | Literal search; optional `path` limits files |
+
 ## Comments
 
 | Method | Path | Role |

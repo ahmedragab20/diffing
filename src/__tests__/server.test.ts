@@ -530,6 +530,7 @@ describe('server', () => {
         expect(summaryRes.status).toBe(200)
         const summary = await summaryRes.json()
         expect(summary).toMatchObject({ files: 1, hunks: 1, additions: 2, deletions: 1 })
+        expect(summary.directories).toEqual([expect.objectContaining({ path: 'src', files: 1 })])
 
         const sliceRes = await app.fetch(new Request(
           `http://localhost/api/diff/slice?file=0&maxLines=3&generation=${summary.generation}`,
@@ -550,6 +551,44 @@ describe('server', () => {
           `http://localhost/api/diff/hunks?file=0&generation=${generation}`,
         ))
         expect(stale.status).toBe(409)
+      })
+
+      it('filters files by path glob and resolves slice by unique path', async () => {
+        mockGetGitDiffAsync.mockResolvedValue(`diff --git a/src/a.ts b/src/a.ts
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1 +1 @@
+-old
++new
+diff --git a/gone.ts b/gone.ts
+--- a/gone.ts
++++ b/gone.ts
+@@ -1 +1 @@
+-x
++y
+`)
+        const files = await app.fetch(new Request('http://localhost/api/diff/files?path=src/**'))
+        expect(files.status).toBe(200)
+        const page = await files.json()
+        expect(page).toMatchObject({ path: 'src/**', matched: 1, total: 2 })
+        expect(page.files).toEqual([expect.objectContaining({ index: 0, path: 'src/a.ts' })])
+
+        const slice = await app.fetch(new Request('http://localhost/api/diff/slice?path=src/a.ts&maxLines=4'))
+        expect(slice.status).toBe(200)
+        expect((await slice.json()).fileIndex).toBe(0)
+
+        const missing = await app.fetch(new Request('http://localhost/api/diff/slice?path=nope.ts'))
+        expect(missing.status).toBe(404)
+
+        const many = await app.fetch(new Request('http://localhost/api/diff/hunks?path=**/*.ts'))
+        expect(many.status).toBe(409)
+        expect((await many.json()).matches.length).toBe(2)
+
+        const both = await app.fetch(new Request('http://localhost/api/diff/slice?file=0&path=src/a.ts'))
+        expect(both.status).toBe(400)
+
+        const invalid = await app.fetch(new Request('http://localhost/api/diff/files?path=src/['))
+        expect(invalid.status).toBe(400)
       })
     })
 

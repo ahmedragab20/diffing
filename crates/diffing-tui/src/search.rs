@@ -202,10 +202,8 @@ impl SearchClient {
                 Ok(0) => break,
                 Ok(count) => response.extend_from_slice(&buffer[..count]),
                 Err(error)
-                    if matches!(
-                        error.kind(),
-                        ErrorKind::WouldBlock | ErrorKind::TimedOut
-                    ) && Instant::now() < deadline =>
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+                        && Instant::now() < deadline =>
                 {
                     continue;
                 }
@@ -913,8 +911,7 @@ pub fn execute_local_search(
         SearchScope::All if query.is_empty() => Ok(changed_file_search_hits(index, query)),
         SearchScope::All => {
             let (files, file_total) = changed_file_search_hits(index, query);
-            let (symbols, symbol_total) =
-                changed_symbol_search_hits(index, query, symbol_cache)?;
+            let (symbols, symbol_total) = changed_symbol_search_hits(index, query, symbol_cache)?;
             let symbol_locations = symbols
                 .iter()
                 .filter_map(|hit| hit.line.map(|line| (hit.path.clone(), line)))
@@ -922,8 +919,7 @@ pub fn execute_local_search(
             let (mut text, text_total) = changed_text_search_hits(index, query)?;
             let before_dedup = text.len();
             text.retain(|hit| {
-                !hit
-                    .line
+                !hit.line
                     .is_some_and(|line| symbol_locations.contains(&(hit.path.clone(), line)))
             });
             let deduplicated = before_dedup.saturating_sub(text.len());
@@ -986,7 +982,10 @@ pub fn execute_search_request(
             notice: None,
         });
     }
-    let client = ctx.bridge.as_ref().expect("bridge required for remote search");
+    let client = ctx
+        .bridge
+        .as_ref()
+        .expect("bridge required for remote search");
     client.search(
         &request.query,
         request.scope,
@@ -995,7 +994,10 @@ pub fn execute_search_request(
     )
 }
 
-pub fn diff_first_search_hits(hits: Vec<SearchHit>, changed_paths: &HashSet<String>) -> Vec<SearchHit> {
+pub fn diff_first_search_hits(
+    hits: Vec<SearchHit>,
+    changed_paths: &HashSet<String>,
+) -> Vec<SearchHit> {
     let (mut in_diff, outside_diff): (Vec<_>, Vec<_>) = hits
         .into_iter()
         .partition(|hit| changed_paths.contains(&hit.path));
@@ -1141,7 +1143,11 @@ mod tests {
             "use App\\Models\\User;",
             "fn () => 1",
         ] {
-            assert_eq!(classify_symbol_line(line), None, "expected reject for {line:?}");
+            assert_eq!(
+                classify_symbol_line(line),
+                None,
+                "expected reject for {line:?}"
+            );
         }
     }
 

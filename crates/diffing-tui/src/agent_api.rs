@@ -4,7 +4,7 @@
 //! index as the TUI.  It is not a second diff engine and never binds beyond
 //! loopback.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
@@ -12,6 +12,10 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::inspect_scope::{
+    directories, display_path, is_lockfile_noise, matching_indexes, parse_exclude, resolve_file,
+    FileResolve,
+};
 use anyhow::{Context, Result};
 use diffing_core::comments::{
     CommentSeverity, CommentSide, CommentStatus, FileCommentStore, NewComment,
@@ -79,44 +83,42 @@ impl AgentApi {
             .context("configuring TUI agent API listener")?;
         thread::Builder::new()
             .name("diffing-agent-api".to_string())
-            .spawn(move || {
-                loop {
-                    if shutdown_rx.try_recv().is_ok() {
-                        break;
-                    }
-                    match listener.accept() {
-                        Ok((stream, _)) => {
-                            let state = state.clone();
-                            let slots = connection_slots.clone();
-                            let mut guard = match slots.lock() {
-                                Ok(guard) => guard,
-                                Err(_) => continue,
-                            };
-                            if *guard >= MAX_CONCURRENT_CONNECTIONS {
-                                continue;
-                            }
-                            *guard += 1;
-                            drop(guard);
-                            let slots_for_handler = connection_slots.clone();
-                            let spawned = thread::Builder::new()
-                                .name("diffing-agent-request".to_string())
-                                .spawn(move || {
-                                    let _ = handle_connection(stream, &state);
-                                    if let Ok(mut guard) = slots_for_handler.lock() {
-                                        *guard = guard.saturating_sub(1);
-                                    }
-                                });
-                            if spawned.is_err() {
-                                if let Ok(mut guard) = connection_slots.lock() {
+            .spawn(move || loop {
+                if shutdown_rx.try_recv().is_ok() {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let state = state.clone();
+                        let slots = connection_slots.clone();
+                        let mut guard = match slots.lock() {
+                            Ok(guard) => guard,
+                            Err(_) => continue,
+                        };
+                        if *guard >= MAX_CONCURRENT_CONNECTIONS {
+                            continue;
+                        }
+                        *guard += 1;
+                        drop(guard);
+                        let slots_for_handler = connection_slots.clone();
+                        let spawned = thread::Builder::new()
+                            .name("diffing-agent-request".to_string())
+                            .spawn(move || {
+                                let _ = handle_connection(stream, &state);
+                                if let Ok(mut guard) = slots_for_handler.lock() {
                                     *guard = guard.saturating_sub(1);
                                 }
+                            });
+                        if spawned.is_err() {
+                            if let Ok(mut guard) = connection_slots.lock() {
+                                *guard = guard.saturating_sub(1);
                             }
                         }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(5));
-                        }
-                        Err(_) => break,
                     }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
                 }
             })?;
         Ok(Self {
@@ -182,40 +184,66 @@ fn route(
 ) -> Result<(u16, Value)> {
     if method == "GET" && path == "/api/diff/summary" {
         let index = current_index(state);
+        let exclude = match parse_exclude(params.get("exclude").map(String::as_str)) {
+            Ok(value) => value,
+            Err(error) => return Ok((400, json!({ "error": error }))),
+        };
+        let skip_lockfiles = exclude.iter().any(|value| value == "lockfiles");
         let mut changes: HashMap<String, usize> = HashMap::new();
+        let mut files = 0usize;
+        let mut hunks = 0usize;
+        let mut rows = 0u64;
+        let mut additions = 0u64;
+        let mut deletions = 0u64;
         for file in &index.files {
+            if skip_lockfiles && is_lockfile_noise(&display_path(file)) {
+                continue;
+            }
+            files += 1;
+            hunks += file.hunks.len();
+            rows += file.row_count;
+            additions += file.additions;
+            deletions += file.deletions;
             *changes
                 .entry(format!("{:?}", file.kind).to_lowercase())
                 .or_default() += 1;
         }
-        return Ok((
-            200,
-            json!({
-                "generation": index.generation,
-                "complete": index.complete,
-                "files": index.files.len(),
-                "hunks": index.total_hunks,
-                "rows": index.total_rows,
-                "additions": index.additions,
-                "deletions": index.deletions,
-                "patchBytes": index.patch_bytes,
-                "changes": changes,
-                "next": ["diff_files", "diff_search", "diff_slice"]
-            }),
-        ));
+        let mut body = json!({
+            "generation": index.generation,
+            "complete": index.complete,
+            "files": files,
+            "hunks": hunks,
+            "rows": rows,
+            "additions": additions,
+            "deletions": deletions,
+            "patchBytes": index.patch_bytes,
+            "changes": changes,
+            "directories": directories(&index.files, skip_lockfiles),
+            "next": ["diff_files", "diff_search", "diff_slice"]
+        });
+        if !exclude.is_empty() {
+            body["exclude"] = json!(exclude);
+        }
+        return Ok((200, body));
     }
     if method == "GET" && path == "/api/diff/files" {
         let index = current_index(state);
+        let matched_indexes = match matching_indexes(&index, params.get("path").map(String::as_str))
+        {
+            Ok(value) => value,
+            Err(response) => return Ok(response),
+        };
         let cursor = usize_param(params, "cursor", 0);
         let limit = usize_param(params, "limit", 100).clamp(1, MAX_PAGE_LINES);
-        let end = cursor.saturating_add(limit).min(index.files.len());
-        let files: Vec<Value> = index.files[cursor.min(index.files.len())..end]
+        let start = cursor.min(matched_indexes.len());
+        let end = start.saturating_add(limit).min(matched_indexes.len());
+        let files: Vec<Value> = matched_indexes[start..end]
             .iter()
-            .enumerate()
-            .map(|(offset, file)| {
+            .map(|&file_index| {
+                let file = &index.files[file_index];
                 json!({
-                    "index": cursor + offset,
-                    "path": file.display_path().to_string_lossy(),
+                    "index": file_index,
+                    "path": display_path(file),
                     "oldPath": file.old_path,
                     "newPath": file.new_path,
                     "kind": file.kind,
@@ -227,21 +255,32 @@ fn route(
                 })
             })
             .collect();
-        return Ok((
-            200,
-            json!({
-                "generation": index.generation,
-                "returned": files.len(),
-                "total": index.files.len(),
-                "nextCursor": (end < index.files.len()).then_some(end),
-                "files": files,
-            }),
-        ));
+        let mut body = json!({
+            "generation": index.generation,
+            "returned": files.len(),
+            "total": index.files.len(),
+            "matched": matched_indexes.len(),
+            "nextCursor": (end < matched_indexes.len()).then_some(end),
+            "files": files,
+        });
+        if let Some(path) = params.get("path") {
+            if !path.is_empty() {
+                body["path"] = json!(path);
+            }
+        }
+        return Ok((200, body));
     }
     if method == "GET" && path == "/api/diff/hunks" {
         let index = current_index(state);
         generation_guard(params, &index)?;
-        let file_index = usize_param(params, "file", 0);
+        let file_index = match resolve_file(
+            &index,
+            optional_usize(params, "file"),
+            params.get("path").map(String::as_str),
+        ) {
+            FileResolve::Index(value) => value,
+            FileResolve::Error { status, body } => return Ok((status, body)),
+        };
         let Some(file) = index.files.get(file_index) else {
             return Ok((404, json!({ "error": "file index not found" })));
         };
@@ -253,7 +292,7 @@ fn route(
             json!({
                 "generation": index.generation,
                 "file": file_index,
-                "path": file.display_path().to_string_lossy(),
+                "path": display_path(file),
                 "returned": end - cursor,
                 "total": file.hunks.len(),
                 "nextCursor": (end < file.hunks.len()).then_some(end),
@@ -264,7 +303,14 @@ fn route(
     if method == "GET" && path == "/api/diff/slice" {
         let index = current_index(state);
         generation_guard(params, &index)?;
-        let file = usize_param(params, "file", 0);
+        let file = match resolve_file(
+            &index,
+            optional_usize(params, "file"),
+            params.get("path").map(String::as_str),
+        ) {
+            FileResolve::Index(value) => value,
+            FileResolve::Error { status, body } => return Ok((status, body)),
+        };
         let start = u64_param(params, "start", 0);
         let max_lines = usize_param(params, "maxLines", 120).clamp(1, MAX_PAGE_LINES);
         let max_bytes = usize_param(params, "maxBytes", 256 * 1024).clamp(1, MAX_BODY_BYTES);
@@ -279,7 +325,13 @@ fn route(
         let row = u64_param(params, "row", 0);
         let limit = usize_param(params, "limit", 100).clamp(1, MAX_PAGE_LINES);
         let max_bytes = usize_param(params, "maxBytes", 256 * 1024).clamp(1, MAX_BODY_BYTES);
-        let page = index.search_literal(query, file, row, limit, max_bytes)?;
+        let allowed: HashSet<usize> =
+            match matching_indexes(&index, params.get("path").map(String::as_str)) {
+                Ok(indexes) => indexes.into_iter().collect(),
+                Err(response) => return Ok(response),
+            };
+        let page =
+            index.search_literal_filtered(query, file, row, limit, max_bytes, Some(&allowed))?;
         return Ok((200, serde_json::to_value(page)?));
     }
     let store = FileCommentStore::new(&state.repo_root);
@@ -569,6 +621,10 @@ fn usize_param(params: &HashMap<String, String>, name: &str, default: usize) -> 
         .unwrap_or(default)
 }
 
+fn optional_usize(params: &HashMap<String, String>, name: &str) -> Option<usize> {
+    params.get(name).and_then(|value| value.parse().ok())
+}
+
 fn u64_param(params: &HashMap<String, String>, name: &str, default: u64) -> u64 {
     params
         .get(name)
@@ -604,12 +660,8 @@ fn optional_u32_field(value: &Value, field: &str) -> Result<Option<u32>, (u16, V
                 )
             })
             .and_then(|line| {
-                u32::try_from(line).map_err(|_| {
-                    (
-                        400,
-                        json!({ "error": format!("{field} out of range") }),
-                    )
-                })
+                u32::try_from(line)
+                    .map_err(|_| (400, json!({ "error": format!("{field} out of range") })))
             })
             .map(Some),
     }
@@ -722,6 +774,44 @@ mod tests {
         let state = review.0.lock().unwrap();
         assert_eq!(state.round, 1);
         assert_eq!(state.payload.as_deref(), Some("<review/>"));
+    }
+
+    #[test]
+    fn inspect_path_and_file_are_mutually_exclusive() {
+        let index = Arc::new(DiffIndex::empty(7, PathBuf::from("/tmp/repo"), true));
+        let shared = Arc::new(RwLock::new(index));
+        let state = ApiState {
+            repo_root: "/tmp/repo".to_string(),
+            index: shared,
+            capability: "cap".to_string(),
+            review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
+        };
+        let mut both = HashMap::new();
+        both.insert("file".to_string(), "0".to_string());
+        both.insert("path".to_string(), "src/a.ts".to_string());
+        let (status, body) = route("GET", "/api/diff/slice", &both, b"", &state).unwrap();
+        assert_eq!(status, 400);
+        assert_eq!(
+            body.get("error").and_then(Value::as_str),
+            Some("path and file are mutually exclusive")
+        );
+
+        let mut missing = HashMap::new();
+        missing.insert("path".to_string(), "src/a.ts".to_string());
+        let (status, body) = route("GET", "/api/diff/hunks", &missing, b"", &state).unwrap();
+        assert_eq!(status, 404);
+        assert_eq!(
+            body.get("error").and_then(Value::as_str),
+            Some("path matched no files")
+        );
+
+        let mut files = HashMap::new();
+        files.insert("path".to_string(), "src/**".to_string());
+        let (status, body) = route("GET", "/api/diff/files", &files, b"", &state).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body.get("matched").and_then(Value::as_u64), Some(0));
+        assert_eq!(body.get("total").and_then(Value::as_u64), Some(0));
+        assert_eq!(body.get("path").and_then(Value::as_str), Some("src/**"));
     }
 
     #[test]

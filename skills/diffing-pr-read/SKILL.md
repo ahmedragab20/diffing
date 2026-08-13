@@ -24,10 +24,10 @@ Never load the full patch or full session JSON by default.
 |------|-----|-----|
 | Identity + counts | `gh_overview` | `diffing gh overview [--json]` |
 | Patch totals | `diff_summary` | `diffing inspect summary` |
-| File list | `diff_files` (page `nextCursor`) | `diffing inspect files --cursor N --limit 50` |
-| Hunk map | `diff_hunks` | `diffing inspect hunks --file N --generation G` |
-| Body rows | `diff_slice` | `diffing inspect slice --file N --start R --max-lines 120 --generation G` |
-| Find text | `diff_search` | `diffing inspect search "literal" --generation G` |
+| File list | `diff_files` (`path` glob, page filtered `nextCursor`) | `diffing inspect files --path GLOB --cursor N --limit 50` |
+| Hunk map | `diff_hunks` (`path` XOR `file`) | `diffing inspect hunks --path FILE --generation G` |
+| Body rows | `diff_slice` (`path` XOR `file`) | `diffing inspect slice --path FILE --start R --max-lines 120 --generation G` |
+| Find text | `diff_search` (optional `path`) | `diffing inspect search "literal" --path GLOB --generation G` |
 | Discussion | `gh_list_threads` (`unresolvedOnly`) | `diffing gh threads --unresolved` |
 | Verdicts | `gh_list_reviews` | `diffing gh reviews` |
 
@@ -54,9 +54,9 @@ diffing sessions use <matching-pr-session-id>  # reuse when present
 diffing --gh-pr 1234 --no-open                  # starts a concurrent active session
 diffing gh overview --json
 diffing inspect summary
-diffing inspect files --limit 50
-diffing inspect hunks --file 0 --generation <g>
-diffing inspect slice --file 0 --start 0 --max-lines 120 --generation <g>
+diffing inspect files --path "src/**" --limit 50
+diffing inspect hunks --path src/lib/foo.ts --generation <g>
+diffing inspect slice --path src/lib/foo.ts --start 0 --max-lines 120 --generation <g>
 diffing gh threads --unresolved          # XML default
 diffing gh reviews --format json
 ```
