@@ -1,3 +1,11 @@
+## 0.17.0
+
+### Minor Changes
+
+- 87bd4cc: Publish the diffing-release skill in the installable tree
+- fe0b3dd: Add path-scoped inspect for bounded diffs
+- 75fc857: Add diffing-release skill
+
 # Changelog
 
 ## 0.16.1

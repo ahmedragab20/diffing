@@ -325,7 +325,7 @@ dependencies = [
 
 [[package]]
 name = "diffing-core"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "diffing-tui"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "clap",
