@@ -45,6 +45,7 @@ const SKILL_NAMES = [
 	"diffing-plan-review",
 	"diffing-pr-address",
 	"diffing-pr-read",
+	"diffing-release",
 	"diffing-review",
 	"diffing-start-review",
 ] as const;

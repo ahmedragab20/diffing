@@ -26,6 +26,7 @@ describe('published agent skills', () => {
       'diffing-plan-review',
       'diffing-pr-address',
       'diffing-pr-read',
+      'diffing-release',
       'diffing-review',
       'diffing-start-review',
     ])
