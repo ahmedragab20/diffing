@@ -48,6 +48,7 @@ import type { MockupStore } from "./lib/mockups.js";
 import { MockupReviewSession } from "./lib/mockup-review-session.js";
 import { formatMockupReview } from "./lib/mockup-format.js";
 import { injectMockupProbe } from "./lib/mockup-document.js";
+import { lintMockupScreens } from "./lib/mockup-lint.js";
 import {
 	normalizeMockupViewport,
 	isMockupViewport,
@@ -160,9 +161,7 @@ function collectPrAvatarUrls(session: PrSession): Set<string> {
 }
 
 function isCustomMode(opts: DiffOptions): boolean {
-	return (
-		opts.revisions.length > 0 || opts.pathspecs.length > 0 || opts.showMode
-	);
+	return opts.revisions.length > 0 || opts.pathspecs.length > 0 || opts.showMode;
 }
 
 /**
@@ -414,8 +413,7 @@ export function createApp(
 				if (isGit) {
 					const isIndex = filename.endsWith("index");
 					const isHead = filename.endsWith("HEAD");
-					const isRefs =
-						filename.includes("refs/") || filename.includes("refs\\");
+					const isRefs = filename.includes("refs/") || filename.includes("refs\\");
 					if (isIndex || isHead || isRefs) {
 						shouldTrigger = true;
 					}
@@ -794,10 +792,7 @@ export function createApp(
 			}
 
 			if (editor && editor !== "default") {
-				const command = resolveEditorCommand(
-					editor as EditorChoice,
-					absolutePath,
-				);
+				const command = resolveEditorCommand(editor as EditorChoice, absolutePath);
 				if (command) {
 					const { execFile } = await import("node:child_process");
 					execFile(command.cmd, command.args, (err) => {
@@ -964,11 +959,7 @@ export function createApp(
 		const deletionStart = Number(c.req.query("deletionStart"));
 		const deletionCount = Number(c.req.query("deletionCount"));
 
-		if (
-			!filePath ||
-			Number.isNaN(deletionStart) ||
-			Number.isNaN(deletionCount)
-		) {
+		if (!filePath || Number.isNaN(deletionStart) || Number.isNaN(deletionCount)) {
 			return c.json({ error: "Missing or invalid parameters" }, 400);
 		}
 
@@ -991,10 +982,7 @@ export function createApp(
 			);
 			return c.json(history);
 		} catch (err: any) {
-			return c.json(
-				{ error: err.message || "Failed to fetch hunk history" },
-				500,
-			);
+			return c.json({ error: err.message || "Failed to fetch hunk history" }, 500);
 		}
 	});
 
@@ -1210,8 +1198,7 @@ export function createApp(
 			message,
 			model: typeof body.model === "string" ? body.model : undefined,
 			agentId: typeof body.agentId === "string" ? body.agentId : undefined,
-			commentId:
-				typeof body.commentId === "string" ? body.commentId : undefined,
+			commentId: typeof body.commentId === "string" ? body.commentId : undefined,
 			pct:
 				typeof body.pct === "number" && body.pct >= 0 && body.pct <= 100
 					? body.pct
@@ -1415,10 +1402,7 @@ export function createApp(
 			await store.update(id, { status: "resolved" });
 			return c.json({ ok: true, replacedLines: result.replacedLines });
 		} catch (err: any) {
-			return c.json(
-				{ error: `Failed to apply suggestion: ${err.message}` },
-				500,
-			);
+			return c.json({ error: `Failed to apply suggestion: ${err.message}` }, 500);
 		}
 	});
 
@@ -1482,10 +1466,7 @@ export function createApp(
 		if (!session) return notInPrMode(c);
 		const url = c.req.query("url");
 		if (!url || !collectPrAvatarUrls(session).has(url)) {
-			return c.json(
-				{ error: "Avatar URL is not part of this PR session" },
-				403,
-			);
+			return c.json({ error: "Avatar URL is not part of this PR session" }, 403);
 		}
 		let parsed: URL;
 		try {
@@ -1508,9 +1489,7 @@ export function createApp(
 			if (!contentType.startsWith("image/")) {
 				return c.json({ error: "Avatar response was not an image" }, 502);
 			}
-			const declaredLength = Number(
-				response.headers.get("content-length") ?? "0",
-			);
+			const declaredLength = Number(response.headers.get("content-length") ?? "0");
 			if (declaredLength > MAX_AVATAR_BYTES)
 				return c.json({ error: "Avatar is too large" }, 413);
 			const bytes = new Uint8Array(await response.arrayBuffer());
@@ -1559,9 +1538,7 @@ export function createApp(
 		const format = (c.req.query("format") ?? "json").toLowerCase();
 		if (format === "xml") {
 			c.header("Content-Type", "application/xml; charset=utf-8");
-			return c.body(
-				formatPrReviewThreads(session, page.threads, undefined, page),
-			);
+			return c.body(formatPrReviewThreads(session, page.threads, undefined, page));
 		}
 		return c.json(page);
 	});
@@ -1670,12 +1647,11 @@ export function createApp(
 		// fetch above must not be silently overwritten. The draft `comments`
 		// filter and any optimistic reviews come from this current snapshot.
 		const current = (await prStore.get()) ?? session;
-		const { existingComments, remainingPending } =
-			mergeFreshWithLocalOptimistic(
-				freshExistingComments,
-				current.existingComments,
-				current.pendingOptimisticReplyIds ?? [],
-			);
+		const { existingComments, remainingPending } = mergeFreshWithLocalOptimistic(
+			freshExistingComments,
+			current.existingComments,
+			current.pendingOptimisticReplyIds ?? [],
+		);
 		const comments = current.submittedAt
 			? (current.comments ?? []).filter(
 					(comment) => comment.createdAt > current.submittedAt!,
@@ -1738,9 +1714,8 @@ export function createApp(
 			const summary = {
 				total: checks.length,
 				success: checks.filter((x) => x.state === "success").length,
-				failure: checks.filter(
-					(x) => x.state === "failure" || x.state === "error",
-				).length,
+				failure: checks.filter((x) => x.state === "failure" || x.state === "error")
+					.length,
 				pending: checks.filter((x) => x.state === "pending").length,
 			};
 			return c.json({ checks, summary, headSha: session.headSha });
@@ -1762,8 +1737,7 @@ export function createApp(
 		const session = await prStore.get();
 		if (!session) return notInPrMode(c);
 		const id = Number(c.req.param("id"));
-		if (!Number.isFinite(id))
-			return c.json({ error: "Invalid comment id" }, 400);
+		if (!Number.isFinite(id)) return c.json({ error: "Invalid comment id" }, 400);
 		const body = (await c.req.json().catch(() => ({}))) as { body?: string };
 		const text = typeof body.body === "string" ? body.body.trim() : "";
 		if (!text) return c.json({ error: "body is required" }, 400);
@@ -1819,8 +1793,7 @@ export function createApp(
 		const session = await prStore.get();
 		if (!session) return notInPrMode(c);
 		const id = Number(c.req.param("id"));
-		if (!Number.isFinite(id))
-			return c.json({ error: "Invalid comment id" }, 400);
+		if (!Number.isFinite(id)) return c.json({ error: "Invalid comment id" }, 400);
 		const request = (await c.req.json().catch(() => ({}))) as { body?: string };
 		const text = typeof request.body === "string" ? request.body.trim() : "";
 		if (!text) return c.json({ error: "body is required" }, 400);
@@ -1829,8 +1802,7 @@ export function createApp(
 			commentId: id,
 			body: text,
 		});
-		if (!result.ok)
-			return c.json({ error: result.error ?? "Edit failed" }, 502);
+		if (!result.ok) return c.json({ error: result.error ?? "Edit failed" }, 502);
 		const next = await syncExistingPrReviewData(session);
 		return c.json({ ok: true, existingComments: next.existingComments });
 	});
@@ -1841,8 +1813,7 @@ export function createApp(
 		const session = await prStore.get();
 		if (!session) return notInPrMode(c);
 		const id = Number(c.req.param("id"));
-		if (!Number.isFinite(id))
-			return c.json({ error: "Invalid comment id" }, 400);
+		if (!Number.isFinite(id)) return c.json({ error: "Invalid comment id" }, 400);
 		const result = await deletePrReviewComment({
 			resolved: resolvedFromSession(session),
 			commentId: id,
@@ -2022,8 +1993,7 @@ export function createApp(
 		) {
 			return c.json(
 				{
-					error:
-						"decision must be one of: approve, comment, request-changes, draft",
+					error: "decision must be one of: approve, comment, request-changes, draft",
 				},
 				400,
 			);
@@ -2044,11 +2014,9 @@ export function createApp(
 			const resolved = resolvedFromSession(session);
 			const comments = session.comments ?? [];
 			const bodies = [generalBody, ...comments.map((c) => c.body ?? "")];
-			const rewritten = await rewriteLocalAttachmentsInBodies(
-				resolved,
-				bodies,
-				{ dryRun: true },
-			);
+			const rewritten = await rewriteLocalAttachmentsInBodies(resolved, bodies, {
+				dryRun: true,
+			});
 			if (rewritten.error) {
 				return c.json({ ok: false, dryRun: true, error: rewritten.error }, 400);
 			}
@@ -2122,8 +2090,7 @@ export function createApp(
 				submittedAt: Date.now(),
 				submittedReviewId: result.reviewId,
 				submittedReviewUrl: result.reviewUrl,
-				authSource:
-					result.authSource === "none" ? undefined : result.authSource,
+				authSource: result.authSource === "none" ? undefined : result.authSource,
 			};
 			await prStore.set(next);
 		}
@@ -2144,13 +2111,9 @@ export function createApp(
 	// The UI's "Send to agent" button POSTs here. We snapshot the current
 	// comments, format them, and release every agent blocked on /api/review/await.
 	app.post("/api/review/send", async (c) => {
-		const body = await c.req
-			.json()
-			.catch(() => ({}) as Record<string, unknown>);
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 		const generalComment =
-			typeof body?.generalComment === "string"
-				? body.generalComment
-				: undefined;
+			typeof body?.generalComment === "string" ? body.generalComment : undefined;
 		const decision =
 			body?.decision === "approved" ||
 			body?.decision === "changes-requested" ||
@@ -2177,9 +2140,7 @@ export function createApp(
 		// "files changed since last send" even after the agent rewrites the tree.
 		let diffFingerprints: Record<string, string> | undefined;
 		try {
-			const { fingerprintDiffFiles } = await import(
-				"./lib/diff-fingerprint.js"
-			);
+			const { fingerprintDiffFiles } = await import("./lib/diff-fingerprint.js");
 			if (prMode) {
 				const prSession = await prStore.get();
 				if (prSession?.diff) {
@@ -2337,9 +2298,7 @@ export function createApp(
 	});
 
 	app.post("/api/plans", async (c) => {
-		const body = await c.req
-			.json()
-			.catch(() => ({}) as Record<string, unknown>);
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 		if (typeof body.body !== "string" || !body.body.trim()) {
 			return c.json({ error: "A plan body (markdown) is required" }, 400);
 		}
@@ -2510,9 +2469,7 @@ export function createApp(
 	// agent blocked on /api/plan-review/await with the full review payload.
 	app.post("/api/plans/:id/decision", async (c) => {
 		const planId = c.req.param("id");
-		const body = await c.req
-			.json()
-			.catch(() => ({}) as Record<string, unknown>);
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 		const decision = body.decision as PlanDecision;
 		if (
 			decision !== "approved" &&
@@ -2529,9 +2486,7 @@ export function createApp(
 			);
 		}
 		const decisionComment =
-			typeof body.decisionComment === "string"
-				? body.decisionComment
-				: undefined;
+			typeof body.decisionComment === "string" ? body.decisionComment : undefined;
 		const mode =
 			body?.mode === "comment-only" || body?.mode === "standard"
 				? (body.mode as PlanMode)
@@ -2598,11 +2553,9 @@ export function createApp(
 		versionCount: mockup.versions.length,
 		commentCounts: {
 			total: mockup.comments.length,
-			open: mockup.comments.filter((comment) => comment.status === "open")
+			open: mockup.comments.filter((comment) => comment.status === "open").length,
+			resolved: mockup.comments.filter((comment) => comment.status === "resolved")
 				.length,
-			resolved: mockup.comments.filter(
-				(comment) => comment.status === "resolved",
-			).length,
 		},
 		...(includeComments ? { comments: mockup.comments } : {}),
 	});
@@ -2611,9 +2564,7 @@ export function createApp(
 		const all = await mockups.getAll();
 		if (c.req.query("include") === "full") return c.json(all);
 		const includeComments = c.req.query("include") === "comments";
-		return c.json(
-			all.map((mockup) => summarizeMockup(mockup, includeComments)),
-		);
+		return c.json(all.map((mockup) => summarizeMockup(mockup, includeComments)));
 	});
 
 	app.get("/api/mockups/:id", async (c) => {
@@ -2674,6 +2625,9 @@ export function createApp(
 		// comment scope (version + screen + viewport). Legacy clients omit it →
 		// desktop.
 		const viewport = normalizeMockupViewport(c.req.query("viewport"));
+		// mode=view serves a passive probe: the mockup stays fully interactive
+		// (no selection shield) while still reporting sections + anchor checks.
+		const passive = c.req.query("mode") === "view";
 		// Per-document nonce: embedded in the probe and echoed back in every
 		// posted event, and exposed to the UI via the response header so events
 		// can be matched to the exact served document.
@@ -2684,13 +2638,17 @@ export function createApp(
 			version: versionN,
 			viewport,
 		});
-		return c.html(injectMockupProbe(screen.html, { nonce, viewport }), 200, {
-			"Content-Security-Policy":
-				"default-src 'none'; style-src 'unsafe-inline' https: data:; img-src data: blob: https:; font-src https: data:; script-src 'unsafe-inline';",
-			"X-Content-Type-Options": "nosniff",
-			"X-Diffing-Mockup-Nonce": nonce,
-			"X-Diffing-Mockup-Viewport": viewport,
-		});
+		return c.html(
+			injectMockupProbe(screen.html, { nonce, viewport, passive }),
+			200,
+			{
+				"Content-Security-Policy":
+					"default-src 'none'; style-src 'unsafe-inline' https: data:; img-src data: blob: https:; font-src https: data:; script-src 'unsafe-inline';",
+				"X-Content-Type-Options": "nosniff",
+				"X-Diffing-Mockup-Nonce": nonce,
+				"X-Diffing-Mockup-Viewport": viewport,
+			},
+		);
 	});
 
 	// ── Bounded mockup inspection ────────────────────────────────────────────
@@ -2797,16 +2755,12 @@ export function createApp(
 			const snapshot =
 				requestedVersion === mockup.version
 					? mockup
-					: mockup.versions.find(
-							(version) => version.version === requestedVersion,
-						);
+					: mockup.versions.find((version) => version.version === requestedVersion);
 			if (!snapshot) {
 				return c.json({ error: `Version ${requestedVersion} not found` }, 404);
 			}
 			if (screenFilter) {
-				const screen = snapshot.screens.find(
-					(item) => item.id === screenFilter,
-				);
+				const screen = snapshot.screens.find((item) => item.id === screenFilter);
 				if (!screen) return c.json({ error: "Screen not found" }, 404);
 				return c.json({
 					view: "screen",
@@ -2829,9 +2783,7 @@ export function createApp(
 				cursor: start,
 				limit,
 				nextCursor:
-					start + page.length < snapshot.screens.length
-						? start + page.length
-						: null,
+					start + page.length < snapshot.screens.length ? start + page.length : null,
 				screens: page.map((screen) => ({
 					id: screen.id,
 					label: screen.label,
@@ -2844,8 +2796,7 @@ export function createApp(
 		const versionN = versionRaw === undefined ? undefined : Number(versionRaw);
 		const filtered = allComments.filter((c2) => {
 			if (status !== undefined && c2.status !== status) return false;
-			if (screenFilter !== undefined && c2.screenId !== screenFilter)
-				return false;
+			if (screenFilter !== undefined && c2.screenId !== screenFilter) return false;
 			if (viewportRaw !== undefined && commentViewport(c2) !== viewportRaw) {
 				return false;
 			}
@@ -2903,9 +2854,7 @@ export function createApp(
 		if (!MOCKUP_SCREEN_ID_RE.test(screenId)) {
 			return c.json({ error: `Invalid screen id "${screenId}"` }, 400);
 		}
-		const body = await c.req
-			.json()
-			.catch(() => ({}) as Record<string, unknown>);
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 		if (typeof body.html !== "string" || !body.html.trim()) {
 			return c.json({ error: "html is required" }, 400);
 		}
@@ -2928,15 +2877,17 @@ export function createApp(
 			{ expectedVersion },
 		);
 		if (!result.mockup) return screenOpError(c, result);
-		return c.json(result.mockup, 200);
+		const hints = lintMockupScreens([{ id: screenId, html: body.html }]);
+		return c.json(
+			hints.length > 0 ? { ...result.mockup, hints } : result.mockup,
+			200,
+		);
 	});
 
 	app.patch("/api/mockups/:id/screens/:screenId", async (c) => {
 		const mockupId = c.req.param("id");
 		const screenId = c.req.param("screenId");
-		const body = await c.req
-			.json()
-			.catch(() => ({}) as Record<string, unknown>);
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 		const expectedText =
 			typeof body.expectedText === "string" ? body.expectedText : "";
 		const replacement =
@@ -2966,14 +2917,12 @@ export function createApp(
 	app.delete("/api/mockups/:id/screens/:screenId", async (c) => {
 		const mockupId = c.req.param("id");
 		const screenId = c.req.param("screenId");
-		const body = await c.req
-			.json()
-			.catch(() => ({}) as Record<string, unknown>);
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 		const expectedVersion = Number.isFinite(body.expectedVersion)
 			? Number(body.expectedVersion)
-			: c.req.query("expectedVersion") !== undefined
-				? Number(c.req.query("expectedVersion"))
-				: undefined;
+			: c.req.query("expectedVersion") === undefined
+				? undefined
+				: Number(c.req.query("expectedVersion"));
 		const result = await mockups.removeScreen(mockupId, screenId, {
 			expectedVersion,
 		});
@@ -2986,9 +2935,7 @@ export function createApp(
 	// applied (all-or-nothing). Thread ops never bump the mockup version.
 	app.post("/api/mockups/:id/threads/batch", async (c) => {
 		const mockupId = c.req.param("id");
-		const body = await c.req
-			.json()
-			.catch(() => ({}) as Record<string, unknown>);
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 		const normalized = normalizeThreadOperations(body.operations);
 		if (!normalized.ok) {
 			return c.json({ error: normalized.error, index: normalized.index }, 400);
@@ -3012,9 +2959,7 @@ export function createApp(
 	});
 
 	app.post("/api/mockups", async (c) => {
-		const body = await c.req
-			.json()
-			.catch(() => ({}) as Record<string, unknown>);
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 		const normalized = screensFromSubmitBody(body);
 		if (!normalized.ok) return c.json({ error: normalized.error }, 400);
 		const title =
@@ -3028,14 +2973,13 @@ export function createApp(
 			source: typeof body.source === "string" ? body.source : undefined,
 			model: typeof body.model === "string" ? body.model : undefined,
 		});
-		return c.json(mockup, 201);
+		const hints = lintMockupScreens(normalized.screens);
+		return c.json(hints.length > 0 ? { ...mockup, hints } : mockup, 201);
 	});
 
 	app.put("/api/mockups/:id", async (c) => {
 		const id = c.req.param("id");
-		const body = await c.req
-			.json()
-			.catch(() => ({}) as Record<string, unknown>);
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 		let screens;
 		if (body.html !== undefined || body.screens !== undefined) {
 			const normalized = screensFromSubmitBody(body);
@@ -3062,9 +3006,7 @@ export function createApp(
 		const mockupId = c.req.param("id");
 		const mockup = await mockups.get(mockupId);
 		if (!mockup) return c.json({ error: "Mockup not found" }, 404);
-		const body = await c.req
-			.json()
-			.catch(() => ({}) as Record<string, unknown>);
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 		const kind = body.kind as MockupAnchorKind;
 		if (kind !== "section" && kind !== "block" && kind !== "point") {
 			return c.json({ error: "kind must be section, block, or point" }, 400);
@@ -3112,12 +3054,8 @@ export function createApp(
 				typeof body.contextHtml === "string" ? body.contextHtml : undefined,
 			x: Number.isFinite(body.x) ? Number(body.x) : undefined,
 			y: Number.isFinite(body.y) ? Number(body.y) : undefined,
-			sectionX: Number.isFinite(body.sectionX)
-				? Number(body.sectionX)
-				: undefined,
-			sectionY: Number.isFinite(body.sectionY)
-				? Number(body.sectionY)
-				: undefined,
+			sectionX: Number.isFinite(body.sectionX) ? Number(body.sectionX) : undefined,
+			sectionY: Number.isFinite(body.sectionY) ? Number(body.sectionY) : undefined,
 			snapshot: typeof body.snapshot === "string" ? body.snapshot : undefined,
 			rect:
 				rect &&
@@ -3185,22 +3123,19 @@ export function createApp(
 		return c.json(updated);
 	});
 
-	app.put(
-		"/api/mockups/:id/comments/:commentId/replies/:replyId",
-		async (c) => {
-			const { body } = await c.req.json();
-			if (!body) return c.json({ error: "Body is required" }, 400);
-			const updated = await mockups.updateReply(
-				c.req.param("id"),
-				c.req.param("commentId"),
-				c.req.param("replyId"),
-				body,
-			);
-			if (!updated)
-				return c.json({ error: "Mockup, comment, or reply not found" }, 404);
-			return c.json(updated);
-		},
-	);
+	app.put("/api/mockups/:id/comments/:commentId/replies/:replyId", async (c) => {
+		const { body } = await c.req.json();
+		if (!body) return c.json({ error: "Body is required" }, 400);
+		const updated = await mockups.updateReply(
+			c.req.param("id"),
+			c.req.param("commentId"),
+			c.req.param("replyId"),
+			body,
+		);
+		if (!updated)
+			return c.json({ error: "Mockup, comment, or reply not found" }, 404);
+		return c.json(updated);
+	});
 
 	app.delete(
 		"/api/mockups/:id/comments/:commentId/replies/:replyId",
@@ -3218,9 +3153,7 @@ export function createApp(
 
 	app.post("/api/mockups/:id/decision", async (c) => {
 		const mockupId = c.req.param("id");
-		const body = await c.req
-			.json()
-			.catch(() => ({}) as Record<string, unknown>);
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 		const decision = body.decision as MockupDecision;
 		if (
 			decision !== "approved" &&
@@ -3237,9 +3170,7 @@ export function createApp(
 			);
 		}
 		const decisionComment =
-			typeof body.decisionComment === "string"
-				? body.decisionComment
-				: undefined;
+			typeof body.decisionComment === "string" ? body.decisionComment : undefined;
 		const mode =
 			body?.mode === "comment-only" || body?.mode === "standard"
 				? (body.mode as MockupMode)
@@ -3249,11 +3180,7 @@ export function createApp(
 		const focusedViewport = isMockupViewport(body.viewport)
 			? body.viewport
 			: undefined;
-		const mockup = await mockups.setDecision(
-			mockupId,
-			decision,
-			decisionComment,
-		);
+		const mockup = await mockups.setDecision(mockupId, decision, decisionComment);
 		if (!mockup) return c.json({ error: "Mockup not found" }, 404);
 
 		const openCommentCount = (mockup.comments ?? []).filter(
@@ -3323,10 +3250,7 @@ export function createApp(
 
 			return c.json({ url: `/api/attachments/${filename}` });
 		} catch (err: any) {
-			return c.json(
-				{ error: `Failed to save attachment: ${err.message}` },
-				500,
-			);
+			return c.json({ error: `Failed to save attachment: ${err.message}` }, 500);
 		}
 	});
 

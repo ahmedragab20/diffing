@@ -1,19 +1,28 @@
-import { useState, memo, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react'
-import { FileDiff, MultiFileDiff } from '@pierre/diffs/react'
+import {
+  useState,
+  memo,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useCallback,
+} from "react";
+import { FileDiff, MultiFileDiff } from "@pierre/diffs/react";
 import type {
   DiffLineAnnotation,
   FileDiffMetadata,
   AnnotationSide,
   SelectedLineRange,
   FileContents,
-} from '@pierre/diffs'
-import type { Editor, EditorOptions } from '@pierre/diffs/edit'
+  VirtualFileMetrics,
+} from "@pierre/diffs";
+import type { Editor, EditorOptions } from "@pierre/diffs/edit";
 
 /** Structural slice of the library's SelectionActionContext (not exported). */
 interface EditSelectionActionContext {
-  selection: { start: { line: number }; end: { line: number } }
-  getSelectionText: () => string
-  close: () => void
+  selection: { start: { line: number }; end: { line: number } };
+  getSelectionText: () => string;
+  close: () => void;
 }
 import {
   ChevronDown,
@@ -35,28 +44,32 @@ import {
   Save,
   RotateCcw,
   Search,
-} from 'lucide-react'
-import type { FileSearchSession } from '../hooks/useFileSearch'
-import { FileSearchBar } from './FileSearchBar'
-import { Modal } from '../primitives/Modal'
-import { Tooltip } from '../primitives/Tooltip'
-import { EMBEDDED_COMMENT_STYLES } from '../lib/embeddedCommentStyles'
-import { useFileContents } from '../hooks/useFileContents'
-import { isReviewCommentSide, type ReviewComment } from '../../lib/types'
-import type { PrExistingComment } from '../../lib/pr-session'
+} from "lucide-react";
+import type { FileSearchSession } from "../hooks/useFileSearch";
+import { FileSearchBar } from "./FileSearchBar";
+import { Modal } from "../primitives/Modal";
+import { Tooltip } from "../primitives/Tooltip";
+import { EMBEDDED_COMMENT_STYLES } from "../lib/embeddedCommentStyles";
+import { useFileContents } from "../hooks/useFileContents";
+import { isReviewCommentSide, type ReviewComment } from "../../lib/types";
+import type { HunkHistory } from "../../lib/git";
+import type { PrExistingComment } from "../../lib/pr-session";
 import type {
   LineDiffType,
   DiffIndicators,
   HunkSeparatorStyle,
   LineHoverHighlight,
-} from '../hooks/useSettings'
-import { CommentForm } from './CommentForm'
-import { CommentBubble } from './CommentBubble'
-import { ExistingPrCommentBubble } from './ExistingPrCommentBubble'
-import { DiffMinimap } from './DiffMinimap'
-import { SHIKI_THEME_MAP, scrollToLine } from '../utils'
-import { clearFindHighlights, syncFindHighlights } from '../lib/findInFileHighlights'
-import type { EditAnnotation, EditSessionView } from '../hooks/useEditSessions'
+} from "../hooks/useSettings";
+import { CommentForm } from "./CommentForm";
+import { CommentBubble } from "./CommentBubble";
+import { ExistingPrCommentBubble } from "./ExistingPrCommentBubble";
+import { DiffMinimap } from "./DiffMinimap";
+import { SHIKI_THEME_MAP, scrollToLine } from "../utils";
+import {
+  clearFindHighlights,
+  syncFindHighlights,
+} from "../lib/findInFileHighlights";
+import type { EditAnnotation, EditSessionView } from "../hooks/useEditSessions";
 import {
   pendingFromSelection,
   pendingLineLabel,
@@ -70,29 +83,36 @@ import {
   normalizePendingRange,
   type PendingLineComment,
   type PendingLineBounds,
-} from '../lib/commentSelection'
+} from "../lib/commentSelection";
 
-type PendingComment = PendingLineComment
+type PendingComment = PendingLineComment;
 
 /** Metadata union carried by every inline annotation this card renders. */
 type CardAnnotationMetadata =
   | ReviewComment
   | { _pending: true }
-  | { _existingPr: true; comment: PrExistingComment }
+  | { _existingPr: true; comment: PrExistingComment };
 
 /** Keep current GitHub threads on their exact diff line; stale anchors fall back to file-level context. */
 export function canAnchorPrComment(
   fileDiff: FileDiffMetadata,
   comment: PrExistingComment,
 ): boolean {
-  if (comment.isOutdated || comment.line == null || comment.line < 1 || comment.side == null)
-    return false
-  const side = comment.side === 'LEFT' ? 'deletions' : 'additions'
-  const startKey = side === 'additions' ? 'additionStart' : 'deletionStart'
-  const countKey = side === 'additions' ? 'additionCount' : 'deletionCount'
-  return fileDiff.hunks.some(
-    (hunk) => comment.line! >= hunk[startKey] && comment.line! < hunk[startKey] + hunk[countKey],
+  if (
+    comment.isOutdated ||
+    comment.line == null ||
+    comment.line < 1 ||
+    comment.side == null
   )
+    return false;
+  const side = comment.side === "LEFT" ? "deletions" : "additions";
+  const startKey = side === "additions" ? "additionStart" : "deletionStart";
+  const countKey = side === "additions" ? "additionCount" : "deletionCount";
+  return fileDiff.hunks.some(
+    (hunk) =>
+      comment.line! >= hunk[startKey] &&
+      comment.line! < hunk[startKey] + hunk[countKey],
+  );
 }
 
 /** Min/max file line numbers present on one side of a pierre FileDiffMetadata. */
@@ -101,26 +121,26 @@ function boundsForSide(
   side: AnnotationSide,
   expandedLineCount?: number,
 ): PendingLineBounds {
-  const startKey = side === 'additions' ? 'additionStart' : 'deletionStart'
-  const countKey = side === 'additions' ? 'additionCount' : 'deletionCount'
-  let min = Number.POSITIVE_INFINITY
-  let max = 0
+  const startKey = side === "additions" ? "additionStart" : "deletionStart";
+  const countKey = side === "additions" ? "additionCount" : "deletionCount";
+  let min = Number.POSITIVE_INFINITY;
+  let max = 0;
   for (const hunk of fileDiff.hunks) {
-    const start = hunk[startKey] as number
-    const count = hunk[countKey] as number
-    if (count <= 0) continue
-    min = Math.min(min, start)
-    max = Math.max(max, start + count - 1)
+    const start = hunk[startKey] as number;
+    const count = hunk[countKey] as number;
+    if (count <= 0) continue;
+    min = Math.min(min, start);
+    max = Math.max(max, start + count - 1);
   }
   // When full-file context is expanded, allow navigating the whole file.
   if (expandedLineCount && expandedLineCount > 0) {
-    min = Math.min(min === Number.POSITIVE_INFINITY ? 1 : min, 1)
-    max = Math.max(max, expandedLineCount)
+    min = Math.min(min === Number.POSITIVE_INFINITY ? 1 : min, 1);
+    max = Math.max(max, expandedLineCount);
   }
   if (!Number.isFinite(min) || max < 1) {
-    return { min: 1, max: Math.max(1, expandedLineCount ?? 1) }
+    return { min: 1, max: Math.max(1, expandedLineCount ?? 1) };
   }
-  return { min, max }
+  return { min, max };
 }
 
 /** Keep malformed persisted annotations away from Pierre's strict side index. */
@@ -128,40 +148,41 @@ export function filterSupportedLineAnnotations<T>(
   annotations: DiffLineAnnotation<T>[],
 ): DiffLineAnnotation<T>[] {
   return annotations.filter(
-    (annotation) => annotation.lineNumber > 0 && isReviewCommentSide(annotation.side),
-  )
+    (annotation) =>
+      annotation.lineNumber > 0 && isReviewCommentSide(annotation.side),
+  );
 }
 
 interface FileDiffCardProps {
-  id?: string
-  fileDiff: FileDiffMetadata
-  filePath: string
-  annotations: DiffLineAnnotation<ReviewComment>[]
+  id?: string;
+  fileDiff: FileDiffMetadata;
+  filePath: string;
+  annotations: DiffLineAnnotation<ReviewComment>[];
   /** Published GitHub threads, anchored to their PR diff line when possible. */
-  existingComments?: PrExistingComment[]
-  diffStyle: 'split' | 'unified'
-  tabSize: number
-  viewed: boolean
-  theme: string
-  editorIDE?: string
-  lineDiffType: LineDiffType
-  lineWrap: boolean
-  diffIndicators: DiffIndicators
-  showLineNumbers: boolean
-  hunkSeparators: HunkSeparatorStyle
-  lineHoverHighlight: LineHoverHighlight
-  fontSize: number
-  monoFontFamily: string
-  expandContextByDefault: boolean
-  collapsedContextThreshold: number
-  expansionLineCount: number
+  existingComments?: PrExistingComment[];
+  diffStyle: "split" | "unified";
+  tabSize: number;
+  viewed: boolean;
+  theme: string;
+  editorIDE?: string;
+  lineDiffType: LineDiffType;
+  lineWrap: boolean;
+  diffIndicators: DiffIndicators;
+  showLineNumbers: boolean;
+  hunkSeparators: HunkSeparatorStyle;
+  lineHoverHighlight: LineHoverHighlight;
+  fontSize: number;
+  monoFontFamily: string;
+  expandContextByDefault: boolean;
+  collapsedContextThreshold: number;
+  expansionLineCount: number;
   /**
    * Auto-collapse the card when its added+deleted line count exceeds this.
    * Set to 0 to disable. The user can still expand any card by clicking the
    * header; auto-collapse only fires on initial mount / file change.
    */
-  autoCollapseLineThreshold: number
-  onViewedChange: (filePath: string, viewed: boolean) => void
+  autoCollapseLineThreshold: number;
+  onViewedChange: (filePath: string, viewed: boolean) => void;
   onAddComment: (
     filePath: string,
     side: AnnotationSide,
@@ -169,15 +190,18 @@ interface FileDiffCardProps {
     lineContent: string,
     body: string,
     startLineNumber?: number,
-    severity?: import('../../lib/types').CommentSeverity,
-  ) => void
-  onDeleteComment: (id: string) => void
-  onReplyExisting?: (commentId: number, body: string) => Promise<void>
-  onEditExisting?: (commentId: number, body: string) => Promise<void>
-  onDeleteExisting?: (commentId: number) => Promise<void>
-  onSetExistingResolved?: (threadId: string, resolved: boolean) => Promise<void>
+    severity?: import("../../lib/types").CommentSeverity,
+  ) => void;
+  onDeleteComment: (id: string) => void;
+  onReplyExisting?: (commentId: number, body: string) => Promise<void>;
+  onEditExisting?: (commentId: number, body: string) => Promise<void>;
+  onDeleteExisting?: (commentId: number) => Promise<void>;
+  onSetExistingResolved?: (
+    threadId: string,
+    resolved: boolean,
+  ) => Promise<void>;
   /** Hide editor/revert actions on remote or otherwise read-only review surfaces. */
-  allowLocalActions?: boolean
+  allowLocalActions?: boolean;
   /**
    * Fired by the header click AFTER the local `collapsed` state has been
    * flipped. Used by App.tsx to drive the auto-advance-to-next-file
@@ -185,25 +209,32 @@ interface FileDiffCardProps {
    * expand path or by the `viewed`-prop sync effect — only by the user's
    * explicit header click.
    */
-  onCardToggleCollapse?: (filePath: string, willCollapse: boolean) => void
+  onCardToggleCollapse?: (filePath: string, willCollapse: boolean) => void;
   /** Scope-level gate: editing is only available in working-tree reviews. */
-  canEdit?: boolean
+  canEdit?: boolean;
   /** Active in-place edit session for this file, if any. */
-  editSession?: EditSessionView | null
-  onRequestEdit?: (filePath: string) => void
-  onEditChange?: (filePath: string, file: FileContents, annotations?: EditAnnotation[]) => void
-  onEditAttach?: (filePath: string, editor: Editor<CardAnnotationMetadata>) => void
-  onEditSave?: (filePath: string) => void
-  onEditDiscard?: (filePath: string) => void
-  onEditExit?: (filePath: string) => void
+  editSession?: EditSessionView | null;
+  onRequestEdit?: (filePath: string) => void;
+  onEditChange?: (
+    filePath: string,
+    file: FileContents,
+    annotations?: EditAnnotation[],
+  ) => void;
+  onEditAttach?: (
+    filePath: string,
+    editor: Editor<CardAnnotationMetadata>,
+  ) => void;
+  onEditSave?: (filePath: string) => void;
+  onEditDiscard?: (filePath: string) => void;
+  onEditExit?: (filePath: string) => void;
   /**
    * Active file-scoped search session. The card renders its find-in-file bar
    * only when `fileSearch.filePath` matches this card's file. Undefined (or a
    * session targeting another file) hides the bar.
    */
-  fileSearch?: FileSearchSession | null
+  fileSearch?: FileSearchSession | null;
   /** Open the find-in-file bar on this file (from the header search button). */
-  onOpenFileSearch?: (filePath: string) => void
+  onOpenFileSearch?: (filePath: string) => void;
 }
 
 export const FileDiffCard = memo(function FileDiffCard({
@@ -249,100 +280,112 @@ export const FileDiffCard = memo(function FileDiffCard({
   fileSearch,
   onOpenFileSearch,
 }: FileDiffCardProps) {
-  const [pending, setPending] = useState<PendingComment | null>(null)
+  const [pending, setPending] = useState<PendingComment | null>(null);
   /**
    * Controlled pierre selection — only set while a pending composer is open so
    * we do not fight live drag selection (re-applying null mid-drag collapses
    * multi-line ranges to a single line).
    */
-  const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
-  const [liveSelectionCount, setLiveSelectionCount] = useState(0)
+  const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(
+    null,
+  );
+  const [liveSelectionCount, setLiveSelectionCount] = useState(0);
   /** Stable draft key for the open composer session (survives range adjusts). */
-  const draftSessionRef = useRef<string | null>(null)
-  const [permalinkFlash, setPermalinkFlash] = useState<string | null>(null)
-  const [pathCopyFlash, setPathCopyFlash] = useState(false)
-  const lineTotal = fileDiff.additionLines.length + fileDiff.deletionLines.length
+  const draftSessionRef = useRef<string | null>(null);
+  const [permalinkFlash, setPermalinkFlash] = useState<string | null>(null);
+  const [pathCopyFlash, setPathCopyFlash] = useState(false);
+  const lineTotal =
+    fileDiff.additionLines.length + fileDiff.deletionLines.length;
   // Collapse if the user has viewed the file OR if the auto-collapse threshold
   // is set and the file is larger than it. Threshold 0 = never auto-collapse.
   const initialCollapsed =
-    viewed || (autoCollapseLineThreshold > 0 && lineTotal > autoCollapseLineThreshold)
-  const [collapsed, setCollapsed] = useState(initialCollapsed)
-  const [opening, setOpening] = useState(false)
-  const [showFileCommentForm, setShowFileCommentForm] = useState(false)
-  const [localContextExpanded, setLocalContextExpanded] = useState(expandContextByDefault)
+    viewed ||
+    (autoCollapseLineThreshold > 0 && lineTotal > autoCollapseLineThreshold);
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
+  const [opening, setOpening] = useState(false);
+  const [showFileCommentForm, setShowFileCommentForm] = useState(false);
+  const [localContextExpanded, setLocalContextExpanded] = useState(
+    expandContextByDefault,
+  );
   // In-place editing forces full-file context: the editor's document must be
   // the whole new file so a save never truncates a partial patch.
-  const editing = editSession != null
-  const contextExpanded = editing ? true : localContextExpanded
-  const [revertingHunk, setRevertingHunk] = useState<number | null>(null)
-  const [revertError, setRevertError] = useState<string | null>(null)
-  const [previewHunkIndex, setPreviewHunkIndex] = useState<number | null>(null)
-  const [editEntryError, setEditEntryError] = useState<string | null>(null)
+  const editing = editSession != null;
+  const contextExpanded = editing ? true : localContextExpanded;
+  const [revertingHunk, setRevertingHunk] = useState<number | null>(null);
+  const [revertError, setRevertError] = useState<string | null>(null);
+  const [previewHunkIndex, setPreviewHunkIndex] = useState<number | null>(null);
+  const [editEntryError, setEditEntryError] = useState<string | null>(null);
   /** Live selection text for edit-mode comment drafts (patch arrays are stale mid-session). */
-  const selectionContentRef = useRef<string | null>(null)
-  const cardRef = useRef<HTMLDivElement>(null)
+  const selectionContentRef = useRef<string | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
   // Defer mounting the expensive @pierre/diffs renderer until the card is near
   // the viewport. Once mounted we keep it (sticky) so scroll-back doesn't re-run
   // Shiki. Combined with content-visibility CSS this is the main large-diff win.
-  const [bodyMounted, setBodyMounted] = useState(false)
+  const [bodyMounted, setBodyMounted] = useState(false);
 
   const handleCopyPath = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (typeof navigator === 'undefined' || !navigator.clipboard) return
+    e.stopPropagation();
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
     navigator.clipboard.writeText(filePath).then(
       () => {
-        setPathCopyFlash(true)
-        window.setTimeout(() => setPathCopyFlash(false), 1500)
+        setPathCopyFlash(true);
+        window.setTimeout(() => setPathCopyFlash(false), 1500);
       },
       () => {},
-    )
-  }
+    );
+  };
 
   const handleRevertHunk = async (hunkIndex: number) => {
-    if (revertingHunk !== null) return
-    setRevertingHunk(hunkIndex)
-    setRevertError(null)
+    if (revertingHunk !== null) return;
+    setRevertingHunk(hunkIndex);
+    setRevertError(null);
     try {
-      const res = await fetch('/api/revert-hunk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/revert-hunk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filePath, hunkIndex }),
-      })
+      });
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string }
-        throw new Error(body.error ?? `HTTP ${res.status}`)
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
       }
       // SSE will refresh the diff automatically.
     } catch (err: any) {
-      setRevertError(err.message)
+      setRevertError(err.message);
     } finally {
-      setRevertingHunk(null)
+      setRevertingHunk(null);
     }
-  }
+  };
 
-  const isChangedFile = fileDiff.type === 'change' || fileDiff.type === 'rename-changed'
-  const canExpandContext = !collapsed && isChangedFile
-  const oldFilePath = fileDiff.prevName ?? filePath
+  const isChangedFile =
+    fileDiff.type === "change" || fileDiff.type === "rename-changed";
+  const canExpandContext = !collapsed && isChangedFile;
+  const oldFilePath = fileDiff.prevName ?? filePath;
   const {
     loading: contentsLoading,
     oldContent,
     newContent,
     refetch: refetchContents,
-  } = useFileContents(filePath, (contextExpanded && canExpandContext) || editing, oldFilePath)
-  const contentsReady = contextExpanded && oldContent !== null && newContent !== null
+  } = useFileContents(
+    filePath,
+    (contextExpanded && canExpandContext) || editing,
+    oldFilePath,
+  );
+  const contentsReady =
+    contextExpanded && oldContent !== null && newContent !== null;
 
   // Refetch full contents when the underlying patch changes while context is
   // expanded or an edit session is active (save / revert-hunk / external
   // edit all broadcast `change`). Otherwise the full-context render would
   // keep showing pre-mutation content.
-  const fileDiffRef = useRef(fileDiff)
+  const fileDiffRef = useRef(fileDiff);
   useEffect(() => {
-    if (fileDiffRef.current === fileDiff) return
-    fileDiffRef.current = fileDiff
+    if (fileDiffRef.current === fileDiff) return;
+    fileDiffRef.current = fileDiff;
     if ((contextExpanded && canExpandContext) || editing) {
-      refetchContents()
+      refetchContents();
     }
-  }, [fileDiff, contextExpanded, canExpandContext, editing, refetchContents])
+  }, [fileDiff, contextExpanded, canExpandContext, editing, refetchContents]);
 
   // Synchronize collapse with viewed state changes from parent.
   // Must use `useLayoutEffect` (NOT `useEffect`) so the collapse commits
@@ -354,39 +397,40 @@ export const FileDiffCard = memo(function FileDiffCard({
   // layout, then the page would shift up under the scroll position,
   // landing on the file AFTER the intended next one.
   useLayoutEffect(() => {
-    setCollapsed(viewed)
-  }, [viewed])
+    setCollapsed(viewed);
+  }, [viewed]);
 
   useEffect(() => {
-    if (bodyMounted || collapsed) return
-    const el = cardRef.current
-    if (!el || typeof IntersectionObserver === 'undefined') {
-      setBodyMounted(true)
-      return
+    if (bodyMounted || collapsed) return;
+    const el = cardRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      setBodyMounted(true);
+      return;
     }
     // Eager-mount when already in / near the viewport on expand.
-    const rect = el.getBoundingClientRect()
+    const rect = el.getBoundingClientRect();
     const near =
       rect.bottom >= -800 &&
-      rect.top <= (typeof window !== 'undefined' ? window.innerHeight + 800 : 2000)
+      rect.top <=
+        (typeof window === "undefined" ? 2000 : window.innerHeight + 800);
     if (near) {
-      setBodyMounted(true)
-      return
+      setBodyMounted(true);
+      return;
     }
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {
-          setBodyMounted(true)
-          io.disconnect()
+          setBodyMounted(true);
+          io.disconnect();
         }
       },
-      { root: null, rootMargin: '800px 0px', threshold: 0 },
-    )
-    io.observe(el)
-    return () => io.disconnect()
-  }, [collapsed, bodyMounted])
+      { root: null, rootMargin: "800px 0px", threshold: 0 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [collapsed, bodyMounted]);
 
-  const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP['rose-pine']
+  const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP["rose-pine"];
 
   // Stable across re-renders triggered by unrelated prop changes (e.g. toggling
   // split/unified) so the diff renderer isn't handed a brand-new CSS string
@@ -394,152 +438,182 @@ export const FileDiffCard = memo(function FileDiffCard({
   const unsafeCSS = useMemo(
     () => buildUnsafeCSS(tabSize, fontSize, monoFontFamily),
     [tabSize, fontSize, monoFontFamily],
-  )
+  );
+
+  // Virtualization metrics for the pierre renderer. `lineHeight` must match
+  // the `--diffs-line-height` buildUnsafeCSS emits (Math.round(fontSize * 1.7))
+  // so the virtualizer's per-line size estimates stay aligned with the real
+  // rows — otherwise scrollbar height and scroll anchoring drift on large
+  // files. The built-in header is disabled (`disableFileHeader: true`) and the
+  // card renders its own header, so the reserved header height is zero.
+  const virtualMetrics = useMemo<VirtualFileMetrics>(
+    () => ({
+      hunkLineCount: 50,
+      lineHeight: Math.round(fontSize * 1.7),
+      diffHeaderHeight: 0,
+      spacing: 8,
+    }),
+    [fontSize],
+  );
 
   // Find-in-file persistent match highlights. Sync immediately, then reconcile
   // on an interval: diff rows lazy-mount (IntersectionObserver) and rebuild
   // (style/theme changes, context expansion) inside the shadow DOM, so a
   // one-shot pass would miss rows that appear after the search opens.
-  const searchSessionActive = fileSearch?.filePath === filePath
-  const searchQuery = searchSessionActive ? fileSearch.query : ''
-  const searchHits = searchSessionActive ? fileSearch.hits : []
-  const searchIndex = searchSessionActive ? fileSearch.index : 0
+  const searchSessionActive = fileSearch?.filePath === filePath;
+  const searchQuery = searchSessionActive ? fileSearch.query : "";
+  const searchHits = searchSessionActive ? fileSearch.hits : [];
+  const searchIndex = searchSessionActive ? fileSearch.index : 0;
   useEffect(() => {
-    const card = cardRef.current
-    if (!card) return
+    const card = cardRef.current;
+    if (!card) return;
     if (!searchSessionActive || !searchQuery.trim()) {
-      clearFindHighlights(card)
-      return
+      clearFindHighlights(card);
+      return;
     }
-    syncFindHighlights(card, searchHits, searchIndex, searchQuery)
+    syncFindHighlights(card, searchHits, searchIndex, searchQuery);
     const timer = window.setInterval(() => {
-      syncFindHighlights(card, searchHits, searchIndex, searchQuery)
-    }, 300)
+      syncFindHighlights(card, searchHits, searchIndex, searchQuery);
+    }, 300);
     return () => {
-      window.clearInterval(timer)
-      clearFindHighlights(card)
-    }
-  }, [searchSessionActive, searchQuery, searchHits, searchIndex, bodyMounted, collapsed, editing])
+      window.clearInterval(timer);
+      clearFindHighlights(card);
+    };
+  }, [
+    searchSessionActive,
+    searchQuery,
+    searchHits,
+    searchIndex,
+    bodyMounted,
+    collapsed,
+    editing,
+  ]);
 
   const getLineContent = (
     side: AnnotationSide,
     lineNumber: number,
     startLineNumber?: number,
   ): string => {
-    const a = startLineNumber ?? lineNumber
-    const b = lineNumber
-    const startNum = Math.min(a, b)
-    const endNum = Math.max(a, b)
-    const resultLines: string[] = []
+    const a = startLineNumber ?? lineNumber;
+    const b = lineNumber;
+    const startNum = Math.min(a, b);
+    const endNum = Math.max(a, b);
+    const resultLines: string[] = [];
     // Full-file contents when "Expand context" is on — fills lines outside patch hunks.
     const expanded = contentsReady
-      ? (side === 'additions' ? newContent : oldContent)?.replace(/\r\n/g, '\n').split('\n')
-      : undefined
+      ? (side === "additions" ? newContent : oldContent)
+          ?.replace(/\r\n/g, "\n")
+          .split("\n")
+      : undefined;
 
     for (let line = startNum; line <= endNum; line++) {
-      const lines = side === 'additions' ? fileDiff.additionLines : fileDiff.deletionLines
-      const startKey = side === 'additions' ? 'additionStart' : 'deletionStart'
-      const countKey = side === 'additions' ? 'additionCount' : 'deletionCount'
-      const indexKey = side === 'additions' ? 'additionLineIndex' : 'deletionLineIndex'
-      let found = false
+      const lines =
+        side === "additions" ? fileDiff.additionLines : fileDiff.deletionLines;
+      const startKey = side === "additions" ? "additionStart" : "deletionStart";
+      const countKey = side === "additions" ? "additionCount" : "deletionCount";
+      const indexKey =
+        side === "additions" ? "additionLineIndex" : "deletionLineIndex";
+      let found = false;
       for (const hunk of fileDiff.hunks) {
-        const start = hunk[startKey]
-        const count = hunk[countKey]
+        const start = hunk[startKey];
+        const count = hunk[countKey];
         if (line >= start && line < start + count) {
-          const index = hunk[indexKey] + (line - start)
-          resultLines.push(lines[index] ?? '')
-          found = true
-          break
+          const index = hunk[indexKey] + (line - start);
+          resultLines.push(lines[index] ?? "");
+          found = true;
+          break;
         }
       }
       if (!found) {
         // Context / expanded lines aren't in the patch arrays.
-        resultLines.push(expanded?.[line - 1] ?? '')
+        resultLines.push(expanded?.[line - 1] ?? "");
       }
     }
-    return resultLines.join('\n')
-  }
+    return resultLines.join("\n");
+  };
 
   const openPending = useCallback((next: PendingComment) => {
-    const normalized = normalizePendingRange(next)
+    const normalized = normalizePendingRange(next);
     if (!draftSessionRef.current) {
-      draftSessionRef.current = crypto.randomUUID()
+      draftSessionRef.current = crypto.randomUUID();
     }
-    setPending(normalized)
-    setSelectedRange(selectedRangeFromPending(normalized))
-    setLiveSelectionCount(0)
-  }, [])
+    setPending(normalized);
+    setSelectedRange(selectedRangeFromPending(normalized));
+    setLiveSelectionCount(0);
+  }, []);
 
   const clearPending = useCallback(() => {
-    setPending(null)
-    setSelectedRange(null)
-    setLiveSelectionCount(0)
-    draftSessionRef.current = null
-  }, [])
+    setPending(null);
+    setSelectedRange(null);
+    setLiveSelectionCount(0);
+    draftSessionRef.current = null;
+  }, []);
 
   // A live comment draft has no place in an edit session: clear it on enter.
   useEffect(() => {
-    if (editing && pending) clearPending()
-  }, [editing, pending, clearPending])
+    if (editing && pending) clearPending();
+  }, [editing, pending, clearPending]);
 
   const pendingBounds = useMemo((): PendingLineBounds | undefined => {
-    if (!pending) return undefined
+    if (!pending) return undefined;
     const expandedCount =
-      contentsReady && pending.side === 'additions'
-        ? (newContent ?? '').split('\n').length
-        : contentsReady && pending.side === 'deletions'
-          ? (oldContent ?? '').split('\n').length
-          : undefined
-    return boundsForSide(fileDiff, pending.side, expandedCount)
-  }, [pending, fileDiff, contentsReady, newContent, oldContent])
+      contentsReady && pending.side === "additions"
+        ? (newContent ?? "").split("\n").length
+        : contentsReady && pending.side === "deletions"
+          ? (oldContent ?? "").split("\n").length
+          : undefined;
+    return boundsForSide(fileDiff, pending.side, expandedCount);
+  }, [pending, fileDiff, contentsReady, newContent, oldContent]);
 
   const updatePendingRange = useCallback((next: PendingComment) => {
-    const normalized = normalizePendingRange(next)
-    setPending(normalized)
-    setSelectedRange(selectedRangeFromPending(normalized))
-  }, [])
+    const normalized = normalizePendingRange(next);
+    setPending(normalized);
+    setSelectedRange(selectedRangeFromPending(normalized));
+  }, []);
 
   // After a new draft opens, scroll its annotation into view (it can land
   // off-screen when opened near the bottom of a tall file). Re-run when the
   // bottom edge moves so the form stays near the anchor slot.
   useEffect(() => {
-    if (!pending) return
+    if (!pending) return;
     const id = window.requestAnimationFrame(() => {
-      const el = cardRef.current?.querySelector('.comment-form, [data-annotation-slot]')
+      const el = cardRef.current?.querySelector(
+        ".comment-form, [data-annotation-slot]",
+      );
       if (el instanceof HTMLElement) {
-        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        el.scrollIntoView({ block: "nearest", behavior: "smooth" });
       }
-    })
-    return () => cancelAnimationFrame(id)
-  }, [pending?.side, pending?.lineNumber])
+    });
+    return () => cancelAnimationFrame(id);
+  }, [pending?.side, pending?.lineNumber]);
 
   const handleOpenEditor = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (fileDiff.type === 'deleted') return
-    setOpening(true)
+    e.stopPropagation();
+    if (fileDiff.type === "deleted") return;
+    setOpening(true);
     try {
-      await fetch('/api/open-file', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      await fetch("/api/open-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filePath, editor: editorIDE }),
-      })
+      });
     } catch (err) {
-      console.error('Failed to open file in IDE editor:', err)
+      console.error("Failed to open file in IDE editor:", err);
     } finally {
-      setOpening(false)
+      setOpening(false);
     }
-  }
+  };
 
   const handleRequestEdit = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!onRequestEdit || editEntryError) return
+    e.stopPropagation();
+    if (!onRequestEdit || editEntryError) return;
     try {
-      await onRequestEdit(filePath)
-      setEditEntryError(null)
+      await onRequestEdit(filePath);
+      setEditEntryError(null);
     } catch (err: any) {
-      setEditEntryError(err?.message ?? 'Failed to enter edit mode')
+      setEditEntryError(err?.message ?? "Failed to enter edit mode");
     }
-  }
+  };
 
   /**
    * Edit-mode selection action → comment draft. The live selection text is
@@ -548,19 +622,19 @@ export const FileDiffCard = memo(function FileDiffCard({
    */
   const handleEditSelectionComment = useCallback(
     (range: { start: number; end: number }, text: string) => {
-      const lo = Math.min(range.start, range.end)
-      const hi = Math.max(range.start, range.end)
-      selectionContentRef.current = text
+      const lo = Math.min(range.start, range.end);
+      const hi = Math.max(range.start, range.end);
+      selectionContentRef.current = text;
       openPending(
         normalizePendingRange({
-          side: 'additions',
+          side: "additions",
           lineNumber: hi,
-          startLineNumber: lo !== hi ? lo : undefined,
+          startLineNumber: lo === hi ? undefined : lo,
         }),
-      )
+      );
     },
     [openPending],
-  )
+  );
 
   /**
    * Creation-time editor options for the in-place edit surface. The factory
@@ -570,68 +644,86 @@ export const FileDiffCard = memo(function FileDiffCard({
   const editorOptions = useMemo<EditorOptions<CardAnnotationMetadata>>(
     () => ({
       onChange: (file, lineAnnotations) => {
-        onEditChange?.(filePath, file, lineAnnotations as EditAnnotation[] | undefined)
+        onEditChange?.(
+          filePath,
+          file,
+          lineAnnotations as EditAnnotation[] | undefined,
+        );
       },
       onAttach: (editor) => {
-        onEditAttach?.(filePath, editor)
+        onEditAttach?.(filePath, editor);
       },
       enabledSelectionAction: true,
       renderSelectionAction: (ctx) =>
         buildEditSelectionAction(ctx, filePath, handleEditSelectionComment),
     }),
     [filePath, onEditChange, onEditAttach, handleEditSelectionComment],
-  )
+  );
 
   const getStatusBadge = () => {
     switch (fileDiff.type) {
-      case 'new':
-        return <span className="diff-status-badge diff-status-new">Added</span>
-      case 'deleted':
-        return <span className="diff-status-badge diff-status-deleted">Deleted</span>
-      case 'rename-pure':
-      case 'rename-changed':
-        return <span className="diff-status-badge diff-status-renamed">Renamed</span>
+      case "new":
+        return <span className="diff-status-badge diff-status-new">Added</span>;
+      case "deleted":
+        return (
+          <span className="diff-status-badge diff-status-deleted">Deleted</span>
+        );
+      case "rename-pure":
+      case "rename-changed":
+        return (
+          <span className="diff-status-badge diff-status-renamed">Renamed</span>
+        );
       default:
-        return <span className="diff-status-badge diff-status-modified">Modified</span>
+        return (
+          <span className="diff-status-badge diff-status-modified">
+            Modified
+          </span>
+        );
     }
-  }
+  };
 
-  const fileLevelAnnotations = annotations.filter((a) => a.lineNumber === 0)
+  const fileLevelAnnotations = annotations.filter((a) => a.lineNumber === 0);
   // Treat persisted/API data as untrusted at the third-party renderer boundary.
   // Pierre assumes every annotation side is valid and otherwise throws while
   // indexing the line, blanking the entire diff surface.
-  const lineAnnotations = filterSupportedLineAnnotations(annotations)
+  const lineAnnotations = filterSupportedLineAnnotations(annotations);
 
   const existingLineAnnotations: DiffLineAnnotation<{
-    _existingPr: true
-    comment: PrExistingComment
+    _existingPr: true;
+    comment: PrExistingComment;
   }>[] = existingComments
     .filter((comment) => canAnchorPrComment(fileDiff, comment))
     .map((comment) => ({
-      side: comment.side === 'LEFT' ? 'deletions' : 'additions',
+      side: comment.side === "LEFT" ? "deletions" : "additions",
       lineNumber: comment.line!,
       metadata: { _existingPr: true, comment },
-    }))
+    }));
   const existingFileLevelComments = existingComments.filter(
     (comment) => !canAnchorPrComment(fileDiff, comment),
-  )
+  );
 
   const renderAnnotationFn = (
     annotation: DiffLineAnnotation<
-      ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }
+      | ReviewComment
+      | { _pending: true }
+      | { _existingPr: true; comment: PrExistingComment }
     >,
   ) => {
-    if ('_pending' in annotation.metadata) {
-      if (!pending) return null
-      const session = draftSessionRef.current ?? 'open'
-      const draftKey = `new:${filePath}:${pending.side}:${session}`
+    if ("_pending" in annotation.metadata) {
+      if (!pending) return null;
+      const session = draftSessionRef.current ?? "open";
+      const draftKey = `new:${filePath}:${pending.side}:${session}`;
       // Edit-mode drafts carry their own line content (the live selection
       // text) because the patch arrays are stale mid-session.
       const lineContent =
         selectionContentRef.current ??
-        getLineContent(pending.side, pending.lineNumber, pending.startLineNumber)
-      const ordered = pendingOrderedRange(pending)
-      const bounds = pendingBounds
+        getLineContent(
+          pending.side,
+          pending.lineNumber,
+          pending.startLineNumber,
+        );
+      const ordered = pendingOrderedRange(pending);
+      const bounds = pendingBounds;
       return (
         <CommentForm
           draftKey={draftKey}
@@ -645,17 +737,21 @@ export const FileDiffCard = memo(function FileDiffCard({
             canAdjustEnd: (d) => canAdjustPendingEnd(pending, d, bounds),
           }}
           onAdjustStart={(delta) => {
-            updatePendingRange(adjustPendingStart(pending, delta, bounds))
+            updatePendingRange(adjustPendingStart(pending, delta, bounds));
           }}
           onAdjustEnd={(delta) => {
-            updatePendingRange(adjustPendingEnd(pending, delta, bounds))
+            updatePendingRange(adjustPendingEnd(pending, delta, bounds));
           }}
           onSubmit={(body, severity) => {
             // Recompute content at submit so adjusted ranges are accurate.
             const content =
               selectionContentRef.current ??
-              getLineContent(pending.side, pending.lineNumber, pending.startLineNumber)
-            selectionContentRef.current = null
+              getLineContent(
+                pending.side,
+                pending.lineNumber,
+                pending.startLineNumber,
+              );
+            selectionContentRef.current = null;
             onAddComment(
               filePath,
               pending.side,
@@ -664,14 +760,14 @@ export const FileDiffCard = memo(function FileDiffCard({
               body,
               pending.startLineNumber,
               severity,
-            )
-            clearPending()
+            );
+            clearPending();
           }}
           onCancel={clearPending}
         />
-      )
+      );
     }
-    if ('_existingPr' in annotation.metadata) {
+    if ("_existingPr" in annotation.metadata) {
       return (
         <ExistingPrCommentBubble
           comment={annotation.metadata.comment}
@@ -685,40 +781,46 @@ export const FileDiffCard = memo(function FileDiffCard({
           onDelete={onDeleteExisting}
           onSetResolved={onSetExistingResolved}
         />
-      )
+      );
     }
     return (
-      <CommentBubble comment={annotation.metadata as ReviewComment} onDelete={onDeleteComment} />
-    )
-  }
+      <CommentBubble
+        comment={annotation.metadata as ReviewComment}
+        onDelete={onDeleteComment}
+      />
+    );
+  };
 
   // Drop any open draft when a new selection starts. Do NOT keep controlling
   // selectedLines during the drag (pending → null → selectedLines=undefined)
   // so pierre owns the live range.
   const handleSelectionStart = useCallback(() => {
-    setLiveSelectionCount(0)
-    setPending(null)
-    setSelectedRange(null)
-    draftSessionRef.current = null
-  }, [])
+    setLiveSelectionCount(0);
+    setPending(null);
+    setSelectedRange(null);
+    draftSessionRef.current = null;
+  }, []);
 
-  const handleSelectionChange = useCallback((range: SelectedLineRange | null) => {
-    if (range) {
-      setLiveSelectionCount(Math.abs(range.end - range.start) + 1)
-    } else {
-      setLiveSelectionCount(0)
-    }
-  }, [])
+  const handleSelectionChange = useCallback(
+    (range: SelectedLineRange | null) => {
+      if (range) {
+        setLiveSelectionCount(Math.abs(range.end - range.start) + 1);
+      } else {
+        setLiveSelectionCount(0);
+      }
+    },
+    [],
+  );
 
   const handleSelectionEnd = useCallback(
     (range: SelectedLineRange | null) => {
-      setLiveSelectionCount(0)
-      if (!range) return
+      setLiveSelectionCount(0);
+      if (!range) return;
       // Open the composer under the selection (works for single-click select + drag).
-      openPending(pendingFromSelection(range))
+      openPending(pendingFromSelection(range));
     },
     [openPending],
-  )
+  );
 
   /**
    * Pierre built-in gutter + (single click or drag). Must NOT be combined with
@@ -726,13 +828,15 @@ export const FileDiffCard = memo(function FileDiffCard({
    */
   const handleGutterUtilityClick = useCallback(
     (range: SelectedLineRange) => {
-      openPending(pendingFromSelection(range))
+      openPending(pendingFromSelection(range));
     },
     [openPending],
-  )
+  );
 
   const allAnnotations: DiffLineAnnotation<
-    ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }
+    | ReviewComment
+    | { _pending: true }
+    | { _existingPr: true; comment: PrExistingComment }
   >[] = [
     ...lineAnnotations,
     ...existingLineAnnotations,
@@ -745,21 +849,21 @@ export const FileDiffCard = memo(function FileDiffCard({
           },
         ]
       : []),
-  ]
+  ];
 
   return (
     <div
       ref={cardRef}
-      className={`file-diff-card ${viewed ? 'file-diff-viewed' : ''} ${collapsed ? 'file-diff-collapsed' : ''}`}
+      className={`file-diff-card ${viewed ? "file-diff-viewed" : ""} ${collapsed ? "file-diff-collapsed" : ""}`}
       id={id}
       data-file-path={filePath}
     >
       <div
         className="file-diff-card-header"
         onClick={() => {
-          const next = !collapsed
-          setCollapsed(next)
-          onCardToggleCollapse?.(filePath, next)
+          const next = !collapsed;
+          setCollapsed(next);
+          onCardToggleCollapse?.(filePath, next);
         }}
       >
         <div className="file-diff-header-left">
@@ -782,7 +886,7 @@ export const FileDiffCard = memo(function FileDiffCard({
             {lineAnnotations.length + existingLineAnnotations.length > 0 && (
               <span
                 className="file-diff-comment-badge"
-                title={`${lineAnnotations.length + existingLineAnnotations.length} inline comment${lineAnnotations.length + existingLineAnnotations.length === 1 ? '' : 's'}`}
+                title={`${lineAnnotations.length + existingLineAnnotations.length} inline comment${lineAnnotations.length + existingLineAnnotations.length === 1 ? "" : "s"}`}
               >
                 <MessageSquare size={10} />
                 {lineAnnotations.length + existingLineAnnotations.length}
@@ -790,7 +894,8 @@ export const FileDiffCard = memo(function FileDiffCard({
             )}
             {liveSelectionCount > 0 && (
               <span className="file-diff-selection-badge" aria-live="polite">
-                {liveSelectionCount} line{liveSelectionCount === 1 ? '' : 's'} selected
+                {liveSelectionCount} line{liveSelectionCount === 1 ? "" : "s"}{" "}
+                selected
               </span>
             )}
             {pathCopyFlash && (
@@ -806,26 +911,33 @@ export const FileDiffCard = memo(function FileDiffCard({
           </div>
         </div>
 
-        <div className="file-diff-header-right" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="file-diff-header-right"
+          onClick={(e) => e.stopPropagation()}
+        >
           {onOpenFileSearch && (
             <Tooltip
               content={
-                fileSearch?.filePath === filePath ? 'Close find in file' : 'Find in file (⌘F)'
+                fileSearch?.filePath === filePath
+                  ? "Close find in file"
+                  : "Find in file (⌘F)"
               }
               side="bottom"
             >
               <button
-                className={`file-diff-icon-btn ${fileSearch?.filePath === filePath ? 'is-active' : ''}`}
+                className={`file-diff-icon-btn ${fileSearch?.filePath === filePath ? "is-active" : ""}`}
                 onClick={() => {
                   if (fileSearch?.filePath === filePath) {
-                    fileSearch.close()
+                    fileSearch.close();
                   } else {
-                    setCollapsed(false)
-                    onOpenFileSearch(filePath)
+                    setCollapsed(false);
+                    onOpenFileSearch(filePath);
                   }
                 }}
                 aria-label={
-                  fileSearch?.filePath === filePath ? 'Close find in file' : 'Find in file'
+                  fileSearch?.filePath === filePath
+                    ? "Close find in file"
+                    : "Find in file"
                 }
               >
                 <Search size={13} />
@@ -834,48 +946,63 @@ export const FileDiffCard = memo(function FileDiffCard({
           )}
           {canExpandContext && !editing && (
             <Tooltip
-              content={contextExpanded ? 'Hide unchanged context' : 'Expand full-file context'}
+              content={
+                contextExpanded
+                  ? "Hide unchanged context"
+                  : "Expand full-file context"
+              }
               side="bottom"
             >
               <button
-                className={`file-diff-icon-btn ${contextExpanded ? 'is-active' : ''}`}
+                className={`file-diff-icon-btn ${contextExpanded ? "is-active" : ""}`}
                 onClick={() => setLocalContextExpanded((v) => !v)}
                 disabled={contentsLoading}
                 aria-label={
                   contentsLoading
-                    ? 'Loading context'
+                    ? "Loading context"
                     : contextExpanded
-                      ? 'Hide context'
-                      : 'Expand context'
+                      ? "Hide context"
+                      : "Expand context"
                 }
               >
-                {contentsLoading ? <Loader2 size={13} className="spin" /> : <Maximize2 size={13} />}
+                {contentsLoading ? (
+                  <Loader2 size={13} className="spin" />
+                ) : (
+                  <Maximize2 size={13} />
+                )}
               </button>
             </Tooltip>
           )}
-          {allowLocalActions && fileDiff.type !== 'deleted' && !editing && (
+          {allowLocalActions && fileDiff.type !== "deleted" && !editing && (
             <Tooltip content="Open in editor" side="bottom">
               <button
                 className="file-diff-icon-btn"
                 onClick={handleOpenEditor}
                 disabled={opening}
-                aria-label={opening ? 'Opening file' : 'Edit file'}
+                aria-label={opening ? "Opening file" : "Edit file"}
               >
-                {opening ? <Loader2 size={13} className="spin" /> : <Edit3 size={13} />}
+                {opening ? (
+                  <Loader2 size={13} className="spin" />
+                ) : (
+                  <Edit3 size={13} />
+                )}
               </button>
             </Tooltip>
           )}
-          {allowLocalActions && fileDiff.type !== 'deleted' && !editing && canEdit && (
-            <Tooltip content="Edit in place (e)" side="bottom">
-              <button
-                className="file-diff-icon-btn"
-                onClick={handleRequestEdit}
-                aria-label="Edit file in place"
-              >
-                <PenLine size={13} />
-              </button>
-            </Tooltip>
-          )}
+          {allowLocalActions &&
+            fileDiff.type !== "deleted" &&
+            !editing &&
+            canEdit && (
+              <Tooltip content="Edit in place (e)" side="bottom">
+                <button
+                  className="file-diff-icon-btn"
+                  onClick={handleRequestEdit}
+                  aria-label="Edit file in place"
+                >
+                  <PenLine size={13} />
+                </button>
+              </Tooltip>
+            )}
           {editing && editSession && (
             <>
               {editSession.dirty && (
@@ -897,9 +1024,15 @@ export const FileDiffCard = memo(function FileDiffCard({
                 className="file-diff-save-btn"
                 onClick={() => onEditSave?.(filePath)}
                 disabled={!editSession.dirty || editSession.saving}
-                aria-label={editSession.saving ? 'Saving…' : 'Save edits (Cmd/Ctrl+S)'}
+                aria-label={
+                  editSession.saving ? "Saving…" : "Save edits (Cmd/Ctrl+S)"
+                }
               >
-                {editSession.saving ? <Loader2 size={12} className="spin" /> : <Save size={12} />}
+                {editSession.saving ? (
+                  <Loader2 size={12} className="spin" />
+                ) : (
+                  <Save size={12} />
+                )}
                 <span>Save</span>
               </button>
               <Tooltip content="Exit edit mode" side="bottom">
@@ -917,8 +1050,8 @@ export const FileDiffCard = memo(function FileDiffCard({
             <button
               className="file-diff-icon-btn"
               onClick={() => {
-                setCollapsed(false)
-                setShowFileCommentForm(true)
+                setCollapsed(false);
+                setShowFileCommentForm(true);
               }}
               aria-label="Add file comment"
             >
@@ -926,22 +1059,22 @@ export const FileDiffCard = memo(function FileDiffCard({
             </button>
           </Tooltip>
           <label
-            className={`viewed-label ${viewed ? 'viewed-checked' : ''}`}
-            title={viewed ? 'Mark unviewed · v' : 'Mark viewed · v'}
+            className={`viewed-label ${viewed ? "viewed-checked" : ""}`}
+            title={viewed ? "Mark unviewed · v" : "Mark viewed · v"}
           >
             <input
               type="checkbox"
               checked={viewed}
-              aria-label={viewed ? 'Mark as unviewed' : 'Mark as viewed'}
+              aria-label={viewed ? "Mark as unviewed" : "Mark as viewed"}
               onChange={(e) => {
-                const next = e.target.checked
+                const next = e.target.checked;
                 // Collapse optimistically in the same event as the parent
                 // viewed update so React 18 batches them into one commit.
                 // Without this, viewed flips first, the card body is still
                 // mounted for a frame, and scroll-to-next measures against
                 // the full expanded height — landing past the next file.
-                setCollapsed(next)
-                onViewedChange(filePath, next)
+                setCollapsed(next);
+                onViewedChange(filePath, next);
               }}
             />
             <span className="viewed-label-text">Viewed</span>
@@ -950,7 +1083,10 @@ export const FileDiffCard = memo(function FileDiffCard({
       </div>
 
       {fileSearch?.filePath === filePath && (
-        <div className="file-search-bar-wrap" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="file-search-bar-wrap"
+          onClick={(e) => e.stopPropagation()}
+        >
           <FileSearchBar
             filePath={filePath}
             query={fileSearch.query}
@@ -966,69 +1102,84 @@ export const FileDiffCard = memo(function FileDiffCard({
       )}
 
       {((editing && editSession?.error) || editEntryError) && (
-        <div className="file-diff-edit-error" role="alert" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="file-diff-edit-error"
+          role="alert"
+          onClick={(e) => e.stopPropagation()}
+        >
           <AlertCircle size={11} />
           {editing && editSession?.error ? editSession.error : editEntryError}
         </div>
       )}
 
-      {allowLocalActions && !collapsed && !editing && fileDiff.hunks.length > 0 && (
-        <div className="file-diff-hunk-actions" onClick={(e) => e.stopPropagation()}>
-          <div className="file-diff-hunk-actions-meta">
-            <span className="file-diff-hunk-actions-label">Revert hunks</span>
-            <Tooltip
-              content="Preview and undo specific change blocks via git apply --reverse"
-              side="top"
-            >
-              <HelpCircle size={12} className="file-diff-hunk-help" />
-            </Tooltip>
-            <span className="file-diff-hunk-count">
-              {fileDiff.hunks.length} block
-              {fileDiff.hunks.length !== 1 ? 's' : ''}
-            </span>
-          </div>
-          <div className="file-diff-hunk-actions-buttons">
-            {fileDiff.hunks.map((h, i) => (
-              <button
-                key={i}
-                type="button"
-                className="file-diff-hunk-revert-btn"
-                onClick={() => setPreviewHunkIndex(i)}
-                disabled={revertingHunk !== null}
-                title={`Preview and revert hunk #${i + 1} (lines @${h.additionStart}+${h.additionLines ?? h.additionCount})`}
+      {allowLocalActions &&
+        !collapsed &&
+        !editing &&
+        fileDiff.hunks.length > 0 && (
+          <div
+            className="file-diff-hunk-actions"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="file-diff-hunk-actions-meta">
+              <span className="file-diff-hunk-actions-label">Revert hunks</span>
+              <Tooltip
+                content="Preview and undo specific change blocks via git apply --reverse"
+                side="top"
               >
-                {revertingHunk === i ? <Loader2 size={10} className="spin" /> : <Undo2 size={10} />}
-                <span>Hunk #{i + 1}</span>
-              </button>
-            ))}
+                <HelpCircle size={12} className="file-diff-hunk-help" />
+              </Tooltip>
+              <span className="file-diff-hunk-count">
+                {fileDiff.hunks.length} block
+                {fileDiff.hunks.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div className="file-diff-hunk-actions-buttons">
+              {fileDiff.hunks.map((h, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className="file-diff-hunk-revert-btn"
+                  onClick={() => setPreviewHunkIndex(i)}
+                  disabled={revertingHunk !== null}
+                  title={`Preview and revert hunk #${i + 1} (lines @${h.additionStart}+${h.additionLines ?? h.additionCount})`}
+                >
+                  {revertingHunk === i ? (
+                    <Loader2 size={10} className="spin" />
+                  ) : (
+                    <Undo2 size={10} />
+                  )}
+                  <span>Hunk #{i + 1}</span>
+                </button>
+              ))}
+            </div>
+            {revertError && (
+              <span className="file-diff-hunk-error" role="alert">
+                <AlertCircle size={11} />
+                {revertError}
+              </span>
+            )}
           </div>
-          {revertError && (
-            <span className="file-diff-hunk-error" role="alert">
-              <AlertCircle size={11} />
-              {revertError}
-            </span>
-          )}
-        </div>
-      )}
+        )}
 
       {/* Selective Revert Hunk Preview Modal */}
       {allowLocalActions &&
         previewHunkIndex !== null &&
         (() => {
-          const previewHunk = fileDiff.hunks[previewHunkIndex]
-          if (!previewHunk) return null
+          const previewHunk = fileDiff.hunks[previewHunkIndex];
+          if (!previewHunk) return null;
           const previewDeletedLines = fileDiff.deletionLines.slice(
             previewHunk.deletionLineIndex,
             previewHunk.deletionLineIndex +
               (previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0),
-          )
+          );
           const previewAddedLines = fileDiff.additionLines.slice(
             previewHunk.additionLineIndex,
             previewHunk.additionLineIndex +
-              (previewHunk.additionStart !== undefined && previewHunk.additionLines !== undefined
+              (previewHunk.additionStart !== undefined &&
+              previewHunk.additionLines !== undefined
                 ? previewHunk.additionLines
-                : previewHunk.additionCount ?? 0),
-          )
+                : (previewHunk.additionCount ?? 0)),
+          );
           return (
             <Modal
               open={previewHunkIndex !== null}
@@ -1053,9 +1204,10 @@ export const FileDiffCard = memo(function FileDiffCard({
               <div className="shortcuts-body">
                 <div className="hunk-preview-intro">
                   Reverting this hunk will restore the deleted (
-                  <span className="hunk-preview-negative">red</span>) lines and remove the added (
-                  <span className="hunk-preview-positive">green</span>) lines from{' '}
-                  <strong>{filePath.split('/').pop()}</strong>.
+                  <span className="hunk-preview-negative">red</span>) lines and
+                  remove the added (
+                  <span className="hunk-preview-positive">green</span>) lines
+                  from <strong>{filePath.split("/").pop()}</strong>.
                 </div>
 
                 <div className="hunk-preview-container">
@@ -1063,9 +1215,14 @@ export const FileDiffCard = memo(function FileDiffCard({
                     <span>{filePath}</span>
                     <span>
                       Lines: @-{previewHunk.deletionStart},
-                      {previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0} @+
+                      {previewHunk.deletionCount ??
+                        previewHunk.deletionLines ??
+                        0}{" "}
+                      @+
                       {previewHunk.additionStart},
-                      {previewHunk.additionLines ?? previewHunk.additionCount ?? 0}
+                      {previewHunk.additionLines ??
+                        previewHunk.additionCount ??
+                        0}
                     </span>
                   </div>
                   <div className="hunk-preview-code">
@@ -1087,18 +1244,21 @@ export const FileDiffCard = memo(function FileDiffCard({
                         <span className="hunk-preview-text">{line}</span>
                       </div>
                     ))}
-                    {previewDeletedLines.length === 0 && previewAddedLines.length === 0 && (
-                      <div className="hunk-preview-line hunk-preview-empty">
-                        No changes in this hunk.
-                      </div>
-                    )}
+                    {previewDeletedLines.length === 0 &&
+                      previewAddedLines.length === 0 && (
+                        <div className="hunk-preview-line hunk-preview-empty">
+                          No changes in this hunk.
+                        </div>
+                      )}
                   </div>
                 </div>
 
                 <HunkHistorySection
                   filePath={filePath}
                   deletionStart={previewHunk.deletionStart}
-                  deletionCount={previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0}
+                  deletionCount={
+                    previewHunk.deletionCount ?? previewHunk.deletionLines ?? 0
+                  }
                 />
               </div>
 
@@ -1112,16 +1272,16 @@ export const FileDiffCard = memo(function FileDiffCard({
                 <button
                   className="hunk-revert-btn-primary"
                   onClick={async () => {
-                    const idx = previewHunkIndex
-                    setPreviewHunkIndex(null)
-                    await handleRevertHunk(idx)
+                    const idx = previewHunkIndex;
+                    setPreviewHunkIndex(null);
+                    await handleRevertHunk(idx);
                   }}
                 >
                   Revert Changes
                 </button>
               </div>
             </Modal>
-          )
+          );
         })()}
       {!collapsed && (
         <div className="file-diff-card-body">
@@ -1135,7 +1295,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               fileDiff={fileDiff}
               filePath={filePath}
               onJump={(path, line) => {
-                scrollToLine(path, line, 'additions')
+                scrollToLine(path, line, "additions");
               }}
             />
           )}
@@ -1149,7 +1309,9 @@ export const FileDiffCard = memo(function FileDiffCard({
                   <MessageSquare size={14} />
                   <span>
                     File-Level Comments (
-                    {fileLevelAnnotations.length + existingFileLevelComments.length})
+                    {fileLevelAnnotations.length +
+                      existingFileLevelComments.length}
+                    )
                   </span>
                 </div>
 
@@ -1182,8 +1344,16 @@ export const FileDiffCard = memo(function FileDiffCard({
                       draftKey={`file-comment:${filePath}`}
                       lineContent=""
                       onSubmit={(body, severity) => {
-                        onAddComment(filePath, 'additions', 0, '', body, undefined, severity)
-                        setShowFileCommentForm(false)
+                        onAddComment(
+                          filePath,
+                          "additions",
+                          0,
+                          "",
+                          body,
+                          undefined,
+                          severity,
+                        );
+                        setShowFileCommentForm(false);
                       }}
                       onCancel={() => setShowFileCommentForm(false)}
                     />
@@ -1202,10 +1372,12 @@ export const FileDiffCard = memo(function FileDiffCard({
           {bodyMounted && contentsReady ? (
             editing && editSession ? (
               <MultiFileDiff<
-                ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }
+                | ReviewComment
+                | { _pending: true }
+                | { _existingPr: true; comment: PrExistingComment }
               >
                 key={`edit-${editSession.sessionKey}`}
-                oldFile={{ name: oldFilePath, contents: oldContent ?? '' }}
+                oldFile={{ name: oldFilePath, contents: oldContent ?? "" }}
                 newFile={{ name: filePath, contents: editSession.seedContent }}
                 edit
                 editorOptions={editorOptions}
@@ -1217,7 +1389,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                   enableLineSelection: false,
                   disableFileHeader: true,
                   lineDiffType,
-                  overflow: lineWrap ? 'wrap' : 'scroll',
+                  overflow: lineWrap ? "wrap" : "scroll",
                   diffIndicators,
                   disableLineNumbers: !showLineNumbers,
                   hunkSeparators,
@@ -1226,33 +1398,42 @@ export const FileDiffCard = memo(function FileDiffCard({
                   collapsedContextThreshold,
                   expansionLineCount,
                   onLineNumberClick: (props) => {
-                    const side = props.annotationSide === 'deletions' ? 'deletions' : 'additions'
-                    const short = `${filePath}:${side === 'deletions' ? '-' : '+'}${props.lineNumber}`
+                    const side =
+                      props.annotationSide === "deletions"
+                        ? "deletions"
+                        : "additions";
+                    const short = `${filePath}:${side === "deletions" ? "-" : "+"}${props.lineNumber}`;
                     const params = new URLSearchParams({
                       file: filePath,
                       line: String(props.lineNumber),
                       side,
-                    })
+                    });
                     const full =
-                      typeof window !== 'undefined'
-                        ? `${window.location.origin}${window.location.pathname}?${params}`
-                        : short
+                      typeof window === "undefined"
+                        ? short
+                        : `${window.location.origin}${window.location.pathname}?${params}`;
                     navigator.clipboard?.writeText(full).then(
                       () => {
-                        setPermalinkFlash(short)
-                        setTimeout(() => setPermalinkFlash(null), 1600)
+                        setPermalinkFlash(short);
+                        setTimeout(() => setPermalinkFlash(null), 1600);
                       },
                       () => {},
-                    )
+                    );
                   },
                   theme: {
-                    dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
+                    dark:
+                      shikiConfig.type === "dark"
+                        ? shikiConfig.themeName
+                        : "rose-pine",
                     light:
-                      shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
+                      shikiConfig.type === "light"
+                        ? shikiConfig.themeName
+                        : "github-light",
                   },
                   themeType: shikiConfig.type,
                   unsafeCSS,
                 }}
+                metrics={virtualMetrics}
                 lineAnnotations={filterSupportedLineAnnotations<CardAnnotationMetadata>(
                   editSession.annotations ?? allAnnotations,
                 )}
@@ -1261,17 +1442,19 @@ export const FileDiffCard = memo(function FileDiffCard({
               />
             ) : (
               <MultiFileDiff<
-                ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }
+                | ReviewComment
+                | { _pending: true }
+                | { _existingPr: true; comment: PrExistingComment }
               >
-                oldFile={{ name: oldFilePath, contents: oldContent ?? '' }}
-                newFile={{ name: filePath, contents: newContent ?? '' }}
+                oldFile={{ name: oldFilePath, contents: oldContent ?? "" }}
+                newFile={{ name: filePath, contents: newContent ?? "" }}
                 options={{
                   diffStyle,
                   enableGutterUtility: true,
                   enableLineSelection: true,
                   disableFileHeader: true,
                   lineDiffType,
-                  overflow: lineWrap ? 'wrap' : 'scroll',
+                  overflow: lineWrap ? "wrap" : "scroll",
                   diffIndicators,
                   disableLineNumbers: !showLineNumbers,
                   hunkSeparators,
@@ -1284,33 +1467,42 @@ export const FileDiffCard = memo(function FileDiffCard({
                   onLineSelectionEnd: handleSelectionEnd,
                   onGutterUtilityClick: handleGutterUtilityClick,
                   onLineNumberClick: (props) => {
-                    const side = props.annotationSide === 'deletions' ? 'deletions' : 'additions'
-                    const short = `${filePath}:${side === 'deletions' ? '-' : '+'}${props.lineNumber}`
+                    const side =
+                      props.annotationSide === "deletions"
+                        ? "deletions"
+                        : "additions";
+                    const short = `${filePath}:${side === "deletions" ? "-" : "+"}${props.lineNumber}`;
                     const params = new URLSearchParams({
                       file: filePath,
                       line: String(props.lineNumber),
                       side,
-                    })
+                    });
                     const full =
-                      typeof window !== 'undefined'
-                        ? `${window.location.origin}${window.location.pathname}?${params}`
-                        : short
+                      typeof window === "undefined"
+                        ? short
+                        : `${window.location.origin}${window.location.pathname}?${params}`;
                     navigator.clipboard?.writeText(full).then(
                       () => {
-                        setPermalinkFlash(short)
-                        setTimeout(() => setPermalinkFlash(null), 1600)
+                        setPermalinkFlash(short);
+                        setTimeout(() => setPermalinkFlash(null), 1600);
                       },
                       () => {},
-                    )
+                    );
                   },
                   theme: {
-                    dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
+                    dark:
+                      shikiConfig.type === "dark"
+                        ? shikiConfig.themeName
+                        : "rose-pine",
                     light:
-                      shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
+                      shikiConfig.type === "light"
+                        ? shikiConfig.themeName
+                        : "github-light",
                   },
                   themeType: shikiConfig.type,
                   unsafeCSS,
                 }}
+                metrics={virtualMetrics}
                 // Only control selection while a draft is open — never push null mid-drag.
                 selectedLines={pending ? selectedRange : undefined}
                 lineAnnotations={allAnnotations}
@@ -1325,7 +1517,9 @@ export const FileDiffCard = memo(function FileDiffCard({
               </div>
             ) : (
               <FileDiff<
-                ReviewComment | { _pending: true } | { _existingPr: true; comment: PrExistingComment }
+                | ReviewComment
+                | { _pending: true }
+                | { _existingPr: true; comment: PrExistingComment }
               >
                 fileDiff={fileDiff}
                 options={{
@@ -1334,7 +1528,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                   enableLineSelection: true,
                   disableFileHeader: true, // Disable built-in header to use custom header
                   lineDiffType,
-                  overflow: lineWrap ? 'wrap' : 'scroll',
+                  overflow: lineWrap ? "wrap" : "scroll",
                   diffIndicators,
                   disableLineNumbers: !showLineNumbers,
                   hunkSeparators,
@@ -1344,33 +1538,42 @@ export const FileDiffCard = memo(function FileDiffCard({
                   onLineSelectionEnd: handleSelectionEnd,
                   onGutterUtilityClick: handleGutterUtilityClick,
                   onLineNumberClick: (props) => {
-                    const side = props.annotationSide === 'deletions' ? 'deletions' : 'additions'
-                    const short = `${filePath}:${side === 'deletions' ? '-' : '+'}${props.lineNumber}`
+                    const side =
+                      props.annotationSide === "deletions"
+                        ? "deletions"
+                        : "additions";
+                    const short = `${filePath}:${side === "deletions" ? "-" : "+"}${props.lineNumber}`;
                     const params = new URLSearchParams({
                       file: filePath,
                       line: String(props.lineNumber),
                       side,
-                    })
+                    });
                     const full =
-                      typeof window !== 'undefined'
-                        ? `${window.location.origin}${window.location.pathname}?${params}`
-                        : short
+                      typeof window === "undefined"
+                        ? short
+                        : `${window.location.origin}${window.location.pathname}?${params}`;
                     navigator.clipboard?.writeText(full).then(
                       () => {
-                        setPermalinkFlash(short)
-                        setTimeout(() => setPermalinkFlash(null), 1600)
+                        setPermalinkFlash(short);
+                        setTimeout(() => setPermalinkFlash(null), 1600);
                       },
                       () => {},
-                    )
+                    );
                   },
                   theme: {
-                    dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
+                    dark:
+                      shikiConfig.type === "dark"
+                        ? shikiConfig.themeName
+                        : "rose-pine",
                     light:
-                      shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
+                      shikiConfig.type === "light"
+                        ? shikiConfig.themeName
+                        : "github-light",
                   },
                   themeType: shikiConfig.type,
                   unsafeCSS,
                 }}
+                metrics={virtualMetrics}
                 selectedLines={pending ? selectedRange : undefined}
                 lineAnnotations={allAnnotations}
                 renderHeaderMetadata={() => null} // Header is disabled
@@ -1381,57 +1584,57 @@ export const FileDiffCard = memo(function FileDiffCard({
         </div>
       )}
     </div>
-  )
-})
+  );
+});
 
 function HunkHistorySection({
   filePath,
   deletionStart,
   deletionCount,
 }: {
-  filePath: string
-  deletionStart: number
-  deletionCount: number
+  filePath: string;
+  deletionStart: number;
+  deletionCount: number;
 }) {
-  const [data, setData] = useState<HunkHistoryData | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [data, setData] = useState<HunkHistory | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let active = true
+    let active = true;
     const fetchData = async () => {
-      setLoading(true)
-      setError(null)
+      setLoading(true);
+      setError(null);
       try {
         const queryParams = new URLSearchParams({
           filePath,
           deletionStart: String(deletionStart),
           deletionCount: String(deletionCount),
-        })
-        const res = await fetch(`/api/hunk-history?${queryParams}`)
+        });
+        const res = await fetch(`/api/hunk-history?${queryParams}`);
         if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`)
+          throw new Error(`HTTP ${res.status}`);
         }
-        const json = await res.json()
+        const json = await res.json();
         if (active) {
-          setData(json)
+          setData(json);
         }
       } catch (err: any) {
         if (active) {
-          setError(err.message || 'Failed to fetch hunk history')
+          setError(err.message || "Failed to fetch hunk history");
         }
       } finally {
         if (active) {
-          setLoading(false)
+          setLoading(false);
         }
       }
-    }
+    };
 
-    fetchData()
+    fetchData();
     return () => {
-      active = false
-    }
-  }, [filePath, deletionStart, deletionCount])
+      active = false;
+    };
+  }, [filePath, deletionStart, deletionCount]);
 
   if (loading) {
     return (
@@ -1439,33 +1642,42 @@ function HunkHistorySection({
         <Loader2 size={14} className="spin hunk-history-status-icon" />
         <span>Loading git history & origin blame…</span>
       </div>
-    )
+    );
   }
 
   if (error) {
     return (
       <div className="hunk-history-error">
-        <AlertCircle size={14} className="hunk-history-status-icon hunk-history-error-icon" />
+        <AlertCircle
+          size={14}
+          className="hunk-history-status-icon hunk-history-error-icon"
+        />
         <span>Failed to load git history: {error}</span>
       </div>
-    )
+    );
   }
 
-  if (!data) return null
+  if (!data) return null;
 
   // Get unique commits from blame
-  const uniqueBlames = Array.from(new Map(data.blame.map((item) => [item.commit, item])).values())
+  const uniqueBlames = Array.from(
+    new Map(data.blame.map((item) => [item.commit, item])).values(),
+  );
 
   return (
     <div className="hunk-history-section">
       {uniqueBlames.length > 0 && (
         <div className="hunk-history-block">
-          <h3 className="hunk-history-title">Commit(s) introducing deleted lines</h3>
+          <h3 className="hunk-history-title">
+            Commit(s) introducing deleted lines
+          </h3>
           <div className="hunk-history-commits">
             {uniqueBlames.map((entry) => (
               <div key={entry.commit} className="hunk-history-commit-card">
                 <div className="hunk-history-commit-header">
-                  <span className="hunk-history-commit-hash">{entry.commit}</span>
+                  <span className="hunk-history-commit-hash">
+                    {entry.commit}
+                  </span>
                   <span className="hunk-history-commit-author">
                     <User size={11} />
                     <span>{entry.author}</span>
@@ -1484,7 +1696,9 @@ function HunkHistorySection({
 
       {data.recentCommits.length > 0 && (
         <div className="hunk-history-block">
-          <h3 className="hunk-history-title">Recent File Modification History</h3>
+          <h3 className="hunk-history-title">
+            Recent File Modification History
+          </h3>
           <div className="hunk-history-log">
             {data.recentCommits.map((c) => (
               <div key={c.hash} className="hunk-history-log-row">
@@ -1500,10 +1714,14 @@ function HunkHistorySection({
         </div>
       )}
     </div>
-  )
+  );
 }
 
-export function buildUnsafeCSS(tabSize: number, fontSize: number, fontFamily: string): string {
+export function buildUnsafeCSS(
+  tabSize: number,
+  fontSize: number,
+  fontFamily: string,
+): string {
   return `
     :host {
       --diffs-tab-size: ${tabSize} !important;
@@ -1577,7 +1795,7 @@ export function buildUnsafeCSS(tabSize: number, fontSize: number, fontFamily: st
       box-shadow: 0 0 0 1px rgba(235, 186, 0, 0.4) !important;
     }
     ${EMBEDDED_COMMENT_STYLES}
-  `
+  `;
 }
 
 /**
@@ -1594,39 +1812,43 @@ function buildEditSelectionAction(
   filePath: string,
   onComment: (range: { start: number; end: number }, text: string) => void,
 ): HTMLElement {
-  const el = document.createElement('div')
-  el.className = 'edit-selection-action'
-  el.setAttribute('role', 'toolbar')
-  el.setAttribute('aria-label', 'Selection actions')
+  const el = document.createElement("div");
+  el.className = "edit-selection-action";
+  el.setAttribute("role", "toolbar");
+  el.setAttribute("aria-label", "Selection actions");
 
-  const commentBtn = document.createElement('button')
-  commentBtn.type = 'button'
-  commentBtn.className = 'edit-selection-action-btn'
-  commentBtn.textContent = 'Comment'
-  commentBtn.title = 'Add a review comment on the selected lines'
-  commentBtn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    const text = ctx.getSelectionText()
-    const s = ctx.selection.start
-    const en = ctx.selection.end
-    ctx.close()
-    onComment({ start: s.line + 1, end: en.line + 1 }, text)
-  })
+  const commentBtn = document.createElement("button");
+  commentBtn.type = "button";
+  commentBtn.className = "edit-selection-action-btn";
+  commentBtn.textContent = "Comment";
+  commentBtn.title = "Add a review comment on the selected lines";
+  commentBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const text = ctx.getSelectionText();
+    const s = ctx.selection.start;
+    const en = ctx.selection.end;
+    ctx.close();
+    onComment({ start: s.line + 1, end: en.line + 1 }, text);
+  });
 
-  const linkBtn = document.createElement('button')
-  linkBtn.type = 'button'
-  linkBtn.className = 'edit-selection-action-btn'
-  linkBtn.textContent = 'Copy link'
-  linkBtn.title = 'Copy a permalink to this line'
-  linkBtn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    const line = ctx.selection.start.line + 1
-    ctx.close()
-    const params = new URLSearchParams({ file: filePath, line: String(line), side: 'additions' })
-    const full = `${window.location.origin}${window.location.pathname}?${params}`
-    navigator.clipboard?.writeText(full).catch(() => {})
-  })
+  const linkBtn = document.createElement("button");
+  linkBtn.type = "button";
+  linkBtn.className = "edit-selection-action-btn";
+  linkBtn.textContent = "Copy link";
+  linkBtn.title = "Copy a permalink to this line";
+  linkBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const line = ctx.selection.start.line + 1;
+    ctx.close();
+    const params = new URLSearchParams({
+      file: filePath,
+      line: String(line),
+      side: "additions",
+    });
+    const full = `${window.location.origin}${window.location.pathname}?${params}`;
+    navigator.clipboard?.writeText(full).catch(() => {});
+  });
 
-  el.append(commentBtn, linkBtn)
-  return el
+  el.append(commentBtn, linkBtn);
+  return el;
 }

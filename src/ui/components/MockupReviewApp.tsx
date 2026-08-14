@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ArrowLeft,
 	Bot,
+	Eye,
 	History,
 	LayoutTemplate,
+	Maximize2,
 	Menu,
+	Minimize2,
 	Monitor,
 	MousePointer2,
 	Palette,
@@ -42,10 +45,13 @@ import {
 	DECISION_META,
 	VIEWPORT_LABEL,
 	VIEWPORT_OPTIONS,
+	VIEWPORT_PX,
 	type ViewportPx,
 } from "./MockupAnchors";
 
 const COMMENTS_RAIL_KEY = "diffing-mockup-comments-rail";
+const VIEW_ONLY_KEY = "diffing-mockup-view-only";
+const ZEN_KEY = "diffing-mockup-zen";
 
 type Tool = MockupAnchorKind;
 
@@ -106,8 +112,8 @@ export function MockupReviewApp() {
 	const defaultId = useMemo(() => {
 		if (mockups.length === 0) return null;
 		return (
-			[...mockups].reverse().find((mockup) => mockup.decision === "pending")
-				?.id ?? mockups[mockups.length - 1].id
+			[...mockups].reverse().find((mockup) => mockup.decision === "pending")?.id ??
+			mockups[mockups.length - 1].id
 		);
 	}, [mockups]);
 
@@ -144,6 +150,24 @@ export function MockupReviewApp() {
 		}
 		return true;
 	});
+	const [viewOnly, setViewOnly] = useState(() => {
+		try {
+			const stored = getUiStateItem(VIEW_ONLY_KEY);
+			if (stored != null) return stored === "true";
+		} catch {
+			/* ignore */
+		}
+		return false;
+	});
+	const [zen, setZen] = useState(() => {
+		try {
+			const stored = getUiStateItem(ZEN_KEY);
+			if (stored != null) return stored === "true";
+		} catch {
+			/* ignore */
+		}
+		return false;
+	});
 	const [tool, setTool] = useState<Tool>("block");
 	const [viewport, setViewport] = useState<ViewportPx>(1280);
 	const [screenId, setScreenId] = useState<string | null>(null);
@@ -153,6 +177,11 @@ export function MockupReviewApp() {
 	const [pending, setPending] = useState<ProbeHit | null>(null);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [toast, setToast] = useState<string | null>(null);
+	const [zenReveal, setZenReveal] = useState<
+		"toolbar" | "sidebar" | "rail" | null
+	>(null);
+	const [probeReady, setProbeReady] = useState(false);
+	const [staleIds, setStaleIds] = useState<Set<string>>(new Set());
 	const [sections, setSections] = useState<
 		{ name: string; rect: { x: number; y: number; w: number; h: number } }[]
 	>([]);
@@ -190,6 +219,22 @@ export function MockupReviewApp() {
 			/* ignore */
 		}
 	}, [commentsRailOpen]);
+
+	useEffect(() => {
+		try {
+			setUiStateItem(VIEW_ONLY_KEY, String(viewOnly));
+		} catch {
+			/* ignore */
+		}
+	}, [viewOnly]);
+
+	useEffect(() => {
+		try {
+			setUiStateItem(ZEN_KEY, String(zen));
+		} catch {
+			/* ignore */
+		}
+	}, [zen]);
 
 	const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
 		e.preventDefault();
@@ -288,6 +333,33 @@ export function MockupReviewApp() {
 			.sort((a, b) => b.createdAt - a.createdAt);
 	}, [active, currentScreenId, viewingVersion, viewportLabel]);
 
+	/**
+	 * Open comments from the *other two* viewports on the current screen +
+	 * version — reachable from the rail but never pinned on this canvas. Order
+	 * is canonical (desktop → tablet → mobile), then chronological.
+	 */
+	const otherViewportOpen = useMemo(() => {
+		if (!active) return [];
+		const order: Record<MockupViewport, number> = {
+			desktop: 0,
+			tablet: 1,
+			mobile: 2,
+		};
+		return (active.comments ?? [])
+			.filter(
+				(c) =>
+					c.screenId === currentScreenId &&
+					c.status === "open" &&
+					c.createdAtMockupVersion === viewingVersion &&
+					commentViewport(c) !== viewportLabel,
+			)
+			.sort(
+				(a, b) =>
+					order[commentViewport(a)] - order[commentViewport(b)] ||
+					a.createdAt - b.createdAt,
+			);
+	}, [active, currentScreenId, viewingVersion, viewportLabel]);
+
 	const scopedOpenCount = comments.filter((c) => c.status === "open").length;
 	const totalOpenCount = (active?.comments ?? []).filter(
 		(c) => c.status === "open",
@@ -318,13 +390,16 @@ export function MockupReviewApp() {
 	useEffect(() => {
 		if (!active || !currentScreenId) {
 			setSrcdoc("");
+			setProbeReady(false);
 			return;
 		}
 		const version = viewVersion ?? active.version;
 		const docKey = `${active.id}:${currentScreenId}:${version}:${viewportLabel}`;
+		const mode = viewOnly ? "&mode=view" : "";
 		let cancelled = false;
+		setProbeReady(false);
 		fetch(
-			`/api/mockups/${active.id}/screens/${currentScreenId}/document?version=${version}&viewport=${viewportLabel}`,
+			`/api/mockups/${active.id}/screens/${currentScreenId}/document?version=${version}&viewport=${viewportLabel}${mode}`,
 		)
 			.then(async (r) => {
 				if (!r.ok) return Promise.reject(new Error(String(r.status)));
@@ -347,6 +422,7 @@ export function MockupReviewApp() {
 		viewVersion,
 		active?.version,
 		viewportLabel,
+		viewOnly,
 	]);
 
 	// Scope change (mockup / screen / version / viewport) clears transient UI state.
@@ -354,6 +430,7 @@ export function MockupReviewApp() {
 		setHover(null);
 		setPending(null);
 		setSelectedId(null);
+		setStaleIds(new Set());
 		setSections([]);
 		if (pendingSelectRef.current) {
 			setSelectedId(pendingSelectRef.current);
@@ -366,6 +443,16 @@ export function MockupReviewApp() {
 		const t = setTimeout(() => setToast(null), 2200);
 		return () => clearTimeout(t);
 	}, [toast]);
+
+	// Entering view-only drops any in-flight selection state (no shield → no
+	// new hover/click probes) and closes any open thread.
+	useEffect(() => {
+		if (viewOnly) {
+			setHover(null);
+			setPending(null);
+			setSelectedId(null);
+		}
+	}, [viewOnly]);
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
@@ -382,6 +469,8 @@ export function MockupReviewApp() {
 			else if (e.key === "2" && !historical) setTool("block");
 			else if (e.key === "3" && !historical) setTool("point");
 			else if (e.key === "c") setCommentsRailOpen((v) => !v);
+			else if (e.key === "v") setViewOnly((v) => !v);
+			else if (e.key === "z") setZen((v) => !v);
 			else if (e.key === "[" || e.key === "]") {
 				if (!screens.length || !currentScreenId) return;
 				const i = screens.findIndex((s) => s.id === currentScreenId);
@@ -391,14 +480,29 @@ export function MockupReviewApp() {
 						: (i - 1 + screens.length) % screens.length;
 				setScreenId(screens[next].id);
 			} else if (e.key === "Escape") {
-				setPending(null);
-				setHover(null);
-				setSelectedId(null);
+				if (zen) {
+					setZen(false);
+					setZenReveal(null);
+				} else {
+					setPending(null);
+					setHover(null);
+					setSelectedId(null);
+				}
 			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [screens, currentScreenId, historical]);
+	}, [screens, currentScreenId, historical, zen]);
+
+	const sendAnchorCheck = useCallback(() => {
+		const anchors = comments
+			.filter((c) => c.selector)
+			.map((c) => ({ id: c.id, selector: c.selector }));
+		iframeRef.current?.contentWindow?.postMessage(
+			{ type: "diffing-mockup", event: "check-anchors", anchors },
+			"*",
+		);
+	}, [comments]);
 
 	// Only accept probe events from the live iframe contentWindow, carrying the
 	// exact nonce + viewport of the document we served.
@@ -421,6 +525,17 @@ export function MockupReviewApp() {
 				return;
 			if (d.event === "ready") {
 				setSections(d.sections ?? []);
+				setProbeReady(true);
+				sendAnchorCheck();
+				return;
+			}
+			if (d.event === "anchors") {
+				const results = Array.isArray(d.results) ? d.results : [];
+				const missing = new Set<string>();
+				for (const r of results) {
+					if (r && !r.present && typeof r.id === "string") missing.add(r.id);
+				}
+				setStaleIds(missing);
 				return;
 			}
 			if (d.event === "hover") {
@@ -449,7 +564,20 @@ export function MockupReviewApp() {
 		};
 		window.addEventListener("message", onMsg);
 		return () => window.removeEventListener("message", onMsg);
-	}, [active?.id, currentScreenId, viewingVersion, viewportLabel, historical]);
+	}, [
+		active?.id,
+		currentScreenId,
+		viewingVersion,
+		viewportLabel,
+		historical,
+		sendAnchorCheck,
+	]);
+
+	// Re-run the anchor check whenever the scoped comments change on a ready
+	// frame (new comment, viewport/screen switch re-render, etc.).
+	useEffect(() => {
+		if (probeReady) sendAnchorCheck();
+	}, [probeReady, sendAnchorCheck]);
 
 	const pushTool = useCallback(() => {
 		iframeRef.current?.contentWindow?.postMessage(
@@ -509,6 +637,7 @@ export function MockupReviewApp() {
 	}, [commentsRailSheet]);
 
 	const toolTip = (id: Tool, tip: string, key: string): string => {
+		if (viewOnly) return "View only — selection tools are disabled";
 		if (historical) return "Comments are disabled on historical versions";
 		if (id === "section" && sections.length === 0)
 			return "Section — no tagged sections in this screen";
@@ -516,15 +645,13 @@ export function MockupReviewApp() {
 	};
 
 	const toolDisabled = (id: Tool): boolean =>
-		historical || (id === "section" && sections.length === 0);
+		viewOnly || historical || (id === "section" && sections.length === 0);
 
 	if (isLoading || !loaded) {
 		return (
 			<div
 				className="app plan-app skeleton-app"
-				style={
-					{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties
-				}
+				style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
 			>
 				<header className="skeleton-toolbar">
 					<div className="skeleton-item skeleton-logo" />
@@ -545,19 +672,38 @@ export function MockupReviewApp() {
 			soundsEnabled={settings.sounds ?? true}
 		>
 			<div
-				className="app plan-app mockup-app"
+				className={`app plan-app mockup-app ${zen ? "zen-mode" : ""}`}
 				ref={appRef}
-				style={
-					{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties
-				}
+				style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
 			>
+				{zen && (
+					<>
+						<div
+							className="zen-edge zen-edge-top"
+							onMouseEnter={() => setZenReveal("toolbar")}
+						/>
+						<div
+							className="zen-edge zen-edge-left"
+							onMouseEnter={() => setZenReveal("sidebar")}
+						/>
+						<div
+							className="zen-edge zen-edge-right"
+							onMouseEnter={() => setZenReveal("rail")}
+						/>
+					</>
+				)}
 				<div
 					className="sidebar-resize-guide"
 					ref={sidebarGuideRef}
 					aria-hidden="true"
 				/>
 
-				<div className="toolbar plan-app-toolbar" ref={toolbarRef}>
+				<div
+					className={`toolbar plan-app-toolbar ${zen ? (zenReveal === "toolbar" ? "zen-revealed" : "") : ""}`}
+					ref={toolbarRef}
+					onMouseEnter={zen ? () => setZenReveal("toolbar") : undefined}
+					onMouseLeave={zen ? () => setZenReveal(null) : undefined}
+				>
 					<div className="toolbar-left">
 						<button
 							className="toolbar-mobile-toggle"
@@ -594,11 +740,7 @@ export function MockupReviewApp() {
 						</div>
 					</div>
 
-					<div
-						className="plan-view-toggle"
-						role="group"
-						aria-label="Selection tool"
-					>
+					<div className="plan-view-toggle" role="group" aria-label="Selection tool">
 						{TOOL_OPTIONS.map(({ id, label, icon: Icon, tip, key }) => (
 							<Tooltip key={id} content={toolTip(id, tip, key)} side="bottom">
 								<button
@@ -649,6 +791,51 @@ export function MockupReviewApp() {
 								</Tooltip>
 							))}
 						</div>
+						<Tooltip
+							content={
+								viewOnly
+									? "Exit view-only mode (v)"
+									: "View only — interactive mockup, no selection (v)"
+							}
+							side="bottom"
+						>
+							<button
+								type="button"
+								className={`btn btn-sm ${viewOnly ? "btn-active" : ""}`}
+								aria-pressed={viewOnly}
+								title="View only (v)"
+								aria-label={viewOnly ? "Exit view-only mode" : "Enter view-only mode"}
+								onClick={() => setViewOnly((v) => !v)}
+							>
+								<Eye size={14} />
+								<span className="btn-label">{viewOnly ? "Review" : "View only"}</span>
+							</button>
+						</Tooltip>
+						<Tooltip
+							content={
+								zen
+									? "Exit zen mode (z / Esc)"
+									: "Zen mode — full-bleed mockup, auto-hide chrome (z)"
+							}
+							side="bottom"
+						>
+							<button
+								type="button"
+								className={`btn btn-sm ${zen ? "btn-active" : ""}`}
+								aria-pressed={zen}
+								title="Zen mode (z)"
+								aria-label={zen ? "Exit zen mode" : "Enter zen mode"}
+								onClick={() => {
+									const next = !zen;
+									setZen(next);
+									if (next)
+										setToast("Zen mode — hover the edges to reveal panels, Esc to exit");
+								}}
+							>
+								{zen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+								<span className="btn-label">{zen ? "Exit zen" : "Zen"}</span>
+							</button>
+						</Tooltip>
 						<Popover
 							open={settingsOpen}
 							onOpenChange={setSettingsOpen}
@@ -718,7 +905,9 @@ export function MockupReviewApp() {
 				<div className="app-body">
 					<aside
 						ref={sidebarRef}
-						className={`sidebar plan-sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+						className={`sidebar plan-sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${zen ? (zenReveal === "sidebar" ? "zen-revealed" : "") : ""}`}
+						onMouseEnter={zen ? () => setZenReveal("sidebar") : undefined}
+						onMouseLeave={zen ? () => setZenReveal(null) : undefined}
 					>
 						<MockupList
 							mockups={mockups}
@@ -734,7 +923,7 @@ export function MockupReviewApp() {
 							onDelete={removeMockup}
 						/>
 					</aside>
-					{!sidebarCollapsed && (
+					{!zen && !sidebarCollapsed && (
 						<div
 							className="sidebar-resize-handle"
 							onMouseDown={handleSidebarResizeStart}
@@ -742,14 +931,7 @@ export function MockupReviewApp() {
 					)}
 
 					<main className="main plan-main">
-						{!active ? (
-							<div className="plan-review-empty empty-state">
-								<p className="empty-state-title">No mockup selected</p>
-								<p className="empty-state-hint">
-									Submit one with submit_mockup or `diffing mockup submit -`.
-								</p>
-							</div>
-						) : (
+						{active ? (
 							<div className="plan-review">
 								<header className="plan-review-head">
 									<div className="plan-review-head-main">
@@ -766,9 +948,7 @@ export function MockupReviewApp() {
 										</div>
 										<div className="plan-review-meta">
 											{active.versions.length <= 1 ? (
-												<span className="plan-review-chip">
-													v{active.version}
-												</span>
+												<span className="plan-review-chip">v{active.version}</span>
 											) : (
 												<div
 													className={`plan-review-version-switcher ${historical ? "is-historical" : ""}`}
@@ -843,6 +1023,9 @@ export function MockupReviewApp() {
 									title={active.title}
 									srcdoc={srcdoc}
 									viewport={viewport}
+									viewOnly={viewOnly}
+									zen={zen}
+									staleIds={staleIds}
 									comments={comments}
 									frameRef={frameRef}
 									iframeRef={iframeRef}
@@ -898,8 +1081,7 @@ export function MockupReviewApp() {
 									}
 									onThreadReply={(body) =>
 										withSelected(
-											(mockupId, c) =>
-												void addReply({ mockupId, commentId: c.id, body }),
+											(mockupId, c) => void addReply({ mockupId, commentId: c.id, body }),
 										)
 									}
 									onThreadEditReply={(replyId, body) =>
@@ -925,34 +1107,54 @@ export function MockupReviewApp() {
 									}
 								/>
 							</div>
+						) : (
+							<div className="plan-review-empty empty-state">
+								<p className="empty-state-title">No mockup selected</p>
+								<p className="empty-state-hint">
+									Submit one with submit_mockup or `diffing mockup submit -`.
+								</p>
+							</div>
 						)}
 					</main>
 
-					{commentsRailOpen && active && commentsRailSheet && (
+					{!zen && commentsRailOpen && active && commentsRailSheet && (
 						<div
 							className="plan-comments-sheet-backdrop"
 							onClick={() => setCommentsRailOpen(false)}
 							aria-hidden="true"
 						/>
 					)}
-					{commentsRailOpen && active && (
-						<MockupCommentsRail
-							comments={comments}
-							priorVersionOpen={priorVersionOpen}
-							scopedOpenCount={scopedOpenCount}
-							totalOpenCount={totalOpenCount}
-							selectedId={selectedId}
-							onSelect={(id) => {
-								setPending(null);
-								setSelectedId(id);
-							}}
-							onJumpToComment={(c) => {
-								pendingSelectRef.current = c.id;
-								setViewVersion(c.createdAtMockupVersion);
-							}}
-							onClose={() => setCommentsRailOpen(false)}
-							sheet={commentsRailSheet}
-						/>
+					{active && (zen || commentsRailOpen) && (
+						<div
+							className={`mockup-rail-slot ${zen ? (zenReveal === "rail" ? "zen-revealed" : "") : ""}`}
+							onMouseEnter={zen ? () => setZenReveal("rail") : undefined}
+							onMouseLeave={zen ? () => setZenReveal(null) : undefined}
+						>
+							<MockupCommentsRail
+								comments={comments}
+								priorVersionOpen={priorVersionOpen}
+								otherViewportOpen={otherViewportOpen}
+								scopedOpenCount={scopedOpenCount}
+								totalOpenCount={totalOpenCount}
+								selectedId={selectedId}
+								staleIds={staleIds}
+								disabled={viewOnly}
+								onSelect={(id) => {
+									setPending(null);
+									setSelectedId(id);
+								}}
+								onJumpToComment={(c) => {
+									pendingSelectRef.current = c.id;
+									setViewVersion(c.createdAtMockupVersion);
+								}}
+								onJumpToViewport={(c) => {
+									pendingSelectRef.current = c.id;
+									setViewport(VIEWPORT_PX[commentViewport(c)]);
+								}}
+								onClose={() => (zen ? setZenReveal(null) : setCommentsRailOpen(false))}
+								sheet={zen ? false : commentsRailSheet}
+							/>
+						</div>
 					)}
 				</div>
 

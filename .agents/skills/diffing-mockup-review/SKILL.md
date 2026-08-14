@@ -13,6 +13,14 @@ Same loop as plan review: submit HTML screens, park, act on the verdict. Do not 
 
 Prefer MCP inline HTML. If you must use a file, write only under `~/.diffing/<repo>-<hash>/mockup-sources/` and submit that path — never a path inside the git tree.
 
+## Hard rule: one state per screen
+
+**Never build tabs, accordions, toggle switches, modals, dropdowns, or any JS that swaps content inside a mockup screen.** Each distinct state, variant, or case (loading/empty/error, open/closed, selected/unselected, each tab's content, each responsive breakpoint) must be its own `screens[]` entry with a stable `id` and a clear `label`.
+
+This keeps comments tab-aware: every comment anchors to one screen + element, and it vanishes cleanly when that element is gone instead of drifting across toggled states.
+
+**Split efficiently:** submit all states at once via `submit_mockup({ screens: [...] })` (one version bump), or add states incrementally with `revise_mockup op=upsert` per screen. Diffing flags in-page state UI (tabs/accordion/modal/dropdown/toggle) in the submit response — split any flagged screen.
+
 ## Submit
 
 Prefer MCP when `mode: web`:
@@ -56,23 +64,30 @@ Comments: `kind="section"` + `target=` → `data-diffing` region; `kind="block"`
 ## Efficient recipe (changes-requested)
 
 1. **Inspect open comments** — compact, filterable by scope:
+
    ```bash
    diffing mockup inspect comments <id> --status open
    # or MCP inspect_mockup({ mockupId, view: 'comments', status: 'open' })
    ```
+
    `context=none|anchor|source` (default `anchor`); `--version N` / `--viewport V` / `--screen S` filter the scope.
 2. **Inspect one screen's source** (bounded, no full-mockup dump):
+
    ```bash
    diffing mockup inspect screen <id> --screen main --context source
    # or MCP inspect_mockup({ mockupId, view: 'screen', screenId: 'main', context: 'source' })
    ```
+
 3. **Patch one screen** — exact-text replace, version-bumping, `--expected-version` guarded (409 on conflict, nothing applied):
+
    ```bash
    diffing mockup screen patch <id> main --text '<h1>Old</h1>' --replacement '<h1>New</h1>' --expected-version 3
    # or MCP revise_mockup({ mockupId, op: 'patch', screenId, expectedText, replacement, expectedVersion })
    # also: screen upsert|remove — multi-screen changes → resubmit with same mockupId
    ```
+
 4. **Batch reply + resolve** — one atomic call, all-or-nothing, never bumps the version:
+
    ```bash
    diffing mockup threads reply <c1> --body "fixed — resubmitted" --model "…"
    diffing mockup threads resolve <c1>

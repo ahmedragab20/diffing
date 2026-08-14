@@ -42,6 +42,7 @@ import {
 import type { Plan } from "./lib/plan-types.js";
 import type { Mockup } from "./lib/mockup-types.js";
 import { formatMockupReview } from "./lib/mockup-format.js";
+import type { MockupStateHint } from "./lib/mockup-lint.js";
 import type { ReviewComment } from "./lib/types.js";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
@@ -98,9 +99,7 @@ const commentSchema = z.object({
 	status: z.enum(["open", "resolved"]),
 	createdAt: z.number(),
 	/** Optional triage label; omitted / none = untriaged. Emitted on agent handoff XML. */
-	severity: z
-		.enum(["blocking", "nit", "question", "praise", "none"])
-		.optional(),
+	severity: z.enum(["blocking", "nit", "question", "praise", "none"]).optional(),
 	replies: z.array(
 		z.object({
 			id: z.string(),
@@ -332,11 +331,7 @@ function validateMcpDiffValue(name: string, value: string): void {
 			`Unsupported value ${JSON.stringify(value)} for ${name}. Expected one of: ${[...allowed].join(", ")}.`,
 		);
 	}
-	if (
-		name === "--unified" ||
-		name === "--inter-hunk-context" ||
-		name === "-U"
-	) {
+	if (name === "--unified" || name === "--inter-hunk-context" || name === "-U") {
 		boundedMcpInteger(name, value, MAX_MCP_CONTEXT_LINES);
 	}
 	if (["--find-copies", "--find-renames", "-C", "-M"].includes(name)) {
@@ -449,10 +444,8 @@ function expectedBuiltMcpArg(arg: string): string | null {
 	if (attached) {
 		const { name, value } = attached;
 		if (name === "-U") return `--unified=${Number(value)}`;
-		if (name === "-C")
-			return Number(value) === 40 ? "-C" : `-C${Number(value)}`;
-		if (name === "-M")
-			return Number(value) === 50 ? "-M" : `-M${Number(value)}`;
+		if (name === "-C") return Number(value) === 40 ? "-C" : `-C${Number(value)}`;
+		if (name === "-M") return Number(value) === 50 ? "-M" : `-M${Number(value)}`;
 		return arg;
 	}
 
@@ -505,9 +498,7 @@ function validateMcpModifierAnchoring(
 			0,
 			Math.max(
 				0,
-				diffArgs.indexOf("--") === -1
-					? diffArgs.length
-					: diffArgs.indexOf("--"),
+				diffArgs.indexOf("--") === -1 ? diffArgs.length : diffArgs.indexOf("--"),
 			),
 		)
 		.filter((arg) => arg.startsWith("-") && !baseline.has(arg));
@@ -569,8 +560,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 	let selectedLock: ServerLock | null = null;
 
 	function liveLock(): ServerLock | null {
-		if (selectedLock && lockIsAlive(selectedLock, repoRoot))
-			return selectedLock;
+		if (selectedLock && lockIsAlive(selectedLock, repoRoot)) return selectedLock;
 		selectedLock = null;
 		const lock = readLock(repoRoot);
 		return lock && lockIsAlive(lock, repoRoot) ? lock : null;
@@ -839,116 +829,113 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			assertMcpModifiersAreEmitted(normalizedArgs, parsed);
 			const requestedScope = diffScopeKey(parsed);
 
-			const operation = startQueue.then(
-				async (): Promise<SessionStartResult> => {
-					const reuse = (existing: ServerLock): SessionStartResult => {
-						ensureReusableLock(existing);
-						const mode = existing.mode ?? "web";
-						if (mode !== "web") {
-							throw new Error(
-								`A live ${mode} diffing session already owns this repository. ` +
-									"diffing will not replace or stop it; end that session manually before starting a local web review.",
-							);
-						}
-						if (!sameScope(existing, requestedScope, diffArgs)) {
-							throw new Error(
-								"A live diffing web session already shows a different diff scope. " +
-									`Requested arguments: ${JSON.stringify(diffArgs)}. ` +
-									"Use the existing session or end it manually; diffing will not replace it.",
-							);
-						}
-						const url = lockUrl(existing);
-						if (!url)
-							throw new Error(
-								"The active diffing web session has no safe loopback URL.",
-							);
-						selectedLock = existing;
-						return {
-							status: "reused",
-							repository: repoRoot,
-							url,
-							mode: "web",
-							managedBy: existing.owner === "mcp" ? "mcp" : "user",
-							diffArgs: existing.diffArgs ?? diffArgs,
-							nextAction: "Call get_diff to inspect the active diff.",
-						};
-					};
-
-					const beforeLease = liveLock();
-					if (beforeLease) return reuse(beforeLease);
-
-					const lease = acquireStartupLease(repoRoot, ownerId);
-					if (!lease) {
+			const operation = startQueue.then(async (): Promise<SessionStartResult> => {
+				const reuse = (existing: ServerLock): SessionStartResult => {
+					ensureReusableLock(existing);
+					const mode = existing.mode ?? "web";
+					if (mode !== "web") {
 						throw new Error(
-							"Another diffing process is starting a review session for this repository. " +
-								"Retry start_review_session after that startup completes.",
+							`A live ${mode} diffing session already owns this repository. ` +
+								"diffing will not replace or stop it; end that session manually before starting a local web review.",
 						);
 					}
-
-					try {
-						// Cross-process race guard: the lease winner must recheck server.json
-						// because another process may have completed startup before acquisition.
-						const afterLease = liveLock();
-						if (afterLease) return reuse(afterLease);
-
-						const authToken = generateSessionToken();
-						const started = await startServerFn({
-							port: 0,
-							host: "127.0.0.1",
-							clientDir,
-							diffOpts: parsed,
-							security: {
-								bindHost: "127.0.0.1",
-								authToken,
-							},
-						});
-						const lock: ServerLock = {
-							port: started.port,
-							host: "127.0.0.1",
-							pid: process.pid,
-							repoRoot,
-							startedAt: now(),
-							version: MCP_VERSION,
-							mode: "web",
-							scope: requestedScope,
-							diffArgs: [...diffArgs],
-							owner: "mcp",
-							ownerId,
-							sessionId: ownerId,
-							authToken,
-						};
-						try {
-							writeLock(lock);
-						} catch (error) {
-							// startServer currently does not expose a close handle. Never report
-							// success and never leave a lock claiming ownership. The loopback
-							// listener can survive only until this MCP process disconnects.
-							const persisted = readLock(repoRoot);
-							if (persisted?.owner === "mcp" && persisted.ownerId === ownerId) {
-								removeLock(repoRoot);
-							}
-							const detail =
-								error instanceof Error ? error.message : String(error);
-							throw new Error(
-								`The review server bound locally but its discovery lock could not be written: ${detail}. ` +
-									"No MCP session was claimed; retry after fixing lock storage. The unadvertised loopback listener will close when this MCP process exits.",
-							);
-						}
-						selectedLock = lock;
-						return {
-							status: "started",
-							repository: repoRoot,
-							url: lockUrl(lock)!,
-							mode: "web",
-							managedBy: "mcp",
-							diffArgs: [...diffArgs],
-							nextAction: "Call get_diff to inspect the active diff.",
-						};
-					} finally {
-						lease.release();
+					if (!sameScope(existing, requestedScope, diffArgs)) {
+						throw new Error(
+							"A live diffing web session already shows a different diff scope. " +
+								`Requested arguments: ${JSON.stringify(diffArgs)}. ` +
+								"Use the existing session or end it manually; diffing will not replace it.",
+						);
 					}
-				},
-			);
+					const url = lockUrl(existing);
+					if (!url)
+						throw new Error(
+							"The active diffing web session has no safe loopback URL.",
+						);
+					selectedLock = existing;
+					return {
+						status: "reused",
+						repository: repoRoot,
+						url,
+						mode: "web",
+						managedBy: existing.owner === "mcp" ? "mcp" : "user",
+						diffArgs: existing.diffArgs ?? diffArgs,
+						nextAction: "Call get_diff to inspect the active diff.",
+					};
+				};
+
+				const beforeLease = liveLock();
+				if (beforeLease) return reuse(beforeLease);
+
+				const lease = acquireStartupLease(repoRoot, ownerId);
+				if (!lease) {
+					throw new Error(
+						"Another diffing process is starting a review session for this repository. " +
+							"Retry start_review_session after that startup completes.",
+					);
+				}
+
+				try {
+					// Cross-process race guard: the lease winner must recheck server.json
+					// because another process may have completed startup before acquisition.
+					const afterLease = liveLock();
+					if (afterLease) return reuse(afterLease);
+
+					const authToken = generateSessionToken();
+					const started = await startServerFn({
+						port: 0,
+						host: "127.0.0.1",
+						clientDir,
+						diffOpts: parsed,
+						security: {
+							bindHost: "127.0.0.1",
+							authToken,
+						},
+					});
+					const lock: ServerLock = {
+						port: started.port,
+						host: "127.0.0.1",
+						pid: process.pid,
+						repoRoot,
+						startedAt: now(),
+						version: MCP_VERSION,
+						mode: "web",
+						scope: requestedScope,
+						diffArgs: [...diffArgs],
+						owner: "mcp",
+						ownerId,
+						sessionId: ownerId,
+						authToken,
+					};
+					try {
+						writeLock(lock);
+					} catch (error) {
+						// startServer currently does not expose a close handle. Never report
+						// success and never leave a lock claiming ownership. The loopback
+						// listener can survive only until this MCP process disconnects.
+						const persisted = readLock(repoRoot);
+						if (persisted?.owner === "mcp" && persisted.ownerId === ownerId) {
+							removeLock(repoRoot);
+						}
+						const detail = error instanceof Error ? error.message : String(error);
+						throw new Error(
+							`The review server bound locally but its discovery lock could not be written: ${detail}. ` +
+								"No MCP session was claimed; retry after fixing lock storage. The unadvertised loopback listener will close when this MCP process exits.",
+						);
+					}
+					selectedLock = lock;
+					return {
+						status: "started",
+						repository: repoRoot,
+						url: lockUrl(lock)!,
+						mode: "web",
+						managedBy: "mcp",
+						diffArgs: [...diffArgs],
+						nextAction: "Call get_diff to inspect the active diff.",
+					};
+				} finally {
+					lease.release();
+				}
+			});
 
 			startQueue = operation.then(
 				() => undefined,
@@ -998,18 +985,13 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 				binaryFiles: diff.binaryFiles,
 				tabSizeMap: diff.tabSizeMap,
 				untrackedFiles: diff.untrackedFiles,
-				...(typeof diff.showMode === "boolean"
-					? { showMode: diff.showMode }
-					: {}),
+				...(typeof diff.showMode === "boolean" ? { showMode: diff.showMode } : {}),
 				...(Array.isArray(diff.commits) ? { commits: diff.commits } : {}),
 				...(typeof diff.truncated === "number"
 					? { truncated: diff.truncated }
 					: {}),
 			};
-			return textResult(
-				diff.patch || "(The active diff is empty.)",
-				structured,
-			);
+			return textResult(diff.patch || "(The active diff is empty.)", structured);
 		},
 	);
 
@@ -1197,8 +1179,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 				maxBytes: String(maxBytes),
 			});
 			if (path) params.set("path", path);
-			if (generation !== undefined)
-				params.set("generation", String(generation));
+			if (generation !== undefined) params.set("generation", String(generation));
 			const result = await requestSessionJson<Record<string, unknown>>(
 				session,
 				`/api/diff/search?${params}`,
@@ -1491,9 +1472,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 				filePath: z
 					.string()
 					.min(1)
-					.describe(
-						"Repository-relative file path exactly as shown in the patch.",
-					),
+					.describe("Repository-relative file path exactly as shown in the patch."),
 				side: z
 					.enum(["deletions", "additions"])
 					.describe("Which side of the patch contains the target line."),
@@ -1515,10 +1494,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 					.describe(
 						"Target line text (or joined multi-line span), used to preserve context in the review UI.",
 					),
-				body: z
-					.string()
-					.min(1)
-					.describe("Actionable review comment in Markdown."),
+				body: z.string().min(1).describe("Actionable review comment in Markdown."),
 				severity: z
 					.enum(["blocking", "nit", "question", "praise", "none"])
 					.optional()
@@ -1534,9 +1510,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 				...input,
 				// Match HTTP/UI: do not persist bare "none".
 				severity:
-					input.severity && input.severity !== "none"
-						? input.severity
-						: undefined,
+					input.severity && input.severity !== "none" ? input.severity : undefined,
 			};
 			const comment = await requestBaseJson<ReviewComment>("/api/comments", {
 				method: "POST",
@@ -1891,10 +1865,9 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			const data = await requestBaseJson<{
 				rounds: Array<Record<string, unknown>>;
 			}>("/api/review/history");
-			return textResult(
-				`Review history: ${data.rounds?.length ?? 0} round(s).`,
-				{ rounds: data.rounds ?? [] },
-			);
+			return textResult(`Review history: ${data.rounds?.length ?? 0} round(s).`, {
+				rounds: data.rounds ?? [],
+			});
 		},
 	);
 
@@ -1911,10 +1884,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 					.string()
 					.optional()
 					.describe("Stable agent id for multi-agent sessions."),
-				commentId: z
-					.string()
-					.optional()
-					.describe("Related comment id, if any."),
+				commentId: z.string().optional().describe("Related comment id, if any."),
 				pct: z
 					.number()
 					.min(0)
@@ -2014,10 +1984,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 					.string()
 					.optional()
 					.describe("Optional source filename or workflow label."),
-				model: z
-					.string()
-					.optional()
-					.describe("Optional agent/model identifier."),
+				model: z.string().optional().describe("Optional agent/model identifier."),
 				planId: z
 					.string()
 					.optional()
@@ -2301,8 +2268,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 		"reply_to_plan_comment",
 		{
 			title: "Reply to a plan comment",
-			description:
-				"Post an agent reply to an existing inline plan-review thread.",
+			description: "Post an agent reply to an existing inline plan-review thread.",
 			inputSchema: {
 				commentId: z
 					.string()
@@ -2389,7 +2355,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 		{
 			title: "Submit HTML mockup for review",
 			description:
-				"Submit HTML mockup screen(s) for visual review. Pass html or screens[].html inline — do NOT write mockup files into the consumer git tree. Share the URL and park unless asked to wait. Resubmit with mockupId to bump version.",
+				"Submit HTML mockup screen(s) for visual review. HARD RULE — one state per screen: every distinct state, variant, or case MUST be its own screens[] entry (stable id + label). NEVER encode state as in-page tabs, accordions, toggle switches, modals, dropdowns, or any JS content-swapping — each state is a separate screen. Pass html or screens[].html inline — do NOT write mockup files into the consumer git tree. Share the URL and park unless asked to wait. Resubmit with mockupId to bump version.",
 			inputSchema: {
 				title: z.string().optional(),
 				html: z.string().optional(),
@@ -2433,13 +2399,21 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 				`${session.apiOrigin}/mockup/${mockup.id}`,
 				session.lock.authToken,
 			);
+			const hints = (mockup as Mockup & { hints?: MockupStateHint[] }).hints ?? [];
+			const hintText =
+				hints.length > 0
+					? `\n⚠️ In-page state UI detected — split each state into its own screen:\n${hints
+							.map((h) => `  • ${h.screenId}: ${h.patterns.join(", ")}`)
+							.join("\n")}`
+					: "";
 			return textResult(
-				`Submitted mockup ${mockup.id} (v${mockup.version}) at ${url}. ${MOCKUP_SUBMIT_NEXT_ACTION}`,
+				`Submitted mockup ${mockup.id} (v${mockup.version}) at ${url}.${hintText} ${MOCKUP_SUBMIT_NEXT_ACTION}`,
 				{
 					mockupId: mockup.id,
 					version: mockup.version,
 					url,
 					nextAction: MOCKUP_SUBMIT_NEXT_ACTION,
+					...(hints.length > 0 ? { hints } : {}),
 				},
 			);
 		},
@@ -2583,9 +2557,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 	);
 
 	async function findMockupForComment(commentId: string): Promise<Mockup> {
-		const all = await requestBaseJson<Mockup[]>(
-			"/api/mockups?include=comments",
-		);
+		const all = await requestBaseJson<Mockup[]>("/api/mockups?include=comments");
 		const mockup = all.find((m) =>
 			(m.comments ?? []).some((c) => c.id === commentId),
 		);
@@ -2738,20 +2710,27 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 					headers,
 					body: JSON.stringify({ html, label, expectedVersion }),
 				});
+				const hints =
+					(mockup as Mockup & { hints?: MockupStateHint[] }).hints ?? [];
+				const hintText =
+					hints.length > 0
+						? `\n⚠️ In-page state UI detected — split each state into its own screen: ${hints
+								.map((h) => h.patterns.join(", "))
+								.join("; ")}`
+						: "";
 				return textResult(
-					`Upserted screen ${screenId} on ${mockupId} → v${mockup.version}`,
+					`Upserted screen ${screenId} on ${mockupId} → v${mockup.version}.${hintText}`,
 					{
 						mockupId,
 						version: mockup.version,
 						screenIds: mockup.screens.map((s) => s.id),
+						...(hints.length > 0 ? { hints } : {}),
 					},
 				);
 			}
 			if (op === "remove") {
 				const qs =
-					expectedVersion !== undefined
-						? `?expectedVersion=${expectedVersion}`
-						: "";
+					expectedVersion === undefined ? "" : `?expectedVersion=${expectedVersion}`;
 				const mockup = await requestBaseJson<Mockup>(`${base}${qs}`, {
 					method: "DELETE",
 				});

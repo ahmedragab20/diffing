@@ -131,4 +131,25 @@ describe("buildMockupProbeScript", () => {
     expect(script).toMatch(/scrollbar-gutter|scrollbarGutter/);
     expect(script).toContain("stable");
   });
+
+  it("embeds a PASSIVE flag defaulting to false (interactive selection shield on)", () => {
+    const script = buildMockupProbeScript();
+    expect(script).toContain("const PASSIVE = false;");
+  });
+
+  it("passive mode still announces ready and answers check-anchors without the shield", () => {
+    const script = buildMockupProbeScript({ passive: true });
+    expect(script).toContain("const PASSIVE = true;");
+    // Still reports sections/ready so the host can run anchor checks.
+    expect(script).toContain("post('ready'");
+    expect(script).toContain("function announce()");
+    // Anchor presence check: host sends check-anchors, probe replies anchors.
+    expect(script).toContain("check-anchors");
+    expect(script).toContain("post('anchors'");
+    expect(script).toContain("document.querySelector");
+    // Boot path chooses announce over the shield when passive.
+    expect(script).toContain(
+      "const boot = PASSIVE ? announce : installShield;",
+    );
+  });
 });

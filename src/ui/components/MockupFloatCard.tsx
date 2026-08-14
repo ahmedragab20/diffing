@@ -53,6 +53,8 @@ export function MockupFloatCard({
 	const [minimized, setMinimized] = useState(false);
 	const sizeRef = useRef(size);
 	sizeRef.current = size;
+	const posRef = useRef(pos);
+	posRef.current = pos;
 	const dragRef = useRef<{
 		startX: number;
 		startY: number;
@@ -98,20 +100,20 @@ export function MockupFloatCard({
 
 	useEffect(() => {
 		const onResize = () => {
-			setPos((current) => {
-				if (!current) {
-					const next = computeRect(sizeRef.current);
-					return next ? { left: next.left, top: next.top } : null;
-				}
-				const next = clampPanelRect(
-					current.left,
-					current.top,
-					sizeRef.current.width,
-					sizeRef.current.height,
-				);
-				setSize({ width: next.width, height: next.height });
-				return { left: next.left, top: next.top };
-			});
+			const current = posRef.current;
+			if (!current) {
+				const next = computeRect(sizeRef.current);
+				if (next) setPos({ left: next.left, top: next.top });
+				return;
+			}
+			const next = clampPanelRect(
+				current.left,
+				current.top,
+				sizeRef.current.width,
+				sizeRef.current.height,
+			);
+			setSize({ width: next.width, height: next.height });
+			setPos({ left: next.left, top: next.top });
 		};
 		window.addEventListener("resize", onResize);
 		return () => window.removeEventListener("resize", onResize);

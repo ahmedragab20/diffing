@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Mockup, MockupSummary } from "../../../lib/mockup-types";
 import { MockupReviewApp } from "../MockupReviewApp";
@@ -15,9 +15,12 @@ vi.mock("lucide-react", () => {
   for (const name of [
     "ArrowLeft",
     "Bot",
+    "Eye",
     "History",
     "LayoutTemplate",
+    "Maximize2",
     "Menu",
+    "Minimize2",
     "Monitor",
     "MousePointer2",
     "Palette",
@@ -377,6 +380,34 @@ describe("MockupReviewApp", () => {
     });
   });
 
+  it("surfaces other-viewport comments and jumps the canvas viewport on click", async () => {
+    stubFetch();
+    renderApp();
+
+    // the mobile comment (v2, same screen) is listed under other viewports
+    expect(
+      await screen.findByText("Other viewports · open"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("mobile note")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("mobile note"));
+
+    // clicking switches the canvas to the mobile viewport and pins the comment
+    await waitFor(() => {
+      expect(
+        fetchCalls.some(
+          (c) =>
+            c.url.includes("/api/mockups/m1/screens/main/document") &&
+            c.url.includes("viewport=mobile"),
+        ),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      const pin = screen.getByRole("button", { name: /^Comment 1:/ });
+      expect(pin).toHaveAccessibleName(expect.stringContaining("mobile"));
+    });
+  });
+
   it("serves the screen document with version+viewport and validates the nonce on posted events", async () => {
     stubFetch("nonce-1");
     renderApp();
@@ -426,5 +457,38 @@ describe("MockupReviewApp", () => {
         openCommentCount: 4,
       });
     });
+  });
+
+  it("view-only mode disables comments and serves the passive (interactive) document", async () => {
+    stubFetch();
+    renderApp();
+
+    // the scoped comment is pinned in review mode
+    await screen.findByText("1 in view · 4 total");
+    await waitFor(() => {
+      expect(document.querySelectorAll(".mockup-pin")).toHaveLength(1);
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Enter view-only mode" }),
+    );
+
+    // pins are gone and the served document switches to the passive probe
+    await waitFor(() => {
+      expect(document.querySelectorAll(".mockup-pin")).toHaveLength(0);
+    });
+    await waitFor(() => {
+      const docs = fetchCalls.filter((c) =>
+        c.url.includes("/api/mockups/m1/screens/main/document"),
+      );
+      expect(docs.some((d) => d.url.includes("mode=view"))).toBe(true);
+    });
+
+    // rail comment items are disabled (read-only)
+    const items = Array.from(
+      document.querySelectorAll(".plan-comments-rail-item"),
+    );
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) expect(item).toBeDisabled();
   });
 });

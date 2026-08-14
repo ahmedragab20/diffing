@@ -15,6 +15,12 @@ export interface MockupProbeOptions {
   nonce?: string;
   /** Layout width the served document is framed at (drives comment scope). */
   viewport?: MockupViewport;
+  /**
+   * Passive probe: still reports ready/sections and answers anchor checks, but
+   * never installs the pointer-capture shield — the mockup stays interactive
+   * (buttons/links/forms clickable). Used for the view-only canvas mode.
+   */
+  passive?: boolean;
 }
 
 /**
@@ -24,11 +30,13 @@ export interface MockupProbeOptions {
 export function buildMockupProbeScript(opts: MockupProbeOptions = {}): string {
   const nonce = opts.nonce ?? "";
   const viewport = opts.viewport ?? "desktop";
+  const passive = opts.passive === true;
   return `(() => {
   if (window.__diffingMockupProbe) return;
   window.__diffingMockupProbe = true;
   const NONCE = ${JSON.stringify(nonce)};
   const VIEWPORT = ${JSON.stringify(viewport)};
+  const PASSIVE = ${passive};
   const BLOCK = 'H1,H2,H3,H4,H5,H6,BUTTON,A,INPUT,TEXTAREA,SELECT,IMG,LI,P,SECTION,ARTICLE,HEADER,TR,TD,LABEL,NAV,ASIDE,FOOTER,FIGURE';
   let tool = 'block';
   let drag = null;
@@ -229,6 +237,18 @@ export function buildMockupProbeScript(opts: MockupProbeOptions = {}): string {
     const d = ev.data;
     if (!d || d.type !== 'diffing-mockup') return;
     if (d.event === 'set-tool' && d.tool) tool = d.tool;
+    if (d.event === 'check-anchors' && Array.isArray(d.anchors)) {
+      const results = d.anchors.map(function (a) {
+        let present = true;
+        if (a && a.selector) {
+          try { present = !!document.querySelector(a.selector); }
+          catch (_) { present = false; }
+        }
+        return { id: a ? a.id : null, present: present };
+      });
+      post('anchors', { results: results });
+      return;
+    }
   });
 
   function targetAt(ev) {
@@ -308,10 +328,15 @@ export function buildMockupProbeScript(opts: MockupProbeOptions = {}): string {
     post('ready', { sections: sections() });
   }
 
+  function announce() {
+    post('ready', { sections: sections() });
+  }
+
+  const boot = PASSIVE ? announce : installShield;
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', installShield, { once: true });
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
   } else {
-    installShield();
+    boot();
   }
 })();`;
 }

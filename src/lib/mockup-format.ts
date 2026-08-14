@@ -97,6 +97,19 @@ export function formatMockupReview(
 				lines.push(
 					"      Do NOT rely on x/y/rect — those change across screens and viewports.",
 				);
+				lines.push(
+					"      Give each screen's elements stable ids (an id= or a data-diffing= name per",
+				);
+				lines.push(
+					"      section/block) so anchors survive revisions and never drift to a different tab.",
+				);
+				lines.push(
+					"      A comment whose anchor no longer exists in its screen is hidden from the canvas.",
+				);
+				lines.push(
+					"      One state per screen: never use tabs/accordions/toggles/modals/JS content-swapping —",
+				);
+				lines.push("      each variant or case must be a separate screen.");
 				lines.push('    - Only address comments with status="open".');
 				lines.push('    - Optional severity="blocking|nit|question|praise".');
 				lines.push("");
@@ -114,9 +127,7 @@ export function formatMockupReview(
 					'      diffing mockup reply <comment-id> --body "..." --model "<your-model-name>"',
 				);
 				lines.push("      diffing mockup resolve <comment-id>");
-				lines.push(
-					"      diffing mockup submit <file-or-dir> --id <mockup-id>",
-				);
+				lines.push("      diffing mockup submit <file-or-dir> --id <mockup-id>");
 			}
 		} else if (mode === "comment-only") {
 			lines.push(
@@ -129,9 +140,7 @@ export function formatMockupReview(
 	const decidedAttr = mockup.decidedAt
 		? ` decided-at="${new Date(mockup.decidedAt).toISOString()}"`
 		: "";
-	const viewingAttr = isHistorical
-		? ` viewing-version="${viewingVersion}"`
-		: "";
+	const viewingAttr = isHistorical ? ` viewing-version="${viewingVersion}"` : "";
 	const screenIds = (screensToRender ?? []).map((s) => s.id).join(",");
 	lines.push(
 		`  <mockup id="${escapeAttr(mockup.id)}" title="${escapeAttr(titleToRender)}" version="${mockup.version}" screens="${escapeAttr(screenIds)}" decision="${mockup.decision}"${decidedAttr}${viewingAttr}${modeAttr}${screenAttr}${viewportAttr}>`,
@@ -181,12 +190,12 @@ function formatComment(
 	const fingerprintAttr = comment.fingerprint
 		? ` fingerprint="${escapeAttr(comment.fingerprint)}"`
 		: "";
-	const xAttr = comment.x !== undefined ? ` x="${comment.x}%"` : "";
-	const yAttr = comment.y !== undefined ? ` y="${comment.y}%"` : "";
+	const xAttr = comment.x === undefined ? "" : ` x="${comment.x}%"`;
+	const yAttr = comment.y === undefined ? "" : ` y="${comment.y}%"`;
 	const sectionXAttr =
-		comment.sectionX !== undefined ? ` section-x="${comment.sectionX}%"` : "";
+		comment.sectionX === undefined ? "" : ` section-x="${comment.sectionX}%"`;
 	const sectionYAttr =
-		comment.sectionY !== undefined ? ` section-y="${comment.sectionY}%"` : "";
+		comment.sectionY === undefined ? "" : ` section-y="${comment.sectionY}%"`;
 	const parts: string[] = [];
 	parts.push(
 		`      <comment id="${escapeAttr(comment.id)}" kind="${comment.kind}" screen="${escapeAttr(comment.screenId)}"${targetAttr}${selectorAttr}${fingerprintAttr}${xAttr}${yAttr}${sectionXAttr}${sectionYAttr} status="${comment.status}"${severityAttr} created-at="${isoDate}"${versionAttr}${viewportAttr}>`,
@@ -219,9 +228,7 @@ function formatComment(
 		for (const reply of comment.replies) {
 			const replyIsoDate = new Date(reply.createdAt).toISOString();
 			const roleAttr = reply.role ? ` role="${reply.role}"` : ' role="agent"';
-			const modelAttr = reply.model
-				? ` model="${escapeAttr(reply.model)}"`
-				: "";
+			const modelAttr = reply.model ? ` model="${escapeAttr(reply.model)}"` : "";
 			parts.push(
 				`          <reply id="${escapeAttr(reply.id)}" created-at="${replyIsoDate}"${roleAttr}${modelAttr}>`,
 			);

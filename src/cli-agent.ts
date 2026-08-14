@@ -191,12 +191,9 @@ async function awaitReview(args: string[]): Promise<number> {
 	const unregister = async () => {
 		if (!agentId) return;
 		try {
-			await apiFetch(
-				`${base}/api/agent/register/${encodeURIComponent(agentId)}`,
-				{
-					method: "DELETE",
-				},
-			);
+			await apiFetch(`${base}/api/agent/register/${encodeURIComponent(agentId)}`, {
+				method: "DELETE",
+			});
 		} catch {
 			/* ignore */
 		}
@@ -268,9 +265,7 @@ async function reply(args: string[]): Promise<number> {
 		body = (await readStdin()).trim();
 	}
 	if (!body) {
-		console.error(
-			"A reply body is required (--body <text> or pipe via stdin).",
-		);
+		console.error("A reply body is required (--body <text> or pipe via stdin).");
 		return EXIT_USAGE;
 	}
 
@@ -774,7 +769,7 @@ async function planShow(args: string[]): Promise<number> {
 	}
 	const plan = (await res.json()) as Plan;
 	const requestedVersion =
-		values.version !== undefined ? Number(values.version) : undefined;
+		values.version === undefined ? undefined : Number(values.version);
 	if (
 		requestedVersion !== undefined &&
 		(!Number.isFinite(requestedVersion) || requestedVersion < 1)
@@ -783,9 +778,7 @@ async function planShow(args: string[]): Promise<number> {
 		return EXIT_USAGE;
 	}
 	if (requestedVersion !== undefined && requestedVersion !== plan.version) {
-		const ver = (plan.versions ?? []).find(
-			(v) => v.version === requestedVersion,
-		);
+		const ver = (plan.versions ?? []).find((v) => v.version === requestedVersion);
 		if (!ver) {
 			console.error(
 				`Version ${requestedVersion} not found for plan ${planId} (current: v${plan.version}).`,
@@ -888,9 +881,7 @@ async function planReply(args: string[]): Promise<number> {
 		body = (await readStdin()).trim();
 	}
 	if (!body) {
-		console.error(
-			"A reply body is required (--body <text> or pipe via stdin).",
-		);
+		console.error("A reply body is required (--body <text> or pipe via stdin).");
 		return EXIT_USAGE;
 	}
 	const base = baseUrl();
@@ -1170,8 +1161,7 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`);
 	}
 	if (resource === "search") {
 		const queryOption = parsed.values.query;
-		const query =
-			typeof queryOption === "string" ? queryOption : positionalQuery;
+		const query = typeof queryOption === "string" ? queryOption : positionalQuery;
 		if (!query) {
 			console.error("diffing inspect search: provide search text or --query");
 			return EXIT_USAGE;
@@ -1222,8 +1212,7 @@ async function progress(args: string[]): Promise<number> {
 		},
 		allowPositionals: true,
 	});
-	const message =
-		(values.message as string | undefined) || positionals[0] || "";
+	const message = (values.message as string | undefined) || positionals[0] || "";
 	if (!message) {
 		console.error(
 			'Usage: diffing progress --message "Working on comment…" [--model M] [--pct N]',
@@ -1239,7 +1228,7 @@ async function progress(args: string[]): Promise<number> {
 			model: values.model,
 			agentId: values["agent-id"],
 			commentId: values["comment-id"],
-			pct: values.pct != null ? Number(values.pct) : undefined,
+			pct: values.pct == null ? undefined : Number(values.pct),
 		}),
 	});
 	if (!res) return EXIT_NO_SERVER;
@@ -1319,8 +1308,7 @@ async function screensFromCli(
 		const html = (await readStdin()).replace(/\r\n/g, "\n");
 		if (!html.trim())
 			return {
-				error:
-					"A mockup HTML body is required (file, dir, --screen, or stdin).",
+				error: "A mockup HTML body is required (file, dir, --screen, or stdin).",
 			};
 		return { html };
 	}
@@ -1535,7 +1523,7 @@ async function mockupShow(args: string[]): Promise<number> {
 	}
 	const mockup = (await res.json()) as Mockup;
 	const requestedVersion =
-		values.version !== undefined ? Number(values.version) : undefined;
+		values.version === undefined ? undefined : Number(values.version);
 	if (
 		requestedVersion !== undefined &&
 		(!Number.isFinite(requestedVersion) || requestedVersion < 1)
@@ -1605,9 +1593,7 @@ async function mockupReply(args: string[]): Promise<number> {
 		console.error("A reply body is required (--body or stdin).");
 		return EXIT_USAGE;
 	}
-	const listRes = await tryApiFetch(
-		`${baseUrl()}/api/mockups?include=comments`,
-	);
+	const listRes = await tryApiFetch(`${baseUrl()}/api/mockups?include=comments`);
 	if (!listRes) return EXIT_NO_SERVER;
 	const all: Mockup[] = listRes.ok ? await listRes.json() : [];
 	const mockup = all.find((m) =>
@@ -1640,9 +1626,7 @@ async function mockupResolve(args: string[]): Promise<number> {
 		console.error("Usage: diffing mockup resolve <comment-id>");
 		return EXIT_USAGE;
 	}
-	const listRes = await tryApiFetch(
-		`${baseUrl()}/api/mockups?include=comments`,
-	);
+	const listRes = await tryApiFetch(`${baseUrl()}/api/mockups?include=comments`);
 	if (!listRes) return EXIT_NO_SERVER;
 	const all: Mockup[] = listRes.ok ? await listRes.json() : [];
 	const mockup = all.find((m) =>
@@ -1821,10 +1805,7 @@ One-screen revision. Version bumps on success; an --expected-version guard abort
 			html = (await readStdin()).replace(/\r\n/g, "\n");
 		} else {
 			try {
-				html = (await readFile(resolvePath(file), "utf-8")).replace(
-					/\r\n/g,
-					"\n",
-				);
+				html = (await readFile(resolvePath(file), "utf-8")).replace(/\r\n/g, "\n");
 			} catch (err: any) {
 				console.error(`Failed to read ${file}: ${err?.message ?? err}`);
 				return EXIT_USAGE;
@@ -1860,9 +1841,7 @@ One-screen revision. Version bumps on success; an --expected-version guard abort
 
 	if (action === "remove") {
 		const qs =
-			expectedVersion !== undefined
-				? `?expectedVersion=${expectedVersion}`
-				: "";
+			expectedVersion === undefined ? "" : `?expectedVersion=${expectedVersion}`;
 		const res = await tryApiFetch(
 			`${base}/api/mockups/${encodeURIComponent(mockupId)}/screens/${encodeURIComponent(screenId)}${qs}`,
 			{ method: "DELETE" },
@@ -2041,6 +2020,7 @@ async function mockupCommand(args: string[]): Promise<number> {
 Submit HTML mockups for visual review. Same loop as plan review.
 Never write mockup HTML into the consumer git tree. Prefer stdin or MCP inline html.
 Staging files, if needed, go under ~/.diffing/<repo>/mockup-sources/ only.
+One state per screen: never tabs/accordions/toggles/modals/JS content-swapping — each variant is a separate screen.
 
   submit [-] [--title T] [--screen id=path]... [--id ID] [--model M] [--wait]
          # or a path already under ~/.diffing/.../mockup-sources/
