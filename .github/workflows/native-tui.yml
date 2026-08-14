@@ -248,6 +248,8 @@ jobs:
           fetch-depth: 0
       - name: Create release from changelog
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
