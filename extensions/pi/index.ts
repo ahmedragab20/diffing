@@ -817,6 +817,128 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
+		name: "diffing_mockup_submit",
+		label: "Diffing Mockup Submit",
+		description:
+			"Submit HTML mockup screen(s) for visual review. Pass html or a file/dir path. Share the URL and park unless asked to wait.",
+		parameters: Type.Object({
+			html: Type.Optional(
+				Type.String({ description: "Single-screen HTML body." }),
+			),
+			file: Type.Optional(
+				Type.String({ description: "HTML file or directory of screens." }),
+			),
+			title: Type.Optional(Type.String()),
+			mockupId: Type.Optional(
+				Type.String({ description: "Resubmit this id." }),
+			),
+			model: Type.Optional(Type.String()),
+			source: Type.Optional(Type.String()),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const args = ["mockup", "submit"];
+			if (params.file) args.push(params.file);
+			else args.push("-");
+			if (params.title) args.push("--title", params.title);
+			if (params.mockupId) args.push("--id", params.mockupId);
+			if (params.model) args.push("--model", params.model);
+			if (params.source) args.push("--source", params.source);
+			const result = await runDiffing(args, ctx.cwd, {
+				stdin: params.file ? undefined : params.html,
+			});
+			return textResult(describe(result, "diffing mockup submit"), {
+				exitCode: result.exitCode,
+				stderr: result.stderr.trim() || undefined,
+			});
+		},
+	});
+
+	pi.registerTool({
+		name: "diffing_mockup_await",
+		label: "Diffing Mockup Await",
+		description:
+			"Sync wait for a mockup verdict. Prefer park after submit unless asked to wait.",
+		parameters: Type.Object({
+			timeout: Type.Optional(
+				Type.Number({ description: "Seconds to wait. Default 25." }),
+			),
+		}),
+		async execute(_id, params, signal, _onUpdate, ctx) {
+			const timeout = params.timeout ?? 25;
+			const result = await runDiffing(
+				["mockup", "await", "-t", String(timeout)],
+				ctx.cwd,
+				{ signal },
+			);
+			if (result.exitCode === 2) {
+				return textResult(
+					`No mockup verdict within ${timeout}s (park). Share the mockup URL and end your turn.`,
+					{ parked: true, exitCode: result.exitCode },
+				);
+			}
+			return textResult(describe(result, "diffing mockup await"), {
+				parked: false,
+				exitCode: result.exitCode,
+				stderr: result.stderr.trim() || undefined,
+			});
+		},
+	});
+
+	pi.registerTool({
+		name: "diffing_mockup_reply",
+		label: "Diffing Mockup Reply",
+		description: "Reply to a mockup comment thread.",
+		parameters: Type.Object({
+			commentId: Type.String(),
+			body: Type.String(),
+			model: Type.Optional(Type.String()),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const result = await runDiffing(
+				[
+					"mockup",
+					"reply",
+					params.commentId,
+					"-",
+					"--model",
+					modelName(ctx, params.model),
+				],
+				ctx.cwd,
+				{ stdin: params.body },
+			);
+			return textResult(
+				describe(result, `diffing mockup reply ${params.commentId}`),
+				{
+					exitCode: result.exitCode,
+					stderr: result.stderr.trim() || undefined,
+				},
+			);
+		},
+	});
+
+	pi.registerTool({
+		name: "diffing_mockup_resolve",
+		label: "Diffing Mockup Resolve",
+		description: "Mark a mockup comment resolved.",
+		parameters: Type.Object({
+			commentId: Type.String(),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const result = await runDiffing(
+				["mockup", "resolve", params.commentId],
+				ctx.cwd,
+			);
+			return textResult(
+				describe(result, `diffing mockup resolve ${params.commentId}`),
+				{
+					exitCode: result.exitCode,
+					stderr: result.stderr.trim() || undefined,
+				},
+			);
+		},
+	});
+
+	pi.registerTool({
 		name: "diffing_url",
 		label: "Diffing URL",
 		description:

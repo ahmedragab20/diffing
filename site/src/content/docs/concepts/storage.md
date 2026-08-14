@@ -23,6 +23,8 @@ server.json
 sessions/
 comments.json
 plans.json
+mockups.json
+mockup-sources/         # mirrors each submitted screen: <id>/<screen>.html
 plan-sources/
 attachments/
 fff/                 # search frecency + history DBs

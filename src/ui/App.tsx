@@ -242,7 +242,9 @@ export function App() {
 		try {
 			const stored = getUiStateItem("diffing-sidebar-collapsed");
 			if (stored != null) return stored === "true";
-		} catch {}
+		} catch {
+			/* ignore persist / parse errors */
+		}
 		return typeof window !== "undefined" && window.innerWidth <= 768;
 	});
 	const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -258,7 +260,9 @@ export function App() {
 	useEffect(() => {
 		try {
 			setUiStateItem(DIFF_UI.zenMode, String(zenMode));
-		} catch {}
+		} catch {
+			/* ignore persist / parse errors */
+		}
 	}, [zenMode]);
 	/** Applied multi-select extensions (normalized). Empty = show all. */
 	const [appliedExtensions, setAppliedExtensions] = useState<string[]>(() => {
@@ -285,7 +289,9 @@ export function App() {
 			) {
 				return stored;
 			}
-		} catch {}
+		} catch {
+			/* ignore persist / parse errors */
+		}
 		return "all";
 	});
 	useEffect(() => {
@@ -361,7 +367,9 @@ export function App() {
 			setSidebarWidth(latestWidth);
 			try {
 				setUiStateItem("diffing-sidebar-width", String(latestWidth));
-			} catch {}
+			} catch {
+				/* ignore persist / parse errors */
+			}
 			document.removeEventListener("mousemove", handleMove);
 			document.removeEventListener("mouseup", handleUp);
 			document.body.style.cursor = "";
@@ -456,7 +464,9 @@ export function App() {
 			setCommentPanelHeight(latestHeight);
 			try {
 				setUiStateItem("diffing-comment-panel-height", String(latestHeight));
-			} catch {}
+			} catch {
+				/* ignore persist / parse errors */
+			}
 			document.removeEventListener("mousemove", handleMove);
 			document.removeEventListener("mouseup", handleUp);
 			document.body.style.cursor = "";
@@ -475,7 +485,9 @@ export function App() {
 				"diffing-comment-panel-height",
 				String(commentPanelHeight),
 			);
-		} catch {}
+		} catch {
+			/* ignore persist / parse errors */
+		}
 	}, [commentPanelHeight]);
 	const { viewedFiles, setViewed } = useViewed();
 	const diffViewerRef = useRef<HTMLDivElement>(null);
@@ -483,7 +495,9 @@ export function App() {
 	useEffect(() => {
 		try {
 			setUiStateItem("diffing-sidebar-collapsed", String(sidebarCollapsed));
-		} catch {}
+		} catch {
+			/* ignore persist / parse errors */
+		}
 	}, [sidebarCollapsed]);
 
 	const untrackedSet = useMemo(() => new Set(untrackedFiles), [untrackedFiles]);
@@ -1402,6 +1416,7 @@ export function App() {
 							pendingPlanCount={pendingPlanCount}
 							lastSend={lastSend}
 							onOpenPlans={() => navigate("/plan")}
+							onOpenMockups={() => navigate("/mockup")}
 							diffStyle={settings.diffStyle}
 							diffOptions={diffOptions}
 							defaultTabSize={settings.defaultTabSize}

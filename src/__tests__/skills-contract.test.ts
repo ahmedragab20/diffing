@@ -23,6 +23,7 @@ describe('published agent skills', () => {
     expect(published).toEqual([
       'diffing',
       'diffing-finish-review',
+      'diffing-mockup-review',
       'diffing-plan-review',
       'diffing-pr-address',
       'diffing-pr-read',

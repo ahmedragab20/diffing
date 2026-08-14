@@ -114,6 +114,22 @@ function renderPlan(open = true) {
   )
 }
 
+function renderMockup(
+  overrides: Partial<React.ComponentProps<typeof SubmitPlanReviewPopover>> = {},
+) {
+  return render(
+    <SubmitPlanReviewPopover
+      kind="mockup"
+      openCommentCount={0}
+      onSubmit={noop as any}
+      submitting={false}
+      agentWaiting={false}
+      currentDecision="pending"
+      {...overrides}
+    />
+  )
+}
+
 function renderGitHub(open = true, comments: any[] = [], onSubmitted?: (result: any) => void) {
   return render(
     <Wrapper>
@@ -261,6 +277,44 @@ describe('SubmitPlanReviewPopover', () => {
     await user.click(buttons[3])
     expect(mockUiStateSet).toHaveBeenCalledWith(SUBMIT_PANEL_SIZE_KEY, '760')
     expect(mockUiStateSet).toHaveBeenCalledWith(SUBMIT_PANEL_WIDTH_KEY, '640')
+  })
+})
+
+describe('SubmitPlanReviewPopover mockup mode', () => {
+  it('titles the panel “Submit mockup review”', () => {
+    renderMockup()
+    expect(screen.getByText('Submit mockup review')).toBeInTheDocument()
+  })
+
+  it('words the verdict descriptions with the mockup noun', () => {
+    renderMockup()
+    expect(
+      screen.getByText('The mockup looks good — the agent should proceed.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('The agent should revise the mockup and resubmit it.'),
+    ).toBeInTheDocument()
+  })
+
+  it('reports scoped vs total open counts when scopedOpenCount is provided', () => {
+    renderMockup({ openCommentCount: 5, scopedOpenCount: 2 })
+    expect(screen.getByText('2 open in view · 5 open total')).toBeInTheDocument()
+  })
+
+  it('falls back to the plural comment count without a scoped count', () => {
+    renderMockup({ openCommentCount: 3 })
+    expect(screen.getByText('3 open comments')).toBeInTheDocument()
+  })
+
+  it('omits the count entirely when there are no open comments', () => {
+    renderMockup({ openCommentCount: 0, scopedOpenCount: 0 })
+    expect(screen.queryByText(/open in view/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/open comments/)).not.toBeInTheDocument()
+  })
+
+  it('labels an already-decided mockup as an update', () => {
+    renderMockup({ currentDecision: 'approved' })
+    expect(screen.getByText('Update mockup review')).toBeInTheDocument()
   })
 })
 

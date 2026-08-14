@@ -17,6 +17,8 @@ diffing sessions           # List/select/stop concurrent review sessions
 diffing url                # Get server base URL (port-agnostic discovery)
 diffing plan submit PLAN.md --model "<model>"  # Submit plan for review
 diffing plan await         # Sync wait for verdict (prefer park after submit)
+diffing mockup submit page.html --model "<model>"  # Submit HTML mockup
+diffing mockup await       # Sync wait for mockup verdict (prefer park after submit)
 diffing await-review       # Sync wait for Send to agent (prefer park when later)
 diffing comments --open              # Dump open review comments as XML
 diffing comments --format md         # Markdown export
@@ -39,6 +41,7 @@ Load a skill when your task matches its trigger. All skills live in `.agents/ski
 | ------- | ---------------------- |
 | `diffing` | Route any diffing request to the strongest available MCP, CLI, or offline workflow |
 | `diffing-plan-review` | Submitting a markdown plan for human review before non-trivial work; awaiting verdict; replying/resolving plan comments |
+| `diffing-mockup-review` | Submitting HTML mockups for visual review; awaiting verdict; replying/resolving mockup comments |
 | `diffing-review` | Performing a code review of local git changes; fetching diff/comments; posting inline comments; applying suggestions |
 | `diffing-start-review` | Launching the diffing server so a human can review changes in the browser |
 | `diffing-finish-review` | Waiting for human handoff ("Send to agent"), applying requested changes, resolving comments |
@@ -133,6 +136,23 @@ crates/
 
 ---
 
+## Mockup Review (Reference)
+
+See `diffing-mockup-review` skill. Same verdicts as plans. Comment scope = **version + screen + viewport** (`desktop|tablet|mobile`). Storage: `mockups.json` + `mockup-sources/<id>/`.
+Never write mockup HTML into the consumer repo — submit inline (`submit_mockup({ html })`) or stdin.
+
+```bash
+printf '%s' "$html" | diffing mockup submit - --title T --model M
+diffing mockup await [--timeout]
+diffing mockup list|show|versions
+diffing mockup inspect <summary|comments|comment|screen> [<id>] [--status open] [--screen S] [--viewport V] [--version N] [--context none|anchor|source]
+diffing mockup screen <upsert|remove|patch> <id> <screen-id> [--file P|--text T --replacement R] [--expected-version N]
+diffing mockup threads <reply|edit|delete|resolve|unresolve> <comment-id> [<reply-id>] [--body "…"]
+```
+
+Open `/mockup/<id>`. Comments are `section` / `block` / `point`; handoff XML is compact and open-only (`mockup-version=`/`viewport=` on each comment).
+Bounded inspect → one-screen patch (`--expected-version` guarded, 409 on conflict) → atomic `threads` batch for replies/resolves.
+
 ## Plan Review (Reference)
 
 See `diffing-plan-review` skill for full API, flags, examples, MCP tools.
@@ -191,6 +211,7 @@ Diff: `get_diff`, `diff_summary`, `diff_files`, `diff_hunks`, `diff_slice`, `dif
 Comments: `create_comment` (path, side, line/range, body, optional **severity**), `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment`, `edit_comment`, `delete_comment`, `apply_suggestion`, `resolve_all_comments`, `edit_reply`, `delete_reply`  
 Loop: `await_review`, `report_progress`, `get_review_history`  
 Plan: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment`
+Mockup: `submit_mockup`, `await_mockup_review`, `list_mockups`, `get_mockup`, `get_mockup_versions`, `get_mockup_version`, `inspect_mockup`, `revise_mockup`, `update_mockup_threads`, `reply_to_mockup_comment`, `resolve_mockup_comment`
 
 ### HTTP API (for posting comments, applying suggestions)
 
@@ -218,8 +239,8 @@ GET    /api/review/history        # Multi-round handoff history
 
 ## Keep the Project Clean
 
-THE CONSUMER PROJECT MUST STAY CLEAN. Never add scratch files (plans, notes, drafts, temp scripts, .diffing/ directories) to the project root or any tracked directory. All agent working files — **including implementation plans** — must live under `~/.diffing/`, which is outside the consumer project entirely.
+THE CONSUMER PROJECT MUST STAY CLEAN. Never add scratch files (plans, notes, drafts, temp scripts, HTML mockups, .diffing/ directories) to the project root or any tracked directory. All agent working files — **including implementation plans and HTML mockups** — must live under `~/.diffing/`, which is outside the consumer project entirely.
 
-If a file is not part of the shipped product, it does not belong in the user's source tree. Write plans, notes, experiments, and agent scratch to `~/.diffing/<repo>/plan-sources/` or pipe them on stdin. Nothing goes in the working tree.
+If a file is not part of the shipped product, it does not belong in the user's source tree. Write plans to `~/.diffing/<repo>/plan-sources/`, never write mockup HTML into the repo (use MCP `submit_mockup({ html })` or stdin), and keep other scratch under `~/.diffing/`. Nothing goes in the working tree.
 
 **This product tree is not a foreign plan host.** Agents must not `cd` into the diffing product checkout to submit, start, or await plans for other repositories. Prefer MCP `submit_plan` with inline `body`; otherwise run `diffing plan` from the consumer workspace. MCP “bound to …/diffing” names where the server runs — it is not an instruction to change cwd here for foreign work.

@@ -1,7 +1,7 @@
 ---
 title: MCP tools
-description: All 37 Model Context Protocol tools exposed by diffing mcp.
-summary: Session, bounded diff inspect, comments, plan review, and GitHub PR tools over stdio MCP.
+description: All 48 Model Context Protocol tools exposed by diffing mcp.
+summary: Session, bounded diff inspect, comments, plan review, mockup review, and GitHub PR tools over stdio MCP.
 order: 2
 section: reference
 ---
@@ -26,7 +26,7 @@ Client snippet:
 }
 ```
 
-Successful calls return readable text plus schema-validated `structuredContent`. Count verified against `src/mcp.ts` `registerTool` (**37** tools).
+Successful calls return readable text plus schema-validated `structuredContent`. Count verified against `src/mcp.ts` `registerTool` (**48** tools).
 
 ## Session
 
@@ -77,6 +77,24 @@ Prefer bounded tools over `get_diff` for large trees.
 | `reply_to_plan_comment` | Reply |
 | `resolve_plan_comment` | Resolve thread |
 
+## Mockup review
+
+| Tool | Purpose |
+|------|---------|
+| `submit_mockup` | Submit HTML screen(s) (async park default) |
+| `await_mockup_review` | Sync wait for verdict |
+| `list_mockups` | All mockups (compact summaries) |
+| `get_mockup` | One mockup + comments/screens (full body — prefer `inspect_mockup`) |
+| `get_mockup_versions` | Version metadata |
+| `get_mockup_version` | Historical version body |
+| `inspect_mockup` | **Bounded reads** — `view=summary/comments/comment/screen`, filters by `status`/`screenId`/`viewport` (`desktop`\|`tablet`\|`mobile`)/`version`, `context=none\|anchor\|source`, `cursor`/`limit` |
+| `revise_mockup` | One-screen revision — `op=upsert/remove/patch` with `expectedVersion` guard (409 on conflict) |
+| `update_mockup_threads` | **Atomic thread batch** — reply/edit/delete/resolve/unresolve in one all-or-nothing call; never bumps the version |
+| `reply_to_mockup_comment` | Reply (single op) |
+| `resolve_mockup_comment` | Resolve thread (single op) |
+
+Comment scope = version + screen + viewport: pass `viewport`/`version` filters to `inspect_mockup`, and expect `mockup-version=`/`viewport=` on handoff comments.
+
 ## GitHub PR
 
 | Tool | Purpose |
@@ -91,7 +109,7 @@ Prefer bounded tools over `get_diff` for large trees.
 
 ## Await semantics
 
-`await_review` / `await_plan_review` return `status: "released" | "timeout"`. Timeout includes `disposition: "park"` and `nextAction` — **end the turn**, do not silent-loop.
+`await_review` / `await_plan_review` / `await_mockup_review` return `status: "released" | "timeout"`. Timeout includes `disposition: "park"` and `nextAction` — **end the turn**, do not silent-loop.
 
 | Mode | When | Action |
 |------|------|--------|

@@ -22,64 +22,68 @@
  * each hold their own socket.
  */
 
-import { liveEventSourceUrl } from './session-auth.js'
+import { liveEventSourceUrl } from "./session-auth.js";
 
 export type LiveEvent =
-  | 'change'
-  | 'comments'
-  | 'agent-status'
-  | 'plans'
-  | 'plan-review-status'
-  | 'viewed'
-  | 'heartbeat'
+	| "change"
+	| "comments"
+	| "agent-status"
+	| "plans"
+	| "plan-review-status"
+	| "mockups"
+	| "mockup-review-status"
+	| "pr-session"
+	| "agent-progress"
+	| "viewed"
+	| "heartbeat";
 
-type Handler = (data: string) => void
+type Handler = (data: string) => void;
 
-const handlers = new Map<LiveEvent, Set<Handler>>()
-let source: EventSource | null = null
+const handlers = new Map<LiveEvent, Set<Handler>>();
+let source: EventSource | null = null;
 
 function ensureConnected() {
-  if (source || typeof EventSource === 'undefined') return
-  source = new EventSource(liveEventSourceUrl())
-  for (const event of handlers.keys()) {
-    attach(event)
-  }
+	if (source || typeof EventSource === "undefined") return;
+	source = new EventSource(liveEventSourceUrl());
+	for (const event of handlers.keys()) {
+		attach(event);
+	}
 }
 
 function attach(event: LiveEvent) {
-  source?.addEventListener(event, (e) => {
-    const data = (e as MessageEvent).data as string
-    for (const handler of handlers.get(event) ?? []) {
-      try {
-        handler(data)
-      } catch (err) {
-        console.error(`live channel handler for "${event}" threw:`, err)
-      }
-    }
-  })
+	source?.addEventListener(event, (e) => {
+		const data = (e as MessageEvent).data as string;
+		for (const handler of handlers.get(event) ?? []) {
+			try {
+				handler(data);
+			} catch (err) {
+				console.error(`live channel handler for "${event}" threw:`, err);
+			}
+		}
+	});
 }
 
 function maybeDisconnect() {
-  const empty = [...handlers.values()].every((set) => set.size === 0)
-  if (empty && source) {
-    source.close()
-    source = null
-  }
+	const empty = [...handlers.values()].every((set) => set.size === 0);
+	if (empty && source) {
+		source.close();
+		source = null;
+	}
 }
 
 /** Subscribe to a named live event. Returns an unsubscribe function. */
 export function subscribeLive(event: LiveEvent, handler: Handler): () => void {
-  let set = handlers.get(event)
-  if (!set) {
-    set = new Set()
-    handlers.set(event, set)
-    if (source) attach(event)
-  }
-  set.add(handler)
-  ensureConnected()
+	let set = handlers.get(event);
+	if (!set) {
+		set = new Set();
+		handlers.set(event, set);
+		if (source) attach(event);
+	}
+	set.add(handler);
+	ensureConnected();
 
-  return () => {
-    set!.delete(handler)
-    maybeDisconnect()
-  }
+	return () => {
+		set!.delete(handler);
+		maybeDisconnect();
+	};
 }

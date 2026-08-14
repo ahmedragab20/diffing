@@ -179,6 +179,7 @@ A specialized suite of subcommands is integrated into the `diffing` binary to co
 | `url` | Active server base URL |
 | `sessions …` | List, select, open, and stop live sessions |
 | `plan …` | Plan-review loop (see §4b) |
+| `mockup …` | Mockup-review loop (see §4b2) |
 | `gh …` | GitHub PR automation (see §4c) |
 | `mcp` | Stdio MCP server (see §5) |
 | `inspect …` | Bounded web, TUI, or PR diff reads (see below) |
@@ -566,6 +567,195 @@ The browser plan surface (`/plan`, `/plan/:id`) is the human half of this loop:
 - **Verdict** — Approve / Request changes / Reject / Comment only via **Submit review** (releases `plan await`).
 
 Keep agent plan sources under `~/.diffing/<repo>/plan-sources/` — never in the consumer project tree.
+
+---
+
+## 4b2. Mockup-Review Subcommands
+
+### Mockup review
+
+`diffing mockup <action>` is the **mockup-review** twin of plan review: an
+agent submits HTML screen(s), the human pins comments on the rendered mockup
+in the browser, and the agent acts on the verdict. Same verdict vocabulary as
+plans (`approved` / `changes-requested` / `rejected` / `comment-only` /
+`pending`) and the same async-default posture — submit, share the URL, park;
+use `--wait` / `mockup await` only for short sync waits.
+
+Agents must **never write mockup HTML into the consumer git tree**. Prefer MCP
+`submit_mockup({ html })` or stdin. A path is only for files already under
+`~/.diffing/<repo>/mockup-sources/`. Submitting a path inside the repo prints a warning.
+
+```bash
+printf '%s' "$html" | diffing mockup submit - --title T --model M
+diffing mockup submit - [--title T] [--id ID] [--model M] [--source S] [--wait] [--timeout N]
+diffing mockup await [--timeout N]
+diffing mockup list|show|versions
+```
+
+- `submit` — prefer `-` / stdin for a single Main screen. A file or directory
+  is accepted only as a convenience; agents must not create those files in the
+  repo. A directory of `*.html` becomes one screen per file (`index.html` first);
+  `--screen id=path` adds explicit screens (ids are slugified to
+  `^[a-z0-9][a-z0-9_-]{0,63}$`). `--title` labels the mockup, `--source` /
+  `--model` record its origin, `--id` resubmits a revision (version++,
+  verdict reset to `pending`), and `--wait` blocks for the verdict. Prints
+  the mockup id on stdout and the review URL (`/mockup/<id>`) on stderr.
+- `await` — **sync** wait for a verdict; prints the `<mockup-review>` XML.
+- `list` / `show` / `versions` — browse mockups (`--json` for raw data;
+  `show --version <n>` prints a historical body).
+
+### Comment scope
+
+Every comment is scoped to **version + screen + viewport** — the mockup
+version it was anchored on, the screen, and the layout width at click time
+(`desktop` | `tablet` | `mobile`). Legacy comments without a viewport anchor
+on `desktop`. Handoff XML and inspect filters use the same scope, so a
+comment is only ever addressed in the exact view where it was written.
+
+### `mockup inspect` — bounded reads
+
+Read compact, paginated mockup data without transferring screen HTML:
+
+```bash
+diffing mockup inspect <summary|comments|comment|screen> [<id>] [options] [--pretty]
+  summary  [<id>]                                   # version, decision, counts (byViewport)
+  comments [<id>] [--status open|resolved] [--screen S] [--viewport desktop|tablet|mobile] [--version N] [--cursor N] [--limit N] [--context none|anchor|source]
+  comment  [<id>] --id <comment-id> [--context none|anchor|source]
+  screen   [<id>] [--version N] [--screen S] [--cursor N] [--limit N] [--context source]
+```
+
+- `context` — `none` (metadata only), `anchor` (adds `target=`/`selector=`/
+  `x`/`y`/`section-x`/`section-y`/`fingerprint`/`html`, default), or `source`
+  (adds `contextHtml`, and full `html` for `view=screen`).
+- `comments` filters by comment scope: `status`, `screen`, `viewport`, and
+  `version` (`createdAtMockupVersion`). Bodies truncate at 400 chars; page
+  with `cursor`/`limit` (`nextCursor`).
+- Omit `<id>` to target the latest mockup.
+
+### `mockup screen` — one-screen revision
+
+Upsert, remove, or exact-text-patch a **single** screen. Every success bumps
+`version`; pass `--expected-version N` to guard against racing edits — a
+mismatch aborts with 409 and nothing is applied (error names the current
+version so you can retry). For multi-screen revisions, resubmit with `--id`.
+
+```bash
+diffing mockup screen upsert <id> <screen-id> --file <path> [--label L] [--expected-version N]   # --file - = stdin
+diffing mockup screen remove <id> <screen-id> [--expected-version N]                            # refuses to drop the last screen
+diffing mockup screen patch  <id> <screen-id> --text <exact-text> --replacement <new-text> [--expected-version N]
+```
+
+`patch` replaces the **first literal** occurrence of `--text` and reports how
+many exact matches existed before patching; 0 matches → 409
+(`exact-text-not-found`).
+
+### `mockup threads` — atomic thread batch
+
+One call, one all-or-nothing batch: every op is validated before any is
+applied, so a bad op aborts the whole batch with no changes. Thread ops
+**never** bump the mockup version (they don't change the design).
+
+```bash
+diffing mockup threads reply <comment-id> --body "…" [--model M] [--id mockup-id]
+diffing mockup threads edit <comment-id> [<reply-id>] --body "…"   # reply-id → edit the reply, else the comment body
+diffing mockup threads delete <comment-id> [<reply-id>]             # reply-id → delete the reply, else the comment
+diffing mockup threads resolve <comment-id>
+diffing mockup threads unresolve <comment-id>
+```
+
+Prefer `threads` over `reply`/`resolve` for multi-op responses — one request
+posts replies and flips resolutions atomically. (`mockup reply` / `mockup
+resolve` remain as single-op conveniences; the owning mockup is resolved
+automatically.)
+
+### Efficient agent recipe
+
+For a `changes-requested` verdict, read + patch + close in four bounded
+steps:
+
+```bash
+# 1. open comments scoped to the current version (compact)
+diffing mockup inspect comments <id> --status open
+# 2. exact source of one screen (context=source adds full html)
+diffing mockup inspect screen <id> --screen main --context source
+# 3. patch one screen (--expected-version guards concurrent edits)
+diffing mockup screen patch <id> main --text '<h1>Old</h1>' --replacement '<h1>New</h1>' --expected-version 3
+# 4. atomic batch: reply to each thread + resolve
+printf '%s' '{"operations":[{"op":"reply","commentId":"…","body":"fixed"},{"op":"resolve","commentId":"…"}]}' | \
+  curl -s -X POST "$(diffing url)/api/mockups/<id>/threads/batch" -H 'content-type: application/json' -d @-
+# or one command per op: diffing mockup threads reply … / threads resolve …
+```
+
+### Storage
+
+Mockups are kept under the per-repo storage dir — never in the consumer
+project tree:
+
+```text
+~/.diffing/<repo-name>-<hash>/
+├── mockups.json                      # records: screens, comments, verdicts, versions
+└── mockup-sources/<id>/<screen>.html # mirror of each submitted screen
+```
+
+Every submitted screen is mirrored to `mockup-sources/<id>/`, so the HTML
+sources stay available for resubmission without polluting the working tree.
+`GET /api/mockups` returns compact summaries by default; `?include=comments`
+adds threads (used by the single-op lookup helpers) and `?include=full`
+returns the raw records — use them only for compatibility.
+
+### Mockup review UI (web)
+
+The browser surface (`/mockup/<id>`) renders each screen in an iframe; a
+selection probe is injected on serve (the stored source is never mutated):
+
+- **Scope** — viewport toggle (desktop / tablet / mobile) plus screen tabs
+  with per-screen open counts; comments are pinned only for the exact
+  version + screen + viewport being viewed. `1`/`2`/`3` pick section / block /
+  pin tools, `c` toggles the comments rail, `[`/`]` cycle screens.
+- **Anchored comments** — `section` (a `[data-diffing]` region via `target=`),
+  `block` (a computed CSS `selector=` + section-relative `fingerprint=` that
+  survives edits elsewhere in the section), or **pin** (`point` at x/y percent
+  coordinates). Optional severity `blocking` | `nit` | `question` | `praise`.
+- **Threads** — collapsible comment cards with replies, edit/delete, resolve;
+  anchors survive resubmission (`createdAtMockupVersion`).
+- **Resizable rails** — left mockup list and right comments rail both drag to
+  resize (widths persisted per repo); the rail collapses to a bottom sheet on
+  narrow windows. Rail shows scoped threads plus an explicit **prior-version
+  unresolved** history group that jumps the version switcher (never pinned on
+  the current canvas). Comments are disabled on historical versions.
+- **Version history** — version switcher in the header; historical versions
+  render read-only with a banner.
+- **Submit review** — Approve / Request changes / Reject / Comment only, same
+  verdicts as plans; the popover reports scoped open count vs total and
+  releases `mockup await`. A `comment-only` submit marks mode in the handoff.
+
+### Mockup review XML
+
+`<mockup-review>` is the mockup twin of `<plan-review>`. The default handoff
+is **compact and open-only**: only `status="open"` comments on the current
+version (plus the submit-time focused `screen=`/`viewport=`), terse attrs,
+no instruction block, no markup payload. Each `<comment>` carries
+`kind="section|block|point"`, `screen="<id>"`, `mockup-version="<n>"`,
+`viewport="desktop|tablet|mobile"`, and its anchor fields (`target=`,
+`selector=`, `fingerprint=`, `section-x=`/`section-y=` percents).
+`x=`/`y=`/`rect` are viewport-relative and unstable across screens — locate
+the spot via the markup from `inspect_mockup` / `mockup inspect` instead.
+Expanded context (instruction block plus `<location>` with `<html>` /
+`<context-html>` / `<snapshot>`) is opt-in via the formatter's
+`instructions` option; historical views add `viewing-version=`:
+
+```xml
+<mockup-review>
+  <mockup id="…" title="…" version="2" screens="main,settings" decision="changes-requested">
+    <decision-summary>…</decision-summary>
+    <comments>
+      <comment id="…" kind="section" screen="main" target="hero" status="open" severity="blocking" mockup-version="2" viewport="desktop">
+        <body><![CDATA[…]]></body>
+      </comment>
+    </comments>
+  </mockup>
+</mockup-review>
+```
 
 ---
 

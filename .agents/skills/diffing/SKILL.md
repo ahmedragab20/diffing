@@ -21,7 +21,7 @@ Authoritative reference: repository `docs/cli.md`, root `AGENTS.md`, and the cur
 Use the strongest available integration without asking the user to choose plumbing:
 
 1. **Native diffing MCP tools**: call `review_session_status` first and follow its `mode` / `nextAction`. Call `start_review_session` only when no compatible session exists; it starts a loopback web session, not the TUI.
-2. **Shell CLI**: run `diffing` commands from the **consumer** target repository; commands discover the active port via `server.json`. Use `diffing sessions` to manage concurrent web/TUI/PR sessions. For plans, stdin or `~/.diffing/<consumer>/plan-sources/` only — not the diffing product checkout.
+2. **Shell CLI**: run `diffing` commands from the **consumer** target repository; commands discover the active port via `server.json`. Use `diffing sessions` to manage concurrent web/TUI/PR sessions. For plans, stdin or `~/.diffing/<consumer>/plan-sources/` only. For mockups, MCP inline `html` or stdin — never write mockup files into the consumer tree.
 3. **Loopback HTTP**: use the URL from `diffing url` only when the needed operation has no MCP/CLI mirror. Keep TUI capabilities secret.
 4. **Offline handoff**: act on pasted `<code-review-comments>` or `<plan-review>` XML when live tools are unavailable.
 
@@ -47,7 +47,7 @@ diffing sessions stop <id>|active|all   # explicit lifecycle action
 ## Branch on session mode
 
 | Mode | Valid agent path |
-|------|------------------|
+| ------ | ------------------ |
 | `none` | Start a loopback web session with MCP `start_review_session`, or CLI `diffing --web --no-open`. |
 | `web` | Prefer bounded `diff_*` inspection; all local comment, handoff, history, progress, suggestion, and plan tools are available. |
 | `tui` | Use bounded `diff_*` inspection. Available review operations are create/list/edit/delete comment, reply, resolve/unresolve, and await. No browser UI, plan API, progress/history, bulk resolve, suggestion apply, or reply edit/delete. |
@@ -75,43 +75,46 @@ The CLI mirror works in web, TUI, and PR sessions: `diffing inspect summary|file
 ## Route by intent
 
 | Intent | Skill / workflow |
-|--------|------------------|
+| -------- | ------------------ |
 | Open the UI or send changes to the human | `diffing-start-review` |
 | Review local changes or a GitHub PR and create findings | `diffing-review` |
 | Read or summarize a GitHub PR token-efficiently | `diffing-pr-read` |
 | Turn PR feedback into an approved local implementation | `diffing-pr-address` |
 | Wait for human code-review feedback and address it | `diffing-finish-review` |
 | Get a plan approved before implementation | `diffing-plan-review` |
+| Submit HTML mockups for visual review | `diffing-mockup-review` |
 
 If the harness does not expose named skills, apply those workflows from this router and the MCP tool descriptions.
 
 ## MCP tool map (current)
 
 | Area | Tools |
-|------|-------|
+| ------ | ------- |
 | Session | `review_session_status`, `start_review_session` |
 | Diff | `get_diff`, `diff_summary`, `diff_files`, `diff_hunks`, `diff_slice`, `diff_search` |
 | Comments | `create_comment` (path, side, line/range, body, optional **severity**), `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment`, `edit_comment`, `delete_comment`, `edit_reply`, `delete_reply`, `apply_suggestion`, `resolve_all_comments` |
 | Loop | `await_review`, `report_progress`, `get_review_history` |
 | Plan | `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment` |
+| Mockup | `submit_mockup`, `await_mockup_review`, `list_mockups`, `get_mockup`, `get_mockup_versions`, `get_mockup_version`, `inspect_mockup` (bounded reads by status/screen/viewport/version), `revise_mockup` (one-screen upsert/remove/patch + expectedVersion), `update_mockup_threads` (atomic reply/edit/delete/resolve/unresolve batch), `reply_to_mockup_comment`, `resolve_mockup_comment` |
 | GitHub PR | `gh_overview`, `gh_list_threads`, `gh_list_reviews`, `gh_list_draft_comments`, `gh_create_draft_comment`, `gh_refresh`, `gh_submit_review` |
 
 MCP also advertises workflow prompts `review_local_changes` and `submit_plan_for_review`, plus resource `diffing://agent-guide`. They aid discovery but do not replace the focused skills or tool schemas.
 
 ## Complete CLI map
 
-| Need | Command |
+|Need|Command|
 |------|---------|
-| Start/review a diff | `diffing [--web|--terminal|--tui] [--host H] [--port N] [--no-open] [git-diff args] [revisions] [-- paths…]` |
-| Commit-series UI | `diffing show <revspec>... [-- paths…]` |
-| MCP server | `diffing mcp --repo <absolute-path>` |
-| Wait/snapshot | `diffing await-review`; `diffing comments [--open] [--format xml|json|md]` |
-| Reply/lifecycle | `diffing reply`; `resolve`; `unresolve`; `comment edit|delete` |
-| Human-visible status | `diffing progress --message "…" [--pct N] [--comment-id ID] [--agent-id ID]` |
-| Plan gate | `diffing plan submit|await|list|show|versions|reply|resolve` |
-| GitHub PR | `diffing "gh pr <ref>"`; `diffing gh status|overview|threads|reviews|pr-fetch|pr-list-comments|pr-review` |
-| Bounded diff reads | `diffing inspect summary|files|hunks|slice|search` |
-| Discovery/DX | `diffing url`; `sessions [list] [--json]`; `sessions use <id>`; `sessions open [<id>|active]`; `sessions stop|kill <id>|active|all`; `mode [web|tui]`; `doctor`; `completion bash|zsh|fish`; `update` |
+|Start/review a diff|`diffing [--web|--terminal|--tui] [--host H] [--port N] [--no-open] [git-diff args] [revisions] [-- paths…]`|
+|Commit-series UI|`diffing show <revspec>... [-- paths…]`|
+|MCP server|`diffing mcp --repo <absolute-path>`|
+|Wait/snapshot|`diffing await-review`; `diffing comments [--open] [--format xml|json|md]`|
+|Reply/lifecycle|`diffing reply`; `resolve`; `unresolve`; `comment edit|delete`|
+|Human-visible status|`diffing progress --message "…" [--pct N] [--comment-id ID] [--agent-id ID]`|
+|Plan gate|`diffing plan submit|await|list|show|versions|reply|resolve`|
+|Mockup gate|`diffing mockup submit|await|list|show|versions`; `mockup inspect <summary|comments|comment|screen> [--status|--screen|--viewport|--version|--context]`; `mockup screen <upsert|remove|patch> … [--expected-version]`; `mockup threads <reply|edit|delete|resolve|unresolve> …`|
+|GitHub PR|`diffing "gh pr <ref>"`; `diffing gh status|overview|threads|reviews|pr-fetch|pr-list-comments|pr-review`|
+|Bounded diff reads|`diffing inspect summary|files|hunks|slice|search`|
+|Discovery/DX|`diffing url`; `sessions [list] [--json]`; `sessions use <id>`; `sessions open [<id>|active]`;`sessions stop|kill <id>|active|all`;`mode [web|tui]`;`doctor`;`completion bash|zsh|fish`;`update`|
 
 Use `diffing --help` and `docs/cli.md` for the full git-compatible option set and exact exit codes. Prefer stdin for long Markdown bodies/replies. `comment delete`, `delete_comment`, `delete_reply`, and GitHub publication are destructive or externally visible; use them only when the request clearly authorizes them.
 
@@ -131,7 +134,7 @@ Use CLI/MCP/API operations instead of editing `comments.json`, `plans.json`, or 
 Shared by code review and plan review agent XML:
 
 | Field | Notes |
-|-------|--------|
+| ------- | -------- |
 | Line / range | `line="N"` or inclusive `line="A-B"` (`startLineNumber`–`lineNumber`) |
 | Side (diff only) | `additions` \| `deletions` |
 | Severity (optional) | `blocking` \| `nit` \| `question` \| `praise`; omit = untriaged |
@@ -152,5 +155,5 @@ UI supports multi-line selection, range adjust, collapsible threads, and severit
 - A plan may be implemented only after **`approved`**; revise the same plan ID on **`changes-requested`**; stop on **`rejected`**.
 - Send replies/resolutions as work completes so the human UI stays live; await another round only when the user wants the loop to continue.
 - In web mode, prefer `report_progress` / `diffing progress` for long-running apply work so the human sees a toast.
-- Keep agent scratch (plans, notes) under `~/.diffing/`, never in the consumer project tree.
+- Keep agent scratch (plans, notes, HTML mockups) under `~/.diffing/`, never in the consumer project tree. Never write a mockup `.html` into the user's repo.
 - **Plans:** prefer MCP `submit_plan` with inline `body`. MCP binding to the product repo is not cwd. If MCP `--repo` mismatches the consumer, use CLI in the consumer — never `cd` into the product to “fix” repo scope.
