@@ -1,3 +1,10 @@
+## 0.18.1
+
+### Patch Changes
+
+- a30b665: Virtualize diff rendering and mockup review
+- dd0cd6e: Set GH_TOKEN for create-release job
+
 ## 0.18.0
 
 ### Minor Changes
