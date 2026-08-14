@@ -1,3 +1,10 @@
+## 0.18.0
+
+### Minor Changes
+
+- 5ac01f1: Add full mockup review loop to the pi extension
+- db2da16: Redesign mockup review for agents
+
 ## 0.17.0
 
 ### Minor Changes
