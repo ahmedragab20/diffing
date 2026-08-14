@@ -43,7 +43,7 @@ pi install git:github.com/ahmedragab20/diffing
 pi install npm:diffing
 ```
 
-The extension lives at `extensions/pi/index.ts` and registers 18 `diffing_*` tools mirroring the MCP catalog — status, start_review, comments, reply/resolve/unresolve, progress, await_review, plan submit/await/list/show/reply/resolve, url, sessions, gh_overview, and a CLI escape hatch. It also adds a `/diffing` command that opens or reuses the review UI and a footer status widget showing the active review session.
+The extension lives at `extensions/pi/index.ts` and registers 28 `diffing_*` tools mirroring the MCP catalog — status, start_review, comments, reply/resolve/unresolve, progress, await_review, plan submit/await/list/show/reply/resolve, mockup submit/await/list/show/versions/inspect/screen/threads/reply/resolve, url, sessions, gh_overview, and a CLI escape hatch. It also adds a `/diffing` command that opens or reuses the review UI and a footer status widget showing the active review session.
 
 > **Note:** When pi runs inside the diffing repo itself, `~/.agents/skills/diffing*` should be symlinks to `.agents/skills/*`. pi dedupes skills by realpath, so symlinked entries merge silently with the repo's project skills; the extension self-heals these links to avoid skill-collision warnings.
 
@@ -75,7 +75,7 @@ No port in the config. Repository is `--repo` or the git root of the MCP process
 2. `start_review_session` — only when needed (idempotent; never replaces user sessions)
 3. Then diff inspect, comments, plan, or `gh_*` as appropriate
 
-See [MCP tools](/docs/reference/mcp/) for the full 37-tool catalog.
+See [MCP tools](/docs/reference/mcp/) for the full 48-tool catalog.
 
 ## Doctor & completions
 
