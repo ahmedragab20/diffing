@@ -36,7 +36,7 @@ export function MockupScreenTabs({
             <span>{s.label}</span>
             {n > 0 && (
               <span
-                className="plan-review-chip mockup-screen-tab-count"
+                className="mockup-screen-tab-count"
                 aria-label={`${n} open`}
               >
                 {n}

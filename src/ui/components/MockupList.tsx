@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PanelLeftClose, PanelLeftOpen, Search, Trash2 } from "lucide-react";
+import { Palette, PanelLeftClose, PanelLeftOpen, Plus, Search, Trash2 } from "lucide-react";
 import type { MockupDecision, MockupSummary } from "../../lib/mockup-types";
 import { timeAgo } from "../utils";
 import { Tooltip } from "../primitives/Tooltip";
@@ -13,6 +13,9 @@ export interface MockupListProps {
 	onToggle: () => void;
 	onSelect: (id: string) => void;
 	onDelete: (id: string) => void;
+	systemActive?: boolean;
+	onSelectSystem?: () => void;
+	onNewMockup?: () => void;
 }
 
 export function MockupList({
@@ -22,6 +25,9 @@ export function MockupList({
 	onToggle,
 	onSelect,
 	onDelete,
+	systemActive,
+	onSelectSystem,
+	onNewMockup,
 }: MockupListProps) {
 	const [filter, setFilter] = useState("");
 	const [decisionFilter, setDecisionFilter] = useState<"all" | MockupDecision>(
@@ -122,7 +128,41 @@ export function MockupList({
 							? `${mockups.length} mockup${mockups.length === 1 ? "" : "s"}`
 							: `${filtered.length} of ${mockups.length}`}
 					</span>
+					{onNewMockup && (
+						<button
+							type="button"
+							className="plan-list-new"
+							onClick={onNewMockup}
+							title="New mockup"
+						>
+							<Plus size={12} />
+							New
+						</button>
+					)}
 				</div>
+				{onSelectSystem && (
+					<div
+						className={`plan-list-item ${systemActive ? "plan-list-item-active" : ""}`}
+						onClick={onSelectSystem}
+						role="button"
+						tabIndex={0}
+						aria-current={systemActive ? "true" : undefined}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" || e.key === " ") {
+								e.preventDefault();
+								onSelectSystem();
+							}
+						}}
+					>
+						<div className="plan-list-item-top">
+							<span className="plan-badge plan-badge-dot">
+								<Palette size={11} aria-hidden="true" />
+							</span>
+							<span className="plan-list-item-title">Design system</span>
+						</div>
+						<div className="plan-list-item-sub">Tokens, components, guidelines</div>
+					</div>
+				)}
 				{filtered.length === 0 && (
 					<div className="plan-list-empty">
 						{filter || decisionFilter !== "all"
@@ -132,9 +172,11 @@ export function MockupList({
 				)}
 				<div className="plan-list-items">
 					{filtered.map((m) => {
-						const meta = DECISION_META[m.decision];
+						const meta =
+							DECISION_META[m.decision] ?? DECISION_META.pending;
 						const Icon = meta.icon;
-						const open = m.commentCounts.open;
+						const open = m.commentCounts?.open ?? 0;
+						const screenCount = m.screens?.length ?? 0;
 						return (
 							<div
 								key={m.id}
@@ -173,7 +215,7 @@ export function MockupList({
 									</button>
 								</div>
 								<div className="plan-list-item-sub">
-									{m.screens.length} screen{m.screens.length === 1 ? "" : "s"}
+									{screenCount} screen{screenCount === 1 ? "" : "s"}
 									{open > 0 ? ` · ${open} open` : ""}
 									{m.model ? ` · ${m.model}` : ""}
 									{" · "}

@@ -173,6 +173,12 @@ interface CommentFormProps {
   onCancel: () => void
   /** Hide severity control (e.g. reply-only contexts). Default true for new comments. */
   showSeverity?: boolean
+  /**
+   * Explicit focus-on-open for floating composers (mockup canvas popups). The
+   * click that opened the popup may have landed inside an iframe, so focus is
+   * retried a beat later to win any late refocus race.
+   */
+  autoFocus?: boolean
 }
 
 export function CommentForm({
@@ -186,6 +192,7 @@ export function CommentForm({
   onSubmit,
   onCancel,
   showSeverity = true,
+  autoFocus = false,
 }: CommentFormProps) {
   const { haptic, sound } = useFeedback()
   const { settings, updateSettings } = useSettings()
@@ -233,6 +240,28 @@ export function CommentForm({
       previewRef.current?.focus()
     }
   }, [activeTab])
+
+  // Focus-on-open for floating popups. Runs after paint and retries once so a
+  // slow iframe refocus cannot steal the field.
+  useEffect(() => {
+    if (!autoFocus) return
+    let cancelled = false
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return
+      textareaRef.current?.focus()
+    })
+    const retry = setTimeout(() => {
+      if (cancelled) return
+      if (document.activeElement !== textareaRef.current) {
+        textareaRef.current?.focus()
+      }
+    }, 200)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+      clearTimeout(retry)
+    }
+  }, [autoFocus])
 
   useEffect(() => {
     if (draftKey) {

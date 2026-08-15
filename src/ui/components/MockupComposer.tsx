@@ -43,6 +43,7 @@ export function MockupComposer({
           lineLabel={hitLabel(pending)}
           lineContent={pending.snapshot}
           showSeverity
+          autoFocus
           onSubmit={onSubmit}
           onCancel={onCancel}
         />

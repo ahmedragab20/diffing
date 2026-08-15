@@ -32,6 +32,7 @@ export type LiveEvent =
 	| "plan-review-status"
 	| "mockups"
 	| "mockup-review-status"
+	| "design-system"
 	| "pr-session"
 	| "agent-progress"
 	| "viewed"

@@ -48,6 +48,17 @@ vi.mock("lucide-react", () => {
     "User",
     "MessagesSquare",
     "PanelRightClose",
+    "Plus",
+    "Sun",
+    "Moon",
+    "Terminal",
+    "HelpCircle",
+    "ChevronLeft",
+    "Navigation",
+    "Keyboard",
+    "MousePointer2",
+    "GitCommit",
+    "PencilLine",
   ]) {
     icons[name] = () => <svg data-testid={`lucide-${name}`} />;
   }
@@ -430,6 +441,28 @@ describe("MockupReviewApp", () => {
 
     // a posted event with the served nonce opens the composer
     postProbeEvent("click", "nonce-1");
+    // sandboxed srcdoc windows may not strictly equal contentWindow —
+    // nonce identity is enough
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          type: "diffing-mockup",
+          event: "click",
+          nonce: "nonce-1",
+          viewport: "desktop",
+          kind: "block",
+          selector: "h1.title",
+          x: 20,
+          y: 20,
+        },
+        source: window,
+      }),
+    );
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Commenting on block · h1.title",
+      }),
+    ).toBeInTheDocument();
     expect(
       await screen.findByRole("dialog", {
         name: "Commenting on block · button.pay",
@@ -490,5 +523,175 @@ describe("MockupReviewApp", () => {
     );
     expect(items.length).toBeGreaterThan(0);
     for (const item of items) expect(item).toBeDisabled();
+  });
+
+  it("aligns screen tabs with the actions card and keeps edit/comment icon-only", async () => {
+    stubFetch();
+    renderApp();
+
+    await waitFor(() => {
+      expect(document.querySelector(".plan-review-meta-stat")?.textContent).toContain(
+        "2 screens",
+      );
+    });
+
+    // Tabs + actions share one header row.
+    const row = document.querySelector(".plan-review-head-row");
+    expect(row).not.toBeNull();
+    expect(row!.querySelector(".mockup-screen-tabs")).not.toBeNull();
+    expect(row!.querySelector(".plan-review-head-actions")).not.toBeNull();
+
+    // A dot separates the viewport picker from the action buttons.
+    expect(document.querySelector(".mockup-action-dot")).not.toBeNull();
+    const actions = document.querySelector(".plan-review-head-actions")!;
+    const viewportGroup = actions.querySelector(".mockup-viewport-picker");
+    const dot = actions.querySelector(".mockup-action-dot");
+    const editBtn = actions.querySelector('[aria-label="Edit screen HTML"]');
+    const commentsBtn = actions.querySelector(
+      '[aria-label="Toggle comments map"]',
+    );
+    expect(
+      viewportGroup!.compareDocumentPosition(dot!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      dot!.compareDocumentPosition(editBtn!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      editBtn!.compareDocumentPosition(commentsBtn!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // Icon-only buttons: no text labels inside.
+    for (const btn of [editBtn, commentsBtn]) {
+      expect(btn!.classList.contains("plan-icon-btn")).toBe(true);
+      expect(btn!.querySelector(".btn-label")).toBeNull();
+      expect(btn!.textContent).not.toContain("Edit");
+      expect(btn!.textContent).not.toContain("Comments");
+    }
+  });
+
+  it("shows version comparison side by side with a draggable split divider", async () => {
+    stubFetch();
+    renderApp();
+
+    await waitFor(() => {
+      expect(document.querySelector(".plan-review-meta-stat")?.textContent).toContain(
+        "2 screens",
+      );
+    });
+
+    // Compare off by default: single canvas, no split.
+    expect(document.querySelector(".mockup-compare-split.is-split")).toBeNull();
+
+    // The second select is the compare select (options start with Compare off).
+    const selects = screen.getAllByTestId("version-select");
+    expect(selects.length).toBeGreaterThanOrEqual(2);
+    fireEvent.change(selects[1], { target: { value: "1" } });
+
+    await waitFor(() => {
+      expect(document.querySelector(".mockup-compare-split.is-split")).not.toBeNull();
+    });
+    // Divider is keyboard-accessible and labeled.
+    const separator = screen.getByRole("separator", {
+      name: "Resize current and compared mockup panes",
+    });
+    expect(separator).toHaveAttribute("aria-orientation", "vertical");
+    expect(separator).toHaveAttribute("aria-valuenow", "50");
+    // Two frames side by side: the live canvas + the compare version.
+    expect(document.querySelectorAll(".mockup-iframe")).toHaveLength(1);
+    expect(document.querySelectorAll(".mockup-compare-frame")).toHaveLength(1);
+
+    // Turning compare back off restores the single canvas.
+    fireEvent.change(selects[1], { target: { value: "off" } });
+    await waitFor(() => {
+      expect(document.querySelector(".mockup-compare-split.is-split")).toBeNull();
+    });
+  });
+
+  it("sizes the frame to the full document height reported by the probe", async () => {
+    stubFetch("nonce-1");
+    renderApp();
+
+    // wait for the iframe to be handed the served doc
+    await waitFor(() => {
+      const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+      expect(iframe.getAttribute("srcdoc")).toContain("<h1>Hi</h1>");
+    });
+
+    // probe reports the document height on ready — the frame must grow to it
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          type: "diffing-mockup",
+          event: "ready",
+          nonce: "nonce-1",
+          viewport: "desktop",
+          sections: [],
+          height: 640,
+        },
+        source: window,
+      }),
+    );
+    await waitFor(() => {
+      const frame = document.querySelector(".mockup-frame") as HTMLElement;
+      expect(frame.style.height).toBe("640px");
+    });
+
+    // late load/resize height updates keep it in sync
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          type: "diffing-mockup",
+          event: "height",
+          nonce: "nonce-1",
+          viewport: "desktop",
+          height: 812,
+        },
+        source: window,
+      }),
+    );
+    await waitFor(() => {
+      const frame = document.querySelector(".mockup-frame") as HTMLElement;
+      expect(frame.style.height).toBe("812px");
+    });
+  });
+
+  it("opens the shortcuts guide with cmd+? and toggles zen from the keymap", async () => {
+    stubFetch();
+    renderApp();
+
+    await waitFor(() => {
+      expect(document.querySelector(".plan-review-meta-stat")?.textContent).toContain(
+        "2 screens",
+      );
+    });
+
+    fireEvent.keyDown(window, { key: "?", metaKey: true });
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Keyboard shortcuts",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Mockup Review Shortcuts" }),
+    ).toBeInTheDocument();
+
+    // Esc closes the dialog (base-ui Dialog handles it).
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Keyboard shortcuts" }),
+      ).not.toBeInTheDocument();
+    });
+
+    // z toggles zen from the keymap.
+    fireEvent.keyDown(window, { key: "z" });
+    await waitFor(() => {
+      expect(document.querySelector(".zen-mode")).not.toBeNull();
+    });
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => {
+      expect(document.querySelector(".zen-mode")).toBeNull();
+    });
   });
 });

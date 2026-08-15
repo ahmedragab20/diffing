@@ -59,4 +59,23 @@ describe('MockupScreenTabs', () => {
     fireEvent.click(screen.getAllByRole('tab')[1])
     expect(onSelect).toHaveBeenCalledWith('checkout')
   })
+
+  it('centers double- and triple-digit counts in the badge without wrapping', () => {
+    render(
+      <MockupScreenTabs
+        screens={screens}
+        activeScreenId="main"
+        openCounts={{ main: 12, checkout: 123 }}
+        onSelect={vi.fn()}
+      />,
+    )
+    const twelve = screen.getByLabelText('12 open')
+    const hundredTwentyThree = screen.getByLabelText('123 open')
+    expect(twelve.textContent).toBe('12')
+    expect(hundredTwentyThree.textContent).toBe('123')
+    // Badge keeps the count chip class and renders the full number.
+    for (const badge of [twelve, hundredTwentyThree]) {
+      expect(badge).toHaveClass('mockup-screen-tab-count')
+    }
+  })
 })

@@ -32,6 +32,9 @@ export interface MockupCanvasProps {
         title: string;
         srcdoc: string;
         viewport: ViewportPx;
+        /** Full height of the served document (px) — frame sizes to it so tall
+         *  pages scroll in the stage instead of clipping at the viewport. */
+        frameHeight?: number | null;
         /** View-only: interactive mockup (no selection shield) — pins stay, outlines don't. */
         viewOnly?: boolean;
         /** Zen: full-bleed frame (no padding / max-width). */
@@ -107,6 +110,7 @@ export function MockupCanvas({
         title,
         srcdoc,
         viewport,
+        frameHeight = null,
         viewOnly = false,
         zen = false,
         staleIds,
@@ -142,6 +146,9 @@ export function MockupCanvas({
                                         width: zen
                                                 ? "100%"
                                                 : Math.min(viewport, 1600),
+                                        height: frameHeight
+                                                ? `${frameHeight}px`
+                                                : "100%",
                                 }}
                         >
                                 {srcdoc ? (

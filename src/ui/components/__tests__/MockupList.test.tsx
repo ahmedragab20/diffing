@@ -14,6 +14,8 @@ vi.mock('lucide-react', () => ({
   Search: () => <svg />,
   PanelLeftClose: () => <svg />,
   PanelLeftOpen: () => <svg />,
+  Palette: () => <svg />,
+  Plus: () => <svg />,
   AlertTriangle: () => <svg />,
   Loader2: () => <svg />,
 }))
@@ -128,6 +130,20 @@ describe('MockupList', () => {
     const dialog = screen.getByRole('alertdialog', { name: 'Delete mockup?' })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
     expect(onDelete).toHaveBeenCalledWith('m1')
+  })
+
+  it('renders rows even when commentCounts is missing', () => {
+    renderList({
+      mockups: [
+        summary({
+          id: 'legacy',
+          title: 'Legacy mockup',
+          commentCounts: undefined as unknown as MockupSummary['commentCounts'],
+        }),
+      ],
+    })
+    expect(screen.getByText('Legacy mockup')).toBeInTheDocument()
+    expect(screen.getByText('1 screen · 2h ago')).toBeInTheDocument()
   })
 
   it('collapses to just the expand toggle', () => {

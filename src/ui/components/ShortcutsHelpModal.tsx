@@ -1,12 +1,12 @@
 import { memo } from 'react'
-import { X, Keyboard, Navigation, Eye, MessageSquare, GitCommit } from 'lucide-react'
+import { X, Keyboard, Navigation, Eye, MessageSquare, GitCommit, MousePointer2 } from 'lucide-react'
 import { Modal } from '../primitives/Modal'
 import { BrandMark } from './BrandMark'
 
 interface ShortcutsHelpModalProps {
   isOpen: boolean
   onClose: () => void
-  mode?: 'diff' | 'plan' | 'pr'
+  mode?: 'diff' | 'plan' | 'pr' | 'mockup'
 }
 
 interface ShortcutItem {
@@ -233,13 +233,95 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
         }
       : category)
 
-  const categories = mode === 'plan' ? planCategories : mode === 'pr' ? prCategories : diffCategories
+  const mockupCategories: ShortcutCategory[] = [
+    {
+      title: 'Scrolling & Content',
+      icon: <Navigation size={15} />,
+      items: [
+        { keys: ['j'], description: 'Scroll Down slightly (mockup stage)' },
+        { keys: ['k'], description: 'Scroll Up slightly (mockup stage)' },
+        { keys: ['Ctrl', 'd'], description: 'Scroll Down half page' },
+        { keys: ['Ctrl', 'u'], description: 'Scroll Up half page' },
+        { keys: ['g', 'g'], description: 'Scroll to Top of the mockup' },
+        { keys: ['G'], description: 'Scroll to Bottom of the mockup' },
+      ],
+    },
+    {
+      title: 'Mockup Navigation',
+      icon: <Keyboard size={15} />,
+      items: [
+        { keys: ['J'], description: 'Jump to Next Mockup in list' },
+        { keys: ['K'], description: 'Jump to Previous Mockup in list' },
+        { keys: [']'], description: 'Next Screen tab' },
+        { keys: ['['], description: 'Previous Screen tab' },
+        { keys: ['b'], description: 'Toggle Mockup List sidebar collapse' },
+      ],
+    },
+    {
+      title: 'Tools & Viewport',
+      icon: <MousePointer2 size={15} />,
+      items: [
+        { keys: ['1'], description: 'Section tool — click a tagged region' },
+        { keys: ['2'], description: 'Block tool — click any element' },
+        { keys: ['3'], description: 'Pin tool — drop a point comment' },
+        { keys: ['UI'], description: 'Viewport icons (desktop · tablet · mobile) scope comments' },
+      ],
+    },
+    {
+      title: 'Views & Layout',
+      icon: <Eye size={15} />,
+      items: [
+        { keys: ['v'], description: 'Toggle View only — interactive mockup, no selection' },
+        { keys: ['z'], description: 'Toggle Zen mode — full-screen mockup, no chrome' },
+        { keys: ['Esc'], description: 'Exit Zen mode (or close an open thread / composer)' },
+        { keys: ['e'], description: 'Toggle Edit HTML for the current screen' },
+        { keys: ['c'], description: 'Toggle Comments map sidebar (right rail)' },
+        { keys: ['drag'], description: 'Compare mode: drag the center divider to resize panes' },
+        { keys: ['dbl-click'], description: 'Compare mode: double-click divider to reset 50/50' },
+        { keys: ['←', '→'], description: 'Compare mode: focus divider, nudge width ±2%' },
+      ],
+    },
+    {
+      title: 'Review & Comments',
+      icon: <MessageSquare size={15} />,
+      items: [
+        { keys: ['click'], description: 'Click the mockup to open a new comment (draft persists)' },
+        { keys: ['UI'], description: 'Pin or rail entry opens the comment thread' },
+        { keys: ['Esc'], description: 'Dismiss thread / cancel pending comment' },
+        { keys: ['⌘', 'Enter'], description: 'In the comment field: submit' },
+        { keys: ['UI'], description: 'Thread: Reply · Edit · Resolve · Unresolve · Delete' },
+        { keys: ['UI'], description: 'Versions: Compare select opens the side-by-side split' },
+      ],
+    },
+    {
+      title: 'Dialogs & Settings',
+      icon: <Keyboard size={15} />,
+      items: [
+        { keys: ['?'], description: 'Open Keyboard Shortcuts Guide' },
+        { keys: ['⌘', '?'], description: 'Open Keyboard Shortcuts Guide' },
+        { keys: ['⌘', ','], description: 'Open Settings' },
+        { keys: ['g', 't'], description: 'Open Theme Selection Modal' },
+        { keys: ['Esc'], description: 'Close dialog / this guide' },
+      ],
+    },
+  ]
+
+  const categories =
+    mode === 'plan'
+      ? planCategories
+      : mode === 'pr'
+        ? prCategories
+        : mode === 'mockup'
+          ? mockupCategories
+          : diffCategories
   const intro =
     mode === 'plan'
       ? 'Vim-style keybindings for plan review. Cycle Source / Read / Split with m, jump plans with J/K, and comment from line selection or text highlight.'
       : mode === 'pr'
         ? 'The same Vim-style diff keybindings used by local review, scoped to GitHub PR navigation, formatting, search, and comments.'
-      : 'Vim-style keybindings for reviewing diffs. Jump files with J/K, walk commits with [ / ], open search with ⌘K, and toggle Zen mode with z.'
+        : mode === 'mockup'
+          ? 'Vim-style keybindings for mockup review. Click the mockup to comment, 1/2/3 switch tools, v toggles view-only, z toggles full-screen zen, and J/K jump between mockups.'
+          : 'Vim-style keybindings for reviewing diffs. Jump files with J/K, walk commits with [ / ], open search with ⌘K, and toggle Zen mode with z.'
 
   return (
     <Modal open={isOpen} onClose={onClose} className="shortcuts-modal" ariaLabel="Keyboard shortcuts">
@@ -247,7 +329,13 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
         <div className="shortcuts-header-title">
           <BrandMark size={22} className="shortcuts-mark" />
           <h2>
-            {mode === 'plan' ? 'Plan Review Shortcuts' : mode === 'pr' ? 'GitHub PR Review Shortcuts' : 'Developer Keyboard Shortcuts'}
+            {mode === 'plan'
+              ? 'Plan Review Shortcuts'
+              : mode === 'pr'
+                ? 'GitHub PR Review Shortcuts'
+                : mode === 'mockup'
+                  ? 'Mockup Review Shortcuts'
+                  : 'Developer Keyboard Shortcuts'}
           </h2>
         </div>
         <button className="shortcuts-close-btn" onClick={onClose} aria-label="Close dialog">

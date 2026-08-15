@@ -15,11 +15,55 @@ import { subscribeLive } from "../live";
 const MOCKUPS_KEY = ["mockups"];
 const MOCKUP_SUMMARIES_KEY = [...MOCKUPS_KEY, "summaries"];
 
+function asSummary(raw: unknown): MockupSummary | null {
+	if (!raw || typeof raw !== "object") return null;
+	const m = raw as Partial<Mockup> & Partial<MockupSummary>;
+	if (typeof m.id !== "string" || typeof m.title !== "string") return null;
+	const comments = Array.isArray(m.comments) ? m.comments : [];
+	const screens = Array.isArray(m.screens)
+		? m.screens.map((s) => ({
+				id: typeof s.id === "string" ? s.id : "main",
+				label: typeof s.label === "string" ? s.label : s.id,
+			}))
+		: [];
+	const counts = m.commentCounts;
+	return {
+		id: m.id,
+		title: m.title,
+		screens,
+		source: m.source,
+		model: m.model,
+		createdAt: m.createdAt ?? 0,
+		updatedAt: m.updatedAt ?? 0,
+		version: m.version ?? 1,
+		decision: m.decision ?? "pending",
+		decidedAt: m.decidedAt,
+		versionCount:
+			typeof m.versionCount === "number"
+				? m.versionCount
+				: Array.isArray(m.versions)
+					? m.versions.length
+					: 1,
+		commentCounts: {
+			total: counts?.total ?? comments.length,
+			open:
+				counts?.open ??
+				comments.filter((c) => c.status === "open").length,
+			resolved:
+				counts?.resolved ??
+				comments.filter((c) => c.status === "resolved").length,
+		},
+		designSystemId: m.designSystemId,
+		planId: m.planId,
+	};
+}
+
 async function fetchMockups(): Promise<MockupSummary[]> {
 	const res = await fetch("/api/mockups");
 	if (!res.ok) return [];
 	const data = await res.json();
-	return Array.isArray(data) ? data : [];
+	if (!Array.isArray(data)) return [];
+	return data.map(asSummary).filter((item): item is MockupSummary => item != null);
 }
 
 async function fetchMockup(id: string): Promise<Mockup | null> {
@@ -43,13 +87,15 @@ function summarizeMockup(mockup: Mockup): MockupSummary {
 		decidedAt: mockup.decidedAt,
 		versionCount: mockup.versions.length,
 		commentCounts: {
-			total: mockup.comments.length,
-			open: mockup.comments.filter((comment) => comment.status === "open")
+			total: (mockup.comments ?? []).length,
+			open: (mockup.comments ?? []).filter((comment) => comment.status === "open")
 				.length,
-			resolved: mockup.comments.filter(
+			resolved: (mockup.comments ?? []).filter(
 				(comment) => comment.status === "resolved",
 			).length,
 		},
+		designSystemId: mockup.designSystemId,
+		planId: mockup.planId,
 	};
 }
 
@@ -80,6 +126,7 @@ export interface AddMockupCommentParams {
 	nonce?: string;
 	/** Layout width the comment was anchored at (part of comment scope). */
 	viewport?: MockupViewport;
+	theme?: "light" | "dark";
 	/** Stable section-relative DOM path fingerprint for block comments. */
 	fingerprint?: string;
 }

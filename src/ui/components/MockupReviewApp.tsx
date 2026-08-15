@@ -7,11 +7,15 @@ import {
 	LayoutTemplate,
 	Maximize2,
 	Menu,
+	MessageSquare,
 	Minimize2,
 	Monitor,
 	MousePointer2,
+	Moon,
 	Palette,
+	Pencil,
 	Settings,
+	Sun,
 	Smartphone,
 	SquareDashed,
 	Tablet,
@@ -38,6 +42,11 @@ import { Tooltip } from "../primitives/Tooltip";
 import { Popover } from "../primitives/Popover";
 import { Select } from "../primitives/Select";
 import { MockupList } from "./MockupList";
+import { DesignSystemPanel } from "./DesignSystemPanel";
+import { ShortcutsHelpModal } from "./ShortcutsHelpModal";
+import { VimStatusBar } from "./VimStatusBar";
+import { InputDialog } from "../primitives/InputDialog";
+import { DESIGN_SYSTEM_ROUTE_ID } from "../../lib/design-system-types";
 import { MockupCanvas, type ProbeHit } from "./MockupCanvas";
 import { MockupCommentsRail } from "./MockupCommentsRail";
 import { MockupScreenTabs } from "./MockupScreenTabs";
@@ -93,6 +102,7 @@ export function MockupReviewApp() {
 		const m = /^\/mockup\/([^/?]+)/.exec(path);
 		return m ? decodeURIComponent(m[1]) : null;
 	}, [path]);
+	const systemOpen = routeId === DESIGN_SYSTEM_ROUTE_ID;
 	const {
 		mockups,
 		activeMockup,
@@ -107,7 +117,7 @@ export function MockupReviewApp() {
 		removeMockup,
 		agentWaiting,
 		isLoading,
-	} = useMockups(routeId);
+	} = useMockups(systemOpen ? null : routeId);
 	const active = activeMockup;
 	const defaultId = useMemo(() => {
 		if (mockups.length === 0) return null;
@@ -118,12 +128,14 @@ export function MockupReviewApp() {
 	}, [mockups]);
 
 	useEffect(() => {
-		if (!routeId && defaultId)
+		if (!routeId && !systemOpen && defaultId)
 			navigate(`/mockup/${defaultId}`, { replace: true });
-	}, [routeId, defaultId]);
+	}, [routeId, defaultId, systemOpen]);
 
 	const [themeModalOpen, setThemeModalOpen] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
+	const [newMockupOpen, setNewMockupOpen] = useState(false);
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
 		try {
 			const stored = getUiStateItem("diffing-sidebar-collapsed");
@@ -172,7 +184,26 @@ export function MockupReviewApp() {
 	const [viewport, setViewport] = useState<ViewportPx>(1280);
 	const [screenId, setScreenId] = useState<string | null>(null);
 	const [viewVersion, setViewVersion] = useState<number | null>(null);
+	const [compareVersion, setCompareVersion] = useState<number | null>(null);
+	/** Compare pane split ratio (%) — same draggable-divider UX as the plan page. */
+	const [compareSplitRatio, setCompareSplitRatio] = useState(() => {
+		try {
+			const stored = getUiStateItem("diffing-mockup-compare-split");
+			const n = stored ? Number(stored) : 50;
+			return Number.isFinite(n) ? Math.max(20, Math.min(80, n)) : 50;
+		} catch {
+			return 50;
+		}
+	});
+	const [compareDragging, setCompareDragging] = useState(false);
+	const [theme, setTheme] = useState<"light" | "dark">("light");
+	const [editing, setEditing] = useState(false);
+	const [editHtml, setEditHtml] = useState("");
 	const [srcdoc, setSrcdoc] = useState("");
+	const [compareSrcdoc, setCompareSrcdoc] = useState("");
+	/** Full height of the served mockup document (probe-reported) — the frame
+	 *  sizes to it so tall pages scroll instead of being clipped. */
+	const [docHeight, setDocHeight] = useState<number | null>(null);
 	const [hover, setHover] = useState<ProbeHit | null>(null);
 	const [pending, setPending] = useState<ProbeHit | null>(null);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -193,6 +224,9 @@ export function MockupReviewApp() {
 	const sidebarGuideRef = useRef<HTMLDivElement>(null);
 	const sidebarWidthRef = useRef(sidebarWidth);
 	sidebarWidthRef.current = sidebarWidth;
+	const compareSplitRef = useRef<HTMLDivElement>(null);
+	const compareSplitRatioRef = useRef(compareSplitRatio);
+	compareSplitRatioRef.current = compareSplitRatio;
 	/**
 	 * Nonce + doc identity of the document currently served to the iframe
 	 * (X-Diffing-Mockup-Nonce). Posted events must match both so stale frames
@@ -280,6 +314,88 @@ export function MockupReviewApp() {
 		document.body.style.cursor = "col-resize";
 		document.body.style.userSelect = "none";
 	}, []);
+
+	const clampCompareSplit = useCallback((pct: number) => {
+		return Math.max(20, Math.min(80, pct));
+	}, []);
+
+	/**
+	 * Drag the compare divider: same UX as the plan split — live CSS-var
+	 * updates during the drag, then commit + persist on mouseup.
+	 */
+	const handleCompareSplitStart = useCallback(
+		(e: React.MouseEvent) => {
+			e.preventDefault();
+			const container = compareSplitRef.current;
+			if (!container) return;
+			const rect = container.getBoundingClientRect();
+			if (rect.width <= 0) return;
+
+			setCompareDragging(true);
+			document.body.style.cursor = "col-resize";
+			document.body.style.userSelect = "none";
+
+			let latest = compareSplitRatioRef.current;
+			let rafId = 0;
+			const apply = (pct: number) => {
+				latest = clampCompareSplit(pct);
+				container.style.setProperty("--mockup-split-pct", `${latest}%`);
+			};
+			const handleMove = (ev: MouseEvent) => {
+				const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+				if (!rafId) {
+					rafId = requestAnimationFrame(() => {
+						rafId = 0;
+						apply(pct);
+					});
+				}
+			};
+			const handleUp = () => {
+				if (rafId) cancelAnimationFrame(rafId);
+				setCompareSplitRatio(latest);
+				try {
+					setUiStateItem("diffing-mockup-compare-split", String(latest));
+				} catch {
+					/* ignore */
+				}
+				setCompareDragging(false);
+				document.body.style.cursor = "";
+				document.body.style.userSelect = "";
+				document.removeEventListener("mousemove", handleMove);
+				document.removeEventListener("mouseup", handleUp);
+			};
+
+			// Immediate feedback on mousedown position.
+			apply(((e.clientX - rect.left) / rect.width) * 100);
+			document.addEventListener("mousemove", handleMove);
+			document.addEventListener("mouseup", handleUp);
+		},
+		[clampCompareSplit],
+	);
+
+	const resetCompareSplit = useCallback(() => {
+		setCompareSplitRatio(50);
+		try {
+			setUiStateItem("diffing-mockup-compare-split", "50");
+		} catch {
+			/* ignore */
+		}
+		compareSplitRef.current?.style.setProperty("--mockup-split-pct", "50%");
+	}, []);
+
+	const nudgeCompareSplit = useCallback(
+		(delta: number) => {
+			const next = clampCompareSplit(compareSplitRatioRef.current + delta);
+			setCompareSplitRatio(next);
+			compareSplitRef.current?.style.setProperty("--mockup-split-pct", `${next}%`);
+			try {
+				setUiStateItem("diffing-mockup-compare-split", String(next));
+			} catch {
+				/* ignore */
+			}
+		},
+		[clampCompareSplit],
+	);
 
 	const screens = useMemo(() => {
 		if (!active) return [];
@@ -396,10 +512,11 @@ export function MockupReviewApp() {
 		const version = viewVersion ?? active.version;
 		const docKey = `${active.id}:${currentScreenId}:${version}:${viewportLabel}`;
 		const mode = viewOnly ? "&mode=view" : "";
+		const themeQs = `&theme=${theme}`;
 		let cancelled = false;
 		setProbeReady(false);
 		fetch(
-			`/api/mockups/${active.id}/screens/${currentScreenId}/document?version=${version}&viewport=${viewportLabel}${mode}`,
+			`/api/mockups/${active.id}/screens/${currentScreenId}/document?version=${version}&viewport=${viewportLabel}${mode}${themeQs}`,
 		)
 			.then(async (r) => {
 				if (!r.ok) return Promise.reject(new Error(String(r.status)));
@@ -423,7 +540,34 @@ export function MockupReviewApp() {
 		active?.version,
 		viewportLabel,
 		viewOnly,
+		theme,
 	]);
+
+	// Compare pane: fetch the older version's screen document through the
+	// patched fetch (which attaches the session token header) and render it as
+	// srcdoc. A raw <iframe src> navigation bypasses the patched fetch, so it
+	// 401s without the token and renders the raw JSON error.
+	useEffect(() => {
+		if (!active || !currentScreenId || compareVersion == null) {
+			setCompareSrcdoc("");
+			return;
+		}
+		let cancelled = false;
+		fetch(
+			`/api/mockups/${active.id}/screens/${currentScreenId}/document?version=${compareVersion}&viewport=${viewportLabel}&mode=view&theme=${theme}`,
+		)
+			.then(async (r) => {
+				if (!r.ok) throw new Error(String(r.status));
+				const html = await r.text();
+				if (!cancelled) setCompareSrcdoc(html);
+			})
+			.catch(() => {
+				if (!cancelled) setCompareSrcdoc("");
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [active?.id, currentScreenId, compareVersion, viewportLabel, theme]);
 
 	// Scope change (mockup / screen / version / viewport) clears transient UI state.
 	useEffect(() => {
@@ -455,20 +599,117 @@ export function MockupReviewApp() {
 	}, [viewOnly]);
 
 	useEffect(() => {
+		let keyBuffer = "";
+		let bufferTimeout: ReturnType<typeof setTimeout>;
+		const resetBuffer = () => {
+			keyBuffer = "";
+			clearTimeout(bufferTimeout);
+		};
+
+		const scrollStage = (top: number) => {
+			const stage =
+				frameRef.current?.closest<HTMLElement>(".mockup-stage") ?? null;
+			if (stage) stage.scrollBy({ top, behavior: "auto" });
+		};
+
+		const mockupIds = mockups.map((m) => m.id);
+		const currentIdx = active ? mockupIds.indexOf(active.id) : -1;
+
 		const onKey = (e: KeyboardEvent) => {
 			const tag = (e.target as HTMLElement)?.tagName;
 			if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-			if ((e.metaKey || e.ctrlKey) && (e.key === "," || e.code === "Comma")) {
-				e.preventDefault();
-				setSettingsOpen((o) => !o);
+
+			// Modifier chords: ⌘,/Ctrl+ settings, ⌘?/Ctrl+? shortcuts, Ctrl+D/U
+			// page-scroll the mockup stage. Handled before the bare-key guard so
+			// meta/ctrl combos are never swallowed.
+			if (e.metaKey || e.ctrlKey) {
+				if (e.key === "," || e.code === "Comma") {
+					e.preventDefault();
+					setSettingsOpen((o) => !o);
+					return;
+				}
+				if (
+					e.key === "?" ||
+					(e.key === "/" && e.shiftKey) ||
+					(e.code === "Slash" && e.shiftKey)
+				) {
+					e.preventDefault();
+					setShortcutsHelpOpen(true);
+					return;
+				}
+				if (e.key === "d" || e.key === "u") {
+					e.preventDefault();
+					scrollStage(e.key === "d" ? 320 : -320);
+				}
 				return;
 			}
-			if (e.key === "b" && !e.metaKey && !e.ctrlKey)
-				setSidebarCollapsed((v) => !v);
+
+			// Never steal other browser chords (⌥ shortcuts, ⌘W, ⌘C…).
+			if (e.altKey) return;
+
+			// Two-key buffer: gg top, gt theme. Any other g prefix resets.
+			if (keyBuffer === "g" && e.key.length === 1) {
+				if (e.key === "g") {
+					e.preventDefault();
+					const stage =
+						frameRef.current?.closest<HTMLElement>(".mockup-stage") ?? null;
+					if (stage) stage.scrollTo({ top: 0, behavior: "auto" });
+					resetBuffer();
+					return;
+				}
+				if (e.key === "t") {
+					e.preventDefault();
+					setThemeModalOpen(true);
+					resetBuffer();
+					return;
+				}
+				resetBuffer();
+			}
+
+			if (e.key === "g") {
+				e.preventDefault();
+				keyBuffer = "g";
+				clearTimeout(bufferTimeout);
+				bufferTimeout = setTimeout(resetBuffer, 600);
+				return;
+			}
+
+			if (e.key.length > 1 && e.key !== "Escape") return;
+
+			if (e.key === "j" || e.key === "k") {
+				e.preventDefault();
+				scrollStage(e.key === "j" ? 100 : -100);
+				return;
+			}
+			if (e.key === "J" || e.key === "K") {
+				if (mockupIds.length && currentIdx >= 0) {
+					e.preventDefault();
+					const next =
+						e.key === "J"
+							? (currentIdx + 1) % mockupIds.length
+							: (currentIdx - 1 + mockupIds.length) % mockupIds.length;
+					navigate(`/mockup/${mockupIds[next]}`);
+					setScreenId(null);
+					setViewVersion(null);
+					setPending(null);
+				}
+				return;
+			}
+			if (e.key === "?") {
+				e.preventDefault();
+				setShortcutsHelpOpen(true);
+				return;
+			}
+			if (e.key === "b") setSidebarCollapsed((v) => !v);
 			else if (e.key === "1" && !historical) setTool("section");
 			else if (e.key === "2" && !historical) setTool("block");
 			else if (e.key === "3" && !historical) setTool("point");
 			else if (e.key === "c") setCommentsRailOpen((v) => !v);
+			else if (e.key === "e" && !historical && active && currentScreenId) {
+				const screen = screens.find((s) => s.id === currentScreenId);
+				setEditHtml(screen?.html ?? "");
+				setEditing((v) => !v);
+			}
 			else if (e.key === "v") setViewOnly((v) => !v);
 			else if (e.key === "z") setZen((v) => !v);
 			else if (e.key === "[" || e.key === "]") {
@@ -491,8 +732,11 @@ export function MockupReviewApp() {
 			}
 		};
 		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [screens, currentScreenId, historical, zen]);
+		return () => {
+			window.removeEventListener("keydown", onKey);
+			clearTimeout(bufferTimeout);
+		};
+	}, [screens, currentScreenId, historical, zen, active, mockups]);
 
 	const sendAnchorCheck = useCallback(() => {
 		const anchors = comments
@@ -512,10 +756,11 @@ export function MockupReviewApp() {
 				? `${active.id}:${currentScreenId}:${viewingVersion}:${viewportLabel}`
 				: null;
 		const onMsg = (ev: MessageEvent) => {
-			if (ev.source !== iframeRef.current?.contentWindow) return;
 			const d = ev.data;
 			if (!d || d.type !== "diffing-mockup") return;
 			const served = docNonceRef.current;
+			// Sandboxed srcdoc iframes can have a WindowProxy that is not
+			// === contentWindow. The per-document nonce is the identity.
 			if (
 				!served ||
 				d.nonce !== served.nonce ||
@@ -525,8 +770,13 @@ export function MockupReviewApp() {
 				return;
 			if (d.event === "ready") {
 				setSections(d.sections ?? []);
+				if (typeof d.height === "number" && d.height > 0) setDocHeight(d.height);
 				setProbeReady(true);
 				sendAnchorCheck();
+				return;
+			}
+			if (d.event === "height") {
+				if (typeof d.height === "number" && d.height > 0) setDocHeight(d.height);
 				return;
 			}
 			if (d.event === "anchors") {
@@ -611,6 +861,7 @@ export function MockupReviewApp() {
 			createdAtMockupVersion: active.version,
 			nonce: docNonceRef.current?.nonce,
 			viewport: viewportLabel,
+			theme,
 			fingerprint: pending.fingerprint,
 		});
 		setPending(null);
@@ -726,8 +977,14 @@ export function MockupReviewApp() {
 						<div className="plan-toolbar-brand">
 							<BrandMark size={18} className="plan-app-brand" />
 							<div className="plan-toolbar-brand-text">
-								<h1 className="toolbar-title plan-app-title">Mockups</h1>
-								{active ? (
+								<h1 className="toolbar-title plan-app-title">
+									{systemOpen ? "Design system" : "Mockups"}
+								</h1>
+								{systemOpen ? (
+									<span className="plan-toolbar-active">
+										Tokens · type · components
+									</span>
+								) : active ? (
 									<span className="plan-toolbar-active" title={active.title}>
 										{active.title}
 									</span>
@@ -740,57 +997,49 @@ export function MockupReviewApp() {
 						</div>
 					</div>
 
-					<div className="plan-view-toggle" role="group" aria-label="Selection tool">
-						{TOOL_OPTIONS.map(({ id, label, icon: Icon, tip, key }) => (
-							<Tooltip key={id} content={toolTip(id, tip, key)} side="bottom">
-								<button
-									type="button"
-									className={`plan-view-toggle-btn ${tool === id ? "is-active" : ""}`}
-									aria-pressed={tool === id}
-									aria-label={toolTip(id, tip, key)}
-									disabled={toolDisabled(id)}
-									onClick={() => setTool(id)}
+					{!systemOpen && (
+						<div className="plan-view-toggle" role="group" aria-label="Selection tool">
+							{TOOL_OPTIONS.map(({ id, label, icon: Icon, tip, key }) => (
+								<Tooltip key={id} content={toolTip(id, tip, key)} side="bottom">
+									<button
+										type="button"
+										className={`plan-view-toggle-btn ${tool === id ? "is-active" : ""}`}
+										aria-pressed={tool === id}
+										aria-label={toolTip(id, tip, key)}
+										disabled={toolDisabled(id)}
+										onClick={() => setTool(id)}
 								>
 									<Icon size={13} aria-hidden="true" />
 									<span>{label}</span>
 								</button>
 							</Tooltip>
 						))}
-					</div>
+						</div>
+					)}
 
 					<div className="toolbar-right">
-						<div
-							className="plan-view-toggle mockup-viewport-toggle"
-							role="group"
-							aria-label="Viewport"
-						>
-							{VIEWPORT_OPTIONS.map(({ value: w, label, viewport: vp }) => (
-								<Tooltip
-									key={w}
-									content={`${label} — comments on this view are scoped to ${vp}`}
-									side="bottom"
-								>
-									<button
-										type="button"
-										className={`plan-view-toggle-btn ${viewport === w ? "is-active" : ""}`}
-										aria-pressed={viewport === w}
-										onClick={() => setViewport(w)}
-									>
-										{label === "Desktop" ? (
-											<Monitor size={13} aria-hidden="true" />
-										) : label === "Tablet" ? (
-											<Tablet size={13} aria-hidden="true" />
-										) : (
-											<Smartphone size={13} aria-hidden="true" />
-										)}
-										<span className="mockup-viewport-full">{label}</span>
-										<span className="mockup-viewport-short" aria-hidden="true">
-											{label.slice(0, 1)}
-										</span>
-									</button>
-								</Tooltip>
-							))}
-						</div>
+						{!systemOpen && (
+							<>
+							<Tooltip
+								content={
+									theme === "dark"
+										? "Mockup theme: dark — click for light"
+										: "Mockup theme: light — click for dark"
+								}
+								side="bottom"
+							>
+							<button
+								type="button"
+								className="btn btn-sm mockup-theme-btn"
+								aria-pressed={theme === "dark"}
+								aria-label={
+									theme === "dark" ? "Switch mockup to light" : "Switch mockup to dark"
+								}
+								onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+							>
+								{theme === "dark" ? <Moon size={14} /> : <Sun size={14} />}
+							</button>
+						</Tooltip>
 						<Tooltip
 							content={
 								viewOnly
@@ -836,6 +1085,8 @@ export function MockupReviewApp() {
 								<span className="btn-label">{zen ? "Exit zen" : "Zen"}</span>
 							</button>
 						</Tooltip>
+						</>
+						)}
 						<Popover
 							open={settingsOpen}
 							onOpenChange={setSettingsOpen}
@@ -911,7 +1162,7 @@ export function MockupReviewApp() {
 					>
 						<MockupList
 							mockups={mockups}
-							activeId={active?.id ?? null}
+							activeId={systemOpen ? null : active?.id ?? null}
 							collapsed={sidebarCollapsed}
 							onToggle={() => setSidebarCollapsed((v) => !v)}
 							onSelect={(id) => {
@@ -921,6 +1172,9 @@ export function MockupReviewApp() {
 								setPending(null);
 							}}
 							onDelete={removeMockup}
+							systemActive={systemOpen}
+							onSelectSystem={() => navigate(`/mockup/${DESIGN_SYSTEM_ROUTE_ID}`)}
+							onNewMockup={() => setNewMockupOpen(true)}
 						/>
 					</aside>
 					{!zen && !sidebarCollapsed && (
@@ -931,7 +1185,9 @@ export function MockupReviewApp() {
 					)}
 
 					<main className="main plan-main">
-						{active ? (
+						{systemOpen ? (
+							<DesignSystemPanel />
+						) : active ? (
 							<div className="plan-review">
 								<header className="plan-review-head">
 									<div className="plan-review-head-main">
@@ -978,6 +1234,31 @@ export function MockupReviewApp() {
 													{active.model}
 												</span>
 											)}
+											{active.planId && (
+												<button
+													type="button"
+													className="plan-review-chip"
+													onClick={() => navigate(`/plan/${active.planId}`)}
+												>
+													Plan
+												</button>
+											)}
+											{active.versions.length > 1 && (
+												<Select
+													value={compareVersion == null ? "off" : String(compareVersion)}
+													onValueChange={(v) =>
+														setCompareVersion(v === "off" ? null : Number(v))
+													}
+													options={[
+														{ value: "off", label: "Compare off" },
+														...active.versions.map((ver) => ({
+															value: String(ver.version),
+															label: `vs v${ver.version}`,
+														})),
+													]}
+													ariaLabel="Compare versions"
+												/>
+											)}
 											<span className="plan-review-meta-stat">
 												{screens.length} screen{screens.length === 1 ? "" : "s"}
 												{" · "}
@@ -993,36 +1274,172 @@ export function MockupReviewApp() {
 											</span>
 										</div>
 									</div>
-									<div
-										className="plan-review-head-actions"
-										role="toolbar"
-										aria-label="Mockup actions"
-									>
-										<MockupScreenTabs
-											screens={screens}
-											activeScreenId={currentScreenId}
-											openCounts={screenOpenCounts}
-											onSelect={setScreenId}
-										/>
-										<button
-											type="button"
-											className={`btn btn-sm ${commentsRailOpen ? "btn-active" : ""}`}
-											onClick={() => setCommentsRailOpen((v) => !v)}
-											title="Toggle comments map (c)"
+									<div className="plan-review-head-row">
+										<div className="mockup-screen-tabs-row">
+											<MockupScreenTabs
+												screens={screens}
+												activeScreenId={currentScreenId}
+												openCounts={screenOpenCounts}
+												onSelect={setScreenId}
+											/>
+										</div>
+										<div
+											className="plan-review-head-actions"
+											role="toolbar"
+											aria-label="Mockup actions"
 										>
-											Comments
-										</button>
-									</div>
+											<div
+												className="mockup-viewport-picker"
+												role="group"
+												aria-label="Viewport"
+											>
+												{VIEWPORT_OPTIONS.map(({ value: w, label, viewport: vp }) => (
+													<Tooltip
+														key={w}
+														content={`${label} viewport — comments scoped to ${vp}`}
+														side="bottom"
+													>
+														<button
+															type="button"
+															className={`plan-icon-btn ${viewport === w ? "is-active" : ""}`}
+															aria-pressed={viewport === w}
+															aria-label={`${label} viewport`}
+															onClick={() => setViewport(w)}
+														>
+															{label === "Desktop" ? (
+																<Monitor size={14} aria-hidden="true" />
+															) : label === "Tablet" ? (
+																<Tablet size={14} aria-hidden="true" />
+															) : (
+																<Smartphone size={14} aria-hidden="true" />
+															)}
+														</button>
+													</Tooltip>
+												))}
+											</div>
+											<span className="mockup-action-dot" aria-hidden="true" />
+											<Tooltip content="Edit this screen's HTML (e)" side="bottom">
+												<button
+													type="button"
+													className={`plan-icon-btn ${editing ? "is-active" : ""}`}
+													onClick={() => {
+														const screen = screens.find((s) => s.id === currentScreenId);
+														setEditHtml(screen?.html ?? "");
+														setEditing((v) => !v);
+													}}
+													title="Edit fragment (e)"
+													aria-label="Edit screen HTML"
+												>
+													<Pencil size={14} aria-hidden="true" />
+												</button>
+											</Tooltip>
+											<Tooltip
+												content={
+													commentsRailOpen
+														? "Hide comments map (c)"
+														: `Show comments map (c)${totalOpenCount > 0 ? ` — ${totalOpenCount} open` : ""}`
+													}
+												side="bottom"
+												>
+													<button
+														type="button"
+														className={`plan-icon-btn ${commentsRailOpen ? "is-active" : ""}`}
+														onClick={() => setCommentsRailOpen((v) => !v)}
+														title="Toggle comments map (c)"
+														aria-label="Toggle comments map"
+													>
+														<MessageSquare size={14} aria-hidden="true" />
+														{totalOpenCount > 0 && (
+															<span className="plan-icon-btn-badge">
+																{totalOpenCount}
+															</span>
+														)}
+													</button>
+												</Tooltip>
+											</div>
+										</div>
 								</header>
 								{historical && (
 									<div className="plan-review-historical-banner">
 										Viewing v{viewVersion} — comments stay on v{active.version}
 									</div>
 								)}
-								<MockupCanvas
+								{editing && currentScreenId && (
+									<div className="mockup-live-edit">
+										<textarea
+											value={editHtml}
+											onChange={(e) => setEditHtml(e.target.value)}
+											spellCheck={false}
+										/>
+										<div className="mockup-live-edit-actions">
+											<button
+												type="button"
+												className="btn btn-sm"
+												onClick={async () => {
+													const screensPayload = screens.map((s) =>
+														s.id === currentScreenId
+															? { ...s, html: editHtml }
+															: s,
+													);
+													await fetch(`/api/mockups/${active.id}`, {
+														method: "PUT",
+														headers: { "Content-Type": "application/json" },
+														body: JSON.stringify({
+															screens: screensPayload.map((s) => ({
+																id: s.id,
+																html: s.html,
+																label: s.label,
+															})),
+														}),
+													});
+													setToast("Saved (same version)");
+												}}
+											>
+												Save
+											</button>
+											<button
+												type="button"
+												className="btn btn-sm"
+												onClick={async () => {
+													await fetch(
+														`/api/mockups/${active.id}/screens/${currentScreenId}`,
+														{
+															method: "PUT",
+															headers: { "Content-Type": "application/json" },
+															body: JSON.stringify({ html: editHtml }),
+														},
+													);
+													setEditing(false);
+													setToast("Saved as new version");
+												}}
+											>
+												Save as new version
+											</button>
+											<button
+												type="button"
+												className="btn btn-sm"
+												onClick={() => setEditing(false)}
+											>
+												Done
+											</button>
+										</div>
+									</div>
+								)}
+								<div
+									className={`mockup-compare-split ${compareVersion != null && currentScreenId ? "is-split" : ""} ${compareDragging ? "mockup-compare-split-dragging" : ""}`}
+									ref={compareSplitRef}
+									style={
+										compareVersion != null && currentScreenId
+											? ({ "--mockup-split-pct": `${compareSplitRatio}%` } as React.CSSProperties)
+											: undefined
+									}
+								>
+									<div className="mockup-compare-pane mockup-compare-pane-current">
+										<MockupCanvas
 									title={active.title}
 									srcdoc={srcdoc}
 									viewport={viewport}
+									frameHeight={docHeight}
 									viewOnly={viewOnly}
 									zen={zen}
 									staleIds={staleIds}
@@ -1106,6 +1523,48 @@ export function MockupReviewApp() {
 										)
 									}
 								/>
+								</div>
+								{compareVersion != null && currentScreenId && (
+									<>
+										<div
+											className="mockup-split-resize-handle"
+											onMouseDown={handleCompareSplitStart}
+											onDoubleClick={resetCompareSplit}
+											role="separator"
+											aria-orientation="vertical"
+											aria-label="Resize current and compared mockup panes"
+											title="Drag to resize · double-click to reset 50/50"
+											aria-valuenow={Math.round(compareSplitRatio)}
+											aria-valuemin={20}
+											aria-valuemax={80}
+											tabIndex={0}
+											onKeyDown={(e) => {
+												if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+												e.preventDefault();
+												nudgeCompareSplit(e.key === "ArrowLeft" ? -2 : 2);
+											}}
+										>
+											<span className="plan-split-resize-grip" aria-hidden="true" />
+										</div>
+										<div className="mockup-compare-pane mockup-compare-pane-old">
+											<div
+												className="mockup-compare-frame-wrap"
+												style={{
+													width: Math.min(viewport, 1600),
+													height: docHeight ? `${docHeight}px` : "100%",
+												}}
+											>
+												<iframe
+													className="mockup-compare-frame"
+													title={`Compare v${compareVersion}`}
+													sandbox="allow-scripts allow-forms allow-modals allow-popups"
+													srcDoc={compareSrcdoc}
+												/>
+											</div>
+										</div>
+									</>
+								)}
+								</div>
 							</div>
 						) : (
 							<div className="plan-review-empty empty-state">
@@ -1163,6 +1622,40 @@ export function MockupReviewApp() {
 					onClose={() => setThemeModalOpen(false)}
 					activeTheme={settings.theme || "rose-pine"}
 					onThemeChange={(theme) => updateSettings({ theme })}
+				/>
+				<ShortcutsHelpModal
+					isOpen={shortcutsHelpOpen}
+					onClose={() => setShortcutsHelpOpen(false)}
+					mode="mockup"
+				/>
+				{!zen && (
+					<VimStatusBar
+						activeFile={active ? active.title : null}
+						onShowHelp={() => setShortcutsHelpOpen(true)}
+						visible={settings.showStatusBar ?? true}
+						placeholder="No active mockup (J/K to jump)"
+					/>
+				)}
+				<InputDialog
+					open={newMockupOpen}
+					title="New mockup"
+					description="Create a blank mockup to paste HTML into."
+					label="Title"
+					initialValue="Untitled mockup"
+					placeholder="Untitled mockup"
+					confirmLabel="Create"
+					onConfirm={async (title) => {
+						setNewMockupOpen(false);
+						const res = await fetch("/api/mockups", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ title: title.trim() || "Untitled mockup", blank: true }),
+						});
+						if (!res.ok) return;
+						const created = (await res.json()) as { id: string };
+						navigate(`/mockup/${created.id}`);
+					}}
+					onCancel={() => setNewMockupOpen(false)}
 				/>
 				{toast && (
 					<div className="mockup-toast" role="status">

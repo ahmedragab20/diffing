@@ -9724,6 +9724,8 @@ button.toolbar-last-send-btn:hover {
   gap: 5px;
   height: 28px;
   padding: 0 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -10103,6 +10105,7 @@ button.toolbar-last-send-btn:hover {
   top: var(--plan-toolbar-offset, var(--toolbar-height));
   z-index: 5;
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
@@ -10111,6 +10114,10 @@ button.toolbar-last-send-btn:hover {
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border-weak);
+}
+.mockup-app .plan-review-head {
+  flex-direction: column;
+  align-items: stretch;
 }
 .plan-review-head-main {
   min-width: 0;
@@ -10275,12 +10282,22 @@ button.toolbar-last-send-btn:hover {
 .plan-review-head-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 2px;
   flex-shrink: 0;
   padding: 2px;
   border-radius: var(--radius-lg);
   background: var(--bg-secondary);
   border: 1px solid var(--border-weak);
+  max-width: 100%;
+}
+.mockup-app .plan-review-head-actions {
+  align-self: flex-end;
+  padding: 4px 6px;
+  gap: 3px;
+}
+.mockup-app .plan-review-head-row .plan-review-head-actions {
+  align-self: center;
 }
 .plan-icon-btn {
   position: relative;
@@ -11981,6 +11998,15 @@ button.toolbar-last-send-btn:hover {
     max-width: 140px;
   }
   .plan-view-toggle-btn span {
+    display: none;
+  }
+  .plan-view-toggle-btn:not(:has(svg)) span {
+    display: inline;
+  }
+  .mockup-app .toolbar.plan-app-toolbar {
+    overflow-x: auto;
+  }
+  .mockup-theme-btn .btn-label {
     display: none;
   }
 
@@ -14024,18 +14050,52 @@ button.toolbar-last-send-btn:hover {
 
 /* Screen tabs (scoped open counts) + viewport picker */
 .mockup-screen-tabs .mockup-screen-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  box-sizing: border-box;
   margin-left: 4px;
-  padding: 0 5px;
   font-size: 10px;
   font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
   background: var(--accent-subtle);
   color: var(--primary);
   border: 1px solid var(--primary);
-  border-radius: var(--radius-round);
-  line-height: 16px;
+  border-radius: 999px;
 }
-.mockup-viewport-toggle {
-  margin-right: var(--space-2);
+.mockup-viewport-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 2px;
+}
+.mockup-screen-tabs-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Screen tabs (left) + actions (right) share one row in the mockup header. */
+.plan-review-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.mockup-action-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.65;
+  margin: 0 7px;
+  flex-shrink: 0;
 }
 
 /* Location chips (anchor · version · viewport) */
@@ -14255,17 +14315,22 @@ button.toolbar-last-send-btn:hover {
   display: none;
 }
 
-.mockup-app.zen-mode .toolbar {
+/* Zen: full-screen mockup, zero chrome. Edge hover reveals each section
+   (top → toolbar, left → mockup list, right → comments rail). */
+.mockup-app.zen-mode .toolbar.plan-app-toolbar {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   transform: translateY(-100%);
-  z-index: 300;
+  z-index: 290;
   transition: transform 0.18s ease;
 }
-.mockup-app.zen-mode .toolbar.zen-revealed {
+.mockup-app.zen-mode .toolbar.plan-app-toolbar.zen-revealed {
   transform: translateY(0);
+}
+.mockup-app.zen-mode .plan-review-head {
+  display: none;
 }
 
 .mockup-app.zen-mode .sidebar {
@@ -14309,7 +14374,7 @@ button.toolbar-last-send-btn:hover {
 
 .mockup-app.zen-mode .mockup-stage {
   padding: 0;
-  overflow: hidden;
+  overflow: auto;
 }
 .mockup-app.zen-mode .mockup-frame {
   border: none;
@@ -14362,4 +14427,186 @@ button.toolbar-last-send-btn:hover {
 }
 .plan-comments-rail-item.is-disabled:hover {
   background: transparent;
+}
+
+.design-system-panel {
+  padding: 20px 24px 48px;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+.design-system-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+.design-system-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+.design-system-meta,
+.design-system-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+.design-system-actions {
+  display: flex;
+  gap: 8px;
+}
+.design-system-section {
+  margin-bottom: 28px;
+}
+.design-system-section h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+  color: var(--text-muted);
+}
+.design-system-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+.design-system-swatch {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border-weak);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+.design-system-chip {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+.design-system-swatch-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.design-system-swatch-name,
+.design-system-swatch-value {
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+.design-system-swatch-name {
+  font-size: 11px;
+}
+.design-system-swatch-value {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.design-system-components {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.design-system-component iframe {
+  width: 100%;
+  height: 120px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.design-system-guidelines,
+.design-system-comment-form textarea,
+.mockup-live-edit textarea {
+  width: 100%;
+  font: inherit;
+  background: var(--bg-elevated, var(--bg));
+  color: inherit;
+  border: 1px solid var(--border);
+  padding: 8px;
+  margin: 8px 0;
+}
+.mockup-live-edit {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 12px;
+}
+.mockup-live-edit-actions {
+  display: flex;
+  gap: 8px;
+}
+.mockup-compare-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg);
+}
+
+/* Compare mode: current version | draggable divider | older version. Same
+   split UX as the plan page (drag, double-click reset, arrow keys, 20–80%). */
+.mockup-compare-split {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.mockup-compare-split.is-split {
+  display: grid;
+  --mockup-split-pct: 50%;
+  grid-template-columns: var(--mockup-split-pct) 10px minmax(0, 1fr);
+  align-items: stretch;
+}
+.mockup-compare-split-dragging {
+  cursor: col-resize;
+  user-select: none;
+}
+.mockup-compare-split-dragging .mockup-compare-pane {
+  pointer-events: none;
+}
+.mockup-compare-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* The current pane must grow to fill the wrapper (non-split mode) or the
+   stage/frame/iframe height chain collapses and the mockup gets clipped. */
+.mockup-compare-pane-current {
+  flex: 1 1 0%;
+}
+.mockup-compare-pane-old {
+  overflow: auto;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  border-left: 1px solid var(--border-weak);
+}
+.mockup-compare-frame-wrap {
+  flex: none;
+  height: 100%;
+  max-width: 100%;
+  border: 1px solid var(--border-normal);
+  background: #fff;
+}
+.plan-list-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.design-system-comment {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
 }

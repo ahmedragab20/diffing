@@ -8,7 +8,7 @@ import { ShortcutsHelpModal } from '../ShortcutsHelpModal'
 vi.mock('lucide-react', () => {
   const Stub = () => null
   const proxy: Record<string, unknown> = {}
-  const keys = ['X', 'Keyboard', 'Navigation', 'Eye', 'MessageSquare', 'GitCommit']
+  const keys = ['X', 'Keyboard', 'Navigation', 'Eye', 'MessageSquare', 'GitCommit', 'MousePointer2']
   for (const k of keys) proxy[k] = Stub
   return proxy
 })
@@ -138,4 +138,25 @@ describe('ShortcutsHelpModal', () => {
     })
   })
 
+  describe('mockup mode', () => {
+    it('shows the mockup title and mockup-specific bindings', () => {
+      render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} mode="mockup" />)
+
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Mockup Review Shortcuts' }),
+      ).toBeInTheDocument()
+      expect(screen.getByText(/click the mockup to comment/i)).toBeInTheDocument()
+      expect(screen.getByText('Jump to Next Mockup in list')).toBeInTheDocument()
+      expect(screen.getByText('Jump to Previous Mockup in list')).toBeInTheDocument()
+      expect(screen.getByText('Section tool — click a tagged region')).toBeInTheDocument()
+      expect(screen.getByText('Block tool — click any element')).toBeInTheDocument()
+      expect(screen.getByText('Pin tool — drop a point comment')).toBeInTheDocument()
+      expect(screen.getByText(/Toggle View only — interactive mockup, no selection/i)).toBeInTheDocument()
+      expect(screen.getByText(/Toggle Zen mode — full-screen mockup, no chrome/i)).toBeInTheDocument()
+      expect(screen.getByText(/Compare mode: drag the center divider to resize panes/i)).toBeInTheDocument()
+      // Plan/diff-specific entries must NOT appear.
+      expect(screen.queryByText('Jump to Next Plan in list')).not.toBeInTheDocument()
+      expect(screen.queryByText('Jump to Next File Diff')).not.toBeInTheDocument()
+    })
+  })
 })
