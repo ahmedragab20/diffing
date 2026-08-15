@@ -1,3 +1,14 @@
+## 0.18.2
+
+### Patch Changes
+
+- dc248c4: Design system panel, frame sizing, and revision UI
+- cb4ad51: Flag generic off-brand styling in lint hints
+- 53357f6: Scope session token to header and cookie with timing-safe compare
+- ba9bc8e: Wire design systems and revision ops through server, CLI, and MCP
+- 2cc0c42: Region replace, preview, shell, handoff, and suggestion libs
+- 00e025c: Design system core model, extraction, and tokens
+
 ## 0.18.1
 
 ### Patch Changes
