@@ -70,7 +70,10 @@ vi.mock("../../router", () => ({
   navigate: (...args: any[]) => mockNavigate(...args),
 }));
 
-vi.mock("../../utils", () => ({ timeAgo: () => "2h ago" }));
+vi.mock("../../utils", () => ({
+  timeAgo: () => "2h ago",
+  isTypingInFocus: () => false,
+}));
 
 vi.mock("../../utils/uiState", () => ({
   getUiStateItem: () => null,
@@ -441,8 +444,14 @@ describe("MockupReviewApp", () => {
 
     // a posted event with the served nonce opens the composer
     postProbeEvent("click", "nonce-1");
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Commenting on block · button.pay",
+      }),
+    ).toBeInTheDocument();
     // sandboxed srcdoc windows may not strictly equal contentWindow —
-    // nonce identity is enough
+    // nonce identity is enough. The pending state is single, so this new
+    // probe replaces the open button.pay composer.
     window.dispatchEvent(
       new MessageEvent("message", {
         data: {
@@ -464,10 +473,10 @@ describe("MockupReviewApp", () => {
       }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByRole("dialog", {
+      screen.queryByRole("dialog", {
         name: "Commenting on block · button.pay",
       }),
-    ).toBeInTheDocument();
+    ).not.toBeInTheDocument();
 
     // a stale/foreign nonce is ignored
     postProbeEvent("click", "nonce-stale", { selector: "button.other" });
