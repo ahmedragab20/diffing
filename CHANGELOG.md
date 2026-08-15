@@ -1,3 +1,10 @@
+## 0.18.3
+
+### Patch Changes
+
+- cd51070: Print mockup lint hints on submit and screen ops
+- 9ea0898: Cover mockup redesign loop — design system, replace-region, preview, handoff
+
 ## 0.18.2
 
 ### Patch Changes
