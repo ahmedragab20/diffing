@@ -79,17 +79,23 @@ fn viewer_starts_and_quits_cleanly_in_a_real_pty() {
     let mut child = command.spawn().unwrap();
 
     let _ = wait_for_output(&mut master, "sample.rs", Duration::from_secs(5));
+    // Drain the initial diff render (the changed line is in the diff body) so
+    // residual pty output cannot satisfy the search assertions below.
+    let _ = wait_for_output(&mut master, "render_search", Duration::from_secs(5));
     for key in [b"/".as_slice(), b"\t", b"\t", b"\t"] {
         master.write_all(key).unwrap();
         thread::sleep(Duration::from_millis(100));
     }
-    let search_frame = wait_for_output(&mut master, "render_search", Duration::from_secs(5));
+    // The search palette renders all four scope labels (All Files Text Symbols)
+    // in its controls row; wait for it to open and cycle to Symbols.
+    let search_frame = wait_for_output(&mut master, "Symbols", Duration::from_secs(5));
     assert!(
         search_frame.contains("Symbols"),
         "Symbols scope was not rendered"
     );
+    let result_frame = wait_for_output(&mut master, "render_search", Duration::from_secs(5));
     assert!(
-        search_frame.contains("render_search"),
+        result_frame.contains("render_search"),
         "changed-line symbol was not rendered"
     );
     master.write_all(b"\x1b").unwrap();
