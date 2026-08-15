@@ -104,7 +104,7 @@ Comment scope = **version + screen + viewport** (`desktop|tablet|mobile`); `view
 | `GET` | `/api/mockups/:id/inspect?view&status&screen&viewport&version&id&cursor&limit&context` | Bounded reads — `view=summary\|comments\|comment\|screen`, `context=none\|anchor\|source` (default `anchor`), bodies truncate at 400 chars, `nextCursor` pagination |
 | `GET` | `/api/mockups/:id/screens/:screenId/document?version&viewport` | Served screen (injected probe; nonce echoed back on comment posts) |
 | `PUT` | `/api/mockups/:id/screens/:screenId` | One-screen upsert (`html`, optional `label`, `expectedVersion`) |
-| `PATCH` | `/api/mockups/:id/screens/:screenId` | Exact-text patch (`expectedText`, `replacement`, `expectedVersion`); 0 matches → 409 `exact-text-not-found` |
+| `PATCH` | `/api/mockups/:id/screens/:screenId` | Exact-text patch (`expectedText`, `replacement`) or region replace (`region`, `replacement`); `expectedVersion` optional; 0 matches → 409 `exact-text-not-found` / `region-not-found` |
 | `DELETE` | `/api/mockups/:id/screens/:screenId[?expectedVersion]` | One-screen remove (refuses last screen) |
 | `POST` | `/api/mockups/:id/threads/batch` | **Atomic** thread batch `{ operations: [{ op: reply\|edit\|delete\|resolve\|unresolve, commentId, replyId?, body?, role?, model? }] }` — all validated before any applies; thread ops never bump the version |
 | `POST` | `/api/mockups/:id/comments` | Create comment (`kind`, `screenId`, `body`, `viewport`, anchor fields, optional `nonce`) |

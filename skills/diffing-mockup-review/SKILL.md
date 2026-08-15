@@ -1,11 +1,11 @@
 ---
 name: diffing-mockup-review
-description: Submit an HTML mockup to diffing for visual review and obey the verdict before implementing UI. Use when an agent created a mockup, the human should mark sections/blocks/points, or you need submit_mockup / await_mockup_review / inspect_mockup / revise_mockup.
+description: Submit an HTML mockup to diffing for visual review and obey the verdict before implementing UI. Use when an agent already has mockup HTML and needs submit_mockup / await_mockup_review / inspect_mockup / revise_mockup. Author the HTML with diffing-mockup-author first.
 ---
 
 # Review an HTML mockup with diffing
 
-Same loop as plan review: submit HTML screens, park, act on the verdict. Do not implement the UI until the mockup is approved.
+Same loop as plan review: submit HTML screens, park, act on the verdict. Do not implement the UI until the mockup is approved. Create or revise the HTML with `diffing-mockup-author` first — this skill is the submit / inspect / patch loop only.
 
 ## Never write mockups into the consumer repo
 
@@ -78,11 +78,12 @@ Comments: `kind="section"` + `target=` → `data-diffing` region; `kind="block"`
    # or MCP inspect_mockup({ mockupId, view: 'screen', screenId: 'main', context: 'source' })
    ```
 
-3. **Patch one screen** — exact-text replace, version-bumping, `--expected-version` guarded (409 on conflict, nothing applied):
+3. **Patch one screen** — version-bumping, `--expected-version` guarded (409 on conflict, nothing applied). Prefer `replace-region` when the comment has a `data-diffing` target; fall back to exact-text `patch`:
 
    ```bash
+   diffing mockup screen replace-region <id> main --region hero --replacement '<h1>New</h1>' --expected-version 3
+   # or MCP revise_mockup({ mockupId, op: 'replace-region', screenId, region: 'hero', replacement, expectedVersion })
    diffing mockup screen patch <id> main --text '<h1>Old</h1>' --replacement '<h1>New</h1>' --expected-version 3
-   # or MCP revise_mockup({ mockupId, op: 'patch', screenId, expectedText, replacement, expectedVersion })
    # also: screen upsert|remove — multi-screen changes → resubmit with same mockupId
    ```
 

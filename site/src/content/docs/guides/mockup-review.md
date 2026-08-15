@@ -28,7 +28,7 @@ diffing mockup submit - [--title T] [--id ID] [--model M] [--screen id=path]... 
 diffing mockup await [--timeout 570]          # sync / resume
 diffing mockup list|show|versions
 diffing mockup inspect <summary|comments|comment|screen> [<id>] [--status open] [--screen S] [--viewport V] [--version N] [--context none|anchor|source]
-diffing mockup screen <upsert|remove|patch> <id> <screen-id> [--file P|--text T --replacement R] [--expected-version N]
+diffing mockup screen <upsert|remove|patch|replace-region> <id> <screen-id> [--file P|--text T --region R --replacement R] [--expected-version N]
 diffing mockup threads <reply|edit|delete|resolve|unresolve> <comment-id> [<reply-id>] [--body "…"] [--model M]
 ```
 
@@ -55,7 +55,7 @@ Resubmit full revisions with the **same** `--id` so history stays one conversati
 | Tool | Purpose |
 |------|---------|
 | `inspect_mockup` | Bounded reads (`view=summary/comments/comment/screen`, filters by `status`/`screenId`/`viewport`/`version`, `context=none|anchor|source`) |
-| `revise_mockup` | One-screen `op=upsert/remove/patch` with `expectedVersion` guard |
+| `revise_mockup` | One-screen `op=upsert/remove/patch/replace-region` with `expectedVersion` guard |
 | `update_mockup_threads` | Atomic thread batch (reply/edit/delete/resolve/unresolve) |
 
 ## Verdicts

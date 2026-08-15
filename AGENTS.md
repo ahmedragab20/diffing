@@ -41,6 +41,7 @@ Load a skill when your task matches its trigger. All skills live in `.agents/ski
 | ------- | ---------------------- |
 | `diffing` | Route any diffing request to the strongest available MCP, CLI, or offline workflow |
 | `diffing-plan-review` | Submitting a markdown plan for human review before non-trivial work; awaiting verdict; replying/resolving plan comments |
+| `diffing-mockup-author` | Authoring HTML mockup screens that match the product (states, `data-diffing`, no generic AI chrome) |
 | `diffing-mockup-review` | Submitting HTML mockups for visual review; awaiting verdict; replying/resolving mockup comments |
 | `diffing-review` | Performing a code review of local git changes; fetching diff/comments; posting inline comments; applying suggestions |
 | `diffing-start-review` | Launching the diffing server so a human can review changes in the browser |
@@ -138,7 +139,7 @@ crates/
 
 ## Mockup Review (Reference)
 
-See `diffing-mockup-review` skill. Same verdicts as plans. Comment scope = **version + screen + viewport** (`desktop|tablet|mobile`). Storage: `mockups.json` + `mockup-sources/<id>/`.
+See `diffing-mockup-author` then `diffing-mockup-review`. Same verdicts as plans. Comment scope = **version + screen + viewport** (`desktop|tablet|mobile`). Storage: `mockups.json` + `mockup-sources/<id>/`. Cap is 24 screens. Prefer `revise_mockup op=replace-region` for a `data-diffing` block.
 Never write mockup HTML into the consumer repo — submit inline (`submit_mockup({ html })`) or stdin.
 
 ```bash
@@ -146,7 +147,7 @@ printf '%s' "$html" | diffing mockup submit - --title T --model M
 diffing mockup await [--timeout]
 diffing mockup list|show|versions
 diffing mockup inspect <summary|comments|comment|screen> [<id>] [--status open] [--screen S] [--viewport V] [--version N] [--context none|anchor|source]
-diffing mockup screen <upsert|remove|patch> <id> <screen-id> [--file P|--text T --replacement R] [--expected-version N]
+diffing mockup screen <upsert|remove|patch|replace-region> <id> <screen-id> [--file P|--text T --region R --replacement R] [--expected-version N]
 diffing mockup threads <reply|edit|delete|resolve|unresolve> <comment-id> [<reply-id>] [--body "…"]
 ```
 
@@ -211,7 +212,7 @@ Diff: `get_diff`, `diff_summary`, `diff_files`, `diff_hunks`, `diff_slice`, `dif
 Comments: `create_comment` (path, side, line/range, body, optional **severity**), `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment`, `edit_comment`, `delete_comment`, `apply_suggestion`, `resolve_all_comments`, `edit_reply`, `delete_reply`  
 Loop: `await_review`, `report_progress`, `get_review_history`  
 Plan: `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment`
-Mockup: `submit_mockup`, `await_mockup_review`, `list_mockups`, `get_mockup`, `get_mockup_versions`, `get_mockup_version`, `inspect_mockup`, `revise_mockup`, `update_mockup_threads`, `reply_to_mockup_comment`, `resolve_mockup_comment`
+Mockup: `submit_mockup`, `await_mockup_review`, `list_mockups`, `get_mockup`, `get_mockup_versions`, `get_mockup_version`, `inspect_mockup`, `revise_mockup`, `update_mockup_threads`, `reply_to_mockup_comment`, `resolve_mockup_comment`, `get_mockup_handoff`. Design system: `get_design_system`, `extract_design_system`, `propose_design_system`, `publish_design_system`
 
 ### HTTP API (for posting comments, applying suggestions)
 

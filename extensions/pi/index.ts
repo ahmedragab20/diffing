@@ -45,6 +45,7 @@ import { Type } from "typebox";
 const SKILL_NAMES = [
 	"diffing",
 	"diffing-finish-review",
+	"diffing-mockup-author",
 	"diffing-mockup-review",
 	"diffing-plan-review",
 	"diffing-pr-address",

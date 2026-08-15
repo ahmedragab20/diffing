@@ -82,7 +82,9 @@ The CLI mirror works in web, TUI, and PR sessions: `diffing inspect summary|file
 | Turn PR feedback into an approved local implementation | `diffing-pr-address` |
 | Wait for human code-review feedback and address it | `diffing-finish-review` |
 | Get a plan approved before implementation | `diffing-plan-review` |
+| Author HTML mockup screens that match the product | `diffing-mockup-author` |
 | Submit HTML mockups for visual review | `diffing-mockup-review` |
+| Extract or publish a per-repo design system | `diffing-mockup-author` (`get_design_system` / `diffing design`) |
 
 If the harness does not expose named skills, apply those workflows from this router and the MCP tool descriptions.
 
@@ -95,7 +97,7 @@ If the harness does not expose named skills, apply those workflows from this rou
 | Comments | `create_comment` (path, side, line/range, body, optional **severity**), `list_comments`, `reply_to_comment`, `resolve_comment`, `unresolve_comment`, `edit_comment`, `delete_comment`, `edit_reply`, `delete_reply`, `apply_suggestion`, `resolve_all_comments` |
 | Loop | `await_review`, `report_progress`, `get_review_history` |
 | Plan | `submit_plan`, `await_plan_review`, `list_plans`, `get_plan`, `get_plan_versions`, `get_plan_version`, `reply_to_plan_comment`, `resolve_plan_comment` |
-| Mockup | `submit_mockup`, `await_mockup_review`, `list_mockups`, `get_mockup`, `get_mockup_versions`, `get_mockup_version`, `inspect_mockup` (bounded reads by status/screen/viewport/version), `revise_mockup` (one-screen upsert/remove/patch + expectedVersion), `update_mockup_threads` (atomic reply/edit/delete/resolve/unresolve batch), `reply_to_mockup_comment`, `resolve_mockup_comment` |
+| Mockup | `submit_mockup`, `await_mockup_review`, `list_mockups`, `get_mockup`, `get_mockup_versions`, `get_mockup_version`, `inspect_mockup` (bounded reads by status/screen/viewport/version), `revise_mockup` (one-screen upsert/remove/patch/replace-region + expectedVersion), `update_mockup_threads` (atomic reply/edit/delete/resolve/unresolve batch), `reply_to_mockup_comment`, `resolve_mockup_comment` |
 | GitHub PR | `gh_overview`, `gh_list_threads`, `gh_list_reviews`, `gh_list_draft_comments`, `gh_create_draft_comment`, `gh_refresh`, `gh_submit_review` |
 
 MCP also advertises workflow prompts `review_local_changes` and `submit_plan_for_review`, plus resource `diffing://agent-guide`. They aid discovery but do not replace the focused skills or tool schemas.
@@ -111,7 +113,7 @@ MCP also advertises workflow prompts `review_local_changes` and `submit_plan_for
 |Reply/lifecycle|`diffing reply`; `resolve`; `unresolve`; `comment edit|delete`|
 |Human-visible status|`diffing progress --message "…" [--pct N] [--comment-id ID] [--agent-id ID]`|
 |Plan gate|`diffing plan submit|await|list|show|versions|reply|resolve`|
-|Mockup gate|`diffing mockup submit|await|list|show|versions`; `mockup inspect <summary|comments|comment|screen> [--status|--screen|--viewport|--version|--context]`; `mockup screen <upsert|remove|patch> … [--expected-version]`; `mockup threads <reply|edit|delete|resolve|unresolve> …`|
+|Mockup gate|`diffing mockup submit|await|list|show|versions`; `mockup inspect <summary|comments|comment|screen> [--status|--screen|--viewport|--version|--context]`; `mockup screen <upsert|remove|patch|replace-region> … [--expected-version]`; `mockup threads <reply|edit|delete|resolve|unresolve> …`|
 |GitHub PR|`diffing "gh pr <ref>"`; `diffing gh status|overview|threads|reviews|pr-fetch|pr-list-comments|pr-review`|
 |Bounded diff reads|`diffing inspect summary|files|hunks|slice|search`|
 |Discovery/DX|`diffing url`; `sessions [list] [--json]`; `sessions use <id>`; `sessions open [<id>|active]`;`sessions stop|kill <id>|active|all`;`mode [web|tui]`;`doctor`;`completion bash|zsh|fish`;`update`|

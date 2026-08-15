@@ -574,6 +574,10 @@ Keep agent plan sources under `~/.diffing/<repo>/plan-sources/` — never in the
 
 ### Mockup review
 
+`diffing design <show|list|extract|propose|publish>` manages the per-repo
+design system under `~/.diffing/<repo>/design-system.json`. Extract writes a
+draft; `publish` makes it wrap new fragment mockups.
+
 `diffing mockup <action>` is the **mockup-review** twin of plan review: an
 agent submits HTML screen(s), the human pins comments on the rendered mockup
 in the browser, and the agent acts on the verdict. Same verdict vocabulary as
@@ -643,11 +647,13 @@ version so you can retry). For multi-screen revisions, resubmit with `--id`.
 diffing mockup screen upsert <id> <screen-id> --file <path> [--label L] [--expected-version N]   # --file - = stdin
 diffing mockup screen remove <id> <screen-id> [--expected-version N]                            # refuses to drop the last screen
 diffing mockup screen patch  <id> <screen-id> --text <exact-text> --replacement <new-text> [--expected-version N]
+diffing mockup screen replace-region <id> <screen-id> --region <data-diffing> --replacement <inner-html> [--expected-version N]
 ```
 
 `patch` replaces the **first literal** occurrence of `--text` and reports how
 many exact matches existed before patching; 0 matches → 409
-(`exact-text-not-found`).
+(`exact-text-not-found`). `replace-region` replaces the inner HTML of the first
+`[data-diffing="<region>"]` element; missing region → 409 (`region-not-found`).
 
 ### `mockup threads` — atomic thread batch
 

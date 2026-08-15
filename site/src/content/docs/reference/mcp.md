@@ -88,7 +88,7 @@ Prefer bounded tools over `get_diff` for large trees.
 | `get_mockup_versions` | Version metadata |
 | `get_mockup_version` | Historical version body |
 | `inspect_mockup` | **Bounded reads** — `view=summary/comments/comment/screen`, filters by `status`/`screenId`/`viewport` (`desktop`\|`tablet`\|`mobile`)/`version`, `context=none\|anchor\|source`, `cursor`/`limit` |
-| `revise_mockup` | One-screen revision — `op=upsert/remove/patch` with `expectedVersion` guard (409 on conflict) |
+| `revise_mockup` | One-screen revision — `op=upsert/remove/patch/replace-region` with `expectedVersion` guard (409 on conflict) |
 | `update_mockup_threads` | **Atomic thread batch** — reply/edit/delete/resolve/unresolve in one all-or-nothing call; never bumps the version |
 | `reply_to_mockup_comment` | Reply (single op) |
 | `resolve_mockup_comment` | Resolve thread (single op) |
