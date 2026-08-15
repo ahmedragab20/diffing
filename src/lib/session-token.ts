@@ -6,7 +6,7 @@
  * `server-auth.ts` and re-export these values for existing Node importers.
  */
 
-/** Header, HttpOnly cookie, or legacy query param carrying the per-session review API token. */
+/** Header, HttpOnly cookie, or SSE query param carrying the per-session review API token. */
 export const SESSION_TOKEN_HEADER = 'x-diffing-token'
 export const SESSION_TOKEN_QUERY = 'token'
 export const SESSION_TOKEN_COOKIE = 'diffing-token'

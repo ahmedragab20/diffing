@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { Context, Next } from 'hono'
 import { getCookie } from 'hono/cookie'
 import {
@@ -7,7 +7,12 @@ import {
   SESSION_TOKEN_QUERY,
 } from './session-token.js'
 
-/** Header, HttpOnly cookie, or legacy query param carrying the per-session review API token. */
+/**
+ * Per-session review API token transport:
+ * - `SESSION_TOKEN_HEADER` — CLI / MCP.
+ * - `SESSION_TOKEN_COOKIE` — browser UI (HttpOnly).
+ * - `SESSION_TOKEN_QUERY` — SSE `/api/live` only (`EventSource` cannot send headers).
+ */
 export { SESSION_TOKEN_HEADER, SESSION_TOKEN_QUERY, SESSION_TOKEN_COOKIE }
 
 export interface ServerAuthConfig {
@@ -56,13 +61,30 @@ export function isAllowedRequestHost(hostHeader: string | undefined, bindHost: s
   return isLoopbackHost(host)
 }
 
-export function readSessionToken(c: Context): string | null {
+/**
+ * Read the session token from the header or HttpOnly cookie.
+ *
+ * The query param is only honored when `allowQuery` is set, which is reserved
+ * for the SSE `/api/live` endpoint (`EventSource` cannot send headers). Tokens
+ * in URLs leak into history, referrers, and logs, so every other API route
+ * requires the header or cookie.
+ */
+export function readSessionToken(c: Context, opts?: { allowQuery?: boolean }): string | null {
   const header = c.req.header(SESSION_TOKEN_HEADER)
   if (header) return header
   const cookie = getCookie(c, SESSION_TOKEN_COOKIE)
   if (cookie) return cookie
-  const query = c.req.query(SESSION_TOKEN_QUERY)
-  return query || null
+  if (opts?.allowQuery) return c.req.query(SESSION_TOKEN_QUERY) || null
+  return null
+}
+
+/** Constant-time comparison of a provided token against the expected session token. */
+function tokenMatches(provided: string | null, expected: string): boolean {
+  if (!provided) return false
+  const providedBuf = Buffer.from(provided)
+  const expectedBuf = Buffer.from(expected)
+  if (providedBuf.length !== expectedBuf.length) return false
+  return timingSafeEqual(providedBuf, expectedBuf)
 }
 
 /** `Set-Cookie` value for the review session token (loopback http — no Secure). */
@@ -95,8 +117,9 @@ export function createServerAuthMiddleware(config: ServerAuthConfig) {
     }
 
     if (!config.insecureNoAuth && config.authToken) {
-      const provided = readSessionToken(c)
-      if (provided !== config.authToken) {
+      const allowQuery = c.req.path === '/api/live'
+      const provided = readSessionToken(c, { allowQuery })
+      if (!tokenMatches(provided, config.authToken)) {
         return c.json({ error: 'invalid or missing review session token' }, 401)
       }
     }

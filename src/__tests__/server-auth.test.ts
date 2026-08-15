@@ -33,17 +33,35 @@ describe('server-auth', () => {
       authToken: 'secret-token',
     }))
     app.get('/api/ping', (c) => c.json({ ok: true }))
+    app.get('/api/live', (c) => c.json({ ok: true }))
     app.get('/index.html', (c) => c.text('ok'))
 
     expect((await app.fetch(new Request('http://127.0.0.1/api/ping'))).status).toBe(401)
-    expect((await app.fetch(new Request(`http://127.0.0.1/api/ping?${SESSION_TOKEN_QUERY}=secret-token`))).status).toBe(200)
+    // Query param is NOT accepted on general API routes (tokens in URLs leak).
+    expect((await app.fetch(new Request(`http://127.0.0.1/api/ping?${SESSION_TOKEN_QUERY}=secret-token`))).status).toBe(401)
     const withHeader = new Request('http://127.0.0.1/api/ping')
     withHeader.headers.set(SESSION_TOKEN_HEADER, 'secret-token')
     expect((await app.fetch(withHeader)).status).toBe(200)
+    const withWrongHeader = new Request('http://127.0.0.1/api/ping')
+    withWrongHeader.headers.set(SESSION_TOKEN_HEADER, 'wrong-token')
+    expect((await app.fetch(withWrongHeader)).status).toBe(401)
     const withCookie = new Request('http://127.0.0.1/api/ping')
     withCookie.headers.set('Cookie', `${SESSION_TOKEN_COOKIE}=secret-token`)
     expect((await app.fetch(withCookie)).status).toBe(200)
     expect((await app.fetch(new Request('http://127.0.0.1/index.html'))).status).toBe(200)
+  })
+
+  it('accepts the query token only on the SSE /api/live endpoint', async () => {
+    const app = new Hono()
+    app.use('*', createServerAuthMiddleware({
+      bindHost: '127.0.0.1',
+      authToken: 'secret-token',
+    }))
+    app.get('/api/live', (c) => c.json({ ok: true }))
+
+    expect((await app.fetch(new Request('http://127.0.0.1/api/live'))).status).toBe(401)
+    expect((await app.fetch(new Request(`http://127.0.0.1/api/live?${SESSION_TOKEN_QUERY}=secret-token`))).status).toBe(200)
+    expect((await app.fetch(new Request(`http://127.0.0.1/api/live?${SESSION_TOKEN_QUERY}=wrong`))).status).toBe(401)
   })
 
   it('builds a loopback-safe session cookie', () => {
