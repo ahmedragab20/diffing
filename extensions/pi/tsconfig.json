@@ -5,10 +5,11 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["index.ts", "pi-modules.d.ts"]
+  "include": ["index.ts", "skill-heal.ts", "pi-modules.d.ts"]
 }

@@ -87,11 +87,16 @@ Prefer bounded tools over `get_diff` for large trees.
 | `get_mockup` | One mockup + comments/screens (full body — prefer `inspect_mockup`) |
 | `get_mockup_versions` | Version metadata |
 | `get_mockup_version` | Historical version body |
-| `inspect_mockup` | **Bounded reads** — `view=summary/comments/comment/screen`, filters by `status`/`screenId`/`viewport` (`desktop`\|`tablet`\|`mobile`)/`version`, `context=none\|anchor\|source`, `cursor`/`limit` |
+| `inspect_mockup` | **Bounded reads** — `view=summary/comments/comment/screen/preview`, filters by `status`/`screenId`/`viewport` (`desktop`\|`tablet`\|`mobile`)/`version`, `context=none\|anchor\|source`, `cursor`/`limit` |
 | `revise_mockup` | One-screen revision — `op=upsert/remove/patch/replace-region` with `expectedVersion` guard (409 on conflict) |
 | `update_mockup_threads` | **Atomic thread batch** — reply/edit/delete/resolve/unresolve in one all-or-nothing call; never bumps the version |
 | `reply_to_mockup_comment` | Reply (single op) |
 | `resolve_mockup_comment` | Resolve thread (single op) |
+| `get_mockup_handoff` | Compact implementation packet after `approved` |
+| `get_design_system` | Read published/draft tokens before authoring |
+| `extract_design_system` | Scan the repo into a draft (does not publish) |
+| `propose_design_system` | Update the draft |
+| `publish_design_system` | Publish — human action unless asked |
 
 Comment scope = version + screen + viewport: pass `viewport`/`version` filters to `inspect_mockup`, and expect `mockup-version=`/`viewport=` on handoff comments.
 

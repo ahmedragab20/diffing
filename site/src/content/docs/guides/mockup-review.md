@@ -54,9 +54,11 @@ Resubmit full revisions with the **same** `--id` so history stays one conversati
 
 | Tool | Purpose |
 |------|---------|
-| `inspect_mockup` | Bounded reads (`view=summary/comments/comment/screen`, filters by `status`/`screenId`/`viewport`/`version`, `context=none|anchor|source`) |
+| `inspect_mockup` | Bounded reads (`view=summary/comments/comment/screen/preview`, filters by `status`/`screenId`/`viewport`/`version`, `context=none|anchor|source`) |
 | `revise_mockup` | One-screen `op=upsert/remove/patch/replace-region` with `expectedVersion` guard |
 | `update_mockup_threads` | Atomic thread batch (reply/edit/delete/resolve/unresolve) |
+| `get_mockup_handoff` | Compact implementation packet after `approved` |
+| `get_design_system` | Read tokens/guidelines before authoring |
 
 ## Verdicts
 

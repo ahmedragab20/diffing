@@ -3,8 +3,8 @@
  *
  * Bridges the local-first diffing review loop into pi:
  *  - Structured LLM tools mirroring the diffing MCP surface (status, review
- *    start, comments, reply/resolve, plan loop, mockup loop, progress,
- *    sessions, GH PR).
+ *    start, comments, reply/resolve, plan loop, mockup loop, design system,
+ *    progress, sessions, GH PR).
  *  - `/diffing` command to open/reuse the review UI for the current repo.
  *  - Footer status showing the active review session.
  *  - Skill self-heal: keeps `~/.agents/skills/diffing*` as symlinks to the
@@ -20,12 +20,9 @@
 import { spawn } from "node:child_process";
 import {
 	existsSync,
-	lstatSync,
 	mkdtempSync,
 	readFileSync,
-	realpathSync,
 	rmSync,
-	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -37,29 +34,18 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import {
+	selfHealSkillLinks,
+	SKILLS_REL,
+} from "./skill-heal.ts";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────────────────
 
-const SKILL_NAMES = [
-	"diffing",
-	"diffing-finish-review",
-	"diffing-mockup-author",
-	"diffing-mockup-review",
-	"diffing-plan-review",
-	"diffing-pr-address",
-	"diffing-pr-read",
-	"diffing-release",
-	"diffing-review",
-	"diffing-start-review",
-] as const;
-
 const MAX_OUTPUT_BYTES = 48 * 1024;
 const REVIEW_START_TIMEOUT_MS = 15_000;
 const REVIEW_START_POLL_MS = 400;
-
-const SKILLS_REL = join(".agents", "skills");
 
 // ────────────────────────────────────────────────────────────────────────────
 // CLI runner
@@ -248,35 +234,6 @@ function findCanonicalRoot(cwd: string): string | null {
 	return null;
 }
 
-/**
- * Keep the `~/.agents/skills/diffing*` entries as symlinks to the canonical
- * checkout's `.agents/skills`. pi dedupes skills by canonical realpath, so
- * symlinked home entries merge silently with the repo's project skills and no
- * `[Skill conflicts]` banner appears. Repairs stale real copies left behind by
- * `diffing setup skills` / `npx skills add --copy`. Only touches the known
- * names in SKILL_NAMES; never deletes anything else.
- */
-function selfHealSkillLinks(canonical: string): void {
-	const homeSkills = join(homedir(), ".agents", "skills");
-	if (!existsSync(homeSkills)) return;
-	for (const name of SKILL_NAMES) {
-		const target = join(canonical, SKILLS_REL, name);
-		if (!existsSync(target)) continue;
-		const link = join(homeSkills, name);
-		try {
-			if (existsSync(link) || lstatSync(link)) {
-				if (lstatSync(link).isSymbolicLink()) {
-					const real = realpathSync(link);
-					if (real === realpathSync(target)) continue; // already correct
-				}
-				rmSync(link, { recursive: true, force: true });
-			}
-			symlinkSync(target, link, "dir");
-		} catch {
-			// best-effort; a failed heal must not break the session
-		}
-	}
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Detached review server start
@@ -340,7 +297,9 @@ export default function (pi: ExtensionAPI) {
 	// Keep the home skill links canonical for every session (idempotent).
 	pi.on("session_start", async (_event, ctx) => {
 		const canonical = findCanonicalRoot(ctx.cwd);
-		if (canonical) selfHealSkillLinks(canonical);
+		if (canonical) {
+			selfHealSkillLinks(canonical, join(homedir(), ".agents", "skills"));
+		}
 		await refreshStatus(ctx);
 	});
 
@@ -825,7 +784,7 @@ export default function (pi: ExtensionAPI) {
 		name: "diffing_mockup_submit",
 		label: "Diffing Mockup Submit",
 		description:
-			"Submit HTML mockup screen(s) for visual review. Pass a single html body, a file/dir path, or an inline screens array [{id, html}]. Share the URL and park unless asked to wait. Resubmit with mockupId to bump the version and reset the verdict.",
+			"Submit HTML mockup screen(s) for visual review. HARD RULE — one state per screen: never tabs/accordions/toggles/modals/JS swaps. Pass html, a file/dir already under ~/.diffing/…/mockup-sources/, or screens [{id, html}]. Call diffing_design show first. Share the URL and park unless asked to wait. Resubmit with mockupId to bump the version. Fix any in-page-state or generic-style hints before parking.",
 		parameters: Type.Object({
 			html: Type.Optional(
 				Type.String({ description: "Single-screen HTML body." }),
@@ -854,6 +813,23 @@ export default function (pi: ExtensionAPI) {
 			),
 			model: Type.Optional(Type.String()),
 			source: Type.Optional(Type.String()),
+			mode: Type.Optional(
+				StringEnum(["fragment", "document"] as const, {
+					description:
+						"fragment = body contents wrapped by the published design-system shell. document = full HTML, no wrap. Default: server default.",
+				}),
+			),
+			designSystem: Type.Optional(
+				Type.String({
+					description:
+						"Design-system id to bind (default system if omitted).",
+				}),
+			),
+			planId: Type.Optional(
+				Type.String({
+					description: "Optional plan id this mockup illustrates.",
+				}),
+			),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const args = ["mockup", "submit"];
@@ -896,6 +872,9 @@ export default function (pi: ExtensionAPI) {
 			if (params.mockupId) args.push("--id", params.mockupId);
 			if (params.model) args.push("--model", params.model);
 			if (params.source) args.push("--source", params.source);
+			if (params.mode) args.push("--mode", params.mode);
+			if (params.designSystem) args.push("--system", params.designSystem);
+			if (params.planId) args.push("--plan-id", params.planId);
 			try {
 				const result = await runDiffing(args, ctx.cwd, { stdin });
 				const stdout = result.stdout.trim();
@@ -1079,12 +1058,15 @@ export default function (pi: ExtensionAPI) {
 		name: "diffing_mockup_inspect",
 		label: "Diffing Mockup Inspect",
 		description:
-			"Read compact, bounded mockup data without transferring screen HTML. view=summary (headline stats), comments (paged comment list), comment (one thread), screen (screen source). Filter by comment scope: status, screenId, viewport (desktop|tablet|mobile), version. context=none|anchor|source controls anchor detail. Prefer this over diffing_mockup_show.",
+			"Read compact, bounded mockup data without transferring screen HTML. view=summary (headline stats), comments (paged comment list), comment (one thread), screen (screen source), preview (rendered preview metadata). Filter by comment scope: status, screenId, viewport (desktop|tablet|mobile), version. context=none|anchor|source controls anchor detail. Prefer this over diffing_mockup_show.",
 		parameters: Type.Object({
-			view: StringEnum(["summary", "comments", "comment", "screen"] as const, {
-				description: "What to read. Default: summary.",
-				default: "summary",
-			}),
+			view: StringEnum(
+				["summary", "comments", "comment", "screen", "preview"] as const,
+				{
+					description: "What to read. Default: summary.",
+					default: "summary",
+				},
+			),
 			mockupId: Type.Optional(
 				Type.String({ description: "Mockup id. Default: latest." }),
 			),
@@ -1152,11 +1134,12 @@ export default function (pi: ExtensionAPI) {
 		name: "diffing_mockup_screen",
 		label: "Diffing Mockup Screen",
 		description:
-			"One-screen revision of an HTML mockup. action=upsert adds/replaces a screen (html or file), remove deletes a screen, patch replaces the first exact occurrence of text with replacement. Every success bumps the mockup version; pass expectedVersion to guard racing edits (409 version-mismatch, nothing applied). For multi-screen revisions, resubmit via diffing_mockup_submit with the same mockupId.",
+			"One-screen revision of an HTML mockup. action=upsert adds/replaces a screen (html or file), remove deletes a screen, patch replaces the first exact occurrence of text with replacement, replace-region replaces the inner HTML of the first [data-diffing=region] element (prefer this when the comment has a data-diffing target). Every success bumps the mockup version; pass expectedVersion to guard racing edits (409 version-mismatch, nothing applied). For multi-screen revisions, resubmit via diffing_mockup_submit with the same mockupId.",
 		parameters: Type.Object({
-			action: StringEnum(["upsert", "remove", "patch"] as const, {
-				description: "Revision op.",
-			}),
+			action: StringEnum(
+				["upsert", "remove", "patch", "replace-region"] as const,
+				{ description: "Revision op." },
+			),
 			mockupId: Type.String({ description: "Mockup id." }),
 			screenId: Type.String({ description: "Screen id." }),
 			html: Type.Optional(
@@ -1177,8 +1160,17 @@ export default function (pi: ExtensionAPI) {
 					description: "For patch: exact text to replace (first occurrence).",
 				}),
 			),
+			region: Type.Optional(
+				Type.String({
+					description:
+						"For replace-region: data-diffing attribute value of the block to replace.",
+				}),
+			),
 			replacement: Type.Optional(
-				Type.String({ description: "For patch: replacement text." }),
+				Type.String({
+					description:
+						"For patch: replacement text. For replace-region: new inner HTML.",
+				}),
 			),
 			expectedVersion: Type.Optional(
 				Type.Number({
@@ -1202,6 +1194,10 @@ export default function (pi: ExtensionAPI) {
 					stdin = params.html;
 				}
 				if (params.label) args.push("--label", params.label);
+			} else if (params.action === "replace-region") {
+				if (params.region) args.push("--region", params.region);
+				if (params.replacement !== undefined)
+					args.push("--replacement", params.replacement);
 			} else if (params.action === "patch") {
 				if (params.text !== undefined) args.push("--text", params.text);
 				if (params.replacement !== undefined)
@@ -1258,6 +1254,77 @@ export default function (pi: ExtensionAPI) {
 			if (params.mockupId) args.push("--id", params.mockupId);
 			const result = await runDiffing(args, ctx.cwd);
 			return textResult(describe(result, "diffing mockup threads"), {
+				exitCode: result.exitCode,
+				stderr: result.stderr.trim() || undefined,
+			});
+		},
+	});
+
+	pi.registerTool({
+		name: "diffing_mockup_handoff",
+		label: "Diffing Mockup Handoff",
+		description:
+			"Compact implementation handoff after a mockup is approved: tokens, screens with intent, components used, leftover nits. Prefer this over dumping every screen's HTML. Call after decision=approved, before writing product UI.",
+		parameters: Type.Object({
+			mockupId: Type.Optional(
+				Type.String({ description: "Mockup id. Default: latest." }),
+			),
+			json: Type.Optional(
+				Type.Boolean({ description: "Emit raw JSON. Default: XML handoff." }),
+			),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const args = ["mockup", "handoff"];
+			if (params.mockupId) args.push(params.mockupId);
+			if (params.json) args.push("--json");
+			const result = await runDiffing(args, ctx.cwd);
+			return textResult(describe(result, "diffing mockup handoff"), {
+				exitCode: result.exitCode,
+				stderr: result.stderr.trim() || undefined,
+			});
+		},
+	});
+
+	pi.registerTool({
+		name: "diffing_design",
+		label: "Diffing Design System",
+		description:
+			"Per-repo design system used before authoring mockup HTML. show/list: read tokens, guidelines, components. extract: scan the consumer repo and write a draft (does not publish). propose: update the draft. publish: human action only — do not publish unless the human asked. Omit id for the default system.",
+		parameters: Type.Object({
+			action: StringEnum(
+				["show", "list", "extract", "propose", "publish"] as const,
+				{ description: "Design-system op. Default: show." },
+			),
+			id: Type.Optional(
+				Type.String({ description: "System id. Default: default." }),
+			),
+			json: Type.Optional(
+				Type.Boolean({ description: "Emit raw JSON. Default: false." }),
+			),
+			from: Type.Optional(
+				StringEnum(["css", "text"] as const, {
+					description: "For extract: scan source. Default: css.",
+				}),
+			),
+			title: Type.Optional(
+				Type.String({ description: "For extract/propose: system title." }),
+			),
+			guidelines: Type.Optional(
+				Type.String({
+					description: "For propose: markdown guidelines to write on the draft.",
+				}),
+			),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const action = params.action ?? "show";
+			const args = ["design", action];
+			if (params.id) args.push(params.id);
+			if (params.json) args.push("--json");
+			if (params.from) args.push("--from", params.from);
+			if (params.title) args.push("--title", params.title);
+			if (params.guidelines) args.push("--guidelines", params.guidelines);
+			const result = await runDiffing(args, ctx.cwd);
+			return textResult(describe(result, `diffing design ${action}`), {
 				exitCode: result.exitCode,
 				stderr: result.stderr.trim() || undefined,
 			});

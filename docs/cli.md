@@ -591,7 +591,7 @@ Agents must **never write mockup HTML into the consumer git tree**. Prefer MCP
 
 ```bash
 printf '%s' "$html" | diffing mockup submit - --title T --model M
-diffing mockup submit - [--title T] [--id ID] [--model M] [--source S] [--wait] [--timeout N]
+diffing mockup submit - [--title T] [--id ID] [--model M] [--source S] [--mode fragment|document] [--system ID] [--plan-id ID] [--wait] [--timeout N]
 diffing mockup await [--timeout N]
 diffing mockup list|show|versions
 ```
@@ -601,12 +601,17 @@ diffing mockup list|show|versions
   repo. A directory of `*.html` becomes one screen per file (`index.html` first);
   `--screen id=path` adds explicit screens (ids are slugified to
   `^[a-z0-9][a-z0-9_-]{0,63}$`). `--title` labels the mockup, `--source` /
-  `--model` record its origin, `--id` resubmits a revision (version++,
-  verdict reset to `pending`), and `--wait` blocks for the verdict. Prints
-  the mockup id on stdout and the review URL (`/mockup/<id>`) on stderr.
+  `--model` record its origin, `--mode fragment|document` chooses the host
+  shell vs full HTML, `--system` binds a design-system id, `--plan-id` links
+  a plan, `--id` resubmits a revision (version++, verdict reset to `pending`),
+  and `--wait` blocks for the verdict. Prints the mockup id on stdout and the
+  review URL (`/mockup/<id>`) on stderr. Soft lint hints (in-page state UI,
+  generic styling) print on stderr and do not fail the submit.
 - `await` — **sync** wait for a verdict; prints the `<mockup-review>` XML.
 - `list` / `show` / `versions` — browse mockups (`--json` for raw data;
   `show --version <n>` prints a historical body).
+- `handoff` — compact implementation packet after `approved` (tokens, screen
+  intent, leftover nits). Prefer this over dumping every screen's HTML.
 
 ### Comment scope
 
@@ -621,11 +626,12 @@ comment is only ever addressed in the exact view where it was written.
 Read compact, paginated mockup data without transferring screen HTML:
 
 ```bash
-diffing mockup inspect <summary|comments|comment|screen> [<id>] [options] [--pretty]
+diffing mockup inspect <summary|comments|comment|screen|preview> [<id>] [options] [--pretty]
   summary  [<id>]                                   # version, decision, counts (byViewport)
   comments [<id>] [--status open|resolved] [--screen S] [--viewport desktop|tablet|mobile] [--version N] [--cursor N] [--limit N] [--context none|anchor|source]
   comment  [<id>] --id <comment-id> [--context none|anchor|source]
   screen   [<id>] [--version N] [--screen S] [--cursor N] [--limit N] [--context source]
+  preview  [<id>] [--screen S] [--viewport desktop|tablet|mobile] [--version N]
 ```
 
 - `context` — `none` (metadata only), `anchor` (adds `target=`/`selector=`/

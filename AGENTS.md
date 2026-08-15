@@ -145,10 +145,11 @@ Never write mockup HTML into the consumer repo — submit inline (`submit_mockup
 ```bash
 printf '%s' "$html" | diffing mockup submit - --title T --model M
 diffing mockup await [--timeout]
-diffing mockup list|show|versions
-diffing mockup inspect <summary|comments|comment|screen> [<id>] [--status open] [--screen S] [--viewport V] [--version N] [--context none|anchor|source]
+diffing mockup list|show|versions|handoff
+diffing mockup inspect <summary|comments|comment|screen|preview> [<id>] [--status open] [--screen S] [--viewport V] [--version N] [--context none|anchor|source]
 diffing mockup screen <upsert|remove|patch|replace-region> <id> <screen-id> [--file P|--text T --region R --replacement R] [--expected-version N]
 diffing mockup threads <reply|edit|delete|resolve|unresolve> <comment-id> [<reply-id>] [--body "…"]
+diffing design show|list|extract|propose|publish
 ```
 
 Open `/mockup/<id>`. Comments are `section` / `block` / `point`; handoff XML is compact and open-only (`mockup-version=`/`viewport=` on each comment).

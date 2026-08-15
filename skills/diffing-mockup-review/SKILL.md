@@ -68,6 +68,7 @@ Comments: `kind="section"` + `target=` → `data-diffing` region; `kind="block"`
    ```bash
    diffing mockup inspect comments <id> --status open
    # or MCP inspect_mockup({ mockupId, view: 'comments', status: 'open' })
+   # also: inspect preview — rendered preview metadata, no full HTML
    ```
 
    `context=none|anchor|source` (default `anchor`); `--version N` / `--viewport V` / `--screen S` filter the scope.
@@ -102,6 +103,7 @@ Comments: `kind="section"` + `target=` → `data-diffing` region; `kind="block"`
 diffing mockup list [--json]
 diffing mockup show [<id>] [--json] [--version N]
 diffing mockup versions <id>
+diffing mockup handoff [<id>]   # after approved: tokens + screen intent (MCP get_mockup_handoff)
 ```
 
 Agents MAY tag regions with `data-diffing="hero"`. Humans can still click untagged blocks and drop pins.
