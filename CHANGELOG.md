@@ -1,3 +1,9 @@
+## 0.18.4
+
+### Patch Changes
+
+- 48b19b8: Herdr coordination — DIFFING_READY marker and DIFFING_VERDICT notices
+
 ## 0.18.3
 
 ### Patch Changes
