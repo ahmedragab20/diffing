@@ -26,7 +26,7 @@ declare module "@earendil-works/pi-coding-agent" {
 				text: string,
 				level?: "info" | "error" | "success" | "warning",
 			): void;
-			setWidget?(id: string, lines: string[]): void;
+			setWidget(id: string, lines: string[] | undefined): void;
 		};
 	}
 

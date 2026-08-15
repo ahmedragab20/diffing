@@ -404,6 +404,11 @@ const localUrl = appendSessionToken(
 );
 
 console.log(`diffing server running at ${localUrl}`);
+// Machine-readable readiness marker for herdr `wait output --match "DIFFING_READY"`
+// (exact match instead of grepping the human banner for "http").
+console.error(
+	`DIFFING_READY ${localUrl} mode=${prMode ? "gh-pr" : "web"} pid=${process.pid}`,
+);
 
 // Open the browser as soon as the server is listening. The decorative quote
 // animation used to block here (typewriter can take seconds) so the UI felt

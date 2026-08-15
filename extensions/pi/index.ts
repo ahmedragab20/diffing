@@ -195,6 +195,45 @@ async function refreshStatus(ctx: ExtensionContext): Promise<void> {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Verdict notices (herdr-visible)
+//
+// After a review/plan/mockup await returns a real verdict, surface a compact,
+// greppable `DIFFING_VERDICT …` line in the pi pane so a sibling herdr pane can
+// observe review state via `herdr pane read` / `herdr wait output`. We use pi's
+// own UI hooks (notify + widget) rather than `herdr pane send-text`, which would
+// type raw bytes into the pi TUI input box instead of the rendered scrollback.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface VerdictNotice {
+	kind: "plan" | "mockup" | "review";
+	decision: string;
+}
+
+function verdictNotice(stderr: string): VerdictNotice | null {
+	const plan = stderr.match(/DIFFING_PLAN_DECISION=(\S+)/);
+	if (plan) return { kind: "plan", decision: plan[1] };
+	const mockup = stderr.match(/DIFFING_MOCKUP_DECISION=(\S+)/);
+	if (mockup) return { kind: "mockup", decision: mockup[1] };
+	const review = stderr.match(/DIFFING_REVIEW_ROUND=(\S+)/);
+	if (review) return { kind: "review", decision: `released round=${review[1]}` };
+	return null;
+}
+
+function emitVerdictNotice(ctx: ExtensionContext, stderr: string): void {
+	const notice = verdictNotice(stderr);
+	if (!notice) return;
+	const line = `DIFFING_VERDICT ${notice.kind} decision=${notice.decision}`;
+	try {
+		if (ctx.hasUI) {
+			ctx.ui.notify(line, "info");
+			ctx.ui.setWidget("diffing-verdict", [line]);
+		}
+	} catch {
+		// UI hooks are best-effort; never break the tool result.
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Canonical skill root + self-heal
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -560,6 +599,7 @@ export default function (pi: ExtensionAPI) {
 					{ parked: true, exitCode: result.exitCode },
 				);
 			}
+			emitVerdictNotice(ctx, result.stderr);
 			return textResult(describe(result, "diffing await-review"), {
 				parked: false,
 				exitCode: result.exitCode,
@@ -667,6 +707,7 @@ export default function (pi: ExtensionAPI) {
 					{ parked: true, exitCode: result.exitCode },
 				);
 			}
+			emitVerdictNotice(ctx, result.stderr);
 			return textResult(describe(result, "diffing plan await"), {
 				parked: false,
 				exitCode: result.exitCode,
@@ -920,6 +961,7 @@ export default function (pi: ExtensionAPI) {
 					{ parked: true, exitCode: result.exitCode },
 				);
 			}
+			emitVerdictNotice(ctx, result.stderr);
 			return textResult(describe(result, "diffing mockup await"), {
 				parked: false,
 				exitCode: result.exitCode,
