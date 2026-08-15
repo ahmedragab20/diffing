@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { detectInPageState, lintMockupScreens } from "../mockup-lint.js";
+import {
+  detectGenericStyle,
+  detectInPageState,
+  formatSubmitHints,
+  lintMockupScreens,
+} from "../mockup-lint.js";
 
 describe("detectInPageState", () => {
   it("flags tabs (role, aria-selected, data-toggle)", () => {
@@ -65,5 +70,53 @@ describe("lintMockupScreens", () => {
 
   it("returns empty for all-clean screens", () => {
     expect(lintMockupScreens([{ id: "main", html: "<p>ok</p>" }])).toEqual([]);
+  });
+
+  it("flags CDN Tailwind, Google Fonts, and Inter+indigo as style hints", () => {
+    const hints = lintMockupScreens([
+      {
+        id: "main",
+        html: '<script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Inter">',
+      },
+      {
+        id: "hero",
+        html: '<p style="font-family: Inter, sans-serif; color: #6366f1">Hi</p>',
+      },
+    ]);
+    expect(hints.map((h) => h.kind)).toEqual(["style", "style"]);
+    expect(hints[0].patterns).toEqual(
+      expect.arrayContaining(["tailwind-cdn", "google-fonts"]),
+    );
+    expect(hints[1].patterns).toContain("generic-palette");
+  });
+
+  it("does not flag Inter without indigo, or indigo without Inter", () => {
+    expect(
+      detectGenericStyle('<p style="font-family: Inter">ok</p>'),
+    ).toEqual([]);
+    expect(detectGenericStyle('<p class="text-indigo-600">ok</p>')).toEqual([]);
+  });
+});
+
+describe("formatSubmitHints", () => {
+  it("groups state and style separately", () => {
+    const text = formatSubmitHints([
+      {
+        screenId: "main",
+        kind: "state",
+        patterns: ["tabs"],
+        message: "split",
+      },
+      {
+        screenId: "main",
+        kind: "style",
+        patterns: ["tailwind-cdn"],
+        message: "generic",
+      },
+    ]);
+    expect(text).toContain("In-page state UI");
+    expect(text).toContain("Generic styling");
+    expect(text).toContain("tabs");
+    expect(text).toContain("tailwind-cdn");
   });
 });

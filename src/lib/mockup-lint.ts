@@ -9,9 +9,13 @@
  * not flagged (it is an input, not an alternate-case toggle).
  */
 
+export type MockupHintKind = "state" | "style";
+
 export interface MockupStateHint {
  /** Screen id that contains the pattern. */
  screenId: string;
+ /** `state` = in-page UI that should be split; `style` = generic/off-brand chrome. */
+ kind?: MockupHintKind;
  /** Human-readable, deduped list of the state patterns found. */
  patterns: string[];
  /** Actionable guidance for the author. */
@@ -60,21 +64,88 @@ export function detectInPageState(html: string): string[] {
  return ORDERED_LABELS.filter((label) => found.has(label));
 }
 
+const STYLE_RULES: PatternRule[] = [
+ { label: "tailwind-cdn", re: /cdn\.tailwindcss\.com/i },
+ {
+  label: "tailwind-cdn",
+  re: /(?:unpkg\.com|cdn\.jsdelivr\.net|esm\.sh)\/(?:npm\/)?tailwindcss/i,
+ },
+ { label: "google-fonts", re: /fonts\.googleapis\.com/i },
+ { label: "google-fonts", re: /fonts\.gstatic\.com/i },
+];
+
+const GENERIC_FONT_RE = /font-family\s*:\s*[^;{]*\bInter\b/i;
+const GENERIC_INDIGO_RE =
+ /#(?:4f46e5|4338ca|6366f1|818cf8|7c3aed|8b5cf6|a78bfa)\b|\b(?:indigo|violet)-(?:[4-9]00|950)\b/i;
+
+/** Off-brand / generic-AI styling that should not ship as the product look. */
+export function detectGenericStyle(html: string): string[] {
+ const found = new Set<string>();
+ for (const rule of STYLE_RULES) {
+  if (found.has(rule.label)) continue;
+  if (rule.re.test(html)) found.add(rule.label);
+ }
+ if (GENERIC_FONT_RE.test(html) && GENERIC_INDIGO_RE.test(html)) {
+  found.add("generic-palette");
+ }
+ return ["tailwind-cdn", "google-fonts", "generic-palette"].filter((label) =>
+  found.has(label),
+ );
+}
+
 /** Build submit-time hints for a set of screens (empty when all clean). */
 export function lintMockupScreens(
  screens: Array<{ id: string; html: string }>,
 ): MockupStateHint[] {
  const hints: MockupStateHint[] = [];
  for (const screen of screens) {
-  const patterns = detectInPageState(screen.html);
-  if (patterns.length === 0) continue;
-  hints.push({
-   screenId: screen.id,
-   patterns,
-   message: `Screen "${screen.id}" contains in-page state UI (${patterns.join(
-    ", ",
-   )}). Split each state into its own screen instead.`,
-  });
+  const state = detectInPageState(screen.html);
+  if (state.length > 0) {
+   hints.push({
+    screenId: screen.id,
+    kind: "state",
+    patterns: state,
+    message: `Screen "${screen.id}" contains in-page state UI (${state.join(
+     ", ",
+    )}). Split each state into its own screen instead.`,
+   });
+  }
+  const style = detectGenericStyle(screen.html);
+  if (style.length > 0) {
+   hints.push({
+    screenId: screen.id,
+    kind: "style",
+    patterns: style,
+    message: `Screen "${screen.id}" looks generic (${style.join(
+     ", ",
+    )}). Drop CDN Tailwind / Google Fonts and do not invent Inter + indigo — match the product.`,
+   });
+  }
  }
  return hints;
+}
+
+/** Compact submit/revise warning for CLI and MCP. */
+export function formatSubmitHints(hints: MockupStateHint[]): string {
+ if (hints.length === 0) return "";
+ const state = hints.filter((h) => h.kind !== "style");
+ const style = hints.filter((h) => h.kind === "style");
+ const lines: string[] = [];
+ if (state.length > 0) {
+  lines.push(
+   "⚠️ In-page state UI detected — split each state into its own screen:",
+  );
+  for (const hint of state) {
+   lines.push(`  • ${hint.screenId}: ${hint.patterns.join(", ")}`);
+  }
+ }
+ if (style.length > 0) {
+  lines.push(
+   "⚠️ Generic styling — match the product (no CDN Tailwind, Google Fonts, or Inter+indigo):",
+  );
+  for (const hint of style) {
+   lines.push(`  • ${hint.screenId}: ${hint.patterns.join(", ")}`);
+  }
+ }
+ return `\n${lines.join("\n")}`;
 }
