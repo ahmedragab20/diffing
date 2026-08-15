@@ -14,6 +14,7 @@ import {
 	defaultScreenLabel,
 	normalizeSubmitScreens,
 } from "./mockup-types.js";
+import { replaceDataDiffingRegion } from "./mockup-region.js";
 
 export function mockupSourceDir(storageDir: string, mockupId: string): string {
 	return join(storageDir, "mockup-sources", mockupId);
@@ -33,6 +34,11 @@ export interface MockupUpsertInput {
 	screens: MockupScreen[];
 	source?: string;
 	model?: string;
+	designSystemId?: string;
+	designRevision?: number;
+	mode?: import("./mockup-types.js").MockupRenderMode;
+	planId?: string;
+	flows?: import("./mockup-types.js").MockupFlow[];
 }
 
 export interface MockupScreenOpResult {
@@ -148,6 +154,18 @@ export interface MockupStore {
 	): Promise<MockupScreenOpResult>;
 
 	/**
+	 * Replace the inner HTML of the first `[data-diffing="<region>"]` element
+	 * on one screen. Bumps the mockup version. `occurrences` is how many
+	 * matching regions existed before the replace.
+	 */
+	replaceRegion(
+		id: string,
+		screenId: string,
+		patch: { region: string; replacement: string },
+		opts?: { expectedVersion?: number },
+	): Promise<MockupScreenOpResult>;
+
+	/**
 	 * Atomic thread batch: every op is validated against the current mockup
 	 * before any is applied, so the batch is all-or-nothing. Thread ops never
 	 * bump the mockup version (they do not change the design).
@@ -163,7 +181,29 @@ function newId(): string {
 }
 
 function snapshotScreens(screens: MockupScreen[]): MockupScreen[] {
-	return screens.map((s) => ({ id: s.id, label: s.label, html: s.html }));
+	return screens.map((s) => ({
+		id: s.id,
+		label: s.label,
+		html: s.html,
+		stateOf: s.stateOf,
+		flow: s.flow,
+	}));
+}
+
+function snapshotBinding(input: {
+	designSystemId?: string;
+	designRevision?: number;
+	mode?: import("./mockup-types.js").MockupRenderMode;
+	planId?: string;
+	flows?: import("./mockup-types.js").MockupFlow[];
+}) {
+	return {
+		designSystemId: input.designSystemId,
+		designRevision: input.designRevision,
+		mode: input.mode,
+		planId: input.planId,
+		flows: input.flows,
+	};
 }
 
 function backfillMockup(mockup: Mockup): void {
@@ -212,6 +252,13 @@ function applyUpsert(
 			existing.screens = snapshotScreens(input.screens);
 			if (input.source !== undefined) existing.source = input.source;
 			if (input.model !== undefined) existing.model = input.model;
+			if (input.designSystemId !== undefined)
+				existing.designSystemId = input.designSystemId;
+			if (input.designRevision !== undefined)
+				existing.designRevision = input.designRevision;
+			if (input.mode !== undefined) existing.mode = input.mode;
+			if (input.planId !== undefined) existing.planId = input.planId;
+			if (input.flows !== undefined) existing.flows = input.flows;
 			existing.version += 1;
 			existing.updatedAt = now;
 			if (!existing.versions) existing.versions = [];
@@ -222,6 +269,7 @@ function applyUpsert(
 				source: existing.source,
 				model: existing.model,
 				createdAt: now,
+				...snapshotBinding(existing),
 			});
 			existing.decision = "pending";
 			existing.decisionComment = undefined;
@@ -240,6 +288,7 @@ function applyUpsert(
 		version: 1,
 		decision: "pending",
 		comments: [],
+		...snapshotBinding(input),
 		versions: [
 			{
 				version: 1,
@@ -248,6 +297,7 @@ function applyUpsert(
 				source: input.source,
 				model: input.model,
 				createdAt: now,
+				...snapshotBinding(input),
 			},
 		],
 	};
@@ -286,6 +336,7 @@ function syncCurrentVersion(mockup: Mockup): void {
 	last.screens = snapshotScreens(mockup.screens);
 	last.source = mockup.source;
 	last.model = mockup.model;
+	Object.assign(last, snapshotBinding(mockup));
 }
 
 // ── Screen ops + thread batch (shared by both stores) ───────────────────────
@@ -312,6 +363,7 @@ function bumpMockupVersion(mockup: Mockup, now: number): void {
 		source: mockup.source,
 		model: mockup.model,
 		createdAt: now,
+		...snapshotBinding(mockup),
 	});
 }
 
@@ -325,11 +377,15 @@ function applyScreenUpsert(
 	if (existing) {
 		existing.html = html;
 		if (screen.label?.trim()) existing.label = screen.label.trim();
+		if (screen.stateOf !== undefined) existing.stateOf = screen.stateOf;
+		if (screen.flow !== undefined) existing.flow = screen.flow;
 	} else {
 		mockup.screens.push({
 			id: screen.id!,
 			label: screen.label?.trim() || defaultScreenLabel(screen.id!),
 			html,
+			stateOf: screen.stateOf,
+			flow: screen.flow,
 		});
 	}
 	bumpMockupVersion(mockup, now);
@@ -347,6 +403,20 @@ function applyScreenPatch(
 		patch.replacement +
 		screen.html.slice(idx + patch.expectedText.length);
 	return count;
+}
+
+function applyScreenRegion(
+	screen: MockupScreen,
+	patch: { region: string; replacement: string },
+): { occurrences: number } | { error: string } {
+	const result = replaceDataDiffingRegion(
+		screen.html,
+		patch.region,
+		patch.replacement,
+	);
+	if (!result.ok) return { error: result.error };
+	screen.html = result.html;
+	return { occurrences: result.occurrences };
 }
 
 /** Validate every op against the mockup before applying any (all-or-nothing). */
@@ -759,6 +829,24 @@ export class InMemoryMockupStore implements MockupStore {
 		return { mockup, occurrences };
 	}
 
+	async replaceRegion(
+		id: string,
+		screenId: string,
+		patch: { region: string; replacement: string },
+		opts?: { expectedVersion?: number },
+	): Promise<MockupScreenOpResult> {
+		const mockup = this.mockups.find((m) => m.id === id);
+		if (!mockup) return { mockup: null, error: "Mockup not found" };
+		const vm = versionMismatch(opts?.expectedVersion, mockup.version);
+		if (vm) return { mockup: null, versionMismatch: vm };
+		const screen = mockup.screens.find((s) => s.id === screenId);
+		if (!screen) return { mockup: null, error: `Screen ${screenId} not found` };
+		const applied = applyScreenRegion(screen, patch);
+		if ("error" in applied) return { mockup: null, error: applied.error };
+		bumpMockupVersion(mockup, Date.now());
+		return { mockup, occurrences: applied.occurrences };
+	}
+
 	async applyThreadBatch(
 		mockupId: string,
 		ops: MockupThreadOp[],
@@ -1086,6 +1174,27 @@ export class FileMockupStore implements MockupStore {
 		await this.writeSourceMirror(mockup);
 		await this.save(mockups);
 		return { mockup, occurrences };
+	}
+
+	async replaceRegion(
+		id: string,
+		screenId: string,
+		patch: { region: string; replacement: string },
+		opts?: { expectedVersion?: number },
+	): Promise<MockupScreenOpResult> {
+		const mockups = await this.getAll();
+		const mockup = mockups.find((m) => m.id === id);
+		if (!mockup) return { mockup: null, error: "Mockup not found" };
+		const vm = versionMismatch(opts?.expectedVersion, mockup.version);
+		if (vm) return { mockup: null, versionMismatch: vm };
+		const screen = mockup.screens.find((s) => s.id === screenId);
+		if (!screen) return { mockup: null, error: `Screen ${screenId} not found` };
+		const applied = applyScreenRegion(screen, patch);
+		if ("error" in applied) return { mockup: null, error: applied.error };
+		bumpMockupVersion(mockup, Date.now());
+		await this.writeSourceMirror(mockup);
+		await this.save(mockups);
+		return { mockup, occurrences: applied.occurrences };
 	}
 
 	async applyThreadBatch(

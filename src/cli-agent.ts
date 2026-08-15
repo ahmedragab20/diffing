@@ -1377,6 +1377,9 @@ async function mockupSubmit(args: string[]): Promise<number> {
 			wait: { type: "boolean", short: "w" },
 			timeout: { type: "string", short: "t" },
 			screen: { type: "string", multiple: true },
+			mode: { type: "string" },
+			system: { type: "string" },
+			"plan-id": { type: "string" },
 		},
 		allowPositionals: true,
 	});
@@ -1419,6 +1422,9 @@ async function mockupSubmit(args: string[]): Promise<number> {
 			screens: parsed.screens,
 			source: values.source || parsed.source,
 			model: values.model,
+			mode: values.mode,
+			designSystemId: values.system,
+			planId: values["plan-id"],
 		}),
 	});
 	if (!submitRes) return EXIT_NO_SERVER;
@@ -1692,10 +1698,10 @@ async function mockupInspect(args: string[]): Promise<number> {
 	const [view, mockupArg, ...extra] = positionals;
 	if (
 		!view ||
-		!["summary", "comments", "comment", "screen"].includes(view) ||
+		!["summary", "comments", "comment", "screen", "preview"].includes(view) ||
 		extra.length > 0
 	) {
-		console.error(`Usage: diffing mockup inspect <summary|comments|comment|screen> [mockup-id] [options]
+		console.error(`Usage: diffing mockup inspect <summary|comments|comment|screen|preview> [mockup-id] [options]
 
 Read bounded mockup data as compact JSON (add --pretty for indented output).
   summary  [mockup-id]                          — headline stats + screen list
@@ -1766,6 +1772,7 @@ async function mockupScreenCmd(args: string[]): Promise<number> {
 			file: { type: "string" },
 			text: { type: "string" },
 			replacement: { type: "string" },
+			region: { type: "string" },
 			label: { type: "string" },
 			"expected-version": { type: "string" },
 		},
@@ -1774,18 +1781,19 @@ async function mockupScreenCmd(args: string[]): Promise<number> {
 	const [action, mockupId, screenId, ...extra] = positionals;
 	if (
 		!action ||
-		!["upsert", "remove", "patch"].includes(action) ||
+		!["upsert", "remove", "patch", "replace-region"].includes(action) ||
 		!mockupId ||
 		!screenId ||
 		extra.length > 0
 	) {
-		console.error(`Usage: diffing mockup screen <upsert|remove|patch> <mockup-id> <screen-id> [options]
+		console.error(`Usage: diffing mockup screen <upsert|remove|patch|replace-region> <mockup-id> <screen-id> [options]
 
 One-screen revision. Version bumps on success; an --expected-version guard aborts with
 409 (no change) when the mockup moved on.
-  upsert <id> <screen-id> --file <path> [--label L] [--expected-version N]   # --file - = stdin
-  remove <id> <screen-id> [--expected-version N]
-  patch  <id> <screen-id> --text <exact-text> --replacement <new-text> [--expected-version N]`);
+  upsert         <id> <screen-id> --file <path> [--label L] [--expected-version N]   # --file - = stdin
+  remove         <id> <screen-id> [--expected-version N]
+  patch          <id> <screen-id> --text <exact-text> --replacement <new-text> [--expected-version N]
+  replace-region <id> <screen-id> --region <data-diffing> --replacement <inner-html> [--expected-version N]`);
 		return EXIT_USAGE;
 	}
 	let expectedVersion: number | undefined;
@@ -1854,6 +1862,39 @@ One-screen revision. Version bumps on success; an --expected-version guard abort
 		const mockup = (await res.json()) as Mockup;
 		console.error(
 			`Removed screen ${screenId} from ${mockupId} → v${mockup.version}.`,
+		);
+		return EXIT_OK;
+	}
+
+	if (action === "replace-region") {
+		const region = values.region?.trim();
+		const replacement = values.replacement;
+		if (!region || replacement === undefined) {
+			console.error(
+				"replace-region requires --region <data-diffing> and --replacement <inner-html>",
+			);
+			return EXIT_USAGE;
+		}
+		const res = await tryApiFetch(
+			`${base}/api/mockups/${encodeURIComponent(mockupId)}/screens/${encodeURIComponent(screenId)}`,
+			{
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					region,
+					replacement,
+					expectedVersion,
+				}),
+			},
+		);
+		if (!res) return EXIT_NO_SERVER;
+		if (!res.ok) {
+			console.error(await mockupOpErrorMessage(res));
+			return res.status === 404 ? EXIT_NOT_FOUND : 1;
+		}
+		const data = (await res.json()) as { mockup: Mockup; occurrences: number };
+		console.error(
+			`Replaced region "${region}" on ${screenId} (${data.occurrences} match(es)) → v${data.mockup.version}.`,
 		);
 		return EXIT_OK;
 	}
@@ -2011,11 +2052,43 @@ Atomic thread ops — each call is validated before apply through the batch endp
 	return EXIT_OK;
 }
 
+async function mockupHandoff(args: string[]): Promise<number> {
+	const { values, positionals } = parseArgs({
+		args,
+		options: { json: { type: "boolean" } },
+		allowPositionals: true,
+	});
+	const base = baseUrl();
+	let id = positionals[0];
+	if (!id) {
+		id = (await latestMockupId(base)) ?? "";
+		if (!id) {
+			console.error("No mockups submitted yet.");
+			return EXIT_NOT_FOUND;
+		}
+	}
+	const res = await tryApiFetch(
+		`${base}/api/mockups/${encodeURIComponent(id)}/handoff`,
+	);
+	if (!res) return EXIT_NO_SERVER;
+	if (res.status === 404) {
+		console.error(`Mockup ${id} not found.`);
+		return EXIT_NOT_FOUND;
+	}
+	const data = await res.json();
+	if (values.json) {
+		process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+		return EXIT_OK;
+	}
+	process.stdout.write((data.xml ?? JSON.stringify(data, null, 2)) + "\n");
+	return EXIT_OK;
+}
+
 async function mockupCommand(args: string[]): Promise<number> {
 	const action = args[0];
 	const rest = args.slice(1);
 	if (args.includes("--help") || args.includes("-h") || !action) {
-		console.log(`Usage: diffing mockup <submit|await|list|show|versions|reply|resolve|inspect|screen|threads> [options]
+		console.log(`Usage: diffing mockup <submit|await|list|show|versions|reply|resolve|inspect|screen|threads|handoff> [options]
 
 Submit HTML mockups for visual review. Same loop as plan review.
 Never write mockup HTML into the consumer git tree. Prefer stdin or MCP inline html.
@@ -2030,8 +2103,9 @@ One state per screen: never tabs/accordions/toggles/modals/JS content-swapping �
   versions <id> [--json]
   reply <comment-id> --body "..." [--model M]
   resolve <comment-id>
-  inspect <summary|comments|comment|screen> [<id>] [--status S] [--screen S] [--viewport V] [--version N] [--id C] [--cursor N] [--limit N] [--context none|anchor|source] [--pretty]
-  screen <upsert|remove|patch> <id> <screen-id> [--file P] [--text T] [--replacement R] [--expected-version N]
+  inspect <summary|comments|comment|screen|preview> [<id>] [--status S] [--screen S] [--viewport V] [--version N] [--id C] [--cursor N] [--limit N] [--context none|anchor|source] [--pretty]
+  handoff [<id>] [--json]
+  screen <upsert|remove|patch|replace-region> <id> <screen-id> [--file P] [--text T] [--region R] [--replacement R] [--expected-version N]
   threads <reply|edit|delete|resolve|unresolve> <comment-id> [<reply-id>] [--body "..."] [--model M] [--id mockup-id]
 `);
 		return EXIT_OK;
@@ -2057,10 +2131,133 @@ One state per screen: never tabs/accordions/toggles/modals/JS content-swapping �
 			return mockupScreenCmd(rest);
 		case "threads":
 			return mockupThreadsCmd(rest);
+		case "handoff":
+			return mockupHandoff(rest);
 		default:
 			console.error(`Unknown mockup action: ${action}`);
 			return EXIT_USAGE;
 	}
+}
+
+async function designCommand(args: string[]): Promise<number> {
+	const action = args[0];
+	const rest = args.slice(1);
+	if (!action || args.includes("--help") || args.includes("-h")) {
+		console.log(`Usage: diffing design <show|list|extract|propose|publish> [id] [options]
+
+Per-repo design system stored under ~/.diffing/<repo>/. Agents read this before
+authoring mockups. Extract is a draft; publish is a human action.
+
+  show [id] [--json]
+  list [--json]
+  extract [id] [--from css|text] [--title T]
+  propose [id] --guidelines "…" [--title T]
+  publish [id]
+`);
+		return EXIT_OK;
+	}
+	const { values, positionals } = parseArgs({
+		args: rest,
+		options: {
+			json: { type: "boolean" },
+			from: { type: "string" },
+			title: { type: "string" },
+			guidelines: { type: "string" },
+		},
+		allowPositionals: true,
+	});
+	const id = positionals[0] || "default";
+	const base = baseUrl();
+	if (action === "list") {
+		const res = await tryApiFetch(`${base}/api/design-systems`);
+		if (!res) return EXIT_NO_SERVER;
+		const all = await res.json();
+		if (values.json) {
+			process.stdout.write(JSON.stringify(all, null, 2) + "\n");
+			return EXIT_OK;
+		}
+		if (!Array.isArray(all) || all.length === 0) {
+			console.error("No design system yet. Run: diffing design extract");
+			return EXIT_OK;
+		}
+		for (const s of all) {
+			console.log(
+				`${s.id}  ${s.title}  v${s.revision}  ${s.status}  ${s.components?.length ?? 0} components`,
+			);
+		}
+		return EXIT_OK;
+	}
+	if (action === "show") {
+		const res = await tryApiFetch(`${base}/api/design-systems/${encodeURIComponent(id)}`);
+		if (!res) return EXIT_NO_SERVER;
+		if (res.status === 404) {
+			console.error(`Design system ${id} not found.`);
+			return EXIT_NOT_FOUND;
+		}
+		const system = await res.json();
+		process.stdout.write(JSON.stringify(system, null, values.json ? 2 : 2) + "\n");
+		return EXIT_OK;
+	}
+	if (action === "extract") {
+		const res = await tryApiFetch(
+			`${base}/api/design-systems/${encodeURIComponent(id)}/extract`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					from: values.from ?? "css",
+					title: values.title,
+				}),
+			},
+		);
+		if (!res) return EXIT_NO_SERVER;
+		if (!res.ok) {
+			console.error(`Extract failed: HTTP ${res.status}`);
+			return 1;
+		}
+		const data = await res.json();
+		console.error(
+			`Draft design system ${data.system.id} from ${data.extract?.files?.length ?? 0} file(s). Publish with: diffing design publish ${id}`,
+		);
+		if (values.json) process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+		return EXIT_OK;
+	}
+	if (action === "propose") {
+		const res = await tryApiFetch(
+			`${base}/api/design-systems/${encodeURIComponent(id)}`,
+			{
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					title: values.title,
+					guidelines: values.guidelines,
+				}),
+			},
+		);
+		if (!res) return EXIT_NO_SERVER;
+		if (res.status === 404) {
+			console.error(`Design system ${id} not found.`);
+			return EXIT_NOT_FOUND;
+		}
+		console.error(`Proposed draft on ${id}. Publish with: diffing design publish ${id}`);
+		return EXIT_OK;
+	}
+	if (action === "publish") {
+		const res = await tryApiFetch(
+			`${base}/api/design-systems/${encodeURIComponent(id)}/publish`,
+			{ method: "POST" },
+		);
+		if (!res) return EXIT_NO_SERVER;
+		if (res.status === 404) {
+			console.error(`Design system ${id} not found.`);
+			return EXIT_NOT_FOUND;
+		}
+		const system = await res.json();
+		console.error(`Published ${system.id} revision ${system.revision}.`);
+		return EXIT_OK;
+	}
+	console.error(`Unknown design action: ${action}`);
+	return EXIT_USAGE;
 }
 
 export async function runSubcommand(
@@ -2086,6 +2283,8 @@ export async function runSubcommand(
 			return plan(args);
 		case "mockup":
 			return mockupCommand(args);
+		case "design":
+			return designCommand(args);
 		case "update": {
 			const { runUpdateCommand } = await import("./lib/update-check.js");
 			return runUpdateCommand();

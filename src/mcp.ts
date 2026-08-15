@@ -42,7 +42,10 @@ import {
 import type { Plan } from "./lib/plan-types.js";
 import type { Mockup } from "./lib/mockup-types.js";
 import { formatMockupReview } from "./lib/mockup-format.js";
-import type { MockupStateHint } from "./lib/mockup-lint.js";
+import {
+	formatSubmitHints,
+	type MockupStateHint,
+} from "./lib/mockup-lint.js";
 import type { ReviewComment } from "./lib/types.js";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
@@ -2365,12 +2368,19 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 							id: z.string().optional(),
 							label: z.string().optional(),
 							html: z.string(),
+							stateOf: z.string().optional(),
+							flow: z.string().optional(),
 						}),
 					)
 					.optional(),
 				mockupId: z.string().optional(),
 				source: z.string().optional(),
 				model: z.string().optional(),
+				mode: z.enum(["fragment", "document"]).optional(),
+				designSystem: z.string().optional(),
+				planId: z.string().optional(),
+				fromMockupId: z.string().optional(),
+				blank: z.boolean().optional(),
 			},
 			outputSchema: {
 				mockupId: z.string(),
@@ -2380,7 +2390,19 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			},
 			annotations: { readOnlyHint: false, idempotentHint: false },
 		},
-		async ({ title, html, screens, mockupId, source, model }) => {
+		async ({
+			title,
+			html,
+			screens,
+			mockupId,
+			source,
+			model,
+			mode,
+			designSystem,
+			planId,
+			fromMockupId,
+			blank,
+		}) => {
 			const session = requireWebSession();
 			await seedMockupCursor(session, undefined, true);
 			const mockup = await requestSessionJson<Mockup>(session, "/api/mockups", {
@@ -2393,6 +2415,11 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 					screens,
 					source,
 					model,
+					mode,
+					designSystemId: designSystem,
+					planId,
+					fromMockupId,
+					blank,
 				}),
 			});
 			const url = appendSessionToken(
@@ -2400,12 +2427,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 				session.lock.authToken,
 			);
 			const hints = (mockup as Mockup & { hints?: MockupStateHint[] }).hints ?? [];
-			const hintText =
-				hints.length > 0
-					? `\n⚠️ In-page state UI detected — split each state into its own screen:\n${hints
-							.map((h) => `  • ${h.screenId}: ${h.patterns.join(", ")}`)
-							.join("\n")}`
-					: "";
+			const hintText = formatSubmitHints(hints);
 			return textResult(
 				`Submitted mockup ${mockup.id} (v${mockup.version}) at ${url}.${hintText} ${MOCKUP_SUBMIT_NEXT_ACTION}`,
 				{
@@ -2624,7 +2646,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			inputSchema: {
 				mockupId: z.string().min(1),
 				view: z
-					.enum(["summary", "comments", "comment", "screen"])
+					.enum(["summary", "comments", "comment", "screen", "preview"])
 					.default("summary"),
 				status: z.enum(["open", "resolved"]).optional(),
 				screenId: z.string().optional(),
@@ -2672,14 +2694,15 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 		{
 			title: "Revise a mockup screen",
 			description:
-				"One-screen revision of an HTML mockup. op=upsert adds/replaces a screen (html inline, never files on disk), op=remove deletes a screen, op=patch replaces the first exact occurrence of expectedText with replacement. Every success bumps the mockup version; pass expectedVersion to guard against racing edits (409 version-mismatch on conflict, nothing applied). For revisions touching many screens, resubmit via submit_mockup with the same mockupId instead.",
+				"One-screen revision of an HTML mockup. op=upsert adds/replaces a screen (html inline, never files on disk), op=remove deletes a screen, op=patch replaces the first exact occurrence of expectedText with replacement, op=replace-region replaces the inner HTML of the first [data-diffing=region] element. Every success bumps the mockup version; pass expectedVersion to guard against racing edits (409 version-mismatch on conflict, nothing applied). For revisions touching many screens, resubmit via submit_mockup with the same mockupId instead.",
 			inputSchema: {
 				mockupId: z.string().min(1),
-				op: z.enum(["upsert", "remove", "patch"]),
+				op: z.enum(["upsert", "remove", "patch", "replace-region"]),
 				screenId: z.string().min(1),
 				html: z.string().optional(),
 				label: z.string().optional(),
 				expectedText: z.string().optional(),
+				region: z.string().optional(),
 				replacement: z.string().optional(),
 				expectedVersion: z.number().int().positive().optional(),
 			},
@@ -2698,6 +2721,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			html,
 			label,
 			expectedText,
+			region,
 			replacement,
 			expectedVersion,
 		}) => {
@@ -2712,12 +2736,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 				});
 				const hints =
 					(mockup as Mockup & { hints?: MockupStateHint[] }).hints ?? [];
-				const hintText =
-					hints.length > 0
-						? `\n⚠️ In-page state UI detected — split each state into its own screen: ${hints
-								.map((h) => h.patterns.join(", "))
-								.join("; ")}`
-						: "";
+				const hintText = formatSubmitHints(hints);
 				return textResult(
 					`Upserted screen ${screenId} on ${mockupId} → v${mockup.version}.${hintText}`,
 					{
@@ -2740,6 +2759,30 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 						mockupId,
 						version: mockup.version,
 						screenIds: mockup.screens.map((s) => s.id),
+					},
+				);
+			}
+			if (op === "replace-region") {
+				if (!region || replacement === undefined) {
+					throw new Error(
+						"revise_mockup op=replace-region requires region and replacement",
+					);
+				}
+				const data = await requestBaseJson<{
+					mockup: Mockup;
+					occurrences: number;
+				}>(base, {
+					method: "PATCH",
+					headers,
+					body: JSON.stringify({ region, replacement, expectedVersion }),
+				});
+				return textResult(
+					`Replaced region "${region}" on ${screenId} (${data.occurrences} match(es)) → v${data.mockup.version}`,
+					{
+						mockupId,
+						version: data.mockup.version,
+						screenIds: data.mockup.screens.map((s) => s.id),
+						occurrences: data.occurrences,
 					},
 				);
 			}
@@ -2823,6 +2866,129 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 		},
 	);
 
+	server.registerTool(
+		"get_design_system",
+		{
+			title: "Get the repo design system",
+			description:
+				"Read the published (or draft) per-repo design system: tokens, guidelines, components. Call this before authoring mockup HTML. Omit id for the default system.",
+			inputSchema: { id: z.string().optional() },
+			outputSchema: { system: z.unknown().nullable() },
+			annotations: READ_ONLY,
+		},
+		async ({ id }) => {
+			const path = id
+				? `/api/design-systems/${encodeURIComponent(id)}`
+				: "/api/design-systems/default";
+			try {
+				const system = await requestBaseJson<unknown>(path);
+				return textResult("design system", { system });
+			} catch {
+				return textResult("No design system published yet.", { system: null });
+			}
+		},
+	);
+
+	server.registerTool(
+		"extract_design_system",
+		{
+			title: "Extract a draft design system from the repo",
+			description:
+				"Scan the consumer repo for CSS custom properties / token JSON and write a draft design system. Does not publish. Human must publish before fragment mockups inherit it.",
+			inputSchema: {
+				id: z.string().optional(),
+				title: z.string().optional(),
+			},
+			outputSchema: { system: z.unknown(), extract: z.unknown() },
+			annotations: MUTATING,
+		},
+		async ({ id, title }) => {
+			const systemId = id || "default";
+			const data = await requestBaseJson<{ system: unknown; extract: unknown }>(
+				`/api/design-systems/${encodeURIComponent(systemId)}/extract`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ from: "css", title }),
+				},
+			);
+			return textResult(
+				`Draft design system ${systemId}. Human must publish before it wraps mockups.`,
+				data,
+			);
+		},
+	);
+
+	server.registerTool(
+		"propose_design_system",
+		{
+			title: "Propose a design-system draft",
+			description:
+				"Update the draft design system (tokens, guidelines, components). Does not publish. Agents may propose; only the human publishes.",
+			inputSchema: {
+				id: z.string().optional(),
+				title: z.string().optional(),
+				guidelines: z.string().optional(),
+				tokens: z.unknown().optional(),
+			},
+			outputSchema: { system: z.unknown() },
+			annotations: MUTATING,
+		},
+		async ({ id, title, guidelines, tokens }) => {
+			const systemId = id || "default";
+			const system = await requestBaseJson(
+				`/api/design-systems/${encodeURIComponent(systemId)}`,
+				{
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ title, guidelines, tokens }),
+				},
+			);
+			return textResult(`Proposed draft on ${systemId}`, { system });
+		},
+	);
+
+	server.registerTool(
+		"publish_design_system",
+		{
+			title: "Publish the design system",
+			description:
+				"Publish the current draft as a new revision. Prefer letting the human do this in the UI. Use only when the user explicitly asked to publish.",
+			inputSchema: { id: z.string().optional() },
+			outputSchema: { system: z.unknown() },
+			annotations: MUTATING,
+		},
+		async ({ id }) => {
+			const systemId = id || "default";
+			const system = await requestBaseJson(
+				`/api/design-systems/${encodeURIComponent(systemId)}/publish`,
+				{ method: "POST" },
+			);
+			return textResult(`Published ${systemId}`, { system });
+		},
+	);
+
+	server.registerTool(
+		"get_mockup_handoff",
+		{
+			title: "Get mockup implementation handoff",
+			description:
+				"Compact handoff after a mockup is approved: tokens, screens with intent, components used, leftover nits. Prefer this over dumping every screen's HTML.",
+			inputSchema: { mockupId: z.string().min(1) },
+			outputSchema: { xml: z.string().optional(), mockupId: z.string().optional() },
+			annotations: READ_ONLY,
+		},
+		async ({ mockupId }) => {
+			const data = await requestBaseJson<Record<string, unknown>>(
+				`/api/mockups/${encodeURIComponent(mockupId)}/handoff`,
+			);
+			return textResult(
+				typeof data.xml === "string" ? data.xml : "handoff",
+				data,
+			);
+		},
+	);
+
 	server.registerResource(
 		"agent-guide",
 		"diffing://agent-guide",
@@ -2864,7 +3030,7 @@ This MCP connection is immutably bound to \`${repoRoot}\`.
 1. Call \`submit_mockup\`, share the URL, and park unless asked to wait; resubmit with the same \`mockupId\` to bump the version.
 2. On resume or sync wait, call \`await_mockup_review\` (or \`list_mockups\` / \`get_mockup\`).
 3. For bounded reads prefer \`inspect_mockup\` (view=summary/comments/comment/screen, filters by status/screenId/viewport/version).
-4. To revise one screen use \`revise_mockup\` (upsert/remove/patch with \`expectedVersion\` guard); thread ops go through atomic \`update_mockup_threads\`.
+4. To revise one screen use \`revise_mockup\` (upsert/remove/patch/replace-region with \`expectedVersion\` guard); thread ops go through atomic \`update_mockup_threads\`.
 5. On \`approved\`, implement; on \`changes-requested\`, revise and resubmit; on \`rejected\`, stop.
 
 ## GitHub PR

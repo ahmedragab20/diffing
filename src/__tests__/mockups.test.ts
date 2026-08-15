@@ -294,6 +294,54 @@ describe('InMemoryMockupStore one-screen ops', () => {
     expect(after?.version).toBe(1)
     expect(after?.screens[0].html).toBe('<h1>Hi</h1>')
   })
+
+  it('replaceRegion swaps the first data-diffing inner HTML and reports matches', async () => {
+    const mockup = await store.upsert({
+      title: 'M',
+      screens: [
+        {
+          id: 'main',
+          label: 'Main',
+          html: '<section data-diffing="hero"><h1>Old</h1></section>',
+        },
+      ],
+    })
+    const res = await store.replaceRegion(mockup.id, 'main', {
+      region: 'hero',
+      replacement: '<h1>New</h1>',
+    })
+    expect(res.occurrences).toBe(1)
+    expect(res.mockup?.version).toBe(2)
+    expect(res.mockup?.screens[0].html).toBe(
+      '<section data-diffing="hero"><h1>New</h1></section>',
+    )
+  })
+
+  it('replaceRegion errors never mutate or bump the version', async () => {
+    const mockup = await store.upsert({
+      title: 'M',
+      screens: [
+        { id: 'main', label: 'Main', html: '<section data-diffing="hero"><h1>Hi</h1></section>' },
+      ],
+    })
+    expect(
+      (await store.replaceRegion(mockup.id, 'main', { region: 'nope', replacement: 'x' }))
+        .error,
+    ).toBe('Region "nope" not found')
+    const vm = await store.replaceRegion(
+      mockup.id,
+      'main',
+      { region: 'hero', replacement: 'x' },
+      { expectedVersion: 9 },
+    )
+    expect(vm.versionMismatch).toEqual({
+      expectedVersion: 9,
+      currentVersion: 1,
+    })
+    const after = await store.get(mockup.id)
+    expect(after?.version).toBe(1)
+    expect(after?.screens[0].html).toContain('<h1>Hi</h1>')
+  })
 })
 
 describe('InMemoryMockupStore atomic thread batch', () => {

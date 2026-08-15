@@ -50,6 +50,22 @@ import { formatMockupReview } from "./lib/mockup-format.js";
 import { injectMockupProbe } from "./lib/mockup-document.js";
 import { lintMockupScreens } from "./lib/mockup-lint.js";
 import {
+	FileDesignSystemStore,
+	type DesignSystemStore,
+} from "./lib/design-system.js";
+import {
+	DEFAULT_DESIGN_SYSTEM_ID,
+	type DesignSystem,
+} from "./lib/design-system-types.js";
+import { extractFromRepo, extractTokensFromText } from "./lib/design-system-extract.js";
+import { renderMockupHtml, resolveRenderMode } from "./lib/mockup-shell.js";
+import { renderMockupPreview } from "./lib/mockup-preview.js";
+import {
+	buildMockupHandoff,
+	formatMockupHandoffXml,
+} from "./lib/mockup-handoff.js";
+import { extractSuggestion } from "./lib/mockup-suggestion.js";
+import {
 	normalizeMockupViewport,
 	isMockupViewport,
 	commentViewport,
@@ -62,6 +78,8 @@ import {
 	type MockupViewport,
 	type Mockup,
 	type MockupSummary,
+	type MockupRenderMode,
+	type MockupTheme,
 } from "./lib/mockup-types.js";
 import { FileUiStateStore } from "./lib/state.js";
 import { isSafePath, toSafeRelativePath } from "./lib/path.js";
@@ -227,6 +245,7 @@ export function createApp(
 		insecureNoAuth: true,
 	},
 	mockupStore?: MockupStore,
+	designSystemStore?: DesignSystemStore,
 ) {
 	const app = new Hono();
 	app.use("*", createServerAuthMiddleware(security));
@@ -237,6 +256,7 @@ export function createApp(
 	const store = commentStore ?? new FileCommentStore();
 	const plans = planStore ?? new FilePlanStore();
 	const mockups = mockupStore ?? new FileMockupStore();
+	const designSystems = designSystemStore ?? new FileDesignSystemStore();
 	const prStore = prSessionStore ?? new FilePrSessionStore();
 	const agentDiffCache = new AgentDiffIndexCache();
 	const uiStateStore = new FileUiStateStore();
@@ -360,6 +380,7 @@ export function createApp(
 			let commentsDebounce: NodeJS.Timeout | null = null;
 			let plansDebounce: NodeJS.Timeout | null = null;
 			let mockupsDebounce: NodeJS.Timeout | null = null;
+			let designSystemDebounce: NodeJS.Timeout | null = null;
 			let prSessionDebounce: NodeJS.Timeout | null = null;
 			const storageWatcher = watch(storageDir, (_eventType, filename) => {
 				if (!filename) return;
@@ -379,6 +400,12 @@ export function createApp(
 					if (mockupsDebounce) clearTimeout(mockupsDebounce);
 					mockupsDebounce = setTimeout(
 						() => broadcast("mockups", Date.now().toString()),
+						120,
+					);
+				} else if (filename.startsWith("design-system.json")) {
+					if (designSystemDebounce) clearTimeout(designSystemDebounce);
+					designSystemDebounce = setTimeout(
+						() => broadcast("design-system", Date.now().toString()),
 						120,
 					);
 				} else if (filename.startsWith("pr-session.json")) {
@@ -2535,6 +2562,182 @@ export function createApp(
 		return c.json(planReviewSession.snapshot());
 	});
 
+	async function resolveDesignSystem(
+		id?: string | null,
+		revision?: number,
+	): Promise<DesignSystem | null> {
+		if (!id) return designSystems.getDefault();
+		const system = await designSystems.get(id);
+		if (!system) return null;
+		if (revision && system.revisions?.length) {
+			const snap = system.revisions.find((r) => r.revision === revision);
+			if (snap) {
+				return {
+					...system,
+					revision: snap.revision,
+					status: snap.status,
+					title: snap.title,
+					tokens: snap.tokens,
+					guidelines: snap.guidelines,
+					components: snap.components,
+					sources: snap.sources,
+				};
+			}
+		}
+		return system;
+	}
+
+	// ── Design system (per-repo, lives next to mockups) ──────────────────────
+	app.get("/api/design-systems", async (c) => {
+		return c.json(await designSystems.getAll());
+	});
+
+	app.get("/api/design-systems/default", async (c) => {
+		const system = await designSystems.getDefault();
+		if (!system) return c.json({ error: "No design system" }, 404);
+		return c.json(system);
+	});
+
+	app.get("/api/design-systems/:id", async (c) => {
+		const system = await designSystems.get(c.req.param("id"));
+		if (!system) return c.json({ error: "Design system not found" }, 404);
+		return c.json(system);
+	});
+
+	app.post("/api/design-systems", async (c) => {
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+		const system = await designSystems.upsert({
+			id: typeof body.id === "string" ? body.id : DEFAULT_DESIGN_SYSTEM_ID,
+			title: typeof body.title === "string" ? body.title : undefined,
+			tokens: body.tokens as never,
+			guidelines: typeof body.guidelines === "string" ? body.guidelines : undefined,
+			sources: Array.isArray(body.sources) ? (body.sources as never) : undefined,
+			status: body.status === "published" ? "published" : "draft",
+		});
+		broadcast("design-system", Date.now().toString());
+		return c.json(system, 201);
+	});
+
+	app.put("/api/design-systems/:id", async (c) => {
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+		const existing = await designSystems.get(c.req.param("id"));
+		if (!existing) return c.json({ error: "Design system not found" }, 404);
+		const system = await designSystems.propose(c.req.param("id"), {
+			title: typeof body.title === "string" ? body.title : undefined,
+			tokens: body.tokens as never,
+			guidelines: typeof body.guidelines === "string" ? body.guidelines : undefined,
+			components: Array.isArray(body.components) ? (body.components as never) : undefined,
+			sources: Array.isArray(body.sources) ? (body.sources as never) : undefined,
+		});
+		broadcast("design-system", Date.now().toString());
+		return c.json(system);
+	});
+
+	app.post("/api/design-systems/:id/publish", async (c) => {
+		const system = await designSystems.publish(c.req.param("id"));
+		if (!system) return c.json({ error: "Design system not found" }, 404);
+		broadcast("design-system", Date.now().toString());
+		return c.json(system);
+	});
+
+	app.post("/api/design-systems/:id/extract", async (c) => {
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+		const from = typeof body.from === "string" ? body.from : "css";
+		let extracted;
+		if (from === "text" && typeof body.text === "string") {
+			extracted = {
+				tokens: extractTokensFromText(body.text),
+				sources: [{ kind: "css-vars" as const, path: "paste" }],
+				files: [],
+			};
+		} else if (from === "url" && typeof body.url === "string") {
+			const url = body.url;
+			if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/i.test(url)) {
+				return c.json(
+					{ error: "Capture URL must be a local http(s) address" },
+					400,
+				);
+			}
+			const res = await fetch(url).catch(() => null);
+			const text = res && res.ok ? await res.text() : "";
+			extracted = {
+				tokens: extractTokensFromText(text),
+				sources: [{ kind: "url" as const, url }],
+				files: text ? [{ path: url, count: Object.keys(extractTokensFromText(text).raw).length }] : [],
+			};
+		} else {
+			extracted = await extractFromRepo(repoRoot);
+		}
+		const id = c.req.param("id");
+		const existing = await designSystems.get(id);
+		const system = existing
+			? await designSystems.propose(id, {
+					tokens: extracted.tokens,
+					sources: extracted.sources,
+				})
+			: await designSystems.upsert({
+					id,
+					title: typeof body.title === "string" ? body.title : "Default",
+					tokens: extracted.tokens,
+					sources: extracted.sources,
+					status: "draft",
+				});
+		broadcast("design-system", Date.now().toString());
+		return c.json({ system, extract: extracted });
+	});
+
+	app.post("/api/design-systems/:id/components", async (c) => {
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+		if (typeof body.id !== "string" || typeof body.html !== "string") {
+			return c.json({ error: "id and html are required" }, 400);
+		}
+		const system = await designSystems.addComponent(c.req.param("id"), {
+			id: body.id,
+			label: typeof body.label === "string" ? body.label : body.id,
+			html: body.html,
+			source: body.source === "promote" ? "promote" : "human",
+		});
+		if (!system) return c.json({ error: "Design system not found" }, 404);
+		broadcast("design-system", Date.now().toString());
+		return c.json(system);
+	});
+
+	app.post("/api/design-systems/:id/comments", async (c) => {
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+		if (typeof body.body !== "string" || !body.body.trim()) {
+			return c.json({ error: "body is required" }, 400);
+		}
+		const kind =
+			body.kind === "token" ||
+			body.kind === "component" ||
+			body.kind === "guidelines"
+				? body.kind
+				: "general";
+		const system = await designSystems.addComment(c.req.param("id"), {
+			kind,
+			target: typeof body.target === "string" ? body.target : undefined,
+			body: body.body,
+		});
+		if (!system) return c.json({ error: "Design system not found" }, 404);
+		broadcast("design-system", Date.now().toString());
+		return c.json(system);
+	});
+
+	app.put("/api/design-systems/:id/comments/:commentId", async (c) => {
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+		const system = await designSystems.updateComment(
+			c.req.param("id"),
+			c.req.param("commentId"),
+			{
+				body: typeof body.body === "string" ? body.body : undefined,
+				status: body.status === "resolved" || body.status === "open" ? body.status : undefined,
+			},
+		);
+		if (!system) return c.json({ error: "Not found" }, 404);
+		broadcast("design-system", Date.now().toString());
+		return c.json(system);
+	});
+
 	// ── Mockup review (twin of plan review) ──────────────────────────────────
 	const summarizeMockup = (
 		mockup: Mockup,
@@ -2557,6 +2760,8 @@ export function createApp(
 			resolved: mockup.comments.filter((comment) => comment.status === "resolved")
 				.length,
 		},
+		designSystemId: mockup.designSystemId,
+		planId: mockup.planId,
 		...(includeComments ? { comments: mockup.comments } : {}),
 	});
 
@@ -2638,8 +2843,25 @@ export function createApp(
 			version: versionN,
 			viewport,
 		});
+		const snapBinding = snap as {
+			mode?: MockupRenderMode;
+			designSystemId?: string;
+			designRevision?: number;
+		};
+		const mode = snapBinding.mode ?? mockup.mode ?? "document";
+		const theme = (c.req.query("theme") === "dark" ? "dark" : "light") as MockupTheme;
+		const system = await resolveDesignSystem(
+			snapBinding.designSystemId ?? mockup.designSystemId,
+			snapBinding.designRevision ?? mockup.designRevision,
+		);
+		const rendered = renderMockupHtml(screen.html, {
+			mode,
+			system,
+			title: mockup.title,
+			theme,
+		});
 		return c.html(
-			injectMockupProbe(screen.html, { nonce, viewport, passive }),
+			injectMockupProbe(rendered, { nonce, viewport, passive }),
 			200,
 			{
 				"Content-Security-Policy":
@@ -2662,10 +2884,11 @@ export function createApp(
 			view !== "summary" &&
 			view !== "comments" &&
 			view !== "comment" &&
-			view !== "screen"
+			view !== "screen" &&
+			view !== "preview"
 		) {
 			return c.json(
-				{ error: "view must be summary|comments|comment|screen" },
+				{ error: "view must be summary|comments|comment|screen|preview" },
 				400,
 			);
 		}
@@ -2729,6 +2952,31 @@ export function createApp(
 					resolved: allComments.filter((c2) => c2.status === "resolved").length,
 					byViewport,
 				},
+			});
+		}
+
+		if (view === "preview") {
+			const screenId = c.req.query("screen") || mockup.screens[0]?.id;
+			const screen = mockup.screens.find((s) => s.id === screenId);
+			if (!screen) return c.json({ error: "Screen not found" }, 404);
+			const viewport = normalizeMockupViewport(c.req.query("viewport"));
+			const theme = (c.req.query("theme") === "dark" ? "dark" : "light") as MockupTheme;
+			const system = await resolveDesignSystem(
+				mockup.designSystemId,
+				mockup.designRevision,
+			);
+			const rendered = renderMockupHtml(screen.html, {
+				mode: mockup.mode ?? "document",
+				system,
+				title: mockup.title,
+				theme,
+			});
+			const preview = await renderMockupPreview(rendered, { viewport });
+			return c.json({
+				view: "preview",
+				mockupId: mockup.id,
+				screenId: screen.id,
+				...preview,
 			});
 		}
 
@@ -2839,6 +3087,9 @@ export function createApp(
 		if (result.error === "Exact text not found") {
 			return c.json({ error: result.error, code: "exact-text-not-found" }, 409);
 		}
+		if (result.error?.includes("not found") && result.error.startsWith("Region ")) {
+			return c.json({ error: result.error, code: "region-not-found" }, 409);
+		}
 		if (
 			result.error === "Mockup not found" ||
 			result.error?.endsWith("not found")
@@ -2888,23 +3139,38 @@ export function createApp(
 		const mockupId = c.req.param("id");
 		const screenId = c.req.param("screenId");
 		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+		const expectedVersion = Number.isFinite(body.expectedVersion)
+			? Number(body.expectedVersion)
+			: undefined;
+		const region = typeof body.region === "string" ? body.region.trim() : "";
+		if (region) {
+			if (typeof body.replacement !== "string") {
+				return c.json({ error: "replacement is required" }, 400);
+			}
+			const result = await mockups.replaceRegion(
+				mockupId,
+				screenId,
+				{ region, replacement: body.replacement },
+				{ expectedVersion },
+			);
+			if (!result.mockup) return screenOpError(c, result);
+			return c.json(
+				{ mockup: result.mockup, occurrences: result.occurrences },
+				200,
+			);
+		}
 		const expectedText =
 			typeof body.expectedText === "string" ? body.expectedText : "";
-		const replacement =
-			typeof body.replacement === "string" ? body.replacement : "";
 		if (!expectedText) {
-			return c.json({ error: "expectedText is required" }, 400);
+			return c.json({ error: "expectedText or region is required" }, 400);
 		}
 		if (typeof body.replacement !== "string") {
 			return c.json({ error: "replacement is required" }, 400);
 		}
-		const expectedVersion = Number.isFinite(body.expectedVersion)
-			? Number(body.expectedVersion)
-			: undefined;
 		const result = await mockups.patchScreen(
 			mockupId,
 			screenId,
-			{ expectedText, replacement },
+			{ expectedText, replacement: body.replacement },
 			{ expectedVersion },
 		);
 		if (!result.mockup) return screenOpError(c, result);
@@ -2960,18 +3226,53 @@ export function createApp(
 
 	app.post("/api/mockups", async (c) => {
 		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+		if (typeof body.fromMockupId === "string") {
+			const source = await mockups.get(body.fromMockupId);
+			if (!source) return c.json({ error: "Source mockup not found" }, 404);
+			body.screens = source.screens.map((s) => ({
+				id: s.id,
+				label: s.label,
+				html: s.html,
+				stateOf: s.stateOf,
+				flow: s.flow,
+			}));
+			if (!body.designSystemId && !body.designSystem) {
+				body.designSystemId = source.designSystemId;
+			}
+			if (!body.mode) body.mode = source.mode;
+			if (!body.flows) body.flows = source.flows;
+		} else if (body.blank === true && !body.html && !body.screens) {
+			body.html = "";
+		}
+		if (body.blank === true && body.html === "") {
+			body.html = "<!-- empty -->";
+		}
 		const normalized = screensFromSubmitBody(body);
 		if (!normalized.ok) return c.json({ error: normalized.error }, 400);
 		const title =
 			typeof body.title === "string" && body.title.trim()
 				? body.title.trim()
 				: "Untitled mockup";
+		const requestedMode = body.mode;
+		const designSystemId =
+			typeof body.designSystem === "string"
+				? body.designSystem
+				: typeof body.designSystemId === "string"
+					? body.designSystemId
+					: undefined;
+		const system = await resolveDesignSystem(designSystemId);
+		const mode = resolveRenderMode(requestedMode, system);
 		const mockup = await mockups.upsert({
 			id: typeof body.id === "string" && body.id ? body.id : undefined,
 			title,
 			screens: normalized.screens,
 			source: typeof body.source === "string" ? body.source : undefined,
 			model: typeof body.model === "string" ? body.model : undefined,
+			designSystemId: system?.id,
+			designRevision: system?.revision,
+			mode,
+			planId: typeof body.planId === "string" ? body.planId : undefined,
+			flows: Array.isArray(body.flows) ? (body.flows as never) : undefined,
 		});
 		const hints = lintMockupScreens(normalized.screens);
 		return c.json(hints.length > 0 ? { ...mockup, hints } : mockup, 201);
@@ -2994,6 +3295,52 @@ export function createApp(
 		});
 		if (!updated) return c.json({ error: "Mockup not found" }, 404);
 		return c.json(updated);
+	});
+
+	app.get("/api/mockups/:id/handoff", async (c) => {
+		const mockup = await mockups.get(c.req.param("id"));
+		if (!mockup) return c.json({ error: "Mockup not found" }, 404);
+		const system = await resolveDesignSystem(
+			mockup.designSystemId,
+			mockup.designRevision,
+		);
+		const handoff = buildMockupHandoff(mockup, system);
+		return c.json({ ...handoff, xml: formatMockupHandoffXml(handoff) });
+	});
+
+	app.post("/api/mockups/:id/comments/:commentId/apply-suggestion", async (c) => {
+		const mockup = await mockups.get(c.req.param("id"));
+		if (!mockup) return c.json({ error: "Mockup not found" }, 404);
+		const comment = mockup.comments.find((x) => x.id === c.req.param("commentId"));
+		if (!comment) return c.json({ error: "Comment not found" }, 404);
+		const suggestion = extractSuggestion(comment.body);
+		if (!suggestion) {
+			return c.json({ error: "No ```suggestion block in comment" }, 400);
+		}
+		const reqBody = await c.req.json().catch(() => ({}) as { expectedVersion?: number });
+		const expectedVersion = Number.isFinite(reqBody.expectedVersion)
+			? Number(reqBody.expectedVersion)
+			: mockup.version;
+		let result;
+		if (comment.target) {
+			result = await mockups.replaceRegion(
+				mockup.id,
+				comment.screenId,
+				{ region: comment.target, replacement: suggestion },
+				{ expectedVersion },
+			);
+		} else if (comment.html) {
+			result = await mockups.patchScreen(
+				mockup.id,
+				comment.screenId,
+				{ expectedText: comment.html, replacement: suggestion },
+				{ expectedVersion },
+			);
+		} else {
+			return c.json({ error: "Comment has no target or html to replace" }, 400);
+		}
+		if (!result.mockup) return screenOpError(c, result);
+		return c.json(result.mockup);
 	});
 
 	app.delete("/api/mockups/:id", async (c) => {
@@ -3028,6 +3375,7 @@ export function createApp(
 			return c.json({ error: "body is required" }, 400);
 		}
 		const viewport = normalizeMockupViewport(body.viewport);
+		const theme: MockupTheme = body.theme === "dark" ? "dark" : "light";
 		const severityRaw = body.severity;
 		const severity =
 			severityRaw === "blocking" ||
@@ -3077,6 +3425,7 @@ export function createApp(
 				? Number(body.createdAtMockupVersion)
 				: mockup.version,
 			viewport,
+			theme,
 			replies: [],
 			...(severity && severity !== "none" ? { severity } : {}),
 		};

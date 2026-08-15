@@ -5,7 +5,7 @@ import type { PlanDecision, PlanMode } from "./plan-types.js";
 export type MockupDecision = PlanDecision;
 export type MockupMode = PlanMode;
 
-export const MOCKUP_MAX_SCREENS = 12;
+export const MOCKUP_MAX_SCREENS = 24;
 export const MOCKUP_MAX_SCREEN_BYTES = Math.floor(1.5 * 1024 * 1024);
 export const MOCKUP_SCREEN_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -33,22 +33,46 @@ export function commentViewport(comment: MockupComment): MockupViewport {
 	return comment.viewport ?? "desktop";
 }
 
+export function commentTheme(comment: MockupComment): MockupTheme {
+	return comment.theme ?? "light";
+}
+
 /** Bounded inspect views exposed by `diffing mockup inspect` / MCP inspect_mockup. */
-export type MockupInspectView = "summary" | "comments" | "comment" | "screen";
+export type MockupInspectView =
+	| "summary"
+	| "comments"
+	| "comment"
+	| "screen"
+	| "preview";
 
 /** How much anchor context an inspect view carries. */
 export type MockupInspectContext = "none" | "anchor" | "source";
+
+export type MockupRenderMode = "fragment" | "document";
+export type MockupTheme = "light" | "dark";
+
+export interface MockupFlow {
+	id: string;
+	label: string;
+	screenIds: string[];
+}
 
 export interface MockupScreen {
 	id: string;
 	label: string;
 	html: string;
+	/** This screen is a state variant of another screen id. */
+	stateOf?: string;
+	/** Optional flow grouping id. */
+	flow?: string;
 }
 
 export interface MockupScreenInput {
 	id?: string;
 	label?: string;
 	html: string;
+	stateOf?: string;
+	flow?: string;
 }
 
 export interface MockupRect {
@@ -91,6 +115,8 @@ export interface MockupComment {
 	 * "desktop".
 	 */
 	viewport?: MockupViewport;
+	/** Color theme at click time. Part of comment scope with viewport. */
+	theme?: MockupTheme;
 	/**
 	 * Stable fingerprint of the block's section-relative DOM path (kind=block
 	 * inside a named section). Survives edits elsewhere in the section.
@@ -105,6 +131,11 @@ export interface MockupVersion {
 	source?: string;
 	model?: string;
 	createdAt: number;
+	designSystemId?: string;
+	designRevision?: number;
+	mode?: MockupRenderMode;
+	planId?: string;
+	flows?: MockupFlow[];
 }
 
 export interface Mockup {
@@ -122,6 +153,11 @@ export interface Mockup {
 	decidedAt?: number;
 	versions: MockupVersion[];
 	comments: MockupComment[];
+	designSystemId?: string;
+	designRevision?: number;
+	mode?: MockupRenderMode;
+	planId?: string;
+	flows?: MockupFlow[];
 }
 
 /** Metadata-only list representation. Screen and version HTML stay out of list/SSE refetches. */
@@ -142,6 +178,8 @@ export interface MockupSummary {
 		open: number;
 		resolved: number;
 	};
+	designSystemId?: string;
+	planId?: string;
 	/** Present only for compatibility lookups with `include=comments`. */
 	comments?: MockupComment[];
 }
@@ -218,7 +256,14 @@ export function normalizeSubmitScreens(input: {
 			typeof item.label === "string" && item.label.trim()
 				? item.label.trim()
 				: defaultScreenLabel(id);
-		screens.push({ id, label, html: item.html.replace(/\r\n/g, "\n") });
+		const screen: MockupScreen = {
+			id,
+			label,
+			html: item.html.replace(/\r\n/g, "\n"),
+		};
+		if (item.stateOf) screen.stateOf = item.stateOf;
+		if (item.flow) screen.flow = item.flow;
+		screens.push(screen);
 	}
 	return { ok: true, screens };
 }

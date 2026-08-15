@@ -165,7 +165,7 @@ export function buildMockupProbeScript(opts: MockupProbeOptions = {}): string {
   function payloadFor(el, ev, kindOverride) {
     // Nearest named [data-diffing] ancestor only — sections never nest deeper.
     const section = el && el.closest ? el.closest('[data-diffing]') : null;
-    const kind = kindOverride || (tool === 'pin' ? 'point' : tool === 'section' && section ? 'section' : 'block');
+    const kind = kindOverride || ((tool === 'pin' || tool === 'point') ? 'point' : tool === 'section' && section ? 'section' : 'block');
     const hitEl = deepestBlock(el);
     const outlineEl = kind === 'section' && section ? section : hitEl;
     const pt = ev ? pointPct(ev) : { x: 0, y: 0 };
@@ -276,7 +276,7 @@ export function buildMockupProbeScript(opts: MockupProbeOptions = {}): string {
 
     shield.addEventListener('mousemove', (ev) => {
       const target = targetAt(ev);
-      if (tool === 'pin') {
+      if (tool === 'pin' || tool === 'point') {
         post('hover', Object.assign(payloadFor(target, ev, 'point'), { kind: 'point' }));
         return;
       }
@@ -305,7 +305,7 @@ export function buildMockupProbeScript(opts: MockupProbeOptions = {}): string {
       const dy = ev.clientY - drag.y;
       const dist = Math.hypot(dx, dy);
       drag = null;
-      if (tool === 'pin') {
+      if (tool === 'pin' || tool === 'point') {
         post('click', payloadFor(target, ev, 'point'));
         return;
       }
@@ -325,11 +325,18 @@ export function buildMockupProbeScript(opts: MockupProbeOptions = {}): string {
       ev.preventDefault();
       ev.stopPropagation();
     }, true);
-    post('ready', { sections: sections() });
+    post('ready', { sections: sections(), height: docHeight() });
+  }
+
+  function docHeight() {
+    return Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0,
+    );
   }
 
   function announce() {
-    post('ready', { sections: sections() });
+    post('ready', { sections: sections(), height: docHeight() });
   }
 
   const boot = PASSIVE ? announce : installShield;
@@ -338,6 +345,14 @@ export function buildMockupProbeScript(opts: MockupProbeOptions = {}): string {
   } else {
     boot();
   }
+  // Keep the parent's frame height in sync after late-loading media and on
+  // any reflow (the frame is sized to the full document so nothing is cropped).
+  window.addEventListener('load', function () {
+    post('height', { height: docHeight() });
+  });
+  window.addEventListener('resize', function () {
+    post('height', { height: docHeight() });
+  });
 })();`;
 }
 

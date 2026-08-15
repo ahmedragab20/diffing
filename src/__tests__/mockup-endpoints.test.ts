@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { Hono } from "hono";
 import type { CommentStore } from "../lib/comments.js";
 import { InMemoryMockupStore } from "../lib/mockups.js";
+import { InMemoryDesignSystemStore } from "../lib/design-system.js";
 import { InMemoryPlanStore } from "../lib/plans.js";
 
 // The server module imports git helpers at load time; stub them like server.test.ts.
@@ -72,6 +73,7 @@ async function makeApp(store: InMemoryMockupStore): Promise<Hono> {
     false,
     undefined,
     store,
+    new InMemoryDesignSystemStore(),
   );
 }
 
@@ -152,6 +154,71 @@ describe("mockup endpoints", () => {
     expect(mockup.hints).toHaveLength(1);
     expect(mockup.hints[0].screenId).toBe("main");
     expect(mockup.hints[0].patterns).toContain("tabs");
+  });
+
+  it("POST /api/mockups returns style hints for CDN Tailwind / Inter+indigo", async () => {
+    const res = await postMockup(app, {
+      title: "Generic",
+      html: '<script src="https://cdn.tailwindcss.com"></script><p style="font-family: Inter; color: #4f46e5">Hi</p>',
+    });
+    expect(res.status).toBe(201);
+    const mockup = await res.json();
+    const style = (mockup.hints ?? []).filter((h: any) => h.kind === "style");
+    expect(style.length).toBeGreaterThan(0);
+    expect(style[0].patterns).toEqual(
+      expect.arrayContaining(["tailwind-cdn", "generic-palette"]),
+    );
+  });
+
+  it("design system extract/publish and mockup fragment binding + handoff", async () => {
+    const extract = await app.fetch(
+      new Request("http://localhost/api/design-systems/default/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: "text",
+          text: ":root { --bg: #111; --text: #eee; --accent: #fc0; }",
+          title: "Test",
+        }),
+      }),
+    );
+    expect(extract.status).toBe(200);
+    const published = await app.fetch(
+      new Request("http://localhost/api/design-systems/default/publish", {
+        method: "POST",
+      }),
+    );
+    expect(published.status).toBe(200);
+    const pub = await published.json();
+    expect(pub.status).toBe("published");
+    expect(pub.revision).toBe(1);
+
+    const submit = await postMockup(app, {
+      title: "Bound",
+      html: "<h1>Hi</h1>",
+    });
+    expect(submit.status).toBe(201);
+    const mockup = await submit.json();
+    expect(mockup.mode).toBe("fragment");
+    expect(mockup.designSystemId).toBe("default");
+
+    const doc = await app.fetch(
+      new Request(
+        `http://localhost/api/mockups/${mockup.id}/screens/main/document`,
+      ),
+    );
+    expect(doc.status).toBe(200);
+    const html = await doc.text();
+    expect(html).toContain("data-diffing-slot=\"content\"");
+    expect(html).toContain("<h1>Hi</h1>");
+
+    const handoff = await app.fetch(
+      new Request(`http://localhost/api/mockups/${mockup.id}/handoff`),
+    );
+    expect(handoff.status).toBe(200);
+    const bundle = await handoff.json();
+    expect(bundle.xml).toContain("mockup-handoff");
+    expect(bundle.designSystemId).toBe("default");
   });
 
   it("POST /api/mockups omits hints when screens are clean", async () => {
@@ -788,6 +855,47 @@ describe("mockup endpoints", () => {
     expect(await noMatch.json()).toMatchObject({
       code: "exact-text-not-found",
     });
+
+    const regionPatch = await app.fetch(
+      new Request(`${base}/cart`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          region: "price",
+          replacement: "<b>$2</b>",
+        }),
+      }),
+    );
+    expect(regionPatch.status).toBe(409);
+    expect(await regionPatch.json()).toMatchObject({
+      code: "region-not-found",
+    });
+
+    await app.fetch(
+      new Request(`${base}/cart`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          html: '<div data-diffing="price"><b>$1</b></div>',
+        }),
+      }),
+    );
+    const replaced = await app.fetch(
+      new Request(`${base}/cart`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          region: "price",
+          replacement: "<b>$2</b>",
+        }),
+      }),
+    );
+    expect(replaced.status).toBe(200);
+    const replacedBody = await replaced.json();
+    expect(replacedBody.occurrences).toBe(1);
+    expect(
+      replacedBody.mockup.screens.find((s: any) => s.id === "cart").html,
+    ).toBe('<div data-diffing="price"><b>$2</b></div>');
     expect(
       (
         await app.fetch(
@@ -805,7 +913,7 @@ describe("mockup endpoints", () => {
       new Request(`${base}/cart`, { method: "DELETE" }),
     );
     expect(del.status).toBe(200);
-    expect((await del.json()).version).toBe(6);
+    expect((await del.json()).version).toBe(8);
 
     const delLast = await app.fetch(
       new Request(`${base}/main`, { method: "DELETE" }),

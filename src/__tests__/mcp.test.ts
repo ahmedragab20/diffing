@@ -1335,6 +1335,8 @@ describe('diffing MCP', () => {
           'inspect_mockup',
           'revise_mockup',
           'update_mockup_threads',
+          'get_design_system',
+          'get_mockup_handoff',
         ]),
       )
 
@@ -1345,6 +1347,7 @@ describe('diffing MCP', () => {
         'comments',
         'comment',
         'screen',
+        'preview',
       ])
       expect(input.properties.viewport.enum).toEqual([
         'desktop',
@@ -1364,7 +1367,9 @@ describe('diffing MCP', () => {
         'upsert',
         'remove',
         'patch',
+        'replace-region',
       ])
+      expect(reviseInput.properties.region).toBeDefined()
       expect(reviseInput.required).toEqual(['mockupId', 'op', 'screenId'])
 
       const batch = tools.tools.find((t) => t.name === 'update_mockup_threads')
@@ -1630,6 +1635,28 @@ describe('diffing MCP', () => {
         replacement: 'Buy',
         expectedVersion: 4,
       })
+
+      const region = await session.client.callTool({
+        name: 'revise_mockup',
+        arguments: {
+          mockupId: 'm1',
+          op: 'replace-region',
+          screenId: 'main',
+          region: 'hero',
+          replacement: '<h1>New</h1>',
+          expectedVersion: 5,
+        },
+      })
+      expect(region.structuredContent).toMatchObject({
+        mockupId: 'm1',
+        version: 5,
+        occurrences: 1,
+      })
+      expect(JSON.parse(calls[3].body!)).toEqual({
+        region: 'hero',
+        replacement: '<h1>New</h1>',
+        expectedVersion: 5,
+      })
     } finally {
       await session.close()
     }
@@ -1676,6 +1703,20 @@ describe('diffing MCP', () => {
       )
       expect(JSON.stringify(noPatchArgs.content)).toContain(
         'requires expectedText and replacement',
+      )
+
+      const noRegion = await session.client.callTool({
+        name: 'revise_mockup',
+        arguments: {
+          mockupId: 'm1',
+          op: 'replace-region',
+          screenId: 'main',
+          replacement: '<h1>x</h1>',
+        },
+      })
+      expect(noRegion.isError, JSON.stringify(noRegion.content)).toBe(true)
+      expect(JSON.stringify(noRegion.content)).toContain(
+        'requires region and replacement',
       )
 
       const badOp = await session.client.callTool({

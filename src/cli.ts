@@ -105,6 +105,7 @@ const SUBCOMMANDS = new Set([
 	"mcp",
 	"plan",
 	"mockup",
+	"design",
 	"update",
 	"gh",
 	"doctor",
