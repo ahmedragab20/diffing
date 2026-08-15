@@ -19,6 +19,10 @@ import type { Plan } from "./lib/plan-types.js";
 import type { Mockup } from "./lib/mockup-types.js";
 import { formatMockupReview } from "./lib/mockup-format.js";
 import { slugifyScreenId } from "./lib/mockup-types.js";
+import {
+	formatSubmitHints,
+	type MockupStateHint,
+} from "./lib/mockup-lint.js";
 
 /**
  * Agent-facing `diffing` subcommands. These make the user→agent handoff
@@ -1366,6 +1370,14 @@ function warnMockupPathsInRepo(paths: string[]): void {
 	}
 }
 
+function printMockupHints(payload: unknown): void {
+	if (!payload || typeof payload !== "object") return;
+	const hints = (payload as { hints?: MockupStateHint[] }).hints;
+	if (!hints?.length) return;
+	const text = formatSubmitHints(hints).trim();
+	if (text) console.error(text);
+}
+
 async function mockupSubmit(args: string[]): Promise<number> {
 	const { values, positionals } = parseArgs({
 		args,
@@ -1444,6 +1456,7 @@ async function mockupSubmit(args: string[]): Promise<number> {
 		`Submitted mockup ${mockup.id} (v${mockup.version}) — review at ${appendSessionToken(`${base}/mockup/${mockup.id}`, activeAuthToken)}`,
 	);
 	if (mockup.sourcePath) console.error(`Source path: ${mockup.sourcePath}`);
+	printMockupHints(mockup);
 	if (!values.wait) {
 		console.error(CLI_MOCKUP_SUBMIT_PARK_HINT);
 		process.stdout.write(mockup.id + "\n");
@@ -1844,6 +1857,7 @@ One-screen revision. Version bumps on success; an --expected-version guard abort
 		console.error(
 			`Upserted screen ${screenId} on ${mockupId} → v${mockup.version} (${mockup.screens.length} screens).`,
 		);
+		printMockupHints(mockup);
 		return EXIT_OK;
 	}
 
@@ -1896,6 +1910,7 @@ One-screen revision. Version bumps on success; an --expected-version guard abort
 		console.error(
 			`Replaced region "${region}" on ${screenId} (${data.occurrences} match(es)) → v${data.mockup.version}.`,
 		);
+		printMockupHints(data.mockup);
 		return EXIT_OK;
 	}
 
@@ -1929,6 +1944,7 @@ One-screen revision. Version bumps on success; an --expected-version guard abort
 	console.error(
 		`Patched ${screenId} on ${mockupId} (${data.occurrences} exact match(es)) → v${data.mockup.version}.`,
 	);
+	printMockupHints(data.mockup);
 	return EXIT_OK;
 }
 
@@ -2096,6 +2112,7 @@ Staging files, if needed, go under ~/.diffing/<repo>/mockup-sources/ only.
 One state per screen: never tabs/accordions/toggles/modals/JS content-swapping — each variant is a separate screen.
 
   submit [-] [--title T] [--screen id=path]... [--id ID] [--model M] [--wait]
+         [--mode fragment|document] [--system ID] [--plan-id ID]
          # or a path already under ~/.diffing/.../mockup-sources/
   await [--timeout N]
   list [--json]
