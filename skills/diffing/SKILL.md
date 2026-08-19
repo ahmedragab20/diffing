@@ -166,16 +166,17 @@ UI supports multi-line selection, range adjust, collapsible threads, and severit
 
 When pi runs inside herdr (`HERDR_ENV=1`), coordinate panes via the `herdr` CLI. Two machine-readable markers bridge the tools:
 
-- `DIFFING_READY <url> mode=<web|gh-pr> pid=<pid>` — printed to stderr once the server is listening. Prefer `herdr wait output <pane> --match "DIFFING_READY"` over grepping the human banner for `"http"`.
+- `DIFFING_READY <url> mode=<web|gh-pr> pid=<pid>` — printed to stderr once the server is listening. Do **not** split a pane to start the server. Prefer MCP `start_review_session`, or background `diffing --web --no-open` in this pane. The tool output already has the URL — do not `herdr wait output` on a sibling pane for this, and do not grep the human banner for `"http"`.
 - `DIFFING_VERDICT <plan|mockup|review> decision=<…>` — surfaced in the pi pane (notify + widget) after each `await_review` / `await_plan_review` / `await_mockup_review` verdict. Grep it with `herdr pane read <pi-pane> --source recent` or `herdr wait output`.
 
 Recipes:
 
 ```bash
-# 1. Run the diffing server in a sibling pane and wait until it is ready
-NEW=$(herdr pane split <self-pane> --direction right --no-focus | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
-herdr pane run "$NEW" "diffing --web --no-open"
-herdr wait output "$NEW" --match "DIFFING_READY" --timeout 30000
+# 1. Open a diffing session — never split a pane for this
+# Prefer MCP start_review_session (returns the URL).
+# CLI fallback: background a persistent process in THIS pane:
+diffing --web --no-open
+# It prints DIFFING_READY <url> mode=… pid=… on stderr.
 
 # 2. Run tests/build in a pane while a review is parked
 T=$(herdr pane split <self-pane> --direction down --no-focus | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
@@ -187,8 +188,8 @@ herdr pane split <self-pane> --direction right --no-focus
 herdr pane run <new-pane> "pi"          # or a subagent
 herdr wait agent-status <new-pane> --status done --timeout 120000
 
-# 4. Read the diffing server pane back for errors / the verdict line
-herdr pane read <server-pane> --source recent --lines 50
+# 4. Read this pane for errors / the verdict line
+herdr pane read <pi-pane> --source recent --lines 50
 ```
 
 Notes:
