@@ -18,6 +18,7 @@ import {
 import { formatPlanReview } from "./lib/plan-format.js";
 import {
 	diffScopeKey,
+	sameDiffScope,
 	acquireServerStartupLease,
 	isLockAlive,
 	resolveActiveServerLock,
@@ -28,6 +29,7 @@ import {
 	type ServerStartupLease,
 } from "./lib/server-lock.js";
 import { startServer } from "./server.js";
+import { probeLockReviewUiSync } from "./lib/lock-probe.js";
 import {
 	generateSessionToken,
 	isLoopbackHost,
@@ -184,6 +186,7 @@ export interface CreateMcpServerOptions {
 		repoRoot: string,
 		ownerId: string,
 	) => ServerStartupLease | null;
+	reviewUiIsReachable?: (lock: ServerLock) => boolean;
 }
 
 interface SessionStatus {
@@ -254,7 +257,7 @@ function sameScope(
 	requestedScope: string,
 	requestedArgs: string[],
 ): boolean {
-	if (lock.scope) return lock.scope === requestedScope;
+	if (lock.scope) return sameDiffScope(lock.scope, requestedScope);
 	// Locks written by older diffing versions had no scope metadata. Reuse only
 	// for the default request; a non-default request must never silently inherit
 	// an unknown scope.
@@ -533,6 +536,8 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 	const lockIsAlive = options.lockIsAlive ?? isLockAlive;
 	const acquireStartupLease =
 		options.acquireStartupLease ?? acquireServerStartupLease;
+	const reviewUiIsReachable =
+		options.reviewUiIsReachable ?? probeLockReviewUiSync;
 	const ownerId = options.ownerId ?? randomUUID();
 	const defaultClientDir = existsSync(resolve(moduleDirectory, "client"))
 		? resolve(moduleDirectory, "client")
@@ -849,6 +854,12 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 								"Use the existing session or end it manually; diffing will not replace it.",
 						);
 					}
+					if (!reviewUiIsReachable(existing)) {
+						throw new Error(
+							"A live diffing API matches this scope, but its human review UI is unavailable. " +
+								"The client bundle may be missing or mid-rebuild; rebuild it or restart that session before retrying.",
+						);
+					}
 					const url = lockUrl(existing);
 					if (!url)
 						throw new Error(
@@ -912,9 +923,8 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 					try {
 						writeLock(lock);
 					} catch (error) {
-						// startServer currently does not expose a close handle. Never report
-						// success and never leave a lock claiming ownership. The loopback
-						// listener can survive only until this MCP process disconnects.
+						await started.close?.().catch(() => {});
+						// Never report success and never leave a lock claiming ownership.
 						const persisted = readLock(repoRoot);
 						if (persisted?.owner === "mcp" && persisted.ownerId === ownerId) {
 							removeLock(repoRoot);
@@ -922,7 +932,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 						const detail = error instanceof Error ? error.message : String(error);
 						throw new Error(
 							`The review server bound locally but its discovery lock could not be written: ${detail}. ` +
-								"No MCP session was claimed; retry after fixing lock storage. The unadvertised loopback listener will close when this MCP process exits.",
+								"No MCP session was claimed and the unadvertised listener was closed; retry after fixing lock storage.",
 						);
 					}
 					selectedLock = lock;

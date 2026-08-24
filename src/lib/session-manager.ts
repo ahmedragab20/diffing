@@ -159,8 +159,8 @@ export async function runSessionsCommand(args: string[]): Promise<number> {
     }
     try {
       const selected = findSession(positionals[0] ?? 'active', sessions, active)
-      activateServerLock(selected)
       await openExistingSession(selected, { noOpen })
+      activateServerLock(selected)
       return EXIT_OK
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error))

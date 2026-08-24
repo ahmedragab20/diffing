@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ServerLock } from '../lib/server-lock.js'
 import {
   existingSessionUrl,
+  findReusableSession,
   openExistingSession,
+  sessionMatchesLaunch,
   stopLockOwner,
 } from '../lib/session-conflict.js'
 
@@ -46,6 +48,48 @@ describe('existingSessionUrl', () => {
     expect(existingSessionUrl(makeLock({ mode: 'tui', port: 0 }))).toBeNull()
   })
 
+})
+
+describe('matching reusable launches', () => {
+  const request = {
+    mode: 'web' as const,
+    scope: 'working-tree-scope',
+    host: '127.0.0.1',
+  }
+
+  it('matches the same mode, scope, and bind target', () => {
+    expect(sessionMatchesLaunch(makeLock({ scope: request.scope }), request)).toBe(true)
+  })
+
+  it('matches legacy scope JSON after removing launch-only fields', () => {
+    const semanticRequest = { ...request, scope: JSON.stringify({ staged: false }) }
+    const legacyScope = JSON.stringify({
+      staged: false,
+      skipSetup: true,
+      viewOnly: false,
+      outputMode: 'web',
+    })
+    expect(sessionMatchesLaunch(makeLock({ scope: legacyScope }), semanticRequest)).toBe(true)
+  })
+
+  it('rejects a different scope, mode, host, or explicitly requested port', () => {
+    expect(sessionMatchesLaunch(makeLock({ scope: 'other' }), request)).toBe(false)
+    expect(sessionMatchesLaunch(makeLock({ scope: request.scope, mode: 'tui' }), request)).toBe(false)
+    expect(sessionMatchesLaunch(makeLock({ scope: request.scope, host: '0.0.0.0' }), request)).toBe(false)
+    expect(sessionMatchesLaunch(makeLock({ scope: request.scope }), { ...request, port: 3433 })).toBe(false)
+  })
+
+  it('keeps GitHub PR identity separate from diff scope', () => {
+    const prRequest = { ...request, mode: 'gh-pr' as const, prRef: '123' }
+    expect(sessionMatchesLaunch(makeLock({ mode: 'gh-pr', scope: request.scope, prRef: '123' }), prRequest)).toBe(true)
+    expect(sessionMatchesLaunch(makeLock({ mode: 'gh-pr', scope: request.scope, prRef: '456' }), prRequest)).toBe(false)
+  })
+
+  it('selects the first compatible entry, preserving newest-first registry order', () => {
+    const older = makeLock({ sessionId: 'older', scope: request.scope, startedAt: 1 })
+    const newer = makeLock({ sessionId: 'newer', scope: request.scope, startedAt: 2 })
+    expect(findReusableSession([newer, older], request)).toBe(newer)
+  })
 })
 
 describe('stopLockOwner', () => {
@@ -110,11 +154,25 @@ describe('stopLockOwner', () => {
     const clearLock = vi.fn()
     await stopLockOwner(makeLock(), {
       lockMatches: async () => false,
+      isAlive: () => false,
       kill,
       clearLock,
     })
     expect(kill).not.toHaveBeenCalled()
     expect(clearLock).toHaveBeenCalledOnce()
+  })
+
+  it('refuses to signal a live owner when the port probe is inconclusive', async () => {
+    const kill = vi.fn()
+    const clearLock = vi.fn()
+    await expect(stopLockOwner(makeLock(), {
+      lockMatches: async () => false,
+      isAlive: () => true,
+      kill,
+      clearLock,
+    })).rejects.toThrow(/review API did not answer/)
+    expect(kill).not.toHaveBeenCalled()
+    expect(clearLock).not.toHaveBeenCalled()
   })
 
   it('throws when the process never exits', async () => {
@@ -141,7 +199,7 @@ describe('openExistingSession', () => {
   it('opens the browser URL for web sessions', async () => {
     const openUrl = vi.fn(async () => {})
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    await openExistingSession(makeLock(), { noOpen: false, openUrl })
+    await openExistingSession(makeLock(), { noOpen: false, openUrl, probeUi: () => true })
     expect(openUrl).toHaveBeenCalledWith('http://127.0.0.1:51835')
     expect(log).toHaveBeenCalledWith(
       'Opening existing diffing session at http://127.0.0.1:51835',
@@ -152,7 +210,11 @@ describe('openExistingSession', () => {
   it('opens a clean browser URL when auth is configured', async () => {
     const openUrl = vi.fn(async () => {})
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    await openExistingSession(makeLock({ authToken: 'secret' }), { noOpen: false, openUrl })
+    await openExistingSession(makeLock({ authToken: 'secret' }), {
+      noOpen: false,
+      openUrl,
+      probeUi: () => true,
+    })
     expect(openUrl).toHaveBeenCalledWith('http://127.0.0.1:51835')
     log.mockRestore()
   })
@@ -160,7 +222,7 @@ describe('openExistingSession', () => {
   it('skips browser open when noOpen is set', async () => {
     const openUrl = vi.fn(async () => {})
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    await openExistingSession(makeLock(), { noOpen: true, openUrl })
+    await openExistingSession(makeLock(), { noOpen: true, openUrl, probeUi: () => true })
     expect(openUrl).not.toHaveBeenCalled()
     log.mockRestore()
   })
@@ -175,5 +237,15 @@ describe('openExistingSession', () => {
     expect(openUrl).not.toHaveBeenCalled()
     expect(log.mock.calls[0]?.[0]).toMatch(/TUI session is already open/)
     log.mockRestore()
+  })
+
+  it('refuses to open an API-only web session with a broken UI shell', async () => {
+    const openUrl = vi.fn(async () => {})
+    await expect(openExistingSession(makeLock(), {
+      noOpen: false,
+      openUrl,
+      probeUi: () => false,
+    })).rejects.toThrow(/review UI is unavailable/)
+    expect(openUrl).not.toHaveBeenCalled()
   })
 })

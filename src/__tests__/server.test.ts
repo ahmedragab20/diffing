@@ -897,6 +897,17 @@ diff --git a/gone.ts b/gone.ts
         expect(res.status).toBe(200)
         expect(res.headers.get('Content-Type')).toBe('text/html')
       })
+
+      it('returns a diagnostic 503 when the client bundle is missing', async () => {
+        const { readFile } = await import('node:fs/promises')
+        vi.mocked(readFile)
+          .mockRejectedValueOnce(new Error('ENOENT'))
+          .mockRejectedValueOnce(new Error('ENOENT'))
+        mockIsSafePath.mockReturnValue(true)
+        const res = await app.fetch(new Request('http://localhost/'))
+        expect(res.status).toBe(503)
+        await expect(res.text()).resolves.toContain('client bundle is missing')
+      })
     })
 
     describe('GET /api/live', () => {

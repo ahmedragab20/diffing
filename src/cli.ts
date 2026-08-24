@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
-import getPort from "get-port";
 import {
 	parseDiffOptions,
 	DEFAULTS,
@@ -19,35 +18,38 @@ import { appendSessionToken } from "./lib/session-url.js";
 import { loadSettings } from "./lib/settings.js";
 import {
 	acquireServerStartupLease,
+	activateServerLock,
 	diffScopeKey,
+	listServerLocks,
 	resolveActiveServerLock,
+	resolveUnresponsiveServerLock,
 	removeServerLockIfOwned,
 	writeServerLock,
+	type ServerLock,
 	type ServerStartupLease,
 } from "./lib/server-lock.js";
 import { getBranchName, getRepoRoot } from "./lib/git.js";
 import { playStartupDisplay } from "./lib/startup-display.js";
 import { buildTuiDiffContext } from "./lib/tui-diff-context.js";
 import { finishTuiChild } from "./lib/tui-child-lifecycle.js";
-import { openExistingSession, stopLockOwner } from "./lib/session-conflict.js";
+import {
+	findReusableSession,
+	openExistingSession,
+	sessionMatchesLaunch,
+	stopLockOwner,
+	type SessionLaunchRequest,
+} from "./lib/session-conflict.js";
 import type { DiffOptions } from "./lib/diff-options.js";
 
-async function resolveServerPort(requested?: number): Promise<number> {
-	if (requested === undefined) {
-		return getPort();
-	}
+function resolveServerPort(requested?: number): number {
+	if (requested === undefined) return 0;
 	if (!Number.isInteger(requested) || requested < 1 || requested > 65535) {
 		console.error(
 			`--port must be an integer between 1 and 65535 (got ${String(requested)}).`,
 		);
 		process.exit(5);
 	}
-	const port = await getPort({ port: requested });
-	if (port !== requested) {
-		console.error(`Port ${requested} is not available.`);
-		process.exit(1);
-	}
-	return port;
+	return requested;
 }
 import type { TuiSearchBridge } from "./lib/tui-search-bridge.js";
 
@@ -210,8 +212,15 @@ if (args[0] === "show") {
 const defaultInteractiveMode = prRef ? "web" : loadSettings().defaultMode;
 const opts = parseDiffOptions(args, defaultInteractiveMode);
 
-if (opts.reuseSession && opts.replaceSession) {
-	console.error("Cannot combine --reuse-session and --replace-session.");
+const sessionBehaviorFlags = [
+	opts.reuseSession,
+	opts.replaceSession,
+	opts.newSession,
+].filter(Boolean).length;
+if (sessionBehaviorFlags > 1) {
+	console.error(
+		"Cannot combine --reuse-session, --replace-session, and --new-session.",
+	);
 	process.exit(5);
 }
 
@@ -273,21 +282,7 @@ if (opts.outputMode === "terminal") {
 }
 
 // ── Web mode: launch the review server ──────────────────
-const __pkgDir = dirname(fileURLToPath(import.meta.url));
-const currentVersion = JSON.parse(
-	readFileSync(resolve(__pkgDir, "..", "package.json"), "utf-8"),
-).version;
-
-const updateCheckPromise = (async () => {
-	try {
-		const { checkForUpdates } = await import("./lib/update-check.js");
-		return await checkForUpdates(currentVersion);
-	} catch {
-		return null;
-	}
-})();
-
-const port = await resolveServerPort(opts.port);
+const port = resolveServerPort(opts.port);
 const host = opts.host;
 
 if (isWildcardBindHost(host) && !opts.insecureNoAuth) {
@@ -298,6 +293,74 @@ if (isWildcardBindHost(host) && !opts.insecureNoAuth) {
 	process.exit(1);
 }
 
+let repoRoot: string;
+try {
+	repoRoot = getRepoRoot();
+} catch {
+	repoRoot = process.cwd();
+}
+
+const launchRequest: SessionLaunchRequest = {
+	mode: prRef ? "gh-pr" : "web",
+	scope: diffScopeKey(opts),
+	host,
+	port: opts.port,
+	prRef: prRef ?? undefined,
+};
+const matchingSession = () =>
+	findReusableSession(listServerLocks(repoRoot), launchRequest);
+const unresponsiveMatchingSession = () => {
+	const lock = resolveUnresponsiveServerLock(repoRoot);
+	if (!lock) return null;
+	if (opts.reuseSession || sessionMatchesLaunch(lock, launchRequest)) return lock;
+	return null;
+};
+const openAndActivateSession = async (lock: ServerLock): Promise<boolean> => {
+	try {
+		await openExistingSession(lock, { noOpen: opts.noOpen });
+		activateServerLock(lock);
+		return true;
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : String(error));
+		return false;
+	}
+};
+const defaultReuse = !(
+	opts.reuseSession ||
+	opts.replaceSession ||
+	opts.newSession
+);
+
+let reusableSession = opts.reuseSession
+	? resolveActiveServerLock(repoRoot)
+	: defaultReuse
+		? matchingSession()
+		: null;
+if (reusableSession) {
+	if (!(await openAndActivateSession(reusableSession))) process.exit(3);
+	process.exit(0);
+}
+let unresponsiveSession = opts.newSession ? null : unresponsiveMatchingSession();
+if (unresponsiveSession && !opts.replaceSession) {
+	console.error(
+		`A matching diffing session (pid ${unresponsiveSession.pid}, port ${unresponsiveSession.port}) is still running but did not answer its health check. ` +
+			"To avoid orphaning another port, no new server was started. Retry shortly, end that pid manually if it is stuck, or pass --new-session only when coexistence is intentional.",
+	);
+	process.exit(3);
+}
+
+const __pkgDir = dirname(fileURLToPath(import.meta.url));
+const currentVersion = JSON.parse(
+	readFileSync(resolve(__pkgDir, "..", "package.json"), "utf-8"),
+).version;
+const updateCheckPromise = (async () => {
+	try {
+		const { checkForUpdates } = await import("./lib/update-check.js");
+		return await checkForUpdates(currentVersion);
+	} catch {
+		return null;
+	}
+})();
 const authToken = opts.insecureNoAuth ? null : generateSessionToken();
 if (isWildcardBindHost(host) && opts.insecureNoAuth) {
 	console.error(
@@ -305,45 +368,70 @@ if (isWildcardBindHost(host) && opts.insecureNoAuth) {
 			"Anyone on your network can read and modify review data.",
 	);
 }
-
 const clientDir = resolve(__pkgDir, "client");
 const resolvedClientDir = existsSync(clientDir)
 	? clientDir
 	: resolve(process.cwd(), "dist/client");
-
 // Kick off the browser module load in parallel with server start so open is
 // ready the moment the port is bound.
 const openModulePromise = opts.noOpen ? null : import("open");
 
-let repoRoot: string;
-try {
-	repoRoot = getRepoRoot();
-} catch {
-	repoRoot = process.cwd();
-}
 const sessionOwnerId = randomUUID();
 let startupLease: ServerStartupLease | null = acquireServerStartupLease(
 	repoRoot,
 	sessionOwnerId,
 );
 if (!startupLease) {
+	// A competing launcher may have published the exact session between our
+	// first registry scan and lease acquisition. Give reuse one final chance.
+	reusableSession = opts.reuseSession
+		? resolveActiveServerLock(repoRoot)
+		: defaultReuse
+			? matchingSession()
+			: null;
+	if (reusableSession) {
+		if (!(await openAndActivateSession(reusableSession))) process.exit(3);
+		process.exit(0);
+	}
+	unresponsiveSession = opts.newSession ? null : unresponsiveMatchingSession();
+	if (unresponsiveSession && !opts.replaceSession) {
+		console.error(
+			`A matching diffing session (pid ${unresponsiveSession.pid}, port ${unresponsiveSession.port}) is still running but did not answer its health check. No new server was started.`,
+		);
+		process.exit(3);
+	}
 	console.error(
 		"Another diffing process is starting a review for this repository. Retry in a moment.",
 	);
 	process.exit(3);
 }
 
-const activeSession =
-	opts.reuseSession || opts.replaceSession
-		? resolveActiveServerLock(repoRoot)
+// The lease winner must recheck discovery: another process may have finished
+// startup while this process was waiting to acquire the lease.
+reusableSession = opts.reuseSession
+	? resolveActiveServerLock(repoRoot)
+	: defaultReuse
+		? matchingSession()
 		: null;
-if (activeSession && opts.reuseSession) {
+if (reusableSession) {
 	startupLease.release();
 	startupLease = null;
-	await openExistingSession(activeSession, { noOpen: opts.noOpen });
+	if (!(await openAndActivateSession(reusableSession))) process.exit(3);
 	process.exit(0);
 }
+unresponsiveSession = opts.newSession ? null : unresponsiveMatchingSession();
+if (unresponsiveSession && !opts.replaceSession) {
+	startupLease.release();
+	startupLease = null;
+	console.error(
+		`A matching diffing session (pid ${unresponsiveSession.pid}, port ${unresponsiveSession.port}) is still running but did not answer its health check. No new server was started.`,
+	);
+	process.exit(3);
+}
 
+const activeSession = opts.replaceSession
+	? resolveActiveServerLock(repoRoot) ?? resolveUnresponsiveServerLock(repoRoot)
+	: null;
 if (activeSession && opts.replaceSession) {
 	try {
 		console.error(
@@ -360,8 +448,9 @@ if (activeSession && opts.replaceSession) {
 
 let actualPort: number;
 let prMode: boolean;
+let runningServer: Awaited<ReturnType<typeof startServer>> | null = null;
 try {
-	const started = await startServer({
+	runningServer = await startServer({
 		port,
 		host,
 		clientDir: resolvedClientDir,
@@ -373,8 +462,8 @@ try {
 			insecureNoAuth: opts.insecureNoAuth,
 		},
 	});
-	actualPort = started.port;
-	prMode = started.prMode;
+	actualPort = runningServer.port;
+	prMode = runningServer.prMode;
 	writeServerLock({
 		port: actualPort,
 		host,
@@ -391,6 +480,7 @@ try {
 	});
 } catch (error) {
 	startupLease?.release();
+	await runningServer?.close?.().catch(() => {});
 	const detail = error instanceof Error ? error.message : String(error);
 	console.error(`Failed to start diffing review safely: ${detail}`);
 	process.exit(1);
@@ -455,13 +545,21 @@ try {
 	// best-effort update check
 }
 
-const shutdown = () => {
-	console.log("\nShutting down...");
+const cleanupOwnedLock = () => {
 	removeServerLockIfOwned(repoRoot, process.pid, sessionOwnerId);
+};
+process.once("exit", cleanupOwnedLock);
+let shuttingDown = false;
+const shutdown = async () => {
+	if (shuttingDown) return;
+	shuttingDown = true;
+	console.log("\nShutting down...");
+	cleanupOwnedLock();
+	await runningServer?.close?.().catch(() => {});
 	process.exit(0);
 };
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown());
 
 // ── TUI helpers ─────────────────────────────────────────
 
@@ -546,14 +644,26 @@ async function launchTui(args: string[], opts: DiffOptions): Promise<number> {
 	} catch {
 		repoRoot = process.cwd();
 	}
-	const activeSession =
-		opts.reuseSession || opts.replaceSession
-			? resolveActiveServerLock(repoRoot)
+	const defaultReuse =
+		!viewOnly &&
+		!(opts.reuseSession || opts.replaceSession || opts.newSession);
+	const reusableSession = opts.reuseSession
+		? resolveActiveServerLock(repoRoot)
+		: defaultReuse
+			? findReusableSession(listServerLocks(repoRoot), {
+					mode: "tui",
+					scope: diffScopeKey(opts),
+					host: "127.0.0.1",
+				})
 			: null;
-	if (activeSession && opts.reuseSession) {
-		await openExistingSession(activeSession, { noOpen: opts.noOpen });
+	if (reusableSession) {
+		activateServerLock(reusableSession);
+		await openExistingSession(reusableSession, { noOpen: opts.noOpen });
 		return 0;
 	}
+	const activeSession = opts.replaceSession
+		? resolveActiveServerLock(repoRoot)
+		: null;
 	if (activeSession && opts.replaceSession) {
 		try {
 			console.error(

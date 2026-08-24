@@ -53,3 +53,68 @@ req.end();
     return false
   }
 }
+
+export interface ReviewUiProbeResponse {
+  status: number
+  contentType: string
+  body: string
+}
+
+export function isReviewUiProbeResponse(
+  value: unknown,
+): value is ReviewUiProbeResponse {
+  if (!value || typeof value !== 'object') return false
+  const response = value as Partial<ReviewUiProbeResponse>
+  return response.status === 200 &&
+    typeof response.contentType === 'string' &&
+    response.contentType.toLowerCase().includes('text/html') &&
+    typeof response.body === 'string' &&
+    /<!doctype html|<html[\s>]/i.test(response.body)
+}
+
+/** Verify that a web/PR session can serve its human UI, not only its API. */
+export function probeLockReviewUiSync(lock: ServerLock): boolean {
+  if ((lock.mode ?? 'web') === 'tui' || lock.port <= 0) return true
+
+  const host = loopbackProbeHost(lock.host)
+  const headers: Record<string, string> = {}
+  if (lock.authToken) headers[SESSION_TOKEN_HEADER] = lock.authToken
+  const path = lock.mode === 'gh-pr' ? '/gh/pr' : '/'
+  const script = `
+import http from 'node:http';
+const req = http.request({
+  hostname: ${JSON.stringify(host)},
+  port: ${lock.port},
+  path: ${JSON.stringify(path)},
+  method: 'GET',
+  headers: ${JSON.stringify(headers)},
+}, (res) => {
+  let body = '';
+  res.setEncoding('utf8');
+  res.on('data', (chunk) => {
+    if (body.length < 4096) body += chunk;
+  });
+  res.on('end', () => {
+    process.stdout.write(JSON.stringify({
+      status: res.statusCode ?? 0,
+      contentType: String(res.headers['content-type'] ?? ''),
+      body: body.slice(0, 4096),
+    }));
+  });
+});
+req.on('error', () => process.exit(2));
+req.setTimeout(700, () => { req.destroy(); process.exit(2); });
+req.end();
+`
+
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    timeout: 1_200,
+    encoding: 'utf8',
+  })
+  if (result.status !== 0) return false
+  try {
+    return isReviewUiProbeResponse(JSON.parse(result.stdout.trim()))
+  } catch {
+    return false
+  }
+}

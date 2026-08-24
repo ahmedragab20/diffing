@@ -94,15 +94,60 @@ export function diffScopeKey(options: DiffOptions): string {
     insecureNoAuth: _insecureNoAuth,
     reuseSession: _reuseSession,
     replaceSession: _replaceSession,
+    newSession: _newSession,
     help: _help,
     version: _version,
+    skipSetup: _skipSetup,
     outputMode: _outputMode,
     tui: _tui,
+    viewOnly: _viewOnly,
     gpu: _gpu,
+    ghPr: _ghPr,
     noExtDiff: _noExtDiff,
     ...scope
   } = options
   return JSON.stringify(scope)
+}
+
+const LEGACY_LAUNCH_SCOPE_KEYS = new Set([
+  'port',
+  'host',
+  'noOpen',
+  'insecureNoAuth',
+  'reuseSession',
+  'replaceSession',
+  'newSession',
+  'help',
+  'version',
+  'skipSetup',
+  'outputMode',
+  'tui',
+  'viewOnly',
+  'gpu',
+  'ghPr',
+  'noExtDiff',
+])
+
+function canonicalScopeValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalScopeValue)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !LEGACY_LAUNCH_SCOPE_KEYS.has(key))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, canonicalScopeValue(nested)]),
+  )
+}
+
+/** Compare current and legacy serialized scopes by their diff semantics. */
+export function sameDiffScope(left: string, right: string): boolean {
+  if (left === right) return true
+  try {
+    return JSON.stringify(canonicalScopeValue(JSON.parse(left))) ===
+      JSON.stringify(canonicalScopeValue(JSON.parse(right)))
+  } catch {
+    return false
+  }
 }
 
 export function lockPath(repoRoot?: string): string {
@@ -165,7 +210,12 @@ function writeSessionRecord(lock: ServerLock): ServerLock {
  */
 export function writeServerLock(lock: ServerLock): void {
   const current = readServerLock(lock.repoRoot)
-  if (current && isLockAlive(current, lock.repoRoot) && !sameServerSession(current, lock)) {
+  if (
+    current &&
+    current.repoRoot === lock.repoRoot &&
+    isLockProcessAlive(current) &&
+    !sameServerSession(current, lock)
+  ) {
     writeSessionRecord(current)
   }
   const normalized = writeSessionRecord(lock)
@@ -201,10 +251,14 @@ export function listServerLocks(repoRoot?: string): ServerLock[] {
 
   const sessions = new Map<string, ServerLock>()
   const addIfLive = (candidate: ServerLock, stalePath?: string) => {
-    if (candidate.repoRoot !== expectedRepoRoot || !isLockAlive(candidate, expectedRepoRoot)) {
+    if (candidate.repoRoot !== expectedRepoRoot || !isLockProcessAlive(candidate)) {
       if (stalePath) rmSync(stalePath, { force: true })
       return
     }
+    // A live owner can be temporarily unable to answer while computing a
+    // large diff. Keep its registry record so one slow probe never turns a
+    // real listener into an undiscoverable orphan.
+    if (!probeLockServerSync(candidate)) return
     const normalized = normalizedLock(candidate)
     sessions.set(serverSessionId(normalized), normalized)
   }
@@ -254,7 +308,9 @@ export function resolveActiveServerLock(repoRoot?: string): ServerLock | null {
 
   const fallback = listServerLocks(expectedRepoRoot)[0]
   if (!fallback) {
-    removeServerLock(expectedRepoRoot)
+    if (!active || active.repoRoot !== expectedRepoRoot || !isLockProcessAlive(active)) {
+      removeServerLock(expectedRepoRoot)
+    }
     return null
   }
   return activateServerLock(fallback)
@@ -281,12 +337,37 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
+/** True when the recorded owner process still exists, without probing HTTP. */
+export function isLockProcessAlive(lock: ServerLock): boolean {
+  return isPidAlive(lock.pid)
+}
+
+/** Return an active record whose owner lives but whose review API did not answer. */
+export function resolveUnresponsiveServerLock(repoRoot?: string): ServerLock | null {
+  let expectedRepoRoot: string
+  try {
+    expectedRepoRoot = repoRoot ?? getRepoRoot()
+  } catch {
+    return null
+  }
+  const lock = readServerLock(expectedRepoRoot)
+  if (
+    !lock ||
+    lock.repoRoot !== expectedRepoRoot ||
+    !isLockProcessAlive(lock) ||
+    probeLockServerSync(lock)
+  ) {
+    return null
+  }
+  return normalizedLock(lock)
+}
+
 /**
  * True when the lock pid is alive, belongs to this repo, and the loopback port
  * still serves a diffing review status endpoint (detects PID reuse).
  */
 export function isLockAlive(lock: ServerLock, expectedRepoRoot?: string): boolean {
-  if (!isPidAlive(lock.pid)) return false
+  if (!isLockProcessAlive(lock)) return false
   try {
     if (lock.repoRoot !== (expectedRepoRoot ?? getRepoRoot())) return false
   } catch {

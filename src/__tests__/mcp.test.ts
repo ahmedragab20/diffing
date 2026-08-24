@@ -26,7 +26,10 @@ describe('diffing MCP', () => {
   })
 
   async function connect(options: Parameters<typeof createMcpServer>[0]) {
-    const server = createMcpServer(options)
+    const server = createMcpServer({
+      reviewUiIsReachable: () => true,
+      ...options,
+    })
     const client = new Client(
       { name: 'mcp-test', version: '1.0.0' },
       { capabilities: {} },
@@ -859,6 +862,37 @@ describe('diffing MCP', () => {
     }
   })
 
+  it('refuses to reuse an API-only session whose human UI is unavailable', async () => {
+    const lock: ServerLock = {
+      port: 43127,
+      host: '127.0.0.1',
+      pid: process.pid,
+      repoRoot,
+      startedAt: 10,
+      version: MCP_VERSION,
+      mode: 'web',
+    }
+    const startServerFn = vi.fn(async () => ({ port: 1, prMode: false }))
+    const session = await connect({
+      repoRoot,
+      startServerFn,
+      readLock: () => lock,
+      lockIsAlive: () => true,
+      reviewUiIsReachable: () => false,
+    })
+    try {
+      const result = await session.client.callTool({
+        name: 'start_review_session',
+        arguments: {},
+      })
+      expect(result.isError).toBe(true)
+      expect(JSON.stringify(result.content)).toContain('human review UI is unavailable')
+      expect(startServerFn).not.toHaveBeenCalled()
+    } finally {
+      await session.close()
+    }
+  })
+
   it('refuses foreign MCP-owned and non-loopback sessions', async () => {
     let lock: ServerLock = {
       port: 43128,
@@ -933,9 +967,10 @@ describe('diffing MCP', () => {
       mode: 'web',
     }
     const removeLock = vi.fn()
+    const close = vi.fn(async () => {})
     const session = await connect({
       repoRoot,
-      startServerFn: vi.fn(async () => ({ port: 43129, prMode: false })),
+      startServerFn: vi.fn(async () => ({ port: 43129, prMode: false, close })),
       readLock: () => lock,
       writeLock: () => {
         lock = foreign
@@ -956,6 +991,7 @@ describe('diffing MCP', () => {
       )
       expect(removeLock).not.toHaveBeenCalled()
       expect(lock).toBe(foreign)
+      expect(close).toHaveBeenCalledOnce()
     } finally {
       await session.close()
     }

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import { buildTuiGitDiffArgs, DEFAULTS, intoShowMode, parseDiffOptions, buildGitDiffArgs } from '../lib/diff-options.js'
+import { diffScopeKey } from '../lib/server-lock.js'
 
 function withStdoutTty<T>(isTTY: boolean, run: () => T): T {
   const descriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
@@ -58,11 +59,21 @@ describe('parseDiffOptions --gh-pr', () => {
 })
 
 describe('parseDiffOptions session conflict flags', () => {
-  it('parses --reuse-session and --replace-session', () => {
+  it('parses --reuse-session, --replace-session, and --new-session', () => {
     expect(parseDiffOptions(['--reuse-session']).reuseSession).toBe(true)
     expect(parseDiffOptions(['--replace-session']).replaceSession).toBe(true)
+    expect(parseDiffOptions(['--new-session']).newSession).toBe(true)
     expect(parseDiffOptions([]).reuseSession).toBe(false)
     expect(parseDiffOptions([]).replaceSession).toBe(false)
+    expect(parseDiffOptions([]).newSession).toBe(false)
+  })
+
+  it('keeps launch controls and PR entry syntax out of the reusable diff scope', () => {
+    const ordinary = diffScopeKey(parseDiffOptions([]))
+    expect(diffScopeKey(parseDiffOptions(['--new-session']))).toBe(ordinary)
+    expect(diffScopeKey(parseDiffOptions(['--reuse-session']))).toBe(ordinary)
+    expect(diffScopeKey(parseDiffOptions(['--skip-setup']))).toBe(ordinary)
+    expect(diffScopeKey(parseDiffOptions(['--gh-pr', '123']))).toBe(ordinary)
   })
 })
 

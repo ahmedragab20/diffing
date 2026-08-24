@@ -61,6 +61,18 @@ describe('server-lock', () => {
     })
   })
 
+  it('normalizes legacy launch-only fields when comparing diff scopes', async () => {
+    const { sameDiffScope } = await loadModule()
+    expect(sameDiffScope(
+      JSON.stringify({ staged: false, skipSetup: true, viewOnly: false }),
+      JSON.stringify({ staged: false }),
+    )).toBe(true)
+    expect(sameDiffScope(
+      JSON.stringify({ staged: true, skipSetup: true }),
+      JSON.stringify({ staged: false }),
+    )).toBe(false)
+  })
+
   it('returns null when no lock exists', async () => {
     const { readServerLock } = await loadModule()
     expect(readServerLock()).toBeNull()
@@ -197,5 +209,24 @@ describe('server-lock', () => {
 
     expect(listServerLocks().map((lock) => lock.sessionId)).toEqual(['live'])
     expect(existsSync(deadPath)).toBe(false)
+  })
+
+  it('preserves a live session record across a transient probe failure', async () => {
+    const {
+      writeServerLock,
+      listServerLocks,
+      readServerLock,
+      resolveActiveServerLock,
+      sessionsPath,
+    } = await loadModule()
+    const live = makeLock({ sessionId: 'temporarily-unresponsive' })
+    writeServerLock(live)
+    const recordPath = join(sessionsPath(), 'temporarily-unresponsive.json')
+
+    mockProbeLockServerSync.mockReturnValue(false)
+    expect(listServerLocks()).toEqual([])
+    expect(existsSync(recordPath)).toBe(true)
+    expect(resolveActiveServerLock()).toBeNull()
+    expect(readServerLock()?.sessionId).toBe('temporarily-unresponsive')
   })
 })

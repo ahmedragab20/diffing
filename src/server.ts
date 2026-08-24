@@ -3654,7 +3654,15 @@ export function createApp(
 				headers: { "Content-Type": contentType },
 			});
 		} catch {
-			const indexContent = await readFile(join(clientDir, "index.html"));
+			let indexContent: Buffer;
+			try {
+				indexContent = await readFile(join(clientDir, "index.html"));
+			} catch {
+				return c.text(
+					"diffing review UI unavailable: client bundle is missing",
+					503,
+				);
+			}
 			const html = injectSessionTokenIntoHtml(
 				indexContent.toString("utf-8"),
 				security.authToken,
@@ -3767,6 +3775,13 @@ export async function cleanupStaleProjects(): Promise<void> {
 	}
 }
 
+export interface StartedServer {
+	port: number;
+	prMode: boolean;
+	/** Stop accepting requests and tear down active review connections. */
+	close?: () => Promise<void>;
+}
+
 export async function startServer(options: {
 	port: number;
 	host: string;
@@ -3780,7 +3795,15 @@ export async function startServer(options: {
 	 * `POST /api/gh/pr/refresh` endpoint to re-fetch).
 	 */
 	prRef?: string;
-}): Promise<{ port: number; prMode: boolean }> {
+}): Promise<StartedServer> {
+	try {
+		await readFile(join(options.clientDir, "index.html"));
+	} catch {
+		throw new Error(
+			`Review UI bundle not found at ${join(options.clientDir, "index.html")}. ` +
+				"Run the full TypeScript/client build before starting diffing.",
+		);
+	}
 	cleanupStaleProjects().catch((err) => {
 		console.error("Failed to clean up stale projects:", err);
 	});
@@ -3823,16 +3846,33 @@ export async function startServer(options: {
 		options.security,
 	);
 
-	return new Promise((resolve) => {
-		serve(
+	return new Promise((resolve, reject) => {
+		const nodeServer = serve(
 			{
 				fetch: app.fetch,
 				port: options.port,
 				hostname: options.host,
 			},
 			(info) => {
-				resolve({ port: info.port, prMode });
+				nodeServer.off("error", onStartupError);
+				resolve({
+					port: info.port,
+					prMode,
+					close: () =>
+						new Promise<void>((resolveClose, rejectClose) => {
+							nodeServer.close((error) => {
+								if (error) rejectClose(error);
+								else resolveClose();
+							});
+							const closeAllConnections = (
+								nodeServer as { closeAllConnections?: () => void }
+							).closeAllConnections;
+							closeAllConnections?.call(nodeServer);
+						}),
+				});
 			},
 		);
+		const onStartupError = (error: Error) => reject(error);
+		nodeServer.once("error", onStartupError);
 	});
 }

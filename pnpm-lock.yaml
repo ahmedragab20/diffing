@@ -37,9 +37,6 @@ importers:
       editorconfig:
         specifier: ^3.0.2
         version: 3.0.2
-      get-port:
-        specifier: ^7.2.0
-        version: 7.2.0
       hono:
         specifier: ^4.7.6
         version: 4.12.10
@@ -2886,13 +2883,6 @@ packages:
         integrity: sha512-9fSjSaos/fRIVIp+xSJlE6lfwhES7LNtKaCBIamHsjr2na1BiABJPo0mOjjz8GJDURarmCPGqaiVg5mfjb98CQ==,
       }
     engines: { node: ">= 0.4" }
-
-  get-port@7.2.0:
-    resolution:
-      {
-        integrity: sha512-afP4W205ONCuMoPBqcR6PSXnzX35KTcJygfJfcp+QY+uwm3p20p1YczWXhlICIzGMCxYBQcySEcOgsJcrkyobg==,
-      }
-    engines: { node: ">=16" }
 
   get-proto@1.0.1:
     resolution:
@@ -6809,8 +6799,6 @@ snapshots:
       has-symbols: 1.1.0
       hasown: 2.0.4
       math-intrinsics: 1.1.0
-
-  get-port@7.2.0: {}
 
   get-proto@1.0.1:
     dependencies:

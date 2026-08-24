@@ -1,6 +1,10 @@
-import { probeLockServerSync } from './lock-probe.js'
+import {
+  probeLockReviewUiSync,
+  probeLockServerSync,
+} from './lock-probe.js'
 import {
   removeServerSession,
+  sameDiffScope,
   type ServerLock,
 } from './server-lock.js'
 import { loadSettings } from './settings.js'
@@ -23,6 +27,42 @@ export interface OpenExistingSessionOptions {
   noOpen: boolean
   /** Injectable browser opener; defaults to the `open` package. */
   openUrl?: (url: string) => Promise<unknown>
+  /** Injectable UI readiness check. */
+  probeUi?: (lock: ServerLock) => boolean
+}
+
+export interface SessionLaunchRequest {
+  mode: 'web' | 'tui' | 'gh-pr'
+  scope: string
+  host: string
+  port?: number
+  prRef?: string
+}
+
+/** True when a live registry entry can serve the requested launch exactly. */
+export function sessionMatchesLaunch(
+  lock: ServerLock,
+  request: SessionLaunchRequest,
+): boolean {
+  const mode = lock.mode ?? 'web'
+  if (
+    mode !== request.mode ||
+    !lock.scope ||
+    !sameDiffScope(lock.scope, request.scope)
+  ) return false
+
+  if (mode === 'gh-pr' && lock.prRef !== request.prRef) return false
+  if (mode !== 'tui' && lock.host !== request.host) return false
+  if (request.port !== undefined && lock.port !== request.port) return false
+  return true
+}
+
+/** Pick the newest compatible session from `listServerLocks()` output. */
+export function findReusableSession(
+  sessions: ServerLock[],
+  request: SessionLaunchRequest,
+): ServerLock | null {
+  return sessions.find((lock) => sessionMatchesLaunch(lock, request)) ?? null
 }
 
 function sleepMs(ms: number): Promise<void> {
@@ -71,15 +111,17 @@ export async function stopLockOwner(
   const lockMatches =
     options.lockMatches ?? ((candidate) => probeLockServerSync(candidate))
 
-  const matches = await lockMatches(lock)
-  if (!matches) {
+  if (!isAlive(lock)) {
     clearLock(lock)
     return
   }
 
-  if (!isAlive(lock)) {
-    clearLock(lock)
-    return
+  const matches = await lockMatches(lock)
+  if (!matches) {
+    throw new Error(
+      `Diffing pid ${lock.pid} is still running, but its review API did not answer. ` +
+        'Refusing to signal a process that cannot be verified; retry shortly or end that pid manually.',
+    )
   }
 
   try {
@@ -130,6 +172,14 @@ export async function openExistingSession(
         'Use that terminal, or replace it with --replace-session.',
     )
     return
+  }
+
+  const probeUi = options.probeUi ?? probeLockReviewUiSync
+  if (!probeUi(lock)) {
+    throw new Error(
+      `The diffing API on port ${lock.port} is alive, but its review UI is unavailable. ` +
+        'The client bundle may be missing or mid-rebuild; rebuild it or restart the session, then retry.',
+    )
   }
 
   const url = existingSessionUrl(lock)

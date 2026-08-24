@@ -146,6 +146,11 @@ export interface DiffOptions {
    */
   replaceSession: boolean
 
+  /**
+   * Always start a separate review, even when a compatible one is live.
+   */
+  newSession: boolean
+
   /** Print help and exit */
   help: boolean
 
@@ -227,6 +232,7 @@ export const DEFAULTS: DiffOptions = {
   insecureNoAuth: false,
   reuseSession: false,
   replaceSession: false,
+  newSession: false,
   help: false,
   version: false,
   skipSetup: false,
@@ -348,6 +354,7 @@ export const DIFFING_OPTIONS = {
   'insecure-no-auth': { type: 'boolean' as const, default: false },
   'reuse-session': { type: 'boolean' as const, default: false },
   'replace-session': { type: 'boolean' as const, default: false },
+  'new-session': { type: 'boolean' as const, default: false },
   web: { type: 'boolean' as const, default: false },
   terminal: { type: 'boolean' as const, default: false },
   tui: { type: 'boolean' as const, default: false },
@@ -391,8 +398,9 @@ Diffing Server Options:
   --insecure-no-auth   Allow binding to 0.0.0.0 without API tokens (unsafe on
                        shared networks). Ignored on loopback binds.
   --no-open            Don't open the browser automatically
-  --reuse-session      Open the active review instead of starting another
+  --reuse-session      Open the active review, regardless of its scope
   --replace-session    Stop the active review and start a replacement
+  --new-session        Start a separate review even when the scope already exists
   --skip-setup         Skip the first-run setup prompt (interactive TTY only)
   --gh-pr <ref>        Open a GitHub PR review session (number, owner/repo#N, or URL)
                        Same as: diffing "gh pr <ref>"
@@ -708,6 +716,7 @@ export function parseDiffOptions(
   if (values['insecure-no-auth']) opts.insecureNoAuth = true
   if (values['reuse-session']) opts.reuseSession = true
   if (values['replace-session']) opts.replaceSession = true
+  if (values['new-session']) opts.newSession = true
   if (values['gh-pr']) opts.ghPr = String(values['gh-pr'])
   if (values['skip-setup']) opts.skipSetup = true
   if (values.view) opts.viewOnly = true

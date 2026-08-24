@@ -29,7 +29,7 @@ Never guess the repository or hard-code a port. For global MCP clients, bind the
 
 ## Select the correct concurrent session
 
-Web, TUI, and GitHub PR reviews can coexist for one repository. Every new CLI launch gets a session ID, becomes active, and leaves older sessions running.
+Web, TUI, and GitHub PR reviews can coexist for one repository. CLI launches reuse the newest matching mode/scope by default; a genuinely different launch gets a session ID, becomes active, and leaves older sessions running.
 
 ```bash
 diffing sessions --json                 # safe summaries: id, active, mode, scope, URL
@@ -42,7 +42,7 @@ diffing sessions stop <id>|active|all   # explicit lifecycle action
 - Use a unique session ID prefix (the displayed first eight characters normally suffice). Never select solely because a session is newest.
 - `use` retargets `url`, `comments`, `inspect`, plan commands, and newly attached MCP discovery without stopping another review. `open` also selects the target. Stopping the active session elects the newest remaining live session.
 - MCP does not expose session-list/use/stop tools. Use the CLI manager when selection is needed, then attach a fresh repository-bound MCP connection. Once an MCP connection starts or reuses a web session, treat it as pinned: a later `sessions use` must not silently retarget that in-flight workflow; reconnect intentionally to switch.
-- Prefer coexistence. Use `--reuse-session` only to open the active review and `--replace-session` only when replacement was explicitly intended.
+- Prefer coexistence. Use `--reuse-session` only to open the active review regardless of scope, `--new-session` to deliberately duplicate a matching review, and `--replace-session` only when replacement was explicitly intended.
 
 ## Branch on session mode
 

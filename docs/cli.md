@@ -92,8 +92,11 @@ To ensure stale lockfiles from terminated or crashed server processes do not blo
 1. It probes the process using `process.kill(pid, 0)` (which checks for process existence without sending a termination signal).
 2. It validates that the repository path registered in the lockfile matches the repository context of the executing CLI process.
 
-Stale registry records are pruned automatically. If the active session exits,
-the newest remaining live session is elected and written to `server.json`.
+Records whose owner process has exited are pruned automatically. A live owner
+that misses a health probe is retained as temporarily unresponsive, preventing
+a slow review from becoming an undiscoverable orphan. If the active session
+exits, the newest remaining live session is elected and written to
+`server.json`.
 
 ---
 
@@ -109,30 +112,41 @@ diffing [options] [<revision>...] [-- <path>...]
 
 #### Diffing Server Options
 
-- `--port <port>`: The port to bind the server to. If omitted, it automatically requests a random available port.
+- `--port <port>`: The port to bind a new server to. If omitted, the OS assigns an available port atomically. A compatible live session is reused before any bind is attempted.
 - `--host <host>`: Host address to bind the server to (default: `127.0.0.1`). Loopback binds generate a per-session API token stored in the server lockfile; the web UI authenticates via an HttpOnly cookie (set when HTML is served) and optional `x-diffing-token` header on fetch. CLI and MCP read the token from the lockfile and send the header. Browseable URLs never include `?token=`. To expose the dashboard on your LAN, pass `0.0.0.0` together with `--insecure-no-auth` (disables API authentication).
 - `--insecure-no-auth`: Required when binding to `0.0.0.0` or `::`. Allows LAN clients to reach the API without a token. Ignored on loopback binds.
 - `--no-open`: Prevents the CLI from automatically launching your browser when the server starts.
-- `--reuse-session`: Open the active session (print URL / launch browser) instead of starting another.
+- `--reuse-session`: Open the active session (print URL / launch browser), regardless of its scope.
 - `--replace-session`: Stop the active session and start a replacement with the current arguments.
+- `--new-session`: Always start a separate review, even when an identical mode and scope are already live.
 - `--gh-pr <ref>`: Open a GitHub PR review session instead of a working-tree diff. The `<ref>` accepts the same forms as `gh pr <ref>` (bare number, `owner/repo#N`, or full GitHub URL). Equivalent to the quoted form `diffing "gh pr <ref>"`. See [§4c. GitHub PR Review Subcommands](#4c-github-pr-review-subcommands) for the full flow.
 - `--view`: Open the focused, read-only native diff viewer. Equivalent to `diffing view`.
 - `--tui`: Open the opt-in native-Rust terminal UI instead of the web server when a compatible `diffing-tui` executable has been installed or built. The same review flow (diff render, file tree, comments, agent handoff) runs in your terminal — no browser. You can also make it the interactive default with `diffing mode tui`. See [§4d. TUI Subcommands (Native Terminal UI)](#4d-tui-subcommands-native-terminal-ui) for installation, fallback, and the full flow.
 
 #### Concurrent session lifecycle
 
-Starting `diffing`, `diffing --web`, `diffing --tui`, or a GitHub PR review no
-longer conflicts with an existing review. Each launch receives its own port and
-registry record, becomes active, and leaves older sessions running. Web and TUI
-sessions can therefore coexist for the same repository.
+Starting `diffing`, `diffing --web`, `diffing --tui`, or a GitHub PR review is
+idempotent by default: the newest compatible live session is selected and
+opened instead of allocating another port. Compatibility includes mode, diff
+scope, bind host, an explicitly requested port, and PR ref where applicable.
+Different scopes and modes still coexist and receive separate registry records.
+Web and PR reuse also verifies that the HTML review shell is available; an
+API-only process with a missing client bundle is reported instead of opened.
+If a matching owner process is alive but its API is temporarily unresponsive,
+the CLI refuses to allocate another port and explains how to retry or opt into
+`--new-session`.
 
-- Pass `--reuse-session` to open the active review and exit.
+- Pass `--reuse-session` to open the active review even when it does not match
+  the requested scope.
 - Pass `--replace-session` to stop only the active review before launching.
+- Pass `--new-session` to deliberately create another session for an already
+  live scope.
 - Use `diffing sessions` to list, select, open, or stop a specific session.
 - MCP `start_review_session` remains conservative: it never stops or replaces
   a user-owned session and reports incompatible active scope/mode conflicts.
 
-`--reuse-session` and `--replace-session` are mutually exclusive.
+`--reuse-session`, `--replace-session`, and `--new-session` are mutually
+exclusive.
 
 #### First-run setup gate
 

@@ -70,6 +70,7 @@ const GLOBAL_FLAGS = [
   '--no-open',
   '--reuse-session',
   '--replace-session',
+  '--new-session',
   '--skip-setup',
   '--port',
   '--host',
