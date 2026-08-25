@@ -78,9 +78,10 @@ fn viewer_starts_and_quits_cleanly_in_a_real_pty() {
     }
     let mut child = command.spawn().unwrap();
 
-    let _ = wait_for_output(&mut master, "sample.rs", Duration::from_secs(5));
-    // Drain the initial diff render (the changed line is in the diff body) so
-    // residual pty output cannot satisfy the search assertions below.
+    // Wait for the complete initial diff render (the changed line is in the
+    // diff body) so residual PTY output cannot satisfy search assertions.
+    // Waiting for the filename first can consume this same frame and then
+    // incorrectly wait for a redraw that the TUI does not need to perform.
     let _ = wait_for_output(&mut master, "render_search", Duration::from_secs(5));
     for key in [b"/".as_slice(), b"\t", b"\t", b"\t"] {
         master.write_all(key).unwrap();
