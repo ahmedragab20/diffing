@@ -1,3 +1,9 @@
+## 0.19.1
+
+### Patch Changes
+
+- fc37f8e: Refine connections and persist model choice
+
 ## 0.19.0
 
 ### Minor Changes
