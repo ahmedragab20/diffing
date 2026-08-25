@@ -145,6 +145,13 @@ import {
 	fetchPrFileContentViaGh,
 } from "./lib/github.js";
 import { AiService } from "./lib/ai/service.js";
+import { ByteLruCache } from "./lib/ai/cache.js";
+import {
+	FileAiConversationStore,
+	type AiConversationStore,
+	type AiConversationCreateInput,
+	type AiConversationUpdateInput,
+} from "./lib/ai/conversations.js";
 import type {
 	AiAttachment,
 	AiCredentialRoute,
@@ -255,6 +262,7 @@ export function createApp(
 	mockupStore?: MockupStore,
 	designSystemStore?: DesignSystemStore,
 	aiService?: AiService,
+	aiConversationStore?: AiConversationStore,
 ) {
 	const app = new Hono();
 	app.use("*", createServerAuthMiddleware(security));
@@ -376,6 +384,7 @@ export function createApp(
 		repoRoot = process.cwd();
 	}
 	const ai = aiService ?? new AiService();
+	const aiConversations = aiConversationStore ?? new FileAiConversationStore();
 
 	// Watch the project storage dir so any write — whether from this server's own
 	// API handlers or from an external agent editing comments.json / plans.json
@@ -750,6 +759,28 @@ export function createApp(
 		if (!session) return null;
 		const sha = version === "old" ? session.baseSha : session.headSha;
 		return fetchPrFileContentViaGh(resolvedFromSession(session), path, sha);
+	};
+	const aiAttachmentCache = new ByteLruCache<Buffer>(4 * 1024 * 1024, 64);
+	const resolveAiAttachment = async (path: string): Promise<Buffer | null> => {
+		let cacheKey = `repo:${repoRoot}:new:${path}`;
+		if (prMode) {
+			const session = await prStore.get();
+			cacheKey = `pr:${session?.headSha ?? "unknown"}:${path}`;
+		} else {
+			const safePath = toSafeRelativePath(path, repoRoot);
+			if (!safePath) return null;
+			try {
+				const file = await stat(join(repoRoot, safePath));
+				cacheKey += `:${file.mtimeMs}:${file.size}`;
+			} catch {
+				return null;
+			}
+		}
+		const cached = aiAttachmentCache.get(cacheKey);
+		if (cached) return cached;
+		const buffer = await resolveFileVersion(path, "new");
+		if (buffer) aiAttachmentCache.set(cacheKey, buffer);
+		return buffer;
 	};
 
 	app.get("/api/file-content", async (c) => {
@@ -1214,6 +1245,57 @@ export function createApp(
 		}
 	});
 
+	const aiSurfaces = new Set(["diff", "pr-diff", "plan"]);
+	const conversationHeaders = { "Cache-Control": "no-store" };
+	app.get("/api/ai/conversations", async (c) => {
+		const surface = c.req.query("surface");
+		const scopeKey = c.req.query("scopeKey");
+		if (surface && !aiSurfaces.has(surface)) return c.json({ error: "Invalid AI conversation surface." }, 400);
+		return c.json(
+			{ conversations: await aiConversations.list({ surface: surface as "diff" | "pr-diff" | "plan" | undefined, scopeKey: scopeKey || undefined }) },
+			200,
+			conversationHeaders,
+		);
+	});
+
+	app.post("/api/ai/conversations", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as Partial<AiConversationCreateInput>;
+		if (!aiSurfaces.has(body.surface ?? "") || typeof body.scopeKey !== "string" || !body.scopeKey.trim()) {
+			return c.json({ error: "surface and scopeKey are required." }, 400);
+		}
+		const conversation = await aiConversations.create({
+			surface: body.surface as "diff" | "pr-diff" | "plan",
+			scopeKey: body.scopeKey,
+			title: body.title,
+			modelId: body.modelId,
+		});
+		return c.json({ conversation }, 201, conversationHeaders);
+	});
+
+	app.get("/api/ai/conversations/:id", async (c) => {
+		const conversation = await aiConversations.get(c.req.param("id"));
+		if (!conversation) return c.json({ error: "AI conversation not found." }, 404);
+		return c.json({ conversation }, 200, conversationHeaders);
+	});
+
+	app.put("/api/ai/conversations/:id", async (c) => {
+		const body = (await c.req.json().catch(() => ({}))) as AiConversationUpdateInput;
+		const conversation = await aiConversations.update(c.req.param("id"), {
+			title: typeof body.title === "string" ? body.title : undefined,
+			draft: typeof body.draft === "string" ? body.draft : undefined,
+			modelId: typeof body.modelId === "string" ? body.modelId : undefined,
+			turns: Array.isArray(body.turns) ? body.turns : undefined,
+		});
+		if (!conversation) return c.json({ error: "AI conversation not found." }, 404);
+		return c.json({ conversation }, 200, conversationHeaders);
+	});
+
+	app.delete("/api/ai/conversations/:id", async (c) => {
+		const removed = await aiConversations.remove(c.req.param("id"));
+		if (!removed) return c.json({ error: "AI conversation not found." }, 404);
+		return c.json({ ok: true }, 200, conversationHeaders);
+	});
+
 	app.post("/api/ai/run", async (c) => {
 		const body = (await c.req.json().catch(() => null)) as AiRunRequest | null;
 		if (!body || body.trigger !== "user") {
@@ -1237,7 +1319,7 @@ export function createApp(
 		const attachments: AiAttachment[] = [];
 		let remainingAttachmentBytes = 64 * 1024;
 		for (const path of requestedPaths) {
-			const buffer = await resolveFileVersion(path, "new");
+			const buffer = await resolveAiAttachment(path);
 			if (!buffer) return c.json({ error: `Attached file was not found: ${path}` }, 404);
 			const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
 			if (sample.includes(0)) return c.json({ error: `Binary files cannot be attached: ${path}` }, 415);

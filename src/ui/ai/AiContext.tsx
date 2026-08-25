@@ -17,12 +17,14 @@ import type {
 	AiRunEvent,
 	AiSourceId,
 	AiSurface,
+	AiConversationTurn,
 } from "../../lib/ai/types";
 
 interface AiResult {
 	runId?: string;
 	text: string;
 	warnings: string[];
+	canceled?: boolean;
 }
 
 interface RunInput {
@@ -31,8 +33,11 @@ interface RunInput {
 	context: AiReviewContext;
 	prompt?: string;
 	conversationId?: string;
+	history?: AiConversationTurn[];
+	signal?: AbortSignal;
 	onDelta?: (text: string) => void;
 	onStart?: (runId: string) => void;
+	onWarning?: (message: string) => void;
 }
 
 interface AiContextValue {
@@ -191,7 +196,7 @@ export function AiProvider({ children }: { children: ReactNode }) {
 		await refresh();
 	}, [refresh]);
 
-	const run = useCallback(async ({ surface, action, context, prompt, conversationId, onDelta, onStart }: RunInput) => {
+	const run = useCallback(async ({ surface, action, context, prompt, conversationId, history, signal, onDelta, onStart, onWarning }: RunInput) => {
 		if (!selectedModel) throw new Error("Connect an AI source and choose a model first.");
 		const response = await fetch("/api/ai/run", {
 			method: "POST",
@@ -205,7 +210,9 @@ export function AiProvider({ children }: { children: ReactNode }) {
 				action,
 				prompt,
 				context,
+				history,
 			}),
+			signal,
 		});
 		if (!response.ok) throw await jsonError(response);
 		if (!response.body) throw new Error("AI response stream is unavailable.");
@@ -231,22 +238,27 @@ export function AiProvider({ children }: { children: ReactNode }) {
 				text += event.text;
 				onDelta?.(text);
 			}
-			if (event.type === "warning") warnings.push(event.message);
+			if (event.type === "warning") { warnings.push(event.message); onWarning?.(event.message); }
 			if (event.type === "complete") text = event.text || text;
 			if (event.type === "error") throw new Error(event.message);
 		};
-		while (true) {
-			const { value, done } = await reader.read();
-			buffer += decoder.decode(value, { stream: !done });
-			let boundary = buffer.indexOf("\n\n");
-			while (boundary >= 0) {
-				consume(buffer.slice(0, boundary));
-				buffer = buffer.slice(boundary + 2);
-				boundary = buffer.indexOf("\n\n");
+		try {
+			while (true) {
+				const { value, done } = await reader.read();
+				buffer += decoder.decode(value, { stream: !done });
+				let boundary = buffer.indexOf("\n\n");
+				while (boundary >= 0) {
+					consume(buffer.slice(0, boundary));
+					buffer = buffer.slice(boundary + 2);
+					boundary = buffer.indexOf("\n\n");
+				}
+				if (done) break;
 			}
-			if (done) break;
+			if (buffer.trim()) consume(buffer);
+		} catch (nextError) {
+			if (signal?.aborted) return { runId, text, warnings, canceled: true };
+			throw nextError;
 		}
-		if (buffer.trim()) consume(buffer);
 		return { runId, text, warnings };
 	}, [reasoningEffort, selectedModel]);
 

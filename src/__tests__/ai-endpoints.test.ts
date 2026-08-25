@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { InMemoryCommentStore } from "../lib/comments.js";
 import { InMemoryPlanStore } from "../lib/plans.js";
 import { InMemoryMockupStore } from "../lib/mockups.js";
+import { InMemoryAiConversationStore } from "../lib/ai/conversations.js";
 import { AiService } from "../lib/ai/service.js";
 import type { AiBackendAdapter } from "../lib/ai/types.js";
 import { DEFAULTS } from "../lib/diff-options.js";
@@ -45,6 +46,7 @@ async function app(run?: AiBackendAdapter["run"]) {
 		new InMemoryMockupStore(),
 		undefined,
 		new AiService([adapter(run)]),
+		new InMemoryAiConversationStore(),
 	);
 }
 
@@ -119,5 +121,26 @@ describe("AI endpoints", () => {
 		expect(response.status).toBe(200);
 		await response.text();
 		expect(attached).toEqual([expect.objectContaining({ path: "package.json", content: expect.stringContaining('"name": "diffing"') })]);
+	});
+
+	it("persists multiple scoped conversations without mixing review surfaces", async () => {
+		const server = await app();
+		const created = await server.request("/api/ai/conversations", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ surface: "diff", scopeKey: "repo:branch", title: "Parser review" }),
+		});
+		expect(created.status).toBe(201);
+		const conversation = (await created.json()).conversation;
+		const updated = await server.request(`/api/ai/conversations/${conversation.id}`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ draft: "follow up", turns: [{ role: "user", text: "What changed?" }, { role: "assistant", text: "The parser." }] }),
+		});
+		expect((await updated.json()).conversation.turns).toHaveLength(2);
+		const scoped = await server.request("/api/ai/conversations?surface=plan&scopeKey=repo:branch");
+		expect((await scoped.json()).conversations).toEqual([]);
+		const listed = await server.request("/api/ai/conversations?surface=diff&scopeKey=repo:branch");
+		expect((await listed.json()).conversations[0]).toMatchObject({ title: "Parser review", turnCount: 2 });
 	});
 });

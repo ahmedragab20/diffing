@@ -95,6 +95,23 @@ export interface AiAttachment {
 	truncated?: boolean;
 }
 
+export interface AiConversationContextLabel {
+	kind?: string;
+	filePath?: string;
+	label?: string;
+	version?: number;
+	attachmentPaths?: string[];
+}
+
+export interface AiConversationTurn {
+	id?: string;
+	role: "user" | "assistant";
+	text: string;
+	createdAt?: number;
+	modelId?: string;
+	context?: AiConversationContextLabel;
+}
+
 export type AiReviewContext = AiDiffContext | AiPlanContext;
 
 export interface AiRunRequest {
@@ -108,6 +125,7 @@ export interface AiRunRequest {
 	context: AiReviewContext;
 	reasoningEffort?: string;
 	serviceTier?: string;
+	history?: AiConversationTurn[];
 }
 
 export type AiRunEvent =

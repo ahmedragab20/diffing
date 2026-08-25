@@ -13,16 +13,23 @@ import type {
 } from "./types.js";
 
 export class AiService {
+	private static readonly CATALOG_TTL_MS = 15_000;
 	private readonly adapters = new Map<AiSourceId, AiBackendAdapter>();
 	private readonly runs = new Map<string, { conversationId: string; controller: AbortController }>();
 	private readonly conversations = new Set<string>();
+	private connectionCache: { expiresAt: number; value: AiConnection[] } | null = null;
+	private modelCache: { expiresAt: number; value: AiModel[] } | null = null;
+	private connectionRequest: Promise<AiConnection[]> | null = null;
+	private modelRequest: Promise<AiModel[]> | null = null;
 
 	constructor(adapters?: AiBackendAdapter[], secrets: SecretStore = new SystemSecretStore()) {
 		for (const adapter of adapters ?? createDefaultAdapters(secrets)) this.adapters.set(adapter.id, adapter);
 	}
 
 	async connections(): Promise<AiConnection[]> {
-		return Promise.all([...this.adapters.values()].map(async (adapter) => {
+		if (this.connectionCache && this.connectionCache.expiresAt > Date.now()) return this.connectionCache.value;
+		if (this.connectionRequest) return this.connectionRequest;
+		const request = Promise.all([...this.adapters.values()].map(async (adapter) => {
 			try {
 				return await adapter.connection();
 			} catch (error) {
@@ -36,29 +43,51 @@ export class AiService {
 					detail: error instanceof Error ? error.message : String(error),
 				};
 			}
-		}));
+		})).then((value) => {
+			this.connectionCache = { value, expiresAt: Date.now() + AiService.CATALOG_TTL_MS };
+			return value;
+		}).finally(() => { this.connectionRequest = null; });
+		this.connectionRequest = request;
+		return request;
 	}
 
 	async models(): Promise<AiModel[]> {
-		const groups = await Promise.all([...this.adapters.values()].map((adapter) => adapter.models().catch(() => [])));
-		return groups.flat();
+		if (this.modelCache && this.modelCache.expiresAt > Date.now()) return this.modelCache.value;
+		if (this.modelRequest) return this.modelRequest;
+		const request = Promise.all([...this.adapters.values()].map((adapter) => adapter.models().catch(() => [])))
+			.then((groups) => groups.flat())
+			.then((value) => {
+				this.modelCache = { value, expiresAt: Date.now() + AiService.CATALOG_TTL_MS };
+				return value;
+			})
+			.finally(() => { this.modelRequest = null; });
+		this.modelRequest = request;
+		return request;
+	}
+
+	private invalidateCatalog(): void {
+		this.connectionCache = null;
+		this.modelCache = null;
 	}
 
 	async connectKey(source: AiSourceId, key: string, remember: boolean): Promise<void> {
 		const adapter = this.adapters.get(source);
 		if (!adapter?.connectKey) throw new Error(`${source} does not accept a direct key in diffing.`);
 		await adapter.connectKey(key, remember);
+		this.invalidateCatalog();
 	}
 
 	async disconnect(source: AiSourceId): Promise<void> {
 		const adapter = this.adapters.get(source);
 		if (!adapter) throw new Error(`Unknown AI source: ${source}`);
 		await adapter.disconnect?.();
+		this.invalidateCatalog();
 	}
 
 	setupCommand(source: AiSourceId, route: AiCredentialRoute, providerId?: string): string {
 		const command = this.adapters.get(source)?.setupCommand?.(route, providerId);
 		if (!command) throw new Error(`${source} does not expose a ${route} setup flow.`);
+		this.invalidateCatalog();
 		return command;
 	}
 

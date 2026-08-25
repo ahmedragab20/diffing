@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -78,5 +78,28 @@ describe("AiAssistantRail", () => {
 		expect(mocks.run).toHaveBeenCalledWith(expect.objectContaining({
 			context: expect.objectContaining({ attachmentPaths: ["docs/cli.md"] }),
 		}));
+	});
+
+	it("clears the composer immediately and shows the labeled thinking state", async () => {
+		let release!: () => void;
+		mocks.run.mockImplementation(() => new Promise((resolve) => {
+			release = () => resolve({ text: "Done", runId: "r2", warnings: [] });
+		}));
+		vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+			const url = String(input);
+			if (url.includes("/api/ai/conversations?") && !init?.method) return new Response(JSON.stringify({ conversations: [] }), { status: 200 });
+			if (url.endsWith("/api/ai/conversations") && init?.method === "POST") return new Response(JSON.stringify({ conversation: { id: "c1", title: "New conversation", surface: "diff", scopeKey: "review", createdAt: 1, updatedAt: 1, turns: [] } }), { status: 201 });
+			return new Response(JSON.stringify({}), { status: 200 });
+		}));
+		const user = userEvent.setup();
+		renderRail(<AiAssistantRail open onClose={vi.fn()} surface="diff" context={{ kind: "diff" }} />);
+		const composer = screen.getByRole("textbox", { name: "Ask AI" });
+		await user.type(composer, "Explain this change");
+		await waitFor(() => expect(screen.getByRole("button", { name: /Send/i })).not.toBeDisabled());
+		await user.click(screen.getByRole("button", { name: /Send/i }));
+		await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Thinking about your request"));
+		expect(composer).toHaveValue("");
+		release();
+		await waitFor(() => expect(screen.getByText("Done")).toBeInTheDocument());
 	});
 });

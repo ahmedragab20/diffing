@@ -63,4 +63,27 @@ describe("AiService", () => {
 		release();
 		await expect(first).resolves.toBe("done");
 	});
+
+	it("deduplicates short-lived model and connection discovery", async () => {
+		const connection = vi.fn(async () => ({
+			id: "codex" as const,
+			label: "Codex",
+			status: "connected" as const,
+			runtimeAvailable: true,
+			credentialRoutes: ["subscription" as const],
+			activeRoutes: ["subscription" as const],
+		}));
+		const models = vi.fn(async () => [{
+			id: "codex/subscription/codex/gpt-test",
+			sourceId: "codex" as const,
+			credentialRoute: "subscription" as const,
+			providerId: "codex",
+			modelId: "gpt-test",
+			displayName: "GPT Test",
+		}]);
+		const service = new AiService([{ ...createAdapter(), connection, models }]);
+		await Promise.all([service.connections(), service.connections(), service.models(), service.models()]);
+		expect(connection).toHaveBeenCalledTimes(1);
+		expect(models).toHaveBeenCalledTimes(1);
+	});
 });

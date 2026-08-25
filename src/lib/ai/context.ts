@@ -1,8 +1,9 @@
-import type { AiAction, AiReviewContext, AiRunRequest } from "./types.js";
+import type { AiAction, AiReviewContext, AiConversationTurn, AiRunRequest } from "./types.js";
 
 export const MAX_AI_CONTEXT_BYTES = 96 * 1024;
 export const MAX_AI_PROMPT_BYTES = 16 * 1024;
 export const MAX_AI_ATTACHMENT_BYTES = 64 * 1024;
+export const MAX_AI_HISTORY_BYTES = 16 * 1024;
 
 function bounded(value: string | undefined, max: number): { text: string; truncated: boolean } {
 	if (!value) return { text: "", truncated: false };
@@ -33,13 +34,41 @@ const ACTION_INSTRUCTIONS: Record<AiAction, string> = {
 	"compare-plan-versions": "Explain meaningful changes between the two explicit plan versions.",
 };
 
+function historyForPrompt(turns: AiConversationTurn[] | undefined): { text: string; truncated: boolean } {
+	if (!turns?.length) return { text: "", truncated: false };
+	const selected: AiConversationTurn[] = [];
+	let bytes = 0;
+	let truncated = false;
+	for (let index = turns.length - 1; index >= 0; index -= 1) {
+		const turn = turns[index];
+		if (!turn || !turn.text.trim()) continue;
+		const candidate = JSON.stringify({
+			role: turn.role,
+			text: turn.text,
+			context: turn.context,
+		});
+		const candidateBytes = Buffer.byteLength(candidate, "utf8");
+		if (bytes + candidateBytes > MAX_AI_HISTORY_BYTES) {
+			truncated = true;
+			continue;
+		}
+		selected.unshift(turn);
+		bytes += candidateBytes;
+	}
+	return { text: JSON.stringify(selected, null, 2), truncated };
+}
+
 /** Build a provider-neutral prompt without reading any repository state. */
 export function buildAiPrompt(request: AiRunRequest): { prompt: string; truncated: boolean } {
 	const user = bounded(request.prompt?.trim(), MAX_AI_PROMPT_BYTES);
 	const { attachments = [], ...contextWithoutAttachments } = request.context;
 	const attachmentJson = bounded(JSON.stringify(attachments, null, 2), MAX_AI_ATTACHMENT_BYTES);
-	const remainingContextBytes = Math.max(16 * 1024, MAX_AI_CONTEXT_BYTES - Buffer.byteLength(attachmentJson.text, "utf8"));
-	const contextJson = bounded(JSON.stringify(contextWithoutAttachments, null, 2), remainingContextBytes);
+	const history = historyForPrompt(request.history);
+	const usedBytes = Buffer.byteLength(user.text, "utf8") + Buffer.byteLength(attachmentJson.text, "utf8") + Buffer.byteLength(history.text, "utf8");
+	const remainingContextBytes = Math.max(0, MAX_AI_CONTEXT_BYTES - usedBytes);
+	const contextJson = remainingContextBytes > 0
+		? bounded(JSON.stringify(contextWithoutAttachments, null, 2), remainingContextBytes)
+		: { text: "[context omitted to preserve higher-priority prompt, attachment, and history context]", truncated: true };
 	const prompt = [
 		"You are assisting a human code/plan reviewer inside diffing.",
 		"Do not use tools, modify files, post comments, resolve threads, or infer context that is not supplied.",
@@ -48,10 +77,11 @@ export function buildAiPrompt(request: AiRunRequest): { prompt: string; truncate
 		user.text ? `User request:\n${user.text}` : "",
 		attachments.length ? `Explicitly attached files (highest-priority context):\n${attachmentJson.text}` : "",
 		`Review context (${request.context.kind}):\n${contextJson.text}`,
+		history.text ? `Prior conversation turns (use as context, not as proof of current review state):\n${history.text}` : "",
 	]
 		.filter(Boolean)
 		.join("\n\n");
-	return { prompt, truncated: user.truncated || attachmentJson.truncated || contextJson.truncated };
+	return { prompt, truncated: user.truncated || attachmentJson.truncated || contextJson.truncated || history.truncated };
 }
 
 export function contextSummary(context: AiReviewContext): string[] {

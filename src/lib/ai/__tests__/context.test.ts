@@ -36,4 +36,19 @@ describe("buildAiPrompt", () => {
 		expect(result.prompt).toContain("src/important.ts");
 		expect(result.prompt).toContain("export const important = true");
 	});
+
+	it("keeps the newest conversation turns when the history budget is exceeded", () => {
+		const input = request("current question");
+		input.history = [
+			{ role: "user", text: "old question ".repeat(2_000) },
+			{ role: "assistant", text: "old answer ".repeat(2_000) },
+			{ role: "user", text: "recent question" },
+			{ role: "assistant", text: "recent answer" },
+		];
+		const result = buildAiPrompt(input);
+		expect(result.truncated).toBe(true);
+		expect(result.prompt).toContain("recent question");
+		expect(result.prompt).toContain("recent answer");
+		expect(result.prompt).not.toContain("old question old question");
+	});
 });
