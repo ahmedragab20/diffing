@@ -16,6 +16,7 @@ import { Markdown } from "../components/Markdown";
 import { FileMentionDropdown } from "../components/FileMentionDropdown";
 import { useFileMention } from "../hooks/useFileMention";
 import { useOptionalAi } from "./AiContext";
+import { aiSourceLabel } from "./labels";
 
 function attachedFilePaths(text: string): string[] {
 	const paths: string[] = [];
@@ -155,7 +156,7 @@ function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", ai }
 
 			<header className="ai-rail-header">
 				<div className="ai-rail-title-icon"><Sparkles size={15} /></div>
-				<div className="ai-rail-title"><strong>{title}</strong><span>{model ? `${model.displayName} · ${model.sourceId}${model.credentialRoute === "runtime-key" ? " BYOK" : ""}` : "No model selected"}</span></div>
+				<div className="ai-rail-title"><strong>{title}</strong><span>{model ? `${model.displayName} · ${aiSourceLabel(model.sourceId)}${model.credentialRoute === "runtime-key" ? " BYOK" : ""}` : "No model selected"}</span></div>
 				<button type="button" className="ai-rail-icon-btn" onClick={onClose} aria-label="Close AI assistant"><X size={15} /></button>
 			</header>
 

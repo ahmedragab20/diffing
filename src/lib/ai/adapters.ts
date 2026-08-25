@@ -532,8 +532,6 @@ export function createDefaultAdapters(secrets: SecretStore): AiBackendAdapter[] 
 			routes: ["subscription", "runtime-key"], setup: { subscription: "cursor-agent login", "runtime-key": "Open Cursor Settings → Models → API Keys" },
 			args: (model) => ["-p", "--output-format", "stream-json", "--stream-partial-output", "--mode", "ask", "--model", model],
 		}),
-		new DirectProviderAdapter({ id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com", envKey: "OPENAI_API_KEY" }, secrets),
-		new DirectProviderAdapter({ id: "anthropic", label: "Anthropic", baseUrl: "https://api.anthropic.com", envKey: "ANTHROPIC_API_KEY" }, secrets),
-		new DirectProviderAdapter({ id: "xai", label: "xAI", baseUrl: "https://api.x.ai", envKey: "XAI_API_KEY" }, secrets),
+		new DirectProviderAdapter({ id: "xai", label: "Grok", baseUrl: "https://api.x.ai", envKey: "XAI_API_KEY" }, secrets),
 	];
 }

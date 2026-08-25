@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DirectProviderAdapter } from "../adapters.js";
+import { createDefaultAdapters, DirectProviderAdapter } from "../adapters.js";
 import type { SecretStore } from "../secrets.js";
 import type { AiRunRequest } from "../types.js";
 
@@ -12,6 +12,12 @@ function secrets(value: string | null = "secret-key"): SecretStore {
 }
 
 describe("DirectProviderAdapter", () => {
+	it("offers Grok as the only direct-key provider", async () => {
+		const adapters = createDefaultAdapters(secrets());
+		expect(adapters.map((adapter) => adapter.id)).toEqual(["codex", "claude", "opencode", "cursor", "xai"]);
+		expect(await adapters.at(-1)?.connection()).toMatchObject({ id: "xai", label: "Grok" });
+	});
+
 	it("discovers account models without exposing the key in connection state", async () => {
 		const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
 			expect((init?.headers as Record<string, string>).authorization).toBe("Bearer secret-key");

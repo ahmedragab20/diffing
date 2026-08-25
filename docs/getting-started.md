@@ -122,7 +122,7 @@ Supported routes:
 
 - Codex / ChatGPT and Claude Code account sign-in
 - OpenCode- and Cursor-managed provider keys and model catalogs
-- Direct OpenAI, Anthropic, and xAI API keys
+- Direct Grok API keys
 
 Direct keys are stored in the operating-system credential vault when available.
 If the vault is unavailable, diffing keeps the key in server memory for the

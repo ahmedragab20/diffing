@@ -46,7 +46,7 @@ interface AiContextValue {
 	loading: boolean;
 	error: string | null;
 	refresh: () => Promise<void>;
-	selectModel: (modelId: string) => void;
+	selectModel: (modelId: string) => Promise<void>;
 	setDefaultModel: (modelId: string) => Promise<void>;
 	setReasoningEffort: (effort: string) => Promise<void>;
 	setRailWidth: (width: number) => Promise<void>;
@@ -93,14 +93,15 @@ export function AiProvider({ children }: { children: ReactNode }) {
 			: {};
 		const nextModels = modelBody.models ?? [];
 		const savedDefault = settings.aiModel || "";
+		const isInitialHydration = !hydrated.current;
 		setConnections(connectionBody.connections ?? []);
 		setModels(nextModels);
 		setSelectedModel((current) => {
-			const requested = hydrated.current ? current : savedDefault;
+			const requested = isInitialHydration ? savedDefault : current;
 			if (nextModels.some((model) => model.id === requested)) return requested;
 			return nextModels.find((model) => model.isDefault)?.id ?? nextModels[0]?.id ?? "";
 		});
-		if (!hydrated.current) {
+		if (isInitialHydration) {
 			setDefaultModelState(savedDefault);
 			setReasoningState(settings.aiReasoningEffort || "");
 			setRailWidthState(Math.max(320, Math.min(720, settings.aiRailWidth || 360)));
@@ -125,15 +126,19 @@ export function AiProvider({ children }: { children: ReactNode }) {
 		window.dispatchEvent(new CustomEvent("diffing-ai-settings", { detail: patch }));
 	}, []);
 
-	const selectModel = useCallback((modelId: string) => {
-		setSelectedModel(modelId);
-	}, []);
-
-	const setDefaultModel = useCallback(async (modelId: string) => {
+	const persistModel = useCallback(async (modelId: string) => {
+		setError(null);
 		setDefaultModelState(modelId);
 		setSelectedModel(modelId);
-		await persistSettings({ aiModel: modelId });
+		try {
+			await persistSettings({ aiModel: modelId });
+		} catch (nextError) {
+			setError(nextError instanceof Error ? nextError.message : String(nextError));
+		}
 	}, [persistSettings]);
+
+	const selectModel = persistModel;
+	const setDefaultModel = persistModel;
 
 	const setReasoningEffort = useCallback(async (effort: string) => {
 		setReasoningState(effort);
