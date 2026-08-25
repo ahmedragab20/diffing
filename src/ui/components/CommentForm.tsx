@@ -17,6 +17,8 @@ import { FileMentionDropdown } from './FileMentionDropdown'
 import { useSettings, type SavedReply } from '../hooks/useSettings'
 import type { CommentSeverity } from '../../lib/types'
 import { InputDialog } from '../primitives/InputDialog'
+import { useOptionalAi } from '../ai/AiContext'
+import type { AiReviewContext, AiSurface, AiAction } from '../../lib/ai/types'
 
 function preprocessMentions(content: string): string {
   return content.replace(/@([^\s@]+)/g, (_, path: string) => {
@@ -179,6 +181,9 @@ interface CommentFormProps {
    * retried a beat later to win any late refocus race.
    */
   autoFocus?: boolean
+  /** Explicit opt-in: shared plan/mockup composers do not show AI unless provided. */
+  aiSurface?: AiSurface
+  aiContext?: AiReviewContext
 }
 
 export function CommentForm({
@@ -193,6 +198,8 @@ export function CommentForm({
   onCancel,
   showSeverity = true,
   autoFocus = false,
+  aiSurface,
+  aiContext,
 }: CommentFormProps) {
   const { haptic, sound } = useFeedback()
   const { settings, updateSettings } = useSettings()
@@ -208,10 +215,37 @@ export function CommentForm({
   const [activeTab, setActiveTab] = useState<'write' | 'preview'>('write')
   const [showSavedReplies, setShowSavedReplies] = useState(false)
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false)
+  const [aiRunning, setAiRunning] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [aiUndoBody, setAiUndoBody] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
 
   const mention = useFileMention(body, setBody)
+  const ai = useOptionalAi()
+
+  const runAiEdit = async (action: AiAction) => {
+    if (!ai || !aiSurface || !aiContext) return
+    setAiRunning(true)
+    setAiError(null)
+    setAiUndoBody(body)
+    try {
+      const result = await ai.run({
+        surface: aiSurface,
+        action,
+        context: { ...aiContext, draft: body } as AiReviewContext,
+        prompt: body || undefined,
+      })
+      setBody(result.text)
+      setActiveTab('write')
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    } catch (error) {
+      setAiUndoBody(null)
+      setAiError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setAiRunning(false)
+    }
+  }
 
   const insertSavedReply = (reply: SavedReply) => {
     setBody((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${reply.body}` : reply.body))
@@ -485,6 +519,21 @@ export function CommentForm({
       {activeTab === 'write' ? (
         <div>
           <div className="comment-form-suggest-row">
+            {ai && aiSurface && aiContext && (
+              <div className="comment-form-ai-actions" aria-label="AI comment actions">
+                <button type="button" className="btn btn-sm comment-form-suggest-btn ai-comment-btn" disabled={aiRunning} onClick={() => void runAiEdit(body.trim() ? 'improve-comment' : 'draft-comment')}>
+                  <Sparkles size={12} /> {body.trim() ? 'Improve writing' : 'Draft comment'}
+                </button>
+                {body.trim() && (
+                  <>
+                    <button type="button" className="btn btn-sm comment-form-suggest-btn" disabled={aiRunning} onClick={() => void runAiEdit('shorten-comment')}>Shorter</button>
+                    <button type="button" className="btn btn-sm comment-form-suggest-btn" disabled={aiRunning} onClick={() => void runAiEdit('make-specific')}>More specific</button>
+                  </>
+                )}
+                {lineContent && <button type="button" className="btn btn-sm comment-form-suggest-btn" disabled={aiRunning} onClick={() => void runAiEdit('suggest-change')}>Generate suggestion</button>}
+                {aiUndoBody !== null && <button type="button" className="btn btn-sm comment-form-suggest-btn" onClick={() => { setBody(aiUndoBody); setAiUndoBody(null) }}>Undo AI edit</button>}
+              </div>
+            )}
             {savedReplies.length > 0 && (
               <div className="comment-form-saved-replies">
                 <button
@@ -542,6 +591,7 @@ export function CommentForm({
               </button>
             ) : null}
           </div>
+          {aiError && <div className="comment-form-ai-error" role="alert">{aiError}</div>}
           <div className="comment-form-editor">
             <textarea
               id="comment-write-panel"

@@ -42,6 +42,12 @@ const defaultSettings = {
   ignoreSpaceChange: false,
   ignoreAllSpace: false,
   editDiagnostics: false,
+  aiModel: null,
+  aiReasoningEffort: null,
+  aiServiceTier: null,
+  aiRailWidth: 360,
+  aiPrivacyAcknowledged: false,
+  aiSettingsExpanded: false,
 }
 
 describe('useSettings', () => {
@@ -103,5 +109,19 @@ describe('useSettings', () => {
         body: JSON.stringify({ ...apiSettings, staged: false, defaultTabSize: 8 }),
       }),
     )
+  })
+
+  it('mirrors global AI preferences into the surface settings copy', async () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve(defaultSettings) })
+    const { result } = renderHook(() => useSettings())
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('diffing-ai-settings', {
+        detail: { aiModel: 'cursor/runtime-key/cursor/sonnet' },
+      }))
+    })
+
+    expect(result.current.settings.aiModel).toBe('cursor/runtime-key/cursor/sonnet')
   })
 })

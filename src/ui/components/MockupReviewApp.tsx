@@ -31,6 +31,7 @@ import { useRoutePath, navigate } from "../router";
 import { timeAgo } from "../utils";
 import { useMockups } from "../hooks/useMockups";
 import { useSettings } from "../hooks/useSettings";
+import { AiConnectionsPanel } from "../ai/AiConnectionsPanel";
 import { useApplyFonts } from "../hooks/useApplyFonts";
 import { usePlanCommentsSheet } from "../hooks/usePlanLayoutMedia";
 import { HapticsProvider } from "../hooks/useHaptics";
@@ -1104,6 +1105,7 @@ export function MockupReviewApp() {
 							}
 						>
 							<div className="popover-scroll settings-panel">
+								<AiConnectionsPanel />
 								<div className="settings-section-label">Appearance</div>
 								<div className="settings-item settings-item-spaced">
 									<span>Theme</span>

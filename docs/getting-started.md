@@ -112,6 +112,48 @@ Full CLI and MCP reference: **[cli.md](cli.md)**.
 
 ---
 
+## AI assistance in web review
+
+The web UI can connect local AI runtimes or provider API keys from **Settings →
+AI connections**. Connections and the selected model are global: changing them
+from a diff, plan, or mockup Settings panel updates every review surface.
+
+Supported routes:
+
+- Codex / ChatGPT and Claude Code account sign-in
+- OpenCode- and Cursor-managed provider keys and model catalogs
+- Direct OpenAI, Anthropic, and xAI API keys
+
+Direct keys are stored in the operating-system credential vault when available.
+If the vault is unavailable, diffing keeps the key in server memory for the
+current session only. Runtime-managed keys remain owned by OpenCode or Cursor;
+diffing never reads or duplicates their credential files.
+
+AI is **always user-triggered**. Loading a review, selecting lines, hovering,
+refreshing a diff, switching plan versions, or changing Settings never starts
+inference. Use a labeled Ask, Summarize, Review risks, Draft, or Improve action.
+Generated text remains a draft until you explicitly insert or submit it.
+
+The toolbar model picker changes the model for the current browser session.
+Set the model used after reload under **Settings → AI connections → Default
+model**. The connections section is collapsed by default and remembers its
+expanded state.
+
+Inside the AI composer, type `@` to attach repository files. Suggestions use
+the same FFF index and frecency ranking as diffing search. Attached text is
+loaded only when you explicitly send the request, is bounded to eight text
+files / 64 KB total, and is shown as removable context chips.
+
+Responses stream into the rail and render through diffing's GFM Markdown
+renderer, including tables, highlighted fenced code blocks, Mermaid, and copy
+controls.
+
+Only the context preview shown in the UI is sent. Diff requests do not silently
+include plans; plan requests do not silently include diffs; mockups expose the
+shared connection Settings but no AI actions.
+
+---
+
 ## Migrating from manual MCP / skills
 
 Already using diffing without the wizard?

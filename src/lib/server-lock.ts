@@ -81,6 +81,8 @@ export interface ServerStartupLease {
 
 const STARTUP_LEASE_STALE_MS = 30_000
 
+type StartupLeaseRecovery = 'absent' | 'busy' | 'recovered' | 'raced'
+
 /**
  * Produce a stable comparison key for the diff a server displays. Runtime-only
  * web options are excluded so `--port`/`--no-open` do not create false scope
@@ -289,6 +291,56 @@ export function listServerLocks(repoRoot?: string): ServerLock[] {
   return [...sessions.values()].sort((left, right) => right.startedAt - left.startedAt)
 }
 
+/**
+ * Return every registered session whose owner process still exists, including
+ * sessions whose loopback API is temporarily unreachable. Session-management
+ * commands use this broader view so a hung server never disappears before the
+ * user has a chance to stop it.
+ */
+export function listRegisteredServerLocks(repoRoot?: string): ServerLock[] {
+  let expectedRepoRoot: string
+  try {
+    expectedRepoRoot = repoRoot ?? getRepoRoot()
+  } catch {
+    return []
+  }
+
+  const sessions = new Map<string, ServerLock>()
+  const addIfOwned = (candidate: ServerLock, stalePath?: string) => {
+    if (candidate.repoRoot !== expectedRepoRoot || !isLockProcessAlive(candidate)) {
+      if (stalePath) rmSync(stalePath, { force: true })
+      return
+    }
+    const normalized = normalizedLock(candidate)
+    sessions.set(serverSessionId(normalized), normalized)
+  }
+
+  const active = readServerLock(expectedRepoRoot)
+  if (active) addIfOwned(active)
+
+  const directory = sessionsPath(expectedRepoRoot)
+  try {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+      const path = join(directory, entry.name)
+      try {
+        const candidate = JSON.parse(readFileSync(path, 'utf-8')) as ServerLock
+        if (typeof candidate.port !== 'number' || typeof candidate.pid !== 'number') {
+          rmSync(path, { force: true })
+          continue
+        }
+        addIfOwned(candidate, path)
+      } catch {
+        rmSync(path, { force: true })
+      }
+    }
+  } catch {
+    // A repository with no registry yet simply has no sessions directory.
+  }
+
+  return [...sessions.values()].sort((left, right) => right.startedAt - left.startedAt)
+}
+
 /** Resolve the active session, electing the newest live fallback when needed. */
 export function resolveActiveServerLock(repoRoot?: string): ServerLock | null {
   let expectedRepoRoot: string
@@ -477,54 +529,8 @@ export function acquireServerStartupLease(
   }
 
   if (!tryCreate()) {
-    let reclaim = false
-    let acquiredAfterRace = false
-    try {
-      const record = JSON.parse(readFileSync(recordPath, 'utf-8')) as Partial<StartupLeaseRecord>
-      if (typeof record.createdAt !== 'number' || typeof record.pid !== 'number') {
-        throw new Error('Malformed startup lease')
-      }
-      let ownerIsAlive = true
-      try {
-        process.kill(record.pid, 0)
-      } catch (error: any) {
-        // ESRCH means no such process. EPERM still proves the pid exists.
-        ownerIsAlive = error?.code !== 'ESRCH'
-      }
-      reclaim = now - record.createdAt > STARTUP_LEASE_STALE_MS && !ownerIsAlive
-      if (!reclaim) return null
-    } catch {
-      try {
-        // A crash between mkdir and lease.json can leave an empty directory.
-        // Its mtime is the only available age signal; reclaim only after the
-        // same conservative stale interval.
-        reclaim = now - statSync(path).mtimeMs > STARTUP_LEASE_STALE_MS
-      } catch (statError: any) {
-        if (statError?.code !== 'ENOENT') return null
-        if (!tryCreate()) return null
-        acquiredAfterRace = true
-      }
-      if (!reclaim && !acquiredAfterRace) return null
-    }
-
-    if (reclaim && !acquiredAfterRace) {
-      // Rename the whole stale lease before replacing it. The previous owner
-      // releases through an owner-specific marker, so it can never unlink the
-      // new lease even if it wakes after stale recovery.
-      const stalePath = `${path}.stale-${process.pid}-${now}`
-      try {
-        renameSync(path, stalePath)
-        rmSync(stalePath, { recursive: true, force: true })
-      } catch (error: any) {
-        if (error?.code === 'ENOENT') {
-          if (!tryCreate()) return null
-          acquiredAfterRace = true
-        } else {
-          return null
-        }
-      }
-    }
-    if (!acquiredAfterRace && !tryCreate()) return null
+    const recovery = recoverStartupLeasePath(path, recordPath, now)
+    if (recovery === 'busy' || !tryCreate()) return null
   }
 
   let released = false
@@ -544,4 +550,53 @@ export function acquireServerStartupLease(
       }
     },
   }
+}
+
+function recoverStartupLeasePath(
+  path: string,
+  recordPath: string,
+  now: number,
+): StartupLeaseRecovery {
+  let shouldRecover = false
+  try {
+    const record = JSON.parse(readFileSync(recordPath, 'utf-8')) as Partial<StartupLeaseRecord>
+    if (typeof record.createdAt !== 'number' || typeof record.pid !== 'number') {
+      throw new Error('Malformed startup lease')
+    }
+    // A valid lease cannot make further progress after its exact owner process
+    // exits, so it is safe to reclaim immediately. The age grace period is
+    // only needed for an incomplete/malformed lease whose owner is unknown.
+    if (isPidAlive(record.pid)) return 'busy'
+    shouldRecover = true
+  } catch {
+    try {
+      // A crash between mkdir and lease.json can leave an empty directory.
+      // Its mtime is the only available age signal; reclaim conservatively.
+      shouldRecover = now - statSync(path).mtimeMs > STARTUP_LEASE_STALE_MS
+    } catch (error: any) {
+      return error?.code === 'ENOENT' ? 'raced' : 'busy'
+    }
+    if (!shouldRecover) return 'busy'
+  }
+
+  if (!shouldRecover) return 'busy'
+  // Rename the whole stale lease before removing it. A delayed release from
+  // the prior owner can therefore never unlink a replacement lease.
+  const stalePath = `${path}.stale-${process.pid}-${now}-${randomUUID()}`
+  try {
+    renameSync(path, stalePath)
+    rmSync(stalePath, { recursive: true, force: true })
+    return 'recovered'
+  } catch (error: any) {
+    return error?.code === 'ENOENT' ? 'raced' : 'busy'
+  }
+}
+
+/** Repair an orphaned startup lease without creating a new one. */
+export function recoverOrphanedServerStartupLease(
+  repoRoot?: string,
+  now = Date.now(),
+): boolean {
+  const path = join(getProjectStorageDir(repoRoot), 'server-startup.lock')
+  return recoverStartupLeasePath(path, join(path, 'lease.json'), now) === 'recovered'
 }

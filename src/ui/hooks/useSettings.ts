@@ -59,6 +59,12 @@ export interface Settings {
 	 * Off by default so users who want a noise-free review never see them.
 	 */
 	editDiagnostics: boolean;
+	aiModel?: string | null;
+	aiReasoningEffort?: string | null;
+	aiServiceTier?: string | null;
+	aiRailWidth?: number;
+	aiPrivacyAcknowledged?: boolean;
+	aiSettingsExpanded?: boolean;
 }
 
 export interface SavedReply {
@@ -97,6 +103,12 @@ const DEFAULTS: Settings = {
 	ignoreSpaceChange: false,
 	ignoreAllSpace: false,
 	editDiagnostics: false,
+	aiModel: null,
+	aiReasoningEffort: null,
+	aiServiceTier: null,
+	aiRailWidth: 360,
+	aiPrivacyAcknowledged: false,
+	aiSettingsExpanded: false,
 };
 
 const MONO_FALLBACK =
@@ -125,6 +137,19 @@ export function useSettings() {
 				setLoaded(true);
 			})
 			.catch(() => setLoaded(true));
+	}, []);
+
+	// AiProvider spans every route while each surface owns a local useSettings
+	// instance. Mirror AI preference changes into that local copy so a later
+	// display-setting save cannot overwrite the globally selected model.
+	useEffect(() => {
+		const onAiSettings = (event: Event) => {
+			const patch = (event as CustomEvent<Partial<Settings>>).detail;
+			if (!patch) return;
+			setSettings((prev) => ({ ...prev, ...patch }));
+		};
+		window.addEventListener("diffing-ai-settings", onAiSettings);
+		return () => window.removeEventListener("diffing-ai-settings", onAiSettings);
 	}, []);
 
 	// Persist settings whenever they change, debounced. Keeping the network

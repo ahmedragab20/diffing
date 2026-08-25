@@ -1,7 +1,10 @@
 import {
   activateServerLock,
+  listRegisteredServerLocks,
   listServerLocks,
+  recoverOrphanedServerStartupLease,
   resolveActiveServerLock,
+  resolveUnresponsiveServerLock,
   sameServerSession,
   serverSessionId,
   type ServerLock,
@@ -24,6 +27,7 @@ interface SessionSummary {
   startedAt: number
   url: string | null
   scope: string
+  status: 'ready' | 'unreachable'
 }
 
 function scopeLabel(lock: ServerLock): string {
@@ -48,7 +52,11 @@ function scopeLabel(lock: ServerLock): string {
   }
 }
 
-function summarize(lock: ServerLock, active: ServerLock | null): SessionSummary {
+function summarize(
+  lock: ServerLock,
+  active: ServerLock | null,
+  responsiveIds: ReadonlySet<string>,
+): SessionSummary {
   return {
     id: serverSessionId(lock),
     active: active ? sameServerSession(lock, active) : false,
@@ -57,6 +65,7 @@ function summarize(lock: ServerLock, active: ServerLock | null): SessionSummary 
     startedAt: lock.startedAt,
     url: existingSessionUrl(lock),
     scope: scopeLabel(lock),
+    status: responsiveIds.has(serverSessionId(lock)) ? 'ready' : 'unreachable',
   }
 }
 
@@ -70,20 +79,24 @@ function formatAge(startedAt: number): string {
   return `${Math.floor(hours / 24)}d`
 }
 
-function printSessions(sessions: ServerLock[], active: ServerLock | null): void {
+function printSessions(
+  sessions: ServerLock[],
+  active: ServerLock | null,
+  responsiveIds: ReadonlySet<string>,
+): void {
   if (sessions.length === 0) {
     console.log('No diffing sessions are running for this repository.')
     return
   }
-  console.log('ACTIVE  ID        MODE   PID      AGE   SCOPE / URL')
+  console.log('ACTIVE  ID        MODE   PID      AGE   STATUS       SCOPE / URL')
   for (const lock of sessions) {
-    const summary = summarize(lock, active)
+    const summary = summarize(lock, active, responsiveIds)
     const activeMark = summary.active ? '*' : ''
     const target = summary.url ? `${summary.scope}  ${summary.url}` : summary.scope
     console.log(
       `${activeMark.padEnd(7)} ${summary.id.slice(0, 8).padEnd(9)} ` +
       `${summary.mode.padEnd(6)} ${String(summary.pid).padEnd(8)} ` +
-      `${formatAge(summary.startedAt).padEnd(5)} ${target}`,
+      `${formatAge(summary.startedAt).padEnd(5)} ${summary.status.padEnd(12)} ${target}`,
     )
   }
   console.log('\nUse `diffing sessions use <id>` to retarget agent commands.')
@@ -117,8 +130,10 @@ export async function runSessionsCommand(args: string[]): Promise<number> {
 
   const action = args[0] && !args[0].startsWith('-') ? args[0] : 'list'
   const rest = action === 'list' && args[0] !== 'list' ? args : args.slice(1)
-  const sessions = listServerLocks()
-  const active = resolveActiveServerLock()
+  const responsiveSessions = listServerLocks()
+  const responsiveIds = new Set(responsiveSessions.map(serverSessionId))
+  const sessions = listRegisteredServerLocks()
+  const active = resolveActiveServerLock() ?? resolveUnresponsiveServerLock()
 
   if (action === 'list') {
     const unknown = rest.filter((arg) => arg !== '--json')
@@ -127,9 +142,9 @@ export async function runSessionsCommand(args: string[]): Promise<number> {
       return EXIT_USAGE
     }
     if (rest.includes('--json')) {
-      process.stdout.write(JSON.stringify(sessions.map((lock) => summarize(lock, active)), null, 2) + '\n')
+      process.stdout.write(JSON.stringify(sessions.map((lock) => summarize(lock, active, responsiveIds)), null, 2) + '\n')
     } else {
-      printSessions(sessions, active)
+      printSessions(sessions, active, responsiveIds)
     }
     return EXIT_OK
   }
@@ -180,7 +195,14 @@ export async function runSessionsCommand(args: string[]): Promise<number> {
       console.error(error instanceof Error ? error.message : String(error))
       return EXIT_NOT_FOUND
     }
+    const recoveredLease = rest[0] === 'all'
+      ? recoverOrphanedServerStartupLease()
+      : false
     if (targets.length === 0) {
+      if (recoveredLease) {
+        console.log('Recovered an orphaned diffing startup lease for this repository.')
+        return EXIT_OK
+      }
       console.log('No diffing sessions are running for this repository.')
       return EXIT_OK
     }
@@ -189,13 +211,20 @@ export async function runSessionsCommand(args: string[]): Promise<number> {
       const id = serverSessionId(target).slice(0, 8)
       try {
         console.error(`Stopping ${id} (${target.mode ?? 'web'}, pid ${target.pid})…`)
-        await stopLockOwner(target)
+        if (action === 'kill') {
+          await stopLockOwner(target, { lockMatches: () => true })
+        } else {
+          await stopLockOwner(target)
+        }
       } catch (error) {
         failed = true
         console.error(error instanceof Error ? error.message : String(error))
       }
     }
-    if (!failed) console.log(`Stopped ${targets.length} diffing session${targets.length === 1 ? '' : 's'}.`)
+    if (!failed) {
+      const repaired = recoveredLease ? ' Recovered an orphaned startup lease.' : ''
+      console.log(`Stopped ${targets.length} diffing session${targets.length === 1 ? '' : 's'}.${repaired}`)
+    }
     return failed ? 1 : EXIT_OK
   }
 

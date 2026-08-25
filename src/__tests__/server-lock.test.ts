@@ -129,7 +129,7 @@ describe('server-lock', () => {
     first!.release()
   })
 
-  it('recovers a stale startup lease only after its owner process is dead', async () => {
+  it('recovers a startup lease immediately after its owner process dies', async () => {
     const { acquireServerStartupLease } = await loadModule()
     const leaseDir = join(storageDir, 'server-startup.lock')
     mkdirSync(leaseDir)
@@ -138,12 +138,25 @@ describe('server-lock', () => {
     }))
     writeFileSync(join(leaseDir, 'owner-dead-owner'), '')
 
-    const replacement = acquireServerStartupLease('/tmp/test-repo', 'new-owner', 31_001)
+    const replacement = acquireServerStartupLease('/tmp/test-repo', 'new-owner', 1_001)
     expect(replacement).not.toBeNull()
-    expect(acquireServerStartupLease('/tmp/test-repo', 'third-owner', 31_002)).toBeNull()
+    expect(acquireServerStartupLease('/tmp/test-repo', 'third-owner', 1_002)).toBeNull()
 
     replacement!.release()
-    expect(acquireServerStartupLease('/tmp/test-repo', 'third-owner', 31_003)).not.toBeNull()
+    expect(acquireServerStartupLease('/tmp/test-repo', 'third-owner', 1_003)).not.toBeNull()
+  })
+
+  it('repairs an orphaned startup lease without acquiring a replacement', async () => {
+    const { recoverOrphanedServerStartupLease } = await loadModule()
+    const leaseDir = join(storageDir, 'server-startup.lock')
+    mkdirSync(leaseDir)
+    writeFileSync(join(leaseDir, 'lease.json'), JSON.stringify({
+      ownerId: 'dead-owner', createdAt: 1_000, pid: 2147483646,
+    }))
+
+    expect(recoverOrphanedServerStartupLease('/tmp/test-repo', 1_001)).toBe(true)
+    expect(existsSync(leaseDir)).toBe(false)
+    expect(recoverOrphanedServerStartupLease('/tmp/test-repo', 1_002)).toBe(false)
   })
 
   it('recovers an empty startup lease directory after it becomes stale', async () => {
@@ -215,6 +228,7 @@ describe('server-lock', () => {
     const {
       writeServerLock,
       listServerLocks,
+      listRegisteredServerLocks,
       readServerLock,
       resolveActiveServerLock,
       sessionsPath,
@@ -225,6 +239,9 @@ describe('server-lock', () => {
 
     mockProbeLockServerSync.mockReturnValue(false)
     expect(listServerLocks()).toEqual([])
+    expect(listRegisteredServerLocks().map((lock) => lock.sessionId)).toEqual([
+      'temporarily-unresponsive',
+    ])
     expect(existsSync(recordPath)).toBe(true)
     expect(resolveActiveServerLock()).toBeNull()
     expect(readServerLock()?.sessionId).toBe('temporarily-unresponsive')

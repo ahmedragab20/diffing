@@ -7,6 +7,7 @@ import { navigate } from '../router'
 import { BrandMark } from './BrandMark'
 import { ReviewSettingsPopover, type ReviewSettingsPopoverProps } from './ReviewSettingsPopover'
 import { SubmitToGitHubPopover } from './SubmitToGitHubPopover'
+import { AiModelPicker } from '../ai/AiModelPicker'
 
 interface PrReviewToolbarProps {
   session: PrSession
@@ -20,6 +21,7 @@ interface PrReviewToolbarProps {
   onEditComment: (id: string, body: string) => void
   onDeleteComment: (id: string) => void
   onSubmitted?: (result: SubmitPrReviewResult) => void
+  onOpenAiAssistant?: () => void
 }
 
 export function PrReviewToolbar({
@@ -34,6 +36,7 @@ export function PrReviewToolbar({
   onEditComment,
   onDeleteComment,
   onSubmitted,
+  onOpenAiAssistant,
 }: PrReviewToolbarProps) {
   return (
     <header className="toolbar diff-app-toolbar pr-review-toolbar" role="banner">
@@ -73,6 +76,7 @@ export function PrReviewToolbar({
       </div>
 
       <div className="toolbar-right">
+        <AiModelPicker onOpenAssistant={onOpenAiAssistant} />
         <button className="btn btn-sm toolbar-search-btn" onClick={onOpenSearch} title="Search files and changed lines (⌘K)" aria-label="Search">
           <Search size={14} />
           <span className="btn-label">Search</span>

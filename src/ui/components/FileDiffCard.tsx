@@ -728,6 +728,15 @@ export const FileDiffCard = memo(function FileDiffCard({
         <CommentForm
           draftKey={draftKey}
           lineContent={lineContent}
+          aiSurface="diff"
+          aiContext={{
+            kind: "selection",
+            filePath,
+            side: pending.side,
+            startLine: ordered.start,
+            endLine: ordered.end,
+            selectedText: lineContent,
+          }}
           lineLabel={pendingLineLabel(pending)}
           range={{
             start: ordered.start,
@@ -1343,6 +1352,8 @@ export const FileDiffCard = memo(function FileDiffCard({
                     <CommentForm
                       draftKey={`file-comment:${filePath}`}
                       lineContent=""
+                      aiSurface="diff"
+                      aiContext={{ kind: "file", filePath }}
                       onSubmit={(body, severity) => {
                         onAddComment(
                           filePath,

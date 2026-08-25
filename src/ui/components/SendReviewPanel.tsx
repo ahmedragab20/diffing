@@ -8,6 +8,7 @@ import {
   MessageSquareWarning,
   MessageSquare,
   ShieldAlert,
+  Sparkles,
 } from 'lucide-react'
 import { useFeedback } from '../hooks/useHaptics'
 import type { ReviewComment, ReviewDecision, ReviewMode } from '../../lib/types'
@@ -15,6 +16,7 @@ import { fileName } from '../utils'
 import { MarkdownField } from './MarkdownField'
 import { useSubmitPanelSize, SUBMIT_PANEL_PRESETS } from '../hooks/useSubmitPanelSize'
 import { ConfirmDialog } from '../primitives/ConfirmDialog'
+import { useOptionalAi } from '../ai/AiContext'
 
 interface SecretFinding {
   rule: string
@@ -122,6 +124,9 @@ export function SendReviewPanel({
   const [forceConfirmed, setForceConfirmed] = useState(false)
   const [unviewedConfirmOpen, setUnviewedConfirmOpen] = useState(false)
   const [submissionError, setSubmissionError] = useState<string | null>(null)
+  const [aiDrafting, setAiDrafting] = useState(false)
+  const [aiDraftError, setAiDraftError] = useState<string | null>(null)
+  const ai = useOptionalAi()
   const {
     popoverStyle,
     activePreset,
@@ -350,6 +355,35 @@ export function SendReviewPanel({
             <label className="srp-general-label" htmlFor="srp-general-input">
               Overall comment <span className="srp-optional">(optional · Markdown)</span>
             </label>
+            {ai && ai.models.length > 0 && (
+              <button
+                type="button"
+                className="btn btn-sm ai-review-summary-btn"
+                disabled={aiDrafting || comments.length === 0}
+                onClick={async () => {
+                  setAiDrafting(true)
+                  setAiDraftError(null)
+                  try {
+                    const result = await ai.run({
+                      surface: 'diff',
+                      action: 'draft-review-summary',
+                      prompt: 'Draft a concise overall review comment from these inline comments.',
+                      context: {
+                        kind: 'comment-thread',
+                        commentBody: comments.map((comment) => `${comment.filePath}:${comment.lineNumber} — ${comment.body}`).join('\n'),
+                      },
+                    })
+                    setGeneral(result.text)
+                  } catch (error) {
+                    setAiDraftError(error instanceof Error ? error.message : String(error))
+                  } finally {
+                    setAiDrafting(false)
+                  }
+                }}
+              >
+                <Sparkles size={12} /> {aiDrafting ? 'Drafting…' : 'Draft summary'}
+              </button>
+            )}
             <MarkdownField
               id="srp-general-input"
               value={general}
@@ -360,6 +394,7 @@ export function SendReviewPanel({
               ariaLabel="Overall review comment"
               onSubmitShortcut={handleSend}
             />
+            {aiDraftError && <div className="ai-run-error" role="alert">{aiDraftError}</div>}
           </div>
         </div>
 

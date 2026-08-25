@@ -144,6 +144,14 @@ import {
 	setPrReviewThreadResolved,
 	fetchPrFileContentViaGh,
 } from "./lib/github.js";
+import { AiService } from "./lib/ai/service.js";
+import type {
+	AiAttachment,
+	AiCredentialRoute,
+	AiRunEvent,
+	AiRunRequest,
+	AiSourceId,
+} from "./lib/ai/types.js";
 
 const MIME_TYPES: Record<string, string> = {
 	".html": "text/html",
@@ -246,6 +254,7 @@ export function createApp(
 	},
 	mockupStore?: MockupStore,
 	designSystemStore?: DesignSystemStore,
+	aiService?: AiService,
 ) {
 	const app = new Hono();
 	app.use("*", createServerAuthMiddleware(security));
@@ -366,6 +375,7 @@ export function createApp(
 	} catch {
 		repoRoot = process.cwd();
 	}
+	const ai = aiService ?? new AiService();
 
 	// Watch the project storage dir so any write — whether from this server's own
 	// API handlers or from an external agent editing comments.json / plans.json
@@ -1147,6 +1157,115 @@ export function createApp(
 
 	app.get("/api/settings", (c) => {
 		return c.json(loadSettings());
+	});
+
+	app.get("/api/ai/connections", async (c) => {
+		return c.json({ connections: await ai.connections() });
+	});
+
+	app.get("/api/ai/models", async (c) => {
+		return c.json({ models: await ai.models() });
+	});
+
+	app.post("/api/ai/connections/:source/key", async (c) => {
+		try {
+			const source = c.req.param("source") as AiSourceId;
+			const body = (await c.req.json()) as { apiKey?: unknown; remember?: unknown };
+			if (typeof body.apiKey !== "string" || !body.apiKey.trim()) {
+				return c.json({ error: "apiKey is required" }, 400);
+			}
+			if (body.apiKey.length > 16 * 1024) {
+				return c.json({ error: "apiKey is too large" }, 413);
+			}
+			await ai.connectKey(source, body.apiKey, body.remember === true);
+			return c.json({ ok: true });
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+		}
+	});
+
+	app.post("/api/ai/connections/:source/login", async (c) => {
+		try {
+			const source = c.req.param("source") as AiSourceId;
+			const body = (await c.req.json().catch(() => ({}))) as { route?: AiCredentialRoute; providerId?: string };
+			const route = body.route ?? "subscription";
+			return c.json({ command: ai.setupCommand(source, route, body.providerId) });
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+		}
+	});
+
+	app.post("/api/ai/connections/:source/configure-runtime-key", async (c) => {
+		try {
+			const source = c.req.param("source") as AiSourceId;
+			const body = (await c.req.json().catch(() => ({}))) as { providerId?: string };
+			return c.json({ command: ai.setupCommand(source, "runtime-key", body.providerId) });
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+		}
+	});
+
+	app.delete("/api/ai/connections/:source", async (c) => {
+		try {
+			await ai.disconnect(c.req.param("source") as AiSourceId);
+			return c.json({ ok: true });
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+		}
+	});
+
+	app.post("/api/ai/run", async (c) => {
+		const body = (await c.req.json().catch(() => null)) as AiRunRequest | null;
+		if (!body || body.trigger !== "user") {
+			return c.json({ error: "AI inference requires an explicit user trigger." }, 400);
+		}
+		if (!body.modelId || !body.action || !body.surface || !body.context) {
+			return c.json({ error: "modelId, action, surface, and context are required" }, 400);
+		}
+		if ("patch" in body.context && body.context.patch !== undefined) {
+			const patch = body.context.patch;
+			const rendererMetadataText = typeof patch === "string" &&
+				/^(?:\[object Object\](?:,\[object Object\])*)(?:\n(?:\[object Object\](?:,\[object Object\])*))*$/.test(patch.trim());
+			if (typeof patch !== "string" || rendererMetadataText) {
+				return c.json({ error: "The selected diff context could not be serialized. Refresh the review and try again." }, 400);
+			}
+		}
+		const requestedPaths = [...new Set((body.context.attachmentPaths ?? []).filter((path): path is string => typeof path === "string" && path.trim().length > 0))];
+		if (requestedPaths.length > 8) {
+			return c.json({ error: "At most 8 files can be attached to one AI request." }, 400);
+		}
+		const attachments: AiAttachment[] = [];
+		let remainingAttachmentBytes = 64 * 1024;
+		for (const path of requestedPaths) {
+			const buffer = await resolveFileVersion(path, "new");
+			if (!buffer) return c.json({ error: `Attached file was not found: ${path}` }, 404);
+			const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
+			if (sample.includes(0)) return c.json({ error: `Binary files cannot be attached: ${path}` }, 415);
+			if (remainingAttachmentBytes <= 0) break;
+			const take = Math.min(buffer.length, 32 * 1024, remainingAttachmentBytes);
+			attachments.push({ path, content: buffer.subarray(0, take).toString("utf8"), truncated: take < buffer.length });
+			remainingAttachmentBytes -= take;
+		}
+		body.context = { ...body.context, attachmentPaths: requestedPaths, attachments };
+		return streamSSE(c, async (stream) => {
+			let runId: string | null = null;
+			stream.onAbort(() => {
+				if (runId) ai.cancel(runId);
+			});
+			try {
+				await ai.run(body, async (event: AiRunEvent) => {
+					if (event.type === "start") runId = event.runId;
+					await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
+				});
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				await stream.writeSSE({ event: "error", data: JSON.stringify({ type: "error", message }) }).catch(() => {});
+			}
+		});
+	});
+
+	app.post("/api/ai/runs/:id/cancel", (c) => {
+		return c.json({ canceled: ai.cancel(c.req.param("id")) });
 	});
 
 	app.put("/api/settings", async (c) => {

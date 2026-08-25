@@ -605,6 +605,15 @@ export function PlanReview({
         <CommentForm
           draftKey={`plan-new:${plan.id}:${session}`}
           lineContent={lineRange(p.startLineNumber, p.lineNumber)}
+          aiSurface="plan"
+          aiContext={{
+            kind: 'plan-selection',
+            planId: plan.id,
+            title: plan.title,
+            version: viewingVersion,
+            body: displayBody,
+            selectedText: lineRange(p.startLineNumber, p.lineNumber),
+          }}
           lineLabel={pendingLineLabel(linePending)}
           showSeverity
           range={{

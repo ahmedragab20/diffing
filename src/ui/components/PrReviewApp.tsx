@@ -43,6 +43,8 @@ import { SearchPalette } from './SearchPalette'
 import { ShortcutsHelpModal } from './ShortcutsHelpModal'
 import { ThemeModal } from './ThemeModal'
 import { VimStatusBar } from './VimStatusBar'
+import { AiAssistantRail } from '../ai/AiAssistantRail'
+import { diffPatchForAiContext } from '../ai/diffContext'
 
 /** GitHub-specific variant of the main review shell. */
 export function PrReviewApp() {
@@ -101,6 +103,7 @@ export function PrReviewApp() {
   const [monoFontModalOpen, setMonoFontModalOpen] = useState(false)
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
   const [submissionToast, setSubmissionToast] = useState<SubmitPrReviewResult | null>(null)
+  const [aiRailOpen, setAiRailOpen] = useState(false)
 
   const appRef = useRef<HTMLDivElement>(null)
   const sidebarRef = useRef<HTMLElement>(null)
@@ -488,7 +491,7 @@ export function PrReviewApp() {
     <HapticsProvider enabled={settings.haptics} soundsEnabled={settings.sounds}>
       <div
         ref={appRef}
-        className="app pr-app"
+        className={`app pr-app ${aiRailOpen ? 'app-ai-open' : ''}`}
         data-pr-mode="true"
         style={{ '--sidebar-width': `${sidebarWidth}px`, '--comment-panel-height': `${commentPanelHeight}px` } as React.CSSProperties}
       >
@@ -500,12 +503,13 @@ export function PrReviewApp() {
           settingsProps={settingsProps}
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
-          onOpenSearch={() => setPalette({ open: true, scope: 'all' })}
+          onOpenSearch={() => setPalette({ open: true, scope: 'all', changedOnly: true })}
           onRefresh={() => refreshPr.mutate()}
           refreshing={refreshPr.isPending}
           onEditComment={(id, body) => updateComment({ id, body })}
           onDeleteComment={removeComment}
           onSubmitted={setSubmissionToast}
+          onOpenAiAssistant={() => setAiRailOpen(true)}
         />
 
         {!sidebarCollapsed && <div className="sidebar-mobile-backdrop" onClick={() => setSidebarCollapsed(true)} aria-hidden="true" />}
@@ -592,6 +596,20 @@ export function PrReviewApp() {
             )}
           </main>
         </div>
+
+        <AiAssistantRail
+          open={aiRailOpen}
+          onClose={() => setAiRailOpen(false)}
+          surface="pr-diff"
+          title="Ask about this pull request"
+          context={{
+            kind: activeFile ? 'file' : 'diff',
+            repoName: session.repo,
+            branch: `${session.headRefName} → ${session.baseRefName}`,
+            filePath: activeFile ?? undefined,
+            patch: diffPatchForAiContext(patch, activeFile),
+          }}
+        />
 
         <SearchPalette
           isOpen={palette.open}

@@ -11,6 +11,7 @@ import '../../node_modules/@pierre/diffs/dist/components/web-components.js'
 import { TooltipProvider } from './primitives/Tooltip'
 import { Root } from './Root'
 import { installSessionAuth } from './session-auth'
+import { AiProvider } from './ai/AiContext'
 import './styles/global.css'
 // Gridline is the canonical web design-system layer. Keep it last: it adapts
 // the legacy component stylesheet to the same terminal-native contract as the
@@ -42,7 +43,9 @@ createRoot(document.getElementById('root')!).render(
         }}
       >
         <TooltipProvider>
-          <Root />
+          <AiProvider>
+            <Root />
+          </AiProvider>
         </TooltipProvider>
       </WorkerPoolContextProvider>
     </HotkeysProvider>

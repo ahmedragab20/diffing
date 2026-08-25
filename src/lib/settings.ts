@@ -84,6 +84,18 @@ export interface Settings {
 	ignoreSpaceChange: boolean;
 	/** Ignore all whitespace (`git diff -w`). Live-toggled from UI. */
 	ignoreAllSpace: boolean;
+	/** Canonical `source/credential-route/provider/model` selected for AI actions. */
+	aiModel?: string | null;
+	/** Model-specific reasoning choice used for the next explicit AI action. */
+	aiReasoningEffort?: string | null;
+	/** Model-specific service tier used for the next explicit AI action. */
+	aiServiceTier?: string | null;
+	/** Width of the shared diff/plan AI assistant rail. */
+	aiRailWidth?: number;
+	/** The user has acknowledged what review context is sent to a provider. */
+	aiPrivacyAcknowledged?: boolean;
+	/** Whether the shared AI Connections section is expanded in Settings. */
+	aiSettingsExpanded?: boolean;
 	/** ISO timestamp when `diffing setup` last completed successfully. */
 	setupCompletedAt?: string | null;
 }
@@ -123,6 +135,12 @@ const DEFAULTS: Settings = {
 	savedReplies: [],
 	ignoreSpaceChange: false,
 	ignoreAllSpace: false,
+	aiModel: null,
+	aiReasoningEffort: null,
+	aiServiceTier: null,
+	aiRailWidth: 360,
+	aiPrivacyAcknowledged: false,
+	aiSettingsExpanded: false,
 };
 
 export function loadSettings(): Settings {

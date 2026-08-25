@@ -32,6 +32,9 @@ import { Tooltip } from '../primitives/Tooltip'
 import { SubmitPlanReviewPopover } from './SubmitPlanReviewPopover'
 import { VimStatusBar } from './VimStatusBar'
 import { ShortcutsHelpModal } from './ShortcutsHelpModal'
+import { AiModelPicker } from '../ai/AiModelPicker'
+import { AiAssistantRail } from '../ai/AiAssistantRail'
+import { AiConnectionsPanel } from '../ai/AiConnectionsPanel'
 
 const FONT_SIZE_OPTS = [11, 12, 13, 14, 15, 16].map((n) => ({
   value: String(n),
@@ -73,6 +76,7 @@ export function PlanReviewApp() {
   const [themeModalOpen, setThemeModalOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
+  const [aiRailOpen, setAiRailOpen] = useState(false)
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -481,7 +485,7 @@ export function PlanReviewApp() {
   return (
     <HapticsProvider enabled={settings.haptics ?? true} soundsEnabled={settings.sounds ?? true}>
       <div
-        className="app plan-app"
+        className={`app plan-app ${aiRailOpen ? 'app-ai-open' : ''}`}
         ref={appRef}
         style={
           {
@@ -574,6 +578,7 @@ export function PlanReviewApp() {
           </div>
 
           <div className="toolbar-right">
+            <AiModelPicker onOpenAssistant={() => setAiRailOpen(true)} />
             <Popover
               open={settingsOpen}
               onOpenChange={setSettingsOpen}
@@ -591,6 +596,7 @@ export function PlanReviewApp() {
               }
             >
               <div className="popover-scroll settings-panel">
+                <AiConnectionsPanel />
                 <div className="settings-section-label">Appearance</div>
                 <div className="settings-item settings-item-spaced">
                   <span>Theme</span>
@@ -756,6 +762,22 @@ export function PlanReviewApp() {
             )}
           </main>
         </div>
+
+        {activePlan && (
+          <AiAssistantRail
+            open={aiRailOpen}
+            onClose={() => setAiRailOpen(false)}
+            surface="plan"
+            title="Ask about this plan"
+            context={{
+              kind: 'plan',
+              planId: activePlan.id,
+              title: activePlan.title,
+              version: activePlan.version,
+              body: activePlan.body,
+            }}
+          />
+        )}
 
         <ThemeModal
           open={themeModalOpen}

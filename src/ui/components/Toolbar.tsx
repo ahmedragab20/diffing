@@ -26,6 +26,7 @@ import type {
 	ReviewMode,
 } from "../../lib/types";
 import { ConfirmDialog } from "../primitives/ConfirmDialog";
+import { AiModelPicker } from "../ai/AiModelPicker";
 
 interface LastSendSummary {
 	round: number;
@@ -128,6 +129,7 @@ interface ToolbarProps {
 	/** Controlled Send-review popover open state (⌘Enter outside zen). */
 	sendReviewOpen?: boolean;
 	onSendReviewOpenChange?: (open: boolean) => void;
+	onOpenAiAssistant?: () => void;
 }
 
 export function ResolveAllControl({
@@ -278,6 +280,7 @@ export const Toolbar = memo(function Toolbar({
 	onToggleZen,
 	sendReviewOpen,
 	onSendReviewOpenChange,
+	onOpenAiAssistant,
 }: ToolbarProps) {
 	const filesLabel = showMode
 		? `${showCommitCount} commit${showCommitCount === 1 ? "" : "s"}`
@@ -335,6 +338,7 @@ export const Toolbar = memo(function Toolbar({
 			</div>
 
 			<div className="toolbar-right">
+				<AiModelPicker onOpenAssistant={onOpenAiAssistant} />
 				{onToggleZen && (
 					<button
 						className={`btn btn-sm toolbar-zen-btn ${zenMode ? "is-active" : ""}`}

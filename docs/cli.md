@@ -211,13 +211,16 @@ diffing sessions --json                # Script-safe summaries (no capabilities)
 diffing sessions use <id>              # Make a session active for agent commands
 diffing sessions open [<id>|active]    # Select and open/print a session
 diffing sessions stop <id>|active|all  # Graceful stop, then force if necessary
-diffing sessions kill <id>|active|all  # Alias for stop
+diffing sessions kill <id>|active|all  # Force a recorded unreachable PID when needed
 ```
 
 The first eight characters shown in the table are accepted when they uniquely
-identify a live session. Stopping the active session automatically elects the
-newest remaining session. `--replace-session` is the launch-time shorthand for
-stopping `active` and starting a new review.
+identify a session. Sessions whose process exists but whose loopback API does
+not answer remain visible as `unreachable`. `stop` keeps the conservative API
+identity check; explicit `kill` force-stops the recorded PID and also repairs an
+orphaned startup lease when used with `all`. Stopping the active session
+automatically elects the newest remaining session. `--replace-session` is the
+launch-time shorthand for stopping `active` and starting a new review.
 
 ### `mode`
 
@@ -1804,9 +1807,21 @@ User-specific preferences, layout options, editor choices, and themes are persis
   "expandContextByDefault": false,   // Automatically load and expand full file context
   "collapsedContextThreshold": 10,   // Context lines gap before collapsing is applied
   "expansionLineCount": 20,          // Context lines revealed per click on expand up/down
-  "haptics": true                    // Interface sound effects and tactile feedback triggers
+  "haptics": true,                   // Interface sound effects and tactile feedback triggers
+  "aiModel": null,                   // Canonical source/credential/provider/model id
+  "aiReasoningEffort": null,         // Optional model-specific reasoning effort
+  "aiServiceTier": null,             // Optional model-specific service tier
+  "aiRailWidth": 360,                // Shared diff/plan assistant rail width
+  "aiPrivacyAcknowledged": false,    // Context-sharing notice acknowledged
+  "aiSettingsExpanded": false        // AI Connections section expanded/collapsed
 }
 ```
+
+AI provider secrets are never stored in this JSON file. Direct BYOK secrets use
+the OS credential vault or session memory. OpenCode/Cursor-managed BYOK remains
+in the owning runtime. AI inference endpoints require `trigger: "user"`; the UI
+does not invoke them from lifecycle, hover, selection, refresh, or navigation
+events.
 
 ---
 

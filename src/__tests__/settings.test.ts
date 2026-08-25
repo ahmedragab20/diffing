@@ -52,6 +52,12 @@ const DEFAULTS = {
   savedReplies: [] as [],
   ignoreSpaceChange: false,
   ignoreAllSpace: false,
+  aiModel: null,
+  aiReasoningEffort: null,
+  aiServiceTier: null,
+  aiRailWidth: 360,
+  aiPrivacyAcknowledged: false,
+  aiSettingsExpanded: false,
 }
 
 describe('settings', () => {

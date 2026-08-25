@@ -9,6 +9,7 @@ import type {
 } from "../hooks/useSettings";
 import { Popover } from "../primitives/Popover";
 import { Select } from "../primitives/Select";
+import { AiConnectionsPanel } from "../ai/AiConnectionsPanel";
 
 export interface ReviewSettingsPopoverProps {
 	diffStyle: "split" | "unified";
@@ -210,6 +211,7 @@ export function ReviewSettingsPopover({
 			}
 		>
 			<div className="popover-scroll settings-panel">
+				<AiConnectionsPanel />
 				{showSource && diffOptions && onDiffOptionsChange && (
 					<>
 						<div className="settings-section-label">Source</div>

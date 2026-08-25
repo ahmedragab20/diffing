@@ -68,6 +68,8 @@ import { CommitWalkBar, stepCommitWalk } from "./components/CommitWalkBar";
 import { ConfirmDialog } from "./primitives/ConfirmDialog";
 import { AgentProgressToast } from "./components/AgentProgressToast";
 import { useSinceLastRound } from "./hooks/useSinceLastRound";
+import { AiAssistantRail } from "./ai/AiAssistantRail";
+import { diffPatchForAiContext } from "./ai/diffContext";
 
 export function App() {
 	const poolManager = useWorkerPool();
@@ -231,6 +233,7 @@ export function App() {
 	const { status: mergeStatus, refresh: refreshMergeStatus } =
 		useMergeStatus(patch);
 	const [activeFile, setActiveFile] = useState<string | null>(null);
+	const [aiRailOpen, setAiRailOpen] = useState(false);
 	/**
 	 * Timestamp of the last *explicit* active-file selection (click, J/K,
 	 * deep link) plus the programmatic smooth scrolls they trigger. Fed to
@@ -514,6 +517,10 @@ export function App() {
 		}
 		return patch;
 	}, [showMode, commitWalkIndex, commits, patch]);
+	const aiContextPatch = useMemo(
+		() => diffPatchForAiContext(activePatch, activeFile),
+		[activePatch, activeFile],
+	);
 
 	const files = useMemo(() => {
 		if (!activePatch) return [];
@@ -1352,7 +1359,7 @@ export function App() {
 				soundsEnabled={settings.sounds ?? true}
 			>
 				<div
-					className={`app ${zenMode ? "app-zen" : ""}`}
+					className={`app ${zenMode ? "app-zen" : ""} ${aiRailOpen ? "app-ai-open" : ""}`}
 					ref={appRef}
 					style={
 						{
@@ -1488,6 +1495,7 @@ export function App() {
 							onToggleZen={toggleZenMode}
 							sendReviewOpen={sendOpen}
 							onSendReviewOpenChange={setSendOpen}
+							onOpenAiAssistant={() => setAiRailOpen(true)}
 						/>
 					)}
 					{!zenMode && !sidebarCollapsed && (
@@ -1639,6 +1647,19 @@ export function App() {
 							/>
 						</main>
 					</div>
+					<AiAssistantRail
+						open={aiRailOpen}
+						onClose={() => setAiRailOpen(false)}
+						surface="diff"
+						title="Ask about this diff"
+						context={{
+							kind: activeFile ? "file" : "diff",
+							repoName,
+							branch: branch || undefined,
+							filePath: activeFile ?? undefined,
+							patch: aiContextPatch,
+						}}
+					/>
 					<SearchPalette
 						isOpen={palette.open}
 						onClose={closePalette}

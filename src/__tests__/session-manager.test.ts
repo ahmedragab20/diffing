@@ -4,13 +4,19 @@ import type { ServerLock } from '../lib/server-lock.js'
 
 const {
   listServerLocks,
+  listRegisteredServerLocks,
   resolveActiveServerLock,
+  resolveUnresponsiveServerLock,
+  recoverOrphanedServerStartupLease,
   activateServerLock,
   openExistingSession,
   stopLockOwner,
 } = vi.hoisted(() => ({
   listServerLocks: vi.fn(),
+  listRegisteredServerLocks: vi.fn(),
   resolveActiveServerLock: vi.fn(),
+  resolveUnresponsiveServerLock: vi.fn(),
+  recoverOrphanedServerStartupLease: vi.fn(() => false),
   activateServerLock: vi.fn((lock) => lock),
   openExistingSession: vi.fn(async () => {}),
   stopLockOwner: vi.fn(async () => {}),
@@ -18,7 +24,10 @@ const {
 
 vi.mock('../lib/server-lock.js', () => ({
   listServerLocks,
+  listRegisteredServerLocks,
   resolveActiveServerLock,
+  resolveUnresponsiveServerLock,
+  recoverOrphanedServerStartupLease,
   activateServerLock,
   serverSessionId: (lock: ServerLock) => lock.sessionId,
   sameServerSession: (left: ServerLock, right: ServerLock) => left.sessionId === right.sessionId,
@@ -47,6 +56,8 @@ function lock(id: string, overrides: Partial<ServerLock> = {}): ServerLock {
 describe('sessions command', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    listRegisteredServerLocks.mockImplementation(() => listServerLocks())
+    recoverOrphanedServerStartupLease.mockReturnValue(false)
   })
 
   afterEach(() => {
@@ -93,5 +104,38 @@ describe('sessions command', () => {
     expect(stopLockOwner).toHaveBeenCalledTimes(2)
     expect(stopLockOwner).toHaveBeenNthCalledWith(1, second)
     expect(stopLockOwner).toHaveBeenNthCalledWith(2, first)
+  })
+
+  it('shows unreachable registered sessions and force-stops them with kill', async () => {
+    const stuck = lock('stuck-session')
+    listServerLocks.mockReturnValue([])
+    listRegisteredServerLocks.mockReturnValue([stuck])
+    resolveActiveServerLock.mockReturnValue(null)
+    resolveUnresponsiveServerLock.mockReturnValue(stuck)
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { runSessionsCommand } = await import('../lib/session-manager.js')
+
+    await expect(runSessionsCommand(['--json'])).resolves.toBe(0)
+    expect(String(output.mock.calls[0][0])).toContain('"status": "unreachable"')
+
+    await expect(runSessionsCommand(['kill', 'all'])).resolves.toBe(0)
+    expect(stopLockOwner).toHaveBeenCalledWith(stuck, expect.objectContaining({
+      lockMatches: expect.any(Function),
+    }))
+  })
+
+  it('repairs an orphaned startup lease when kill all has no sessions', async () => {
+    listServerLocks.mockReturnValue([])
+    listRegisteredServerLocks.mockReturnValue([])
+    resolveActiveServerLock.mockReturnValue(null)
+    resolveUnresponsiveServerLock.mockReturnValue(null)
+    recoverOrphanedServerStartupLease.mockReturnValue(true)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { runSessionsCommand } = await import('../lib/session-manager.js')
+
+    await expect(runSessionsCommand(['kill', 'all'])).resolves.toBe(0)
+    expect(log).toHaveBeenCalledWith('Recovered an orphaned diffing startup lease for this repository.')
   })
 })
