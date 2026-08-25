@@ -7,6 +7,11 @@ description: Author HTML mockup screens that look like the product before submit
 
 Write the HTML. Then use `diffing-mockup-review` to submit, await, inspect, and patch. Do not implement product UI until the mockup is approved.
 
+## Hard rules (pi harness)
+
+- **Lead only.** The lead writes and revises every mockup. Never spawn a worker/subagent to generate or check HTML.
+- **Opt-in only.** Write a mockup only if the user asked for one or accepted a suggestion. Do not author HTML because a UI change looks large — mockups drain tokens.
+
 ## Never write mockups into the consumer repo
 
 Prefer MCP `submit_mockup({ html })` or stdin. If you must stage a file, use only `~/.diffing/<repo>-<hash>/mockup-sources/`.
