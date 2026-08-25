@@ -1,3 +1,11 @@
+## 0.19.0
+
+### Minor Changes
+
+- 858dc79: Avoid PTY smoke render race
+- fec71d1: Integrate review assistant with BYOK and SSO
+- 09f68ab: Reuse healthy review sessions
+
 ## 0.18.4
 
 ### Patch Changes
