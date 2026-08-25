@@ -1,3 +1,9 @@
+## 0.19.2
+
+### Patch Changes
+
+- 51cbccd: Polish review assistant experience
+
 ## 0.19.1
 
 ### Patch Changes
