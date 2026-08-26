@@ -1737,7 +1737,7 @@ export function App() {
 					<FontPickerModal
 						open={uiFontModalOpen}
 						title="Select UI Font"
-						defaultLabel="Default (Geist, from CDN)"
+						defaultLabel="Default (Geist Mono, from CDN)"
 						activeFont={settings.uiFont}
 						onFontChange={handleUiFontChange}
 						onClose={() => setUiFontModalOpen(false)}

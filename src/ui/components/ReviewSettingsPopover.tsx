@@ -331,7 +331,7 @@ export function ReviewSettingsPopover({
 							setOpen(false);
 							onOpenUiFontModal();
 						}}
-						title={uiFont ?? "Default (Geist)"}
+						title={uiFont ?? "Default (Geist Mono)"}
 					>
 						<Type size={13} />
 						<span className="settings-value-label">{uiFont ?? "Default…"}</span>

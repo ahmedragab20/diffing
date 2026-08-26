@@ -48,7 +48,8 @@ textarea,
   --toolbar-height: 60px;
   /* --- Typography definitions --- */
   --font-sans:
-    "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
   --font-mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     monospace;
