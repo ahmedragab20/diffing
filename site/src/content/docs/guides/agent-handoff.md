@@ -2,7 +2,7 @@
 title: Agent handoff
 description: Async vs sync review loops, park discipline, exit codes, and MCP/CLI pairing.
 summary: Default is async park after sharing the URL; use await only for live reviews; timeout means park not retry-forever.
-order: 3
+order: 4
 section: guides
 ---
 

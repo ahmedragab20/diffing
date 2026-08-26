@@ -29,8 +29,9 @@ section: start
 
 1. [Getting started](/docs/getting-started/) — install and first review.
 2. [Code review](/docs/guides/code-review/) — web UI workflow.
-3. [Keyboard shortcuts](/docs/reference/keyboard/) — vim-style navigation.
-4. [Themes](/docs/design/themes/) & [Gridline](/docs/design/gridline/) — visual system.
+3. [AI assistance](/docs/guides/ai-assistance/) — optional Ask AI rail (BYOK / SSO).
+4. [Keyboard shortcuts](/docs/reference/keyboard/) — vim-style navigation.
+5. [Themes](/docs/design/themes/) & [Gridline](/docs/design/gridline/) — visual system.
 
 ## Sections
 
@@ -38,7 +39,7 @@ section: start
 |---------|----------------|
 | **Start** | Install, setup, first review |
 | **Concepts** | Architecture, sessions, storage |
-| **Guides** | Review loops, agents, PR, TUI, search |
+| **Guides** | Review loops, AI assistance, agents, PR, TUI, search |
 | **Reference** | CLI, MCP, HTTP API, XML, settings, exit codes |
 | **Design** | Gridline design system, themes |
 

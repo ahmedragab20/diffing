@@ -19,7 +19,8 @@ In the UI:
 2. Toggle split/unified with <kbd>m</kbd>
 3. Select lines → add comment (optional severity: blocking · nit · question · praise)
 4. Optional multi-line ranges and ```` ```suggestion ```` blocks
-5. Click **Send review** / **Send to agent** with a verdict and optional note
+5. (Optional) Connect a model and use **Ask AI**, or Draft / Improve helpers on the comment form — see [AI assistance](/docs/guides/ai-assistance/)
+6. Click **Send review** / **Send to agent** with a verdict and optional note
 
 Live updates: agent replies and resolves appear over SSE without refresh.
 
@@ -66,6 +67,7 @@ Each **Send to agent** increments a review round. History is available via UI an
 
 ## Related
 
+- [AI assistance](/docs/guides/ai-assistance/)
 - [Agent handoff](/docs/guides/agent-handoff/)
 - [Comments XML](/docs/reference/comments-xml/)
 - [Keyboard](/docs/reference/keyboard/)

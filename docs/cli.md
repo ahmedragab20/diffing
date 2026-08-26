@@ -2002,13 +2002,18 @@ Uploads a pasted image file from the clipboard or file picker.
 
   ```json
   {
-    "url": "/api/attachments/pasted_image_de4f55-bc11...png"
+    "url": "/api/attachments/pasted_image_de4f55-bc11...png",
+    "name": "screenshot.png",
+    "mimeType": "image/png",
+    "size": 2048
   }
   ```
 
-  Draft comments keep this **loopback** URL so the local UI can preview the
-  image. On GitHub publish (review submit, reply, or edit), diffing rewrites
-  these to repo-scoped raw blob URLs (see below).
+  Only PNG, JPEG, WebP, and GIF are accepted (≤ 10 MB). Non-image uploads and
+  mismatched magic bytes are rejected. Draft comments and Ask AI keep this
+  **loopback** URL so the local UI can preview the image. On GitHub publish
+  (review submit, reply, or edit), diffing rewrites these to repo-scoped raw
+  blob URLs (see below).
 
 #### `GET /api/attachments/:filename`
 
@@ -2040,7 +2045,103 @@ https://<host>/<owner>/<repo>/raw/<commitSha>/<hash>.<ext>
 
 ---
 
-### 4. Git Operations & IDE Integration
+### 4. AI assistance (review assistant)
+
+Loopback endpoints used by the web **Ask AI** rail. Inference is rejected unless
+the body includes `"trigger": "user"`. The UI must not call these from lifecycle,
+hover, selection, refresh, or navigation events. See [getting-started.md](getting-started.md)
+for the human workflow.
+
+#### `GET /api/ai/connections`
+
+Returns `{ connections: AiConnection[] }` for Codex / ChatGPT, Claude Code,
+OpenCode, Cursor, and direct Grok.
+
+#### `GET /api/ai/models`
+
+Returns `{ models: AiModel[] }` from connected sources (subscription, runtime
+BYOK, and direct-key catalogs).
+
+#### `POST /api/ai/connections/:source/key`
+
+Stores a direct API key for a source that supports `direct-key` (currently Grok).
+
+```json
+{ "apiKey": "…", "remember": true }
+```
+
+`remember: true` prefers the OS credential vault; otherwise the key is held in
+server memory for the current process only. Keys are never written to
+`settings.json`.
+
+#### `POST /api/ai/connections/:source/login`
+
+Returns a CLI setup command for account sign-in or related routes.
+
+```json
+{ "route": "subscription", "providerId": "optional" }
+```
+
+Response: `{ "command": "codex login" }` (example).
+
+#### `POST /api/ai/connections/:source/configure-runtime-key`
+
+Returns a setup command for OpenCode/Cursor-managed BYOK (`runtime-key`).
+
+#### `DELETE /api/ai/connections/:source`
+
+Disconnects the source and clears any vault/session key owned by diffing.
+
+#### Conversations
+
+Persisted under `~/.diffing/<repo>-<hash>/ai-conversations.json` (capped count
+and age). Surfaces: `diff` | `pr-diff` | `plan`.
+
+| Method | Path | Role |
+|--------|------|------|
+| `GET` | `/api/ai/conversations?surface&scopeKey` | List summaries |
+| `POST` | `/api/ai/conversations` | Create (`surface`, `scopeKey`, optional `title` / `modelId`) |
+| `GET` | `/api/ai/conversations/:id` | Full conversation |
+| `PUT` | `/api/ai/conversations/:id` | Update `title` / `draft` / `modelId` / `turns` |
+| `DELETE` | `/api/ai/conversations/:id` | Delete |
+
+Responses use `Cache-Control: no-store`.
+
+#### `POST /api/ai/run`
+
+Starts a user-triggered inference run and streams Server-Sent Events.
+
+Required body fields:
+
+```json
+{
+  "trigger": "user",
+  "conversationId": "…",
+  "modelId": "…",
+  "surface": "diff",
+  "action": "ask",
+  "prompt": "optional free-form question",
+  "context": { "kind": "diff", "patch": "…" },
+  "history": []
+}
+```
+
+- `action` values include `ask`, `summarize`, `review-risks`, `draft-comment`,
+  `improve-comment`, `review-map`, `explain-hunk`, `draft-review-summary`,
+  `critique-plan`, `find-plan-gaps`, and related comment/plan helpers.
+- Context limits: ≤ 8 `@` attachment paths / 64 KB total text; ≤ 8 explicit
+  line ranges / 64 KB; ≤ 4 images (PNG/JPEG/WebP/GIF, ≤ 10 MB each) resolved
+  from `/api/attachments/…`.
+- SSE event types: `start`, `text-delta`, `warning`, `error`, `complete`
+  (payload JSON matches each event).
+
+#### `POST /api/ai/runs/:id/cancel`
+
+Cancels an in-flight run. Response: `{ "canceled": true | false }`.
+
+---
+
+### 5. Git Operations & IDE Integration
 
 #### `POST /api/open-file`
 
@@ -2120,7 +2221,7 @@ Retrieves a file version as text. Includes a `missing` indicator in the JSON out
 
 Retrieves or overwrites the global user configuration stored in `~/.config/diffing/settings.json`.
 
-### 5. Plan Review
+### 6. Plan Review
 
 Plans are persisted to `plans.json` in the per-repo storage dir (watched for live
 `plans` SSE broadcasts). The verdict handoff mirrors the comment handoff but uses
@@ -2216,7 +2317,7 @@ Returns `{ round, waiters, lastDecidedAt }` for the plan handoff session.
 
 ---
 
-### 6. GitHub PR Review
+### 7. GitHub PR Review
 
 Mutating `/api/gh/*` endpoints return **404** when no active PR session exists,
 so the local and plan-review flows are unaffected. `GET /api/gh/session` is the

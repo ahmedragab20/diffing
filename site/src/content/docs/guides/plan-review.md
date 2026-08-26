@@ -2,7 +2,7 @@
 title: Plan review
 description: Submit markdown plans for human approval before implementation.
 summary: Agents submit plans, humans verdict approved/changes-requested/rejected, then agents obey the decision.
-order: 2
+order: 3
 section: guides
 ---
 
@@ -60,6 +60,7 @@ Same triage as code review: `blocking` | `nit` | `question` | `praise`. Treat bl
 | Live edit | <kbd>e</kbd> — autosave PUT; Save as new version POST |
 | Outline / comments map | <kbd>o</kbd> / <kbd>c</kbd> |
 | Inline comments | Source gutter or Read highlight; multi-line + severity |
+| Ask AI (optional) | Summarize, Find gaps, Critique plan — shared connections; see [AI assistance](/docs/guides/ai-assistance/) |
 | Submit review | Verdict that unblocks `plan await` |
 
 ## Keep the tree clean

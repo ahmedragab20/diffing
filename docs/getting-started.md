@@ -127,26 +127,38 @@ Supported routes:
 Direct keys are stored in the operating-system credential vault when available.
 If the vault is unavailable, diffing keeps the key in server memory for the
 current session only. Runtime-managed keys remain owned by OpenCode or Cursor;
-diffing never reads or duplicates their credential files.
+diffing never reads or duplicates their credential files. Secrets are never
+written to `settings.json`.
 
 AI is **always user-triggered**. Loading a review, selecting lines, hovering,
 refreshing a diff, switching plan versions, or changing Settings never starts
-inference. Use a labeled Ask, Summarize, Review risks, Draft, or Improve action.
-Generated text remains a draft until you explicitly insert or submit it.
+inference. Use a labeled Ask AI, Summarize, Review risks, Draft, or Improve
+action. Generated text remains a draft until you explicitly insert or submit it.
 
-The toolbar model picker changes the model for the current browser session.
-Set the model used after reload under **Settings → AI connections → Default
-model**. The connections section is collapsed by default and remembers its
-expanded state.
+The toolbar model picker (and **Settings → AI connections → Default model**)
+persist the chosen model in `aiModel` across reloads. The connections section is
+collapsed by default and remembers its expanded state.
+
+**Ask AI** opens a resizable rail with surface-specific quick actions
+(Summarize, Review risks / Find gaps, Review map / Explain context / Critique
+plan). Conversations persist under the per-repo store (`ai-conversations.json`),
+scoped by surface + repo/branch or plan id — list, rename, or delete threads as
+needed.
 
 Inside the AI composer, type `@` to attach repository files. Suggestions use
 the same FFF index and frecency ranking as diffing search. Attached text is
 loaded only when you explicitly send the request, is bounded to eight text
-files / 64 KB total, and is shown as removable context chips.
+files / 64 KB total, and is shown as removable context chips. Paste, drag, or
+attach images (PNG/JPEG/WebP/GIF; up to four, 10 MB each) when the selected
+model source supports images.
 
-Responses stream into the rail and render through diffing's GFM Markdown
-renderer, including tables, highlighted fenced code blocks, Mermaid, and copy
-controls.
+A whole-diff ask sends the review’s changed-file map and diff content within
+the context budget; the focused file is only a navigation hint. You can attach
+up to eight explicit line ranges (64 KB total) to prioritize. Responses stream
+into the rail as GFM Markdown (tables, fenced code, Mermaid, copy).
+
+Comment forms offer Draft / Improve / Shorter / More specific / Generate
+suggestion helpers. Send review can draft a summary from open comments.
 
 Only the context preview shown in the UI is sent. Diff requests do not silently
 include plans; plan requests do not silently include diffs; mockups expose the
@@ -188,6 +200,6 @@ diffing setup --check
 
 ## Next steps
 
-- [CLI reference](cli.md) — every subcommand, flag, and exit code
+- [CLI reference](cli.md) — every subcommand, flag, exit code, and `/api/ai/*`
 - [README](../README.md) — features, themes, plan review
 - [AGENTS.md](../AGENTS.md) — agent workflows (plan review, code review, MCP)

@@ -2,7 +2,7 @@
 title: GitHub PR review
 description: Review a GitHub pull request locally through diffing.
 summary: Open a PR session with diffing gh pr or --gh-pr; use bounded inspect and gh_* tools; mutate GitHub only with explicit authorization.
-order: 4
+order: 5
 section: guides
 ---
 

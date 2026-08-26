@@ -2,7 +2,7 @@
 title: Terminal UI (TUI)
 description: Experimental native Rust review UI and read-only viewer.
 summary: diffing view is the read-only browser; --tui is full review. Experimental — web remains the supported production path.
-order: 5
+order: 6
 section: guides
 ---
 

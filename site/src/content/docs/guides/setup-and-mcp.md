@@ -2,7 +2,7 @@
 title: Setup & MCP
 description: First-run wizard, skills install, and MCP client configuration.
 summary: Run diffing setup for doctor, skills, and MCP JSON; write IDE configs only with explicit flags.
-order: 7
+order: 8
 section: guides
 ---
 

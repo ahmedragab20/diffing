@@ -2,7 +2,7 @@
 title: Search
 description: Rust-powered fuzzy file, text, symbol, and unified search in the review UI.
 summary: Four scopes via fff — files, text, symbols, all — with frecency ranking and graceful degradation.
-order: 6
+order: 7
 section: guides
 ---
 

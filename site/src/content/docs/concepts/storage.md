@@ -26,6 +26,7 @@ plans.json
 mockups.json
 mockup-sources/         # mirrors each submitted screen: <id>/<screen>.html
 plan-sources/
+ai-conversations.json   # Ask AI threads (capped count / age)
 attachments/
 fff/                 # search frecency + history DBs
 ```
@@ -50,8 +51,10 @@ Inactive projects may be auto-pruned after prolonged inactivity (see product set
 - No account, no telemetry, no required cloud
 - GitHub features only run when you open a PR session / authorize publish
 - Agent plans and scratch should live under `~/.diffing/…/plan-sources/`, not in the consumer working tree
+- Direct AI API keys use the OS credential vault (or session memory) — never `settings.json`. OpenCode/Cursor-managed keys stay in those runtimes.
 
 ## Related
 
 - [Settings](/docs/reference/settings/)
+- [AI assistance](/docs/guides/ai-assistance/)
 - [Architecture](/docs/concepts/architecture/)

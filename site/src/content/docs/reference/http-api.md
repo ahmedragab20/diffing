@@ -1,7 +1,7 @@
 ---
 title: HTTP API
 description: Loopback REST and SSE endpoints used by the UI, CLI, and agents.
-summary: Review await/send, comments CRUD, plans, mockups, progress, live SSE, search, and attachments on the local server.
+summary: Review await/send, comments CRUD, plans, mockups, AI assistant, progress, live SSE, search, and attachments on the local server.
 order: 3
 section: reference
 ---
@@ -84,7 +84,41 @@ All endpoints are on the session base URL from `diffing url` (loopback). Authent
 ## Attachments
 
 `POST /api/attachments` (multipart) · `GET /api/attachments/:filename`  
-Stored under per-repo `attachments/`.
+Stored under per-repo `attachments/`. Image-only for AI/composer use (PNG, JPEG, WebP, GIF; ≤ 10 MB).
+
+## AI assistance
+
+Loopback-only review assistant used by the web UI. Inference requires `trigger: "user"` — clients must not call `/api/ai/run` from lifecycle, hover, selection, refresh, or navigation events.
+
+| Method | Path | Role |
+|--------|------|------|
+| `GET` | `/api/ai/connections` | Connection status for Codex, Claude, OpenCode, Cursor, Grok |
+| `GET` | `/api/ai/models` | Models from connected sources |
+| `POST` | `/api/ai/connections/:source/key` | Store direct API key (`apiKey`, optional `remember`) |
+| `POST` | `/api/ai/connections/:source/login` | Return CLI setup command (`route`: `subscription` \| …) |
+| `POST` | `/api/ai/connections/:source/configure-runtime-key` | Return runtime BYOK setup command |
+| `DELETE` | `/api/ai/connections/:source` | Disconnect / clear stored key |
+| `GET` | `/api/ai/conversations?surface&scopeKey` | List conversation summaries |
+| `POST` | `/api/ai/conversations` | Create (`surface`, `scopeKey`, optional `title` / `modelId`) |
+| `GET` / `PUT` / `DELETE` | `/api/ai/conversations/:id` | Read / update (title, draft, modelId, turns) / delete |
+| `POST` | `/api/ai/run` | Start inference; streams SSE events (`start`, `text-delta`, `warning`, `error`, `complete`) |
+| `POST` | `/api/ai/runs/:id/cancel` | Cancel an in-flight run |
+
+### `/api/ai/run` body (required fields)
+
+```json
+{
+  "trigger": "user",
+  "conversationId": "…",
+  "modelId": "…",
+  "surface": "diff",
+  "action": "ask",
+  "prompt": "optional",
+  "context": { "kind": "diff", "patch": "…" }
+}
+```
+
+`surface` is `diff` | `pr-diff` | `plan`. Context attachments: ≤ 8 `@` files / 64 KB; ≤ 8 line ranges / 64 KB; ≤ 4 images. Conversations live in per-repo `ai-conversations.json`.
 
 ## Plans
 
@@ -126,5 +160,6 @@ Deep endpoint catalog remains in repository `docs/cli.md` §11 for rare routes.
 
 ## Related
 
+- [AI assistance](/docs/guides/ai-assistance/)
 - [Comments XML](/docs/reference/comments-xml/)
 - [Architecture](/docs/concepts/architecture/)

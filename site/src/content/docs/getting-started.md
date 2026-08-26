@@ -105,6 +105,12 @@ TTY auto-detect: interactive terminals open the UI; pipes/redirects print a unif
 
 Default agent behavior is **async**: share the UI URL, end the turn, resume when you say ready. See [Agent handoff](/docs/guides/agent-handoff/).
 
+## AI assistance (optional)
+
+In the web UI, open **Settings → AI connections** to link Codex / ChatGPT, Claude Code, OpenCode, Cursor, or a direct Grok key. Use the toolbar **Ask AI** rail to summarize diffs or plans, draft comments, and attach `@` files or images — always user-triggered, never on hover or load.
+
+Full details: [AI assistance](/docs/guides/ai-assistance/).
+
 ## Troubleshooting
 
 ```bash
@@ -123,5 +129,6 @@ diffing setup --check
 ## Next
 
 - [Code review](/docs/guides/code-review/)
+- [AI assistance](/docs/guides/ai-assistance/)
 - [CLI reference](/docs/reference/cli/)
 - [Architecture](/docs/concepts/architecture/)

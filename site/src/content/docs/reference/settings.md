@@ -34,6 +34,14 @@ Defaults may evolve; inspect your file or product source for the latest schema. 
 | `haptics` | sounds / haptics in web UI |
 | `setupCompletedAt` | first-run wizard marker |
 | `staged` / `untracked` | default inclusion toggles |
+| `aiModel` | persisted Ask AI model id (`source/credential/provider/model`) |
+| `aiReasoningEffort` | optional model-specific reasoning effort |
+| `aiServiceTier` | optional model-specific service tier |
+| `aiRailWidth` | shared diff/plan Ask AI rail width (px) |
+| `aiPrivacyAcknowledged` | context-sharing notice acknowledged |
+| `aiSettingsExpanded` | AI connections section expanded/collapsed |
+
+AI provider secrets are **never** stored in this file. Direct BYOK keys use the OS credential vault or session memory; OpenCode/Cursor-managed keys stay in those runtimes. See [AI assistance](/docs/guides/ai-assistance/).
 
 ## Theme
 

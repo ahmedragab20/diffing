@@ -2,7 +2,7 @@
 title: Mockup review
 description: Submit HTML mockups for human visual review before implementation.
 summary: Agents submit HTML screens, humans pin comments and verdict approved/changes-requested/rejected, then agents act — with version+screen+viewport scoped comments and bounded inspect/revise flows.
-order: 8
+order: 9
 section: guides
 ---
 
