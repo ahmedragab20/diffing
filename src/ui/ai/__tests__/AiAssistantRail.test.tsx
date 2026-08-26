@@ -44,6 +44,14 @@ describe("AiAssistantRail", () => {
 		expect(mocks.run).not.toHaveBeenCalled();
 	});
 
+	it("makes whole-review scope distinct from the current viewport focus", () => {
+		renderRail(<AiAssistantRail open onClose={vi.fn()} surface="diff" context={{ kind: "diff", focusedFilePath: "src/focused.ts", patch: "+x" }} />);
+		expect(screen.getByText("whole diff")).toBeInTheDocument();
+		expect(screen.getByText("focus: src/focused.ts")).toBeInTheDocument();
+		fireEvent.click(screen.getByText("Context being shared"));
+		expect(screen.getByText(/complete changed-file map plus diff content within the context limit/i)).toBeInTheDocument();
+	});
+
 	it("resizes from the left edge and persists on release", () => {
 		renderRail(<AiAssistantRail open onClose={vi.fn()} surface="diff" context={{ kind: "diff" }} />);
 		const separator = screen.getByRole("separator", { name: "Resize AI assistant" });

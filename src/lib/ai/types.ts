@@ -59,6 +59,11 @@ export interface AiDiffContext {
 	kind: "diff" | "file" | "selection" | "comment-thread";
 	repoName?: string;
 	branch?: string;
+	/**
+	 * The file currently nearest the reviewer in the UI. This is a navigation
+	 * hint only: it must never narrow a whole-diff context to one file.
+	 */
+	focusedFilePath?: string;
 	filePath?: string;
 	side?: "additions" | "deletions";
 	startLine?: number;

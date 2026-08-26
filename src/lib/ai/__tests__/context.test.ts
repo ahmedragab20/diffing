@@ -37,6 +37,52 @@ describe("buildAiPrompt", () => {
 		expect(result.prompt).toContain("export const important = true");
 	});
 
+	it("describes the whole review scope and treats viewport focus as a hint", () => {
+		const patch = `diff --git a/src/a.ts b/src/a.ts
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1 +1 @@
+-export const value = 1
++export const value = 2
+diff --git a/src/b.ts b/src/b.ts
+new file mode 100644
+--- /dev/null
++++ b/src/b.ts
+@@ -0,0 +1 @@
++export const added = true
+`;
+		const input = request(patch);
+		input.context = { kind: "diff", patch, repoName: "demo", branch: "feature", focusedFilePath: "src/a.ts" };
+		const result = buildAiPrompt(input);
+		expect(result.prompt).toContain("Scope: entire review diff");
+		expect(result.prompt).toContain("Current UI focus: src/a.ts (navigation hint only");
+		expect(result.prompt).toContain("Total: 2 files, 2 hunks, +2 -1");
+		expect(result.prompt).toContain("[modified] src/a.ts");
+		expect(result.prompt).toContain("[added] src/b.ts");
+		expect(result.prompt).toContain("export const added = true");
+	});
+
+	it("keeps evidence from every changed file when a large diff is truncated", () => {
+		const largeFile = (path: string, token: string) => `diff --git a/${path} b/${path}
+--- a/${path}
++++ b/${path}
+@@ -1 +1 @@
+-old
++${token.repeat(55_000)}
+`;
+		const input = request([
+			largeFile("src/first.ts", "a"),
+			largeFile("src/middle.ts", "b"),
+			largeFile("src/last.ts", "c"),
+		].join(""));
+		const result = buildAiPrompt(input);
+		expect(result.truncated).toBe(true);
+		expect(result.prompt).toContain("### src/first.ts");
+		expect(result.prompt).toContain("### src/middle.ts");
+		expect(result.prompt).toContain("### src/last.ts");
+		expect(result.prompt.match(/\[file diff truncated\]/g)).toHaveLength(3);
+	});
+
 	it("keeps the newest conversation turns when the history budget is exceeded", () => {
 		const input = request("current question");
 		input.history = [

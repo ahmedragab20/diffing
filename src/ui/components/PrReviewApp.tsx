@@ -44,7 +44,7 @@ import { ShortcutsHelpModal } from './ShortcutsHelpModal'
 import { ThemeModal } from './ThemeModal'
 import { VimStatusBar } from './VimStatusBar'
 import { AiAssistantRail } from '../ai/AiAssistantRail'
-import { diffPatchForAiContext } from '../ai/diffContext'
+import { diffReviewContextForAi } from '../ai/diffContext'
 
 /** GitHub-specific variant of the main review shell. */
 export function PrReviewApp() {
@@ -602,13 +602,11 @@ export function PrReviewApp() {
           onClose={() => setAiRailOpen(false)}
           surface="pr-diff"
           title="Ask about this pull request"
-          context={{
-            kind: activeFile ? 'file' : 'diff',
+          context={diffReviewContextForAi(patch, {
             repoName: session.repo,
             branch: `${session.headRefName} → ${session.baseRefName}`,
-            filePath: activeFile ?? undefined,
-            patch: diffPatchForAiContext(patch, activeFile),
-          }}
+            focusedFilePath: activeFile,
+          })}
         />
 
         <SearchPalette

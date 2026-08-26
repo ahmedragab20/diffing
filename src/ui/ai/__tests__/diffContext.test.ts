@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffPatchForAiContext } from "../diffContext";
+import { diffReviewContextForAi } from "../diffContext";
 
 const PATCH = `diff --git a/apps/web/src/client.rs b/apps/web/src/client.rs
 new file mode 100644
@@ -16,20 +16,26 @@ new file mode 100644
 +pub fn render() {}
 `;
 
-describe("diffPatchForAiContext", () => {
-	it("keeps the whole raw patch when no file is active", () => {
-		expect(diffPatchForAiContext(PATCH, null)).toBe(PATCH);
+describe("diffReviewContextForAi", () => {
+	it("keeps the whole raw patch when no file is focused", () => {
+		expect(diffReviewContextForAi(PATCH)).toMatchObject({ kind: "diff", patch: PATCH });
 	});
 
-	it("selects readable unified-diff text for the active file", () => {
-		const result = diffPatchForAiContext(PATCH, "apps/web/src/client.rs");
-		expect(result).toContain("diff --git a/apps/web/src/client.rs");
-		expect(result).toContain("+pub const CATALOG_PATH");
-		expect(result).not.toContain("apps/web/src/app.rs");
-		expect(result).not.toContain("[object Object]");
+	it("keeps whole-review scope while recording the viewport focus", () => {
+		const result = diffReviewContextForAi(PATCH, { focusedFilePath: "apps/web/src/client.rs" });
+		expect(result.kind).toBe("diff");
+		expect(result.focusedFilePath).toBe("apps/web/src/client.rs");
+		expect(result.patch).toContain("+pub const CATALOG_PATH");
+		expect(result.patch).toContain("apps/web/src/app.rs");
+		expect(result.patch).not.toContain("[object Object]");
 	});
 
-	it("falls back to the whole patch if a transient active path is absent", () => {
-		expect(diffPatchForAiContext(PATCH, "missing.rs")).toBe(PATCH);
+	it("includes stable review metadata without inventing empty values", () => {
+		expect(diffReviewContextForAi(PATCH, { repoName: "demo", branch: "feature", focusedFilePath: null })).toMatchObject({
+			kind: "diff",
+			repoName: "demo",
+			branch: "feature",
+			patch: PATCH,
+		});
 	});
 });

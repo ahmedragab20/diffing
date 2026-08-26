@@ -69,7 +69,7 @@ import { ConfirmDialog } from "./primitives/ConfirmDialog";
 import { AgentProgressToast } from "./components/AgentProgressToast";
 import { useSinceLastRound } from "./hooks/useSinceLastRound";
 import { AiAssistantRail } from "./ai/AiAssistantRail";
-import { diffPatchForAiContext } from "./ai/diffContext";
+import { diffReviewContextForAi } from "./ai/diffContext";
 
 export function App() {
 	const poolManager = useWorkerPool();
@@ -517,9 +517,13 @@ export function App() {
 		}
 		return patch;
 	}, [showMode, commitWalkIndex, commits, patch]);
-	const aiContextPatch = useMemo(
-		() => diffPatchForAiContext(activePatch, activeFile),
-		[activePatch, activeFile],
+	const aiReviewContext = useMemo(
+		() => diffReviewContextForAi(activePatch, {
+			repoName,
+			branch,
+			focusedFilePath: activeFile,
+		}),
+		[activePatch, activeFile, branch, repoName],
 	);
 
 	const files = useMemo(() => {
@@ -1652,13 +1656,7 @@ export function App() {
 						onClose={() => setAiRailOpen(false)}
 						surface="diff"
 						title="Ask about this diff"
-						context={{
-							kind: activeFile ? "file" : "diff",
-							repoName,
-							branch: branch || undefined,
-							filePath: activeFile ?? undefined,
-							patch: aiContextPatch,
-						}}
+						context={aiReviewContext}
 					/>
 					<SearchPalette
 						isOpen={palette.open}
