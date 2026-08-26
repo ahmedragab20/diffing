@@ -1,3 +1,9 @@
+## 0.19.4
+
+### Patch Changes
+
+- 6957a87: Improve review assistant experience
+
 ## 0.19.3
 
 ### Patch Changes
