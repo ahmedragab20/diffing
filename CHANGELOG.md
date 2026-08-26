@@ -1,3 +1,9 @@
+## 0.19.5
+
+### Patch Changes
+
+- 4187db2: Use monospace font for interface
+
 ## 0.19.4
 
 ### Patch Changes
