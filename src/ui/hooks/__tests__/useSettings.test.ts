@@ -26,7 +26,7 @@ const defaultSettings = {
   showLineNumbers: true,
   hunkSeparators: 'line-info',
   lineHoverHighlight: 'both',
-  fontSize: 13,
+  fontSize: 14,
   expandContextByDefault: false,
   collapsedContextThreshold: 10,
   expansionLineCount: 20,

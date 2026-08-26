@@ -10,6 +10,7 @@ import type {
 } from "@pierre/diffs";
 import type { Editor } from "@pierre/diffs/edit";
 import type { ReviewComment } from "../../lib/types";
+import type { AiDiffSelection } from "../../lib/ai/types";
 import type { PrExistingComment } from "../../lib/pr-session";
 import type { BinaryFileInfo } from "../hooks/useDiff";
 import type { EditAnnotation, EditSessionView } from "../hooks/useEditSessions";
@@ -57,6 +58,7 @@ interface DiffViewerProps {
     severity?: import("../../lib/types").CommentSeverity,
   ) => void;
   onDeleteComment: (id: string) => void;
+  onAddSelectionToAsk?: (selection: AiDiffSelection) => void;
   onReplyExisting?: (commentId: number, body: string) => Promise<void>;
   onEditExisting?: (commentId: number, body: string) => Promise<void>;
   onDeleteExisting?: (commentId: number) => Promise<void>;
@@ -154,6 +156,7 @@ export const DiffViewer = memo(function DiffViewer({
   existingCommentsMap,
   onAddComment,
   onDeleteComment,
+  onAddSelectionToAsk,
   onReplyExisting,
   onEditExisting,
   onDeleteExisting,
@@ -252,6 +255,7 @@ export const DiffViewer = memo(function DiffViewer({
               onViewedChange={onViewedChange}
               onAddComment={onAddComment}
               onDeleteComment={onDeleteComment}
+              onAddSelectionToAsk={onAddSelectionToAsk}
               onReplyExisting={onReplyExisting}
               onEditExisting={onEditExisting}
               onDeleteExisting={onDeleteExisting}

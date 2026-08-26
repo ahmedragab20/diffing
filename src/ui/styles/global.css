@@ -48,19 +48,18 @@ textarea,
   --toolbar-height: 60px;
   /* --- Typography definitions --- */
   --font-sans:
-    "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    monospace;
+    "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     monospace;
 
   /* --- Type scale (IDE-first: compact, functional) --- */
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-base: 13px;
-  --text-md: 14px;
-  --text-lg: 16px;
-  --text-xl: 19px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 20px;
   --leading-tight: 1.3;
   --leading-normal: 1.5;
   --font-weight-medium: 500;
@@ -2016,6 +2015,7 @@ html {
 
 body {
   font-family: var(--font-sans);
+  font-size: var(--text-base);
   background: var(--bg-primary);
   color: var(--text-primary);
   line-height: 1.5;
@@ -14893,14 +14893,14 @@ button.toolbar-last-send-btn:hover {
 }
 
 .ai-rail-title strong {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.35;
 }
 
 .ai-rail-title span {
   margin-top: 1px;
   color: var(--gl-text-subtle);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .ai-rail-icon-btn {
@@ -14939,7 +14939,7 @@ button.toolbar-last-send-btn:hover {
   background: var(--gl-canvas);
   color: var(--gl-text);
   font: inherit;
-  font-size: 10px;
+  font-size: 12px;
   outline: none;
 }
 
@@ -14955,7 +14955,7 @@ button.toolbar-last-send-btn:hover {
   padding: 6px 10px;
   border-bottom: 1px solid var(--gl-rule-subtle);
   background: var(--gl-canvas);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .ai-conversation-inline-edit input {
@@ -14987,7 +14987,7 @@ button.toolbar-last-send-btn:hover {
   background: var(--gl-element);
   color: var(--gl-text-subtle);
   font: inherit;
-  font-size: 9px;
+  font-size: 11px;
   cursor: pointer;
 }
 
@@ -15038,7 +15038,7 @@ button.toolbar-last-send-btn:hover {
   border: 1px solid var(--gl-rule-subtle);
   border-radius: var(--radius-pill);
   color: var(--gl-text-subtle);
-  font-size: 10px;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -15056,7 +15056,7 @@ button.toolbar-last-send-btn:hover {
   background: var(--gl-selected);
   color: var(--gl-text);
   font: inherit;
-  font-size: 9px;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -15073,7 +15073,7 @@ button.toolbar-last-send-btn:hover {
 .ai-share-details {
   margin-top: 7px;
   color: var(--gl-text-subtle);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .ai-share-details summary {
@@ -15133,14 +15133,14 @@ button.toolbar-last-send-btn:hover {
 }
 
 .ai-quick-actions button strong {
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.25;
 }
 
 .ai-quick-actions button small {
   margin-top: 3px;
   color: var(--gl-text-subtle);
-  font-size: 8.5px;
+  font-size: 11px;
   line-height: 1.25;
 }
 
@@ -15181,12 +15181,12 @@ button.toolbar-last-send-btn:hover {
 .ai-empty-state strong {
   display: block;
   color: var(--gl-text);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .ai-empty-state p {
   margin: 7px 0 0;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -15195,6 +15195,8 @@ button.toolbar-last-send-btn:hover {
   padding: 10px 11px;
   border: 1px solid var(--gl-rule-subtle);
   border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .ai-message-user {
@@ -15211,7 +15213,7 @@ button.toolbar-last-send-btn:hover {
 }
 
 .ai-response-markdown {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.65;
 }
 
@@ -15231,7 +15233,7 @@ button.toolbar-last-send-btn:hover {
 
 .ai-response-markdown h3 {
   margin-top: 16px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .ai-response-markdown p,
@@ -15289,7 +15291,7 @@ button.toolbar-last-send-btn:hover {
   border-radius: var(--radius-md);
   background: var(--gl-canvas);
   color: var(--gl-text-subtle);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .ai-thinking-mark {
@@ -15325,7 +15327,7 @@ button.toolbar-last-send-btn:hover {
   border-left: 2px solid var(--gl-warning);
   background: color-mix(in srgb, var(--gl-warning) 8%, var(--gl-canvas));
   color: var(--gl-text-subtle);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.45;
 }
 
@@ -15362,7 +15364,7 @@ button.toolbar-last-send-btn:hover {
   background: var(--gl-surface);
   color: var(--gl-accent);
   font: inherit;
-  font-size: 9px;
+  font-size: 11px;
   box-shadow: var(--shadow-sm);
   cursor: pointer;
 }
@@ -15406,6 +15408,7 @@ button.toolbar-last-send-btn:hover {
   color: var(--gl-text);
   padding: 10px 11px;
   font: inherit;
+  font-size: 14px;
   line-height: 1.5;
   overflow-y: auto;
 }
@@ -15441,7 +15444,143 @@ button.toolbar-last-send-btn:hover {
   align-items: center;
   gap: 4px;
   color: var(--gl-muted);
-  font-size: 9px;
+  font-size: 11px;
+}
+
+.ai-image-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+}
+
+.ai-rail-composer.is-dragging-image {
+  border-color: var(--gl-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--gl-accent) 28%, transparent);
+}
+
+.ai-composer-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+  gap: 8px;
+  padding: 9px;
+  border-bottom: 1px solid var(--gl-rule-subtle);
+}
+
+.ai-composer-image {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 7px;
+  padding: 5px;
+  border: 1px solid var(--gl-rule-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--gl-surface);
+  font-size: 11px;
+}
+
+.ai-composer-image img {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: var(--radius-xs);
+}
+
+.ai-composer-image span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-composer-image button,
+.ai-attach-image-btn {
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+
+.ai-image-error {
+  padding: 7px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--gl-negative) 35%, var(--gl-rule));
+  color: var(--gl-negative);
+  font-size: 11px;
+}
+
+.ai-message-images {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.ai-message-images img {
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  border: 1px solid var(--gl-rule-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--gl-canvas);
+}
+
+/* Readability floor for the primary review surfaces at 100% browser zoom. */
+.toolbar-branch-inline,
+.toolbar-branch-flow,
+.toolbar-branch-flow code,
+.toolbar-chip,
+.toolbar-search-kbd,
+.ft-chip,
+.ft-filter-status,
+.ft-ext-header,
+.ft-ext-applied,
+.ft-ext-pending,
+.ft-ext-chip,
+.ft-ext-apply,
+.ft-ext-clear,
+.ft-ext-hint,
+.ft-comment-count,
+.diff-status-badge,
+.file-diff-edit-btn,
+.file-diff-comment-badge,
+.file-diff-selection-badge,
+.diff-minimap-title,
+.diff-minimap-summary,
+.diff-minimap-hint,
+.diff-minimap-legend,
+.diff-minimap-live,
+.diff-minimap-live-range,
+.comment-form-line-label,
+.comment-form-range {
+  font-size: 11px;
+}
+
+.ft-file-name {
+  font-size: 13px;
+}
+
+.file-diff-name {
+  font-size: 13.5px;
+}
+
+.file-diff-icon-btn,
+.file-diff-header-right .viewed-label {
+  min-width: 30px;
+  height: 30px;
+}
+
+.file-diff-edit-btn,
+.comment-form-suggest-btn {
+  min-height: 28px !important;
+  font-size: 12px !important;
 }
 
 .ai-send-btn,
@@ -15996,13 +16135,27 @@ button.toolbar-last-send-btn:hover {
 
 @media (max-width: 900px) {
   .ai-assistant-rail {
-    top: 0;
+    top: var(--toolbar-height);
     width: min(100vw, var(--ai-rail-width, 420px)) !important;
     max-width: 100vw;
   }
   .ai-rail-resize-handle { display: none; }
   .app-ai-open .app-body { padding-right: 0; }
   .ai-model-select { max-width: 160px; }
+}
+
+@media (max-width: 768px) {
+  .ai-assistant-rail {
+    right: 0;
+    left: 0;
+    width: auto !important;
+    min-width: 0;
+  }
+  .app-ai-open .sidebar,
+  .app-ai-open .sidebar-mobile-backdrop,
+  .app-ai-open .sidebar-resize-handle {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -36,7 +36,7 @@ import { AiModelPicker } from '../ai/AiModelPicker'
 import { AiAssistantRail } from '../ai/AiAssistantRail'
 import { AiConnectionsPanel } from '../ai/AiConnectionsPanel'
 
-const FONT_SIZE_OPTS = [11, 12, 13, 14, 15, 16].map((n) => ({
+const FONT_SIZE_OPTS = [12, 13, 14, 15, 16, 17, 18].map((n) => ({
   value: String(n),
   label: `${n}px`,
 }))

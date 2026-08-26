@@ -37,7 +37,7 @@ describe('useApplyFonts', () => {
   it('still loads the built-in defaults when no override is set', () => {
     renderHook(() => useApplyFonts(true, null, null))
     const href = cdnHref()
-    expect(href).toContain('Geist+Mono')
+    expect(href).toContain('Geist:')
     expect(href).toContain('JetBrains+Mono')
   })
 

@@ -32,6 +32,28 @@ export interface AiModel {
 	isDefault?: boolean;
 	reasoningEfforts?: string[];
 	serviceTiers?: string[];
+	supportsImages?: boolean;
+}
+
+export interface AiDiffSelection {
+	filePath: string;
+	side: "additions" | "deletions";
+	startLine: number;
+	endLine: number;
+	selectedText: string;
+}
+
+export interface AiImageAttachmentReference {
+	url: string;
+	name: string;
+	mimeType: string;
+	size?: number;
+}
+
+/** Server-resolved image input. Clients may send references, never these fields. */
+export interface AiResolvedImageAttachment extends AiImageAttachmentReference {
+	absolutePath: string;
+	dataUrl: string;
 }
 
 export type AiSurface = "diff" | "pr-diff" | "plan";
@@ -75,6 +97,8 @@ export interface AiDiffContext {
 	replies?: string[];
 	attachmentPaths?: string[];
 	attachments?: AiAttachment[];
+	selections?: AiDiffSelection[];
+	imageAttachments?: AiImageAttachmentReference[];
 }
 
 export interface AiPlanContext {
@@ -92,6 +116,7 @@ export interface AiPlanContext {
 	previousBody?: string;
 	attachmentPaths?: string[];
 	attachments?: AiAttachment[];
+	imageAttachments?: AiImageAttachmentReference[];
 }
 
 export interface AiAttachment {
@@ -106,6 +131,8 @@ export interface AiConversationContextLabel {
 	label?: string;
 	version?: number;
 	attachmentPaths?: string[];
+	selectionLabels?: string[];
+	imageAttachments?: AiImageAttachmentReference[];
 }
 
 export interface AiConversationTurn {
@@ -131,6 +158,8 @@ export interface AiRunRequest {
 	reasoningEffort?: string;
 	serviceTier?: string;
 	history?: AiConversationTurn[];
+	/** Populated by the server after validating project-local image references. */
+	resolvedImages?: AiResolvedImageAttachment[];
 }
 
 export type AiRunEvent =
@@ -142,6 +171,7 @@ export type AiRunEvent =
 
 export interface AiBackendAdapter {
 	id: AiSourceId;
+	supportsImages?: boolean;
 	connection(): Promise<AiConnection>;
 	models(): Promise<AiModel[]>;
 	connectKey?(key: string, remember: boolean): Promise<void>;

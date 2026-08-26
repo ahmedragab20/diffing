@@ -2,7 +2,8 @@ import { useEffect } from 'react'
 
 export function useApplyFonts(loaded: boolean, uiFont?: string | null, monoFont?: string | null) {
   useEffect(() => {
-    const fallback = ', ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace'
+    const uiFallback = ', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    const monoFallback = ', ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace'
 
     // Wait until settings are hydrated from the server before deciding.
     if (!loaded) return
@@ -52,7 +53,7 @@ export function useApplyFonts(loaded: boolean, uiFont?: string | null, monoFont?
     // Built-in defaults keep their full variable-axis spec; custom fonts are
     // requested by family name only since we can't know their available axes
     // (an unsupported axis would 400 the whole request).
-    const uiSpec = uiFont?.trim() ? encodeFamily(uiFont) : 'Geist+Mono:ital,wght@0,100..900;1,100..900'
+    const uiSpec = uiFont?.trim() ? encodeFamily(uiFont) : 'Geist:ital,wght@0,100..900;1,100..900'
     const monoSpec = monoFont?.trim() ? encodeFamily(monoFont) : 'JetBrains+Mono:ital,wght@0,100..800;1,100..800'
     const families = [...new Set([uiSpec, monoSpec].filter(Boolean))]
 
@@ -77,13 +78,13 @@ export function useApplyFonts(loaded: boolean, uiFont?: string | null, monoFont?
       document.head.appendChild(styleEl)
     }
 
-    const uiFontVal = uiFont ? `"${uiFont}"` : '"Geist Mono"'
+    const uiFontVal = uiFont ? `"${uiFont}"` : '"Geist"'
     const monoFontVal = monoFont ? `"${monoFont}"` : '"JetBrains Mono"'
 
     styleEl.innerHTML = `
       :root {
-        --font-sans: ${uiFontVal}${fallback} !important;
-        --font-mono: ${monoFontVal}${fallback} !important;
+        --font-sans: ${uiFontVal}${uiFallback} !important;
+        --font-mono: ${monoFontVal}${monoFallback} !important;
       }
     `
 

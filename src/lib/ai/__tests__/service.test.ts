@@ -64,6 +64,11 @@ describe("AiService", () => {
 		await expect(first).resolves.toBe("done");
 	});
 
+	it("rejects images for adapters without a supported transport", async () => {
+		const service = new AiService([createAdapter()]);
+		await expect(service.run({ ...request(), resolvedImages: [{ url: "/api/attachments/pasted_image_a.png", name: "a.png", mimeType: "image/png", absolutePath: "/tmp/a.png", dataUrl: "data:image/png;base64,cG5n" }] }, vi.fn())).rejects.toThrow("cannot receive image attachments");
+	});
+
 	it("deduplicates short-lived model and connection discovery", async () => {
 		const connection = vi.fn(async () => ({
 			id: "codex" as const,

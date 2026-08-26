@@ -89,7 +89,7 @@ const HOVER_OPTS = [
 	{ value: "number", label: "Number only" },
 	{ value: "disabled", label: "Disabled" },
 ];
-const FONT_SIZE_OPTS = [11, 12, 13, 14, 15, 16].map((n) => ({
+const FONT_SIZE_OPTS = [12, 13, 14, 15, 16, 17, 18].map((n) => ({
 	value: String(n),
 	label: `${n}px`,
 }));
@@ -331,7 +331,7 @@ export function ReviewSettingsPopover({
 							setOpen(false);
 							onOpenUiFontModal();
 						}}
-						title={uiFont ?? "Default (Geist Mono)"}
+						title={uiFont ?? "Default (Geist)"}
 					>
 						<Type size={13} />
 						<span className="settings-value-label">{uiFont ?? "Default…"}</span>

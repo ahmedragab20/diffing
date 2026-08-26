@@ -82,6 +82,24 @@ function normalizeContext(value: unknown): AiConversationContextLabel | undefine
 			.map((path) => path.slice(0, 512))
 			.slice(0, 8);
 	}
+	if (Array.isArray(candidate.selectionLabels)) {
+		context.selectionLabels = candidate.selectionLabels
+			.filter((label): label is string => typeof label === "string")
+			.map((label) => label.slice(0, 640))
+			.slice(0, 8);
+	}
+	if (Array.isArray(candidate.imageAttachments)) {
+		context.imageAttachments = candidate.imageAttachments
+			.filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+			.map((item) => ({
+				url: typeof item.url === "string" ? item.url.slice(0, 512) : "",
+				name: typeof item.name === "string" ? item.name.slice(0, 160) : "image",
+				mimeType: typeof item.mimeType === "string" ? item.mimeType.slice(0, 80) : "image/png",
+				size: typeof item.size === "number" && Number.isFinite(item.size) ? Math.max(0, Math.floor(item.size)) : undefined,
+			}))
+			.filter((item) => item.url.startsWith("/api/attachments/"))
+			.slice(0, 4);
+	}
 	return Object.keys(context).length ? context : undefined;
 }
 

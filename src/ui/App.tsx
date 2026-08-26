@@ -70,6 +70,7 @@ import { AgentProgressToast } from "./components/AgentProgressToast";
 import { useSinceLastRound } from "./hooks/useSinceLastRound";
 import { AiAssistantRail } from "./ai/AiAssistantRail";
 import { diffReviewContextForAi } from "./ai/diffContext";
+import type { AiDiffSelection } from "../lib/ai/types";
 
 export function App() {
 	const poolManager = useWorkerPool();
@@ -234,6 +235,7 @@ export function App() {
 		useMergeStatus(patch);
 	const [activeFile, setActiveFile] = useState<string | null>(null);
 	const [aiRailOpen, setAiRailOpen] = useState(false);
+	const [aiSelections, setAiSelections] = useState<AiDiffSelection[]>([]);
 	/**
 	 * Timestamp of the last *explicit* active-file selection (click, J/K,
 	 * deep link) plus the programmatic smooth scrolls they trigger. Fed to
@@ -518,13 +520,21 @@ export function App() {
 		return patch;
 	}, [showMode, commitWalkIndex, commits, patch]);
 	const aiReviewContext = useMemo(
-		() => diffReviewContextForAi(activePatch, {
+		() => ({ ...diffReviewContextForAi(activePatch, {
 			repoName,
 			branch,
 			focusedFilePath: activeFile,
-		}),
-		[activePatch, activeFile, branch, repoName],
+		}), selections: aiSelections }),
+		[activePatch, activeFile, aiSelections, branch, repoName],
 	);
+	const addSelectionToAsk = useCallback((selection: AiDiffSelection) => {
+		setAiSelections((current) => {
+			const key = `${selection.filePath}:${selection.side}:${selection.startLine}:${selection.endLine}`;
+			if (current.some((item) => `${item.filePath}:${item.side}:${item.startLine}:${item.endLine}` === key)) return current;
+			return [...current, selection].slice(-8);
+		});
+		setAiRailOpen(true);
+	}, []);
 
 	const files = useMemo(() => {
 		if (!activePatch) return [];
@@ -1637,6 +1647,7 @@ export function App() {
 								fileAnnotationsMap={fileAnnotationsMap}
 								onAddComment={addComment}
 								onDeleteComment={removeComment}
+								onAddSelectionToAsk={addSelectionToAsk}
 								onCardToggleCollapse={handleCardToggleCollapse}
 								canEdit={canEditScope}
 								editSessions={editSessions}
@@ -1657,6 +1668,7 @@ export function App() {
 						surface="diff"
 						title="Ask about this diff"
 						context={aiReviewContext}
+						onRemoveSelection={(index) => setAiSelections((current) => current.filter((_, itemIndex) => itemIndex !== index))}
 					/>
 					<SearchPalette
 						isOpen={palette.open}
@@ -1725,7 +1737,7 @@ export function App() {
 					<FontPickerModal
 						open={uiFontModalOpen}
 						title="Select UI Font"
-						defaultLabel="Default (Geist Mono, from CDN)"
+						defaultLabel="Default (Geist, from CDN)"
 						activeFont={settings.uiFont}
 						onFontChange={handleUiFontChange}
 						onClose={() => setUiFontModalOpen(false)}

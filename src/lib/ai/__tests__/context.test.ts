@@ -37,6 +37,15 @@ describe("buildAiPrompt", () => {
 		expect(result.prompt).toContain("export const important = true");
 	});
 
+	it("prioritizes exact attached diff ranges with line metadata", () => {
+		const input = request("+ambient change");
+		input.context = { ...input.context, selections: [{ filePath: "src/device.ts", side: "additions", startLine: 14, endLine: 16, selectedText: "one\ntwo\nthree" }] };
+		const result = buildAiPrompt(input);
+		expect(result.prompt).toContain("Explicitly attached diff ranges (highest-priority review evidence)");
+		expect(result.prompt).toContain("src/device.ts · additions · L14–L16");
+		expect(result.prompt.indexOf("one\ntwo\nthree")).toBeLessThan(result.prompt.indexOf("## Unified diff"));
+	});
+
 	it("describes the whole review scope and treats viewport focus as a hint", () => {
 		const patch = `diff --git a/src/a.ts b/src/a.ts
 --- a/src/a.ts

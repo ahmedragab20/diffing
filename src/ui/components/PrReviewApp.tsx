@@ -638,7 +638,7 @@ export function PrReviewApp() {
         />
         <ShortcutsHelpModal isOpen={shortcutsHelpOpen} onClose={() => setShortcutsHelpOpen(false)} mode="pr" />
         <ThemeModal open={themeModalOpen} activeTheme={settings.theme || 'rose-pine'} onThemeChange={(theme) => update({ theme })} onClose={() => setThemeModalOpen(false)} />
-        <FontPickerModal open={uiFontModalOpen} title="Select UI Font" defaultLabel="Default (Geist Mono, from CDN)" activeFont={settings.uiFont} onFontChange={(uiFont) => update({ uiFont })} onClose={() => setUiFontModalOpen(false)} />
+        <FontPickerModal open={uiFontModalOpen} title="Select UI Font" defaultLabel="Default (Geist, from CDN)" activeFont={settings.uiFont} onFontChange={(uiFont) => update({ uiFont })} onClose={() => setUiFontModalOpen(false)} />
         <FontPickerModal open={monoFontModalOpen} title="Select Code Font" defaultLabel="Default (JetBrains Mono, from CDN)" activeFont={settings.monoFont} onFontChange={(monoFont) => update({ monoFont })} onClose={() => setMonoFontModalOpen(false)} />
         {submissionToast && <PrSubmittedToast result={submissionToast} onDismiss={() => setSubmissionToast(null)} />}
       </div>

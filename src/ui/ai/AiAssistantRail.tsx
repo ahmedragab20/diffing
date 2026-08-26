@@ -4,6 +4,7 @@ import {
 	Copy,
 	FileText,
 	GripVertical,
+	ImagePlus,
 	ListTree,
 	Paperclip,
 	Pencil,
@@ -15,7 +16,7 @@ import {
 	Trash2,
 	X,
 } from "lucide-react";
-import type { AiAction, AiConversationContextLabel, AiConversationTurn, AiReviewContext, AiSurface } from "../../lib/ai/types";
+import type { AiAction, AiConversationContextLabel, AiConversationTurn, AiImageAttachmentReference, AiReviewContext, AiSurface } from "../../lib/ai/types";
 import type { AiConversation, AiConversationSummary } from "../../lib/ai/conversations";
 import { Markdown } from "../components/Markdown";
 import { FileMentionDropdown } from "../components/FileMentionDropdown";
@@ -43,12 +44,15 @@ function conversationScopeKey(surface: AiSurface, context: AiReviewContext): str
 	return `${surface}:${root}:${branch}`;
 }
 
-function contextLabel(context: AiReviewContext, attachmentPaths: string[]): AiConversationContextLabel {
-	const label: AiConversationContextLabel = { kind: context.kind, attachmentPaths };
+function contextLabel(context: AiReviewContext, attachmentPaths: string[], imageAttachments: AiImageAttachmentReference[]): AiConversationContextLabel {
+	const label: AiConversationContextLabel = { kind: context.kind, attachmentPaths, imageAttachments };
 	if ("filePath" in context && context.filePath) label.filePath = context.filePath;
 	if ("version" in context) label.version = context.version;
 	if (context.kind === "selection" && "selectedText" in context) label.label = "Selected context";
 	if (context.kind === "comment-thread" && "commentBody" in context) label.label = "Review thread";
+	if ("selections" in context && context.selections?.length) {
+		label.selectionLabels = context.selections.map((selection) => `${selection.filePath} · L${selection.startLine}${selection.endLine !== selection.startLine ? `–L${selection.endLine}` : ""}`);
+	}
 	return label;
 }
 
@@ -60,6 +64,11 @@ function titleForPrompt(prompt: string): string {
 function localConversation(surface: AiSurface, scopeKey: string, modelId: string): AiConversation {
 	const now = Date.now();
 	return { id: `local-${crypto.randomUUID()}`, title: "New conversation", surface, scopeKey, createdAt: now, updatedAt: now, modelId, turns: [] };
+}
+
+function UserMessage({ turn }: { turn: AiConversationTurn }) {
+	const images = turn.context?.imageAttachments ?? [];
+	return <div className="ai-message ai-message-user"><span>{turn.text}</span>{images.length > 0 && <div className="ai-message-images">{images.map((image) => <img key={image.url} src={image.url} alt={image.name} title={image.name} />)}</div>}</div>;
 }
 
 type RunPhase = "idle" | "thinking" | "streaming" | "stopping" | "error";
@@ -77,6 +86,7 @@ interface AiAssistantRailProps {
 	surface: AiSurface;
 	context: AiReviewContext;
 	title?: string;
+	onRemoveSelection?: (index: number) => void;
 }
 
 export function AiAssistantRail(props: AiAssistantRailProps) {
@@ -85,7 +95,7 @@ export function AiAssistantRail(props: AiAssistantRailProps) {
 	return <AiAssistantRailOpen {...props} ai={ai} />;
 }
 
-function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", ai }: AiAssistantRailProps & { ai: NonNullable<ReturnType<typeof useOptionalAi>> }) {
+function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", onRemoveSelection, ai }: AiAssistantRailProps & { ai: NonNullable<ReturnType<typeof useOptionalAi>> }) {
 	const [prompt, setPrompt] = useState("");
 	const [conversation, setConversation] = useState<AiConversation | null>(null);
 	const [conversationSummaries, setConversationSummaries] = useState<AiConversationSummary[]>([]);
@@ -100,10 +110,15 @@ function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", ai }
 	const [renaming, setRenaming] = useState(false);
 	const [renameDraft, setRenameDraft] = useState("");
 	const [deletePending, setDeletePending] = useState(false);
+	const [imageAttachments, setImageAttachments] = useState<AiImageAttachmentReference[]>([]);
+	const [imageUploading, setImageUploading] = useState(false);
+	const [imageError, setImageError] = useState<string | null>(null);
+	const [draggingImage, setDraggingImage] = useState(false);
 	const runId = useRef<string | null>(null);
 	const abortController = useRef<AbortController | null>(null);
 	const resizeCleanup = useRef<(() => void) | null>(null);
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+	const imageInputRef = useRef<HTMLInputElement | null>(null);
 	const conversationRef = useRef<HTMLDivElement | null>(null);
 	const followOutputRef = useRef(true);
 	const forceScrollRef = useRef(false);
@@ -113,9 +128,35 @@ function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", ai }
 	const latestConversationRef = useRef<AiConversation | null>(null);
 	const latestPromptRef = useRef("");
 	const model = useMemo(() => ai.models.find((item) => item.id === ai.selectedModel), [ai.models, ai.selectedModel]);
+	const imageCapable = model?.supportsImages ?? (model ? ["codex", "openai", "anthropic", "xai"].includes(model.sourceId) : false);
 	const mention = useFileMention(prompt, setPrompt);
 	const attachmentPaths = useMemo(() => attachedFilePaths(prompt), [prompt]);
 	const scopeKey = useMemo(() => conversationScopeKey(surface, context), [surface, context]);
+
+	const uploadImages = useCallback(async (files: File[]) => {
+		const accepted = files.filter((file) => ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type));
+		if (!accepted.length) { setImageError("Choose a PNG, JPEG, WebP, or GIF image."); return; }
+		if (!imageCapable) { setImageError("The selected model source cannot receive images. Choose Codex or another image-capable source."); return; }
+		const available = Math.max(0, 4 - imageAttachments.length);
+		if (available === 0) { setImageError("You can attach up to 4 images per message."); return; }
+		setImageUploading(true);
+		setImageError(null);
+		try {
+			const uploaded = await Promise.all(accepted.slice(0, available).map(async (file) => {
+				const form = new FormData();
+				form.append("file", file, file.name);
+				const response = await fetch("/api/attachments", { method: "POST", body: form });
+				const body = await response.json().catch(() => ({})) as Partial<AiImageAttachmentReference> & { error?: string };
+				if (!response.ok || !body.url) throw new Error(body.error || `Image upload failed (${response.status}).`);
+				return { url: body.url, name: body.name || file.name, mimeType: body.mimeType || file.type, size: body.size ?? file.size };
+			}));
+			setImageAttachments((current) => [...current, ...uploaded].slice(0, 4));
+		} catch (error) {
+			setImageError(error instanceof Error ? error.message : String(error));
+		} finally {
+			setImageUploading(false);
+		}
+	}, [imageAttachments.length, imageCapable]);
 
 	useEffect(() => {
 		if (ai.railWidth) setLocalWidth(ai.railWidth);
@@ -231,13 +272,16 @@ function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", ai }
 		}
 	}, [conversation?.turns.length, pending?.assistantText, phase]);
 
-	const start = async (action: AiAction, overridePrompt?: string) => {
+	const start = async (action: AiAction, overridePrompt?: string, overrideImages?: AiImageAttachmentReference[]) => {
 		const requested = (overridePrompt ?? prompt).trim();
-		if (!requested || !selectedModel || (phase !== "idle" && phase !== "error")) return;
+		const requestedImages = overrideImages ?? imageAttachments;
+		if ((!requested && requestedImages.length === 0) || !selectedModel || (phase !== "idle" && phase !== "error")) return;
+		if (requestedImages.length && !imageCapable) { setImageError("The selected model source cannot receive images."); return; }
 		const requestedAttachments = attachedFilePaths(prompt);
 		if (!overridePrompt) {
 			saveDraft("");
 			setPrompt("");
+			setImageAttachments([]);
 			requestAnimationFrame(() => { resizeComposer(); textareaRef.current?.focus(); });
 		}
 		setPersistenceError(null);
@@ -245,9 +289,9 @@ function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", ai }
 		const userTurn: AiConversationTurn = {
 			id: crypto.randomUUID(),
 			role: "user",
-			text: requested,
+			text: requested || `Sent ${requestedImages.length} image${requestedImages.length === 1 ? "" : "s"}`,
 			createdAt: Date.now(),
-			context: contextLabel(context, requestedAttachments),
+			context: contextLabel(context, requestedAttachments, requestedImages),
 		};
 		const controller = new AbortController();
 		abortController.current = controller;
@@ -258,8 +302,8 @@ function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", ai }
 			const result = await run({
 				surface,
 				action,
-				context: { ...context, attachmentPaths: requestedAttachments },
-				prompt: requested || undefined,
+				context: { ...context, attachmentPaths: requestedAttachments, imageAttachments: requestedImages },
+				prompt: requested || "Analyze the attached image in the supplied review context.",
 				history: activeConversation.turns,
 				conversationId: activeConversation.id,
 				signal: controller.signal,
@@ -283,7 +327,7 @@ function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", ai }
 				modelId: selectedModel,
 				context: userTurn.context,
 			};
-			const nextTitle = activeConversation.turns.length === 0 ? titleForPrompt(requested) : activeConversation.title;
+			const nextTitle = activeConversation.turns.length === 0 ? titleForPrompt(requested || requestedImages.map((image) => image.name).join(", ")) : activeConversation.title;
 			const nextConversation: AiConversation = {
 				...activeConversation,
 				title: nextTitle,
@@ -360,6 +404,7 @@ function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", ai }
 		setDeletePending(false);
 		setRenaming(false);
 		setPrompt("");
+		setImageAttachments([]);
 		setPending(null);
 		try {
 			const created = await createConversation({ surface, scopeKey, modelId: selectedModel });
@@ -378,6 +423,7 @@ function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", ai }
 			const loaded = await getConversation(id);
 			setConversation(loaded);
 			setPrompt(loaded.draft ?? "");
+			setImageAttachments([]);
 			setPending(null);
 			setRenaming(false);
 			setDeletePending(false);
@@ -452,18 +498,24 @@ function AiAssistantRailOpen({ onClose, surface, context, title = "Ask AI", ai }
 			{renaming && conversation && <div className="ai-conversation-inline-edit"><input aria-label="Conversation name" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void saveRename(); if (event.key === "Escape") setRenaming(false); }} /><button type="button" onClick={() => void saveRename()} aria-label="Save conversation name"><Check size={13} /></button><button type="button" onClick={() => setRenaming(false)} aria-label="Cancel rename"><X size={13} /></button></div>}
 			{deletePending && conversation && <div className="ai-conversation-delete-confirm" role="alert"><span>Delete “{conversation.title}”?</span><button type="button" onClick={() => void removeCurrentConversation()}>Delete</button><button type="button" onClick={() => setDeletePending(false)}>Cancel</button></div>}
 
-			<div className="ai-context-bar"><div className="ai-context-chips"><span>{context.kind === "diff" ? "whole diff" : context.kind}</span>{"filePath" in context && context.filePath && <span title={context.filePath}>{context.filePath}</span>}{"focusedFilePath" in context && context.focusedFilePath && <span title={`Current UI focus: ${context.focusedFilePath}`}>focus: {context.focusedFilePath}</span>}{"version" in context && <span>v{context.version}</span>}{attachmentPaths.map((path) => <button type="button" className="ai-attachment-chip" key={path} title={`Remove ${path}`} aria-label={`Remove ${path}`} onClick={() => setPrompt((value) => value.replace(`@${path} `, "").replace(`@${path}`, ""))}><Paperclip size={9} />{path}<X size={9} /></button>)}</div><details className="ai-share-details"><summary>Context being shared</summary><p>{context.kind === "diff" ? "The whole review scope is sent: a complete changed-file map plus diff content within the context limit. The focused file is only a navigation hint." : "Only this review context is sent."} No unrelated files, mockups, credentials, or hidden state.</p></details></div>
+			<div className="ai-context-bar"><div className="ai-context-chips"><span>{context.kind === "diff" ? "whole diff" : context.kind}</span>{"filePath" in context && context.filePath && <span title={context.filePath}>{context.filePath}</span>}{"focusedFilePath" in context && context.focusedFilePath && <span title={`Current UI focus: ${context.focusedFilePath}`}>focus: {context.focusedFilePath}</span>}{"version" in context && <span>v{context.version}</span>}{"selections" in context && context.selections?.map((selection, index) => <button type="button" className="ai-attachment-chip" key={`${selection.filePath}:${selection.side}:${selection.startLine}:${selection.endLine}`} title={`Remove ${selection.filePath} lines ${selection.startLine} to ${selection.endLine}`} aria-label={`Remove ${selection.filePath} lines ${selection.startLine} to ${selection.endLine}`} onClick={() => onRemoveSelection?.(index)}><FileText size={11} />{selection.filePath.split("/").at(-1)} · L{selection.startLine}{selection.endLine !== selection.startLine ? `–L${selection.endLine}` : ""}<X size={11} /></button>)}{attachmentPaths.map((path) => <button type="button" className="ai-attachment-chip" key={path} title={`Remove ${path}`} aria-label={`Remove ${path}`} onClick={() => setPrompt((value) => value.replace(`@${path} `, "").replace(`@${path}`, ""))}><Paperclip size={11} />{path}<X size={11} /></button>)}</div><details className="ai-share-details"><summary>Context being shared</summary><p>{context.kind === "diff" ? `The whole review scope is sent: a complete changed-file map plus diff content within the context limit.${context.selections?.length ? ` ${context.selections.length} explicitly attached line range${context.selections.length === 1 ? " is" : "s are"} prioritized.` : ""} The focused file is only a navigation hint.` : "Only this review context is sent."} No unrelated files, mockups, credentials, or hidden state.</p></details></div>
 
 			<div className="ai-quick-actions" aria-label="AI quick actions">{quickActions.map(({ action, prompt: actionPrompt, label, hint, icon: Icon }) => <button type="button" key={action} disabled={isBusy || !selectedModel} onClick={() => void start(action, actionPrompt)}><Icon size={14} /><span><strong>{label}</strong><small>{hint}</small></span></button>)}</div>
 
 			<div className={`ai-conversation ${!turns.length && !pending ? "is-empty" : ""}`} ref={conversationRef} onScroll={(event) => { const element = event.currentTarget; const distance = element.scrollHeight - element.scrollTop - element.clientHeight; const nearBottom = distance < 72; followOutputRef.current = nearBottom; setShowJump(!nearBottom && (isBusy || !!pending)); }} aria-live="polite">
 				{!turns.length && !pending && <div className="ai-empty-state"><div><Sparkles size={20} /></div><strong>What do you want to understand?</strong><p>Ask a focused question, or choose a review action above. Nothing runs until you tell it to.</p></div>}
-				{turns.map((turn) => turn.role === "user" ? <div className="ai-message ai-message-user" key={turn.id}>{turn.text}</div> : <article className="ai-response-document" key={turn.id}><Markdown content={turn.text} className="markdown-body ai-response-markdown" /><div className="ai-message-actions"><button type="button" onClick={() => void copyMarkdown(turn)} aria-label={`Copy response ${turn.id}`}>{copiedId === turn.id ? <Check size={12} /> : <Copy size={12} />} {copiedId === turn.id ? "Copied" : "Copy Markdown"}</button></div></article>)}
-				{pending && <><div className="ai-message ai-message-user">{pending.user.text}</div>{pending.assistantText ? <article className="ai-response-document"><Markdown content={pending.assistantText} className="markdown-body ai-response-markdown" /></article> : phase === "thinking" || phase === "stopping" ? <div className="ai-thinking" role="status"><span className="ai-thinking-mark" aria-hidden="true">{Array.from({ length: 9 }, (_, index) => <i key={index} />)}</span><span>{phase === "stopping" ? "Stopping this request" : "Thinking about your request"}</span></div> : null}{pending.warnings.map((warning) => <div className="ai-run-warning" key={warning} role="status">{warning}</div>)}{pending.error && <div className="ai-run-error" role="alert"><span>{pending.error}</span><button type="button" onClick={() => { const retry = pending.user.text; setPending(null); setPhase("idle"); void start("ask", retry); }} aria-label="Retry AI request">Retry</button></div>}</>}
+				{turns.map((turn) => turn.role === "user" ? <UserMessage key={turn.id} turn={turn} /> : <article className="ai-response-document" key={turn.id}><Markdown content={turn.text} className="markdown-body ai-response-markdown" /><div className="ai-message-actions"><button type="button" onClick={() => void copyMarkdown(turn)} aria-label={`Copy response ${turn.id}`}>{copiedId === turn.id ? <Check size={12} /> : <Copy size={12} />} {copiedId === turn.id ? "Copied" : "Copy Markdown"}</button></div></article>)}
+				{pending && <><UserMessage turn={pending.user} />{pending.assistantText ? <article className="ai-response-document"><Markdown content={pending.assistantText} className="markdown-body ai-response-markdown" /></article> : phase === "thinking" || phase === "stopping" ? <div className="ai-thinking" role="status"><span className="ai-thinking-mark" aria-hidden="true">{Array.from({ length: 9 }, (_, index) => <i key={index} />)}</span><span>{phase === "stopping" ? "Stopping this request" : "Thinking about your request"}</span></div> : null}{pending.warnings.map((warning) => <div className="ai-run-warning" key={warning} role="status">{warning}</div>)}{pending.error && <div className="ai-run-error" role="alert"><span>{pending.error}</span><button type="button" onClick={() => { const retry = pending.user.text; const retryImages = pending.user.context?.imageAttachments; setPending(null); setPhase("idle"); void start("ask", retry, retryImages); }} aria-label="Retry AI request">Retry</button></div>}</>}
 				{!pending && runWarnings.map((warning) => <div className="ai-run-warning" key={`complete-${warning}`} role="status">{warning}</div>)}{persistenceError && <div className="ai-run-warning" role="status">Conversation history unavailable: {persistenceError}</div>}{showJump && <button type="button" className="ai-jump-latest" onClick={() => scrollToLatest()}>Jump to latest</button>}
 			</div>
 
-			<div className="ai-rail-composer"><div className="ai-composer-editor"><textarea ref={(element) => { textareaRef.current = element; mention.setTextareaRef(element); }} value={prompt} onChange={(event) => { setPrompt(event.target.value); saveDraft(event.target.value); }} onKeyDown={(event) => { if (mention.handleKeyDown(event)) return; if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && prompt.trim() && !isBusy) { event.preventDefault(); void start("ask"); } }} placeholder="Ask about this review context… Type @ to attach files" aria-label="Ask AI" />{mention.isOpen && <FileMentionDropdown results={mention.results} focusedIndex={mention.focusedIndex} query={mention.query} cursorTop={mention.cursorTop} onSelect={mention.onSelect} onHover={mention.setFocusedIndex} />}</div><div><span className="ai-composer-hint"><Paperclip size={10} /> @ attach files · ⌘↵ send</span><span />{isBusy ? <button type="button" className="ai-stop-btn" onClick={() => void stop()} disabled={phase === "stopping"} aria-label="Stop AI request"><Square size={11} /> {phase === "stopping" ? "Stopping" : "Stop"}</button> : <button type="button" className="ai-send-btn" disabled={!prompt.trim() || !selectedModel || conversationLoading} onClick={() => void start("ask")}><Send size={13} /> Send</button>}</div></div>
+			<div className={`ai-rail-composer ${draggingImage ? "is-dragging-image" : ""}`} onDragEnter={(event) => { if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDraggingImage(true); } }} onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingImage(false); }} onDrop={(event) => { event.preventDefault(); setDraggingImage(false); void uploadImages(Array.from(event.dataTransfer.files)); }}>
+				<input ref={imageInputRef} className="ai-image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void uploadImages(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} aria-label="Attach images" />
+				{imageAttachments.length > 0 && <div className="ai-composer-images">{imageAttachments.map((image) => <div className="ai-composer-image" key={image.url}><img src={image.url} alt="" /><span title={image.name}>{image.name}</span><button type="button" onClick={() => setImageAttachments((current) => current.filter((item) => item.url !== image.url))} aria-label={`Remove image ${image.name}`}><X size={13} /></button></div>)}</div>}
+				<div className="ai-composer-editor"><textarea ref={(element) => { textareaRef.current = element; mention.setTextareaRef(element); }} value={prompt} onChange={(event) => { setPrompt(event.target.value); saveDraft(event.target.value); }} onPaste={(event) => { const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (files.length) { event.preventDefault(); void uploadImages(files); } }} onKeyDown={(event) => { if (mention.handleKeyDown(event)) return; if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && (prompt.trim() || imageAttachments.length > 0) && !isBusy) { event.preventDefault(); void start("ask"); } }} placeholder="Ask about this review context… Type @ to attach files" aria-label="Ask AI" />{mention.isOpen && <FileMentionDropdown results={mention.results} focusedIndex={mention.focusedIndex} query={mention.query} cursorTop={mention.cursorTop} onSelect={mention.onSelect} onHover={mention.setFocusedIndex} />}</div>
+				{imageError && <div className="ai-image-error" role="alert">{imageError}</div>}
+				<div><button type="button" className="ai-attach-image-btn" onClick={() => imageInputRef.current?.click()} disabled={!imageCapable || imageUploading || isBusy} aria-label="Attach images" title={imageCapable ? "Attach images" : "Selected model source does not support images"}><ImagePlus size={15} />{imageUploading ? "Uploading…" : "Image"}</button><span className="ai-composer-hint"><Paperclip size={12} /> @ attach files · ⌘↵ send</span><span />{isBusy ? <button type="button" className="ai-stop-btn" onClick={() => void stop()} disabled={phase === "stopping"} aria-label="Stop AI request"><Square size={13} /> {phase === "stopping" ? "Stopping" : "Stop"}</button> : <button type="button" className="ai-send-btn" disabled={(!prompt.trim() && imageAttachments.length === 0) || !selectedModel || conversationLoading || imageUploading || (imageAttachments.length > 0 && !imageCapable)} onClick={() => void start("ask")}><Send size={15} /> Send</button>}</div>
+			</div>
 		</aside>
 	);
 }

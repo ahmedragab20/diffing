@@ -18,7 +18,7 @@ import { useSettings, type SavedReply } from '../hooks/useSettings'
 import type { CommentSeverity } from '../../lib/types'
 import { InputDialog } from '../primitives/InputDialog'
 import { useOptionalAi } from '../ai/AiContext'
-import type { AiReviewContext, AiSurface, AiAction } from '../../lib/ai/types'
+import type { AiDiffSelection, AiReviewContext, AiSurface, AiAction } from '../../lib/ai/types'
 
 function preprocessMentions(content: string): string {
   return content.replace(/@([^\s@]+)/g, (_, path: string) => {
@@ -184,6 +184,8 @@ interface CommentFormProps {
   /** Explicit opt-in: shared plan/mockup composers do not show AI unless provided. */
   aiSurface?: AiSurface
   aiContext?: AiReviewContext
+  /** Attach this exact diff selection to the persistent Ask rail. */
+  onAddToAsk?: (selection: AiDiffSelection) => void
 }
 
 export function CommentForm({
@@ -200,6 +202,7 @@ export function CommentForm({
   autoFocus = false,
   aiSurface,
   aiContext,
+  onAddToAsk,
 }: CommentFormProps) {
   const { haptic, sound } = useFeedback()
   const { settings, updateSettings } = useSettings()
@@ -531,6 +534,22 @@ export function CommentForm({
                   </>
                 )}
                 {lineContent && <button type="button" className="btn btn-sm comment-form-suggest-btn" disabled={aiRunning} onClick={() => void runAiEdit('suggest-change')}>Generate suggestion</button>}
+                {onAddToAsk && aiContext?.kind === 'selection' && aiContext.filePath && aiContext.side && aiContext.startLine != null && aiContext.endLine != null && (
+                  <button
+                    type="button"
+                    className="btn btn-sm comment-form-suggest-btn ai-comment-btn"
+                    disabled={aiRunning}
+                    onClick={() => onAddToAsk({
+                      filePath: aiContext.filePath!,
+                      side: aiContext.side!,
+                      startLine: aiContext.startLine!,
+                      endLine: aiContext.endLine!,
+                      selectedText: aiContext.selectedText ?? lineContent ?? '',
+                    })}
+                  >
+                    <Sparkles size={13} /> Add to Ask
+                  </button>
+                )}
                 {aiUndoBody !== null && <button type="button" className="btn btn-sm comment-form-suggest-btn" onClick={() => { setBody(aiUndoBody); setAiUndoBody(null) }}>Undo AI edit</button>}
               </div>
             )}

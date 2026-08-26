@@ -83,4 +83,24 @@ describe("DirectProviderAdapter", () => {
 		expect(deltas).toEqual(["# Heading\n", "Body"]);
 		expect(text).toBe("# Heading\nBody");
 	});
+
+	it("sends resolved images as multimodal Responses input", async () => {
+		const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+			const body = JSON.parse(String(init?.body));
+			expect(body.input[0].content).toEqual([
+				{ type: "input_text", text: "Question" },
+				{ type: "input_image", image_url: "data:image/png;base64,cG5n", detail: "auto" },
+			]);
+			return new Response(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Seen" })}\n\ndata: [DONE]\n\n`, { status: 200 });
+		}) as unknown as typeof fetch;
+		const adapter = new DirectProviderAdapter(
+			{ id: "xai", label: "xAI", baseUrl: "https://api.test", envKey: "DIFFING_TEST_XAI_KEY" },
+			secrets(),
+			fetchImpl,
+		);
+		await adapter.run({
+			trigger: "user", conversationId: "c-image", modelId: "xai/direct-key/xai/grok", surface: "diff", action: "ask", prompt: "Question", context: { kind: "diff" },
+			resolvedImages: [{ url: "/api/attachments/pasted_image_a.png", name: "a.png", mimeType: "image/png", absolutePath: "/tmp/a.png", dataUrl: "data:image/png;base64,cG5n" }],
+		}, new AbortController().signal, vi.fn());
+	});
 });

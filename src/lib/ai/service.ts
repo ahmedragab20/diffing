@@ -107,6 +107,9 @@ export class AiService {
 		const [source] = request.modelId.split("/") as [AiSourceId];
 		const adapter = this.adapters.get(source);
 		if (!adapter) throw new Error(`Unknown model source: ${source}`);
+		if (request.resolvedImages?.length && !adapter.supportsImages) {
+			throw new Error(`${source} cannot receive image attachments in its current non-interactive runtime. Choose an image-capable model source.`);
+		}
 		const runId = randomUUID();
 		const controller = new AbortController();
 		this.runs.set(runId, { conversationId: request.conversationId, controller });

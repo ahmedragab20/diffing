@@ -57,7 +57,7 @@ export interface Settings {
 	haptics: boolean;
 	/** Synthesized audio feedback on interaction. */
 	sounds: boolean;
-	/** UI font family override. null = default (Geist Mono from CDN). */
+	/** UI font family override. null = default (Geist from CDN). */
 	uiFont?: string | null;
 	/** Code/diff/plans font family override. null = default (JetBrains Mono from CDN). */
 	monoFont?: string | null;
@@ -120,7 +120,7 @@ const DEFAULTS: Settings = {
 	showLineNumbers: true,
 	hunkSeparators: "line-info",
 	lineHoverHighlight: "both",
-	fontSize: 13,
+	fontSize: 14,
 	expandContextByDefault: false,
 	collapsedContextThreshold: 10,
 	expansionLineCount: 20,

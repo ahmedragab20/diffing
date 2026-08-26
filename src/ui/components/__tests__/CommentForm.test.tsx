@@ -23,6 +23,10 @@ vi.mock('../Markdown', () => ({
   Markdown: ({ content }: { content: string }) => <div data-testid="md">{content}</div>,
 }))
 
+vi.mock('../../ai/AiContext', () => ({
+  useOptionalAi: () => ({ run: vi.fn(), selectedModel: 'codex/test' }),
+}))
+
 import { CommentForm } from '../CommentForm'
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -44,6 +48,26 @@ afterEach(() => {
 })
 
 describe('CommentForm — @-mention dropdown offset parent', () => {
+	it('adds the exact selected diff range to Ask without submitting a comment', async () => {
+		const onAddToAsk = vi.fn()
+		const onSubmit = vi.fn()
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CommentForm
+					lineContent={'one\ntwo\nthree'}
+					showSeverity={false}
+					aiSurface="diff"
+					aiContext={{ kind: 'selection', filePath: 'src/device.ts', side: 'additions', startLine: 14, endLine: 16, selectedText: 'one\ntwo\nthree' }}
+					onAddToAsk={onAddToAsk}
+					onSubmit={onSubmit}
+					onCancel={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		)
+		await userEvent.click(screen.getByRole('button', { name: /Add to Ask/i }))
+		expect(onAddToAsk).toHaveBeenCalledWith({ filePath: 'src/device.ts', side: 'additions', startLine: 14, endLine: 16, selectedText: 'one\ntwo\nthree' })
+		expect(onSubmit).not.toHaveBeenCalled()
+	})
   it('renders the dropdown in a positioning wrapper that excludes the suggest-row', async () => {
     const user = userEvent.setup()
     render(

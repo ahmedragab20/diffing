@@ -52,6 +52,7 @@ import { Tooltip } from "../primitives/Tooltip";
 import { EMBEDDED_COMMENT_STYLES } from "../lib/embeddedCommentStyles";
 import { useFileContents } from "../hooks/useFileContents";
 import { isReviewCommentSide, type ReviewComment } from "../../lib/types";
+import type { AiDiffSelection } from "../../lib/ai/types";
 import type { HunkHistory } from "../../lib/git";
 import type { PrExistingComment } from "../../lib/pr-session";
 import type {
@@ -193,6 +194,7 @@ interface FileDiffCardProps {
     severity?: import("../../lib/types").CommentSeverity,
   ) => void;
   onDeleteComment: (id: string) => void;
+  onAddSelectionToAsk?: (selection: AiDiffSelection) => void;
   onReplyExisting?: (commentId: number, body: string) => Promise<void>;
   onEditExisting?: (commentId: number, body: string) => Promise<void>;
   onDeleteExisting?: (commentId: number) => Promise<void>;
@@ -263,6 +265,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   onViewedChange,
   onAddComment,
   onDeleteComment,
+  onAddSelectionToAsk,
   onReplyExisting,
   onEditExisting,
   onDeleteExisting,
@@ -737,6 +740,10 @@ export const FileDiffCard = memo(function FileDiffCard({
             endLine: ordered.end,
             selectedText: lineContent,
           }}
+          onAddToAsk={onAddSelectionToAsk ? (selection) => {
+            onAddSelectionToAsk(selection);
+            clearPending();
+          } : undefined}
           lineLabel={pendingLineLabel(pending)}
           range={{
             start: ordered.start,

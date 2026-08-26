@@ -194,6 +194,7 @@ async function runCommand(
 
 export class RuntimeAdapter implements AiBackendAdapter {
 	readonly id: RuntimeSpec["id"];
+	readonly supportsImages: boolean = false;
 	constructor(private readonly spec: RuntimeSpec) {
 		this.id = spec.id;
 	}
@@ -245,6 +246,7 @@ export class RuntimeAdapter implements AiBackendAdapter {
 			modelId: entry.id,
 			displayName: entry.label,
 			isDefault: index === 0,
+			supportsImages: this.supportsImages,
 		}));
 	}
 
@@ -323,6 +325,7 @@ async function codexModelCatalog(): Promise<Array<{ id: string; displayName: str
 async function runCodexAppServer(
 	model: string,
 	prompt: string,
+	images: AiRunRequest["resolvedImages"],
 	effort: string | undefined,
 	serviceTier: string | undefined,
 	signal: AbortSignal,
@@ -368,7 +371,7 @@ async function runCodexAppServer(
 					const result = message.result as { thread?: { id?: string } };
 					threadId = result.thread?.id ?? "";
 					if (!threadId) return finish(new Error("Codex did not create a thread."));
-					send(3, "turn/start", { threadId, input: [{ type: "text", text: prompt, text_elements: [] }], model, effort: effort || undefined, serviceTier: serviceTier || undefined, approvalPolicy: "never", environments: [] });
+					send(3, "turn/start", { threadId, input: [{ type: "text", text: prompt, text_elements: [] }, ...(images ?? []).map((image) => ({ type: "localImage", path: image.absolutePath }))], model, effort: effort || undefined, serviceTier: serviceTier || undefined, approvalPolicy: "never", environments: [] });
 					continue;
 				}
 				if (message.id && message.error) return finish(new Error("Codex app-server request failed."));
@@ -391,6 +394,7 @@ async function runCodexAppServer(
 }
 
 class CodexAdapter extends RuntimeAdapter {
+	override readonly supportsImages = true;
 	async models(): Promise<AiModel[]> {
 		try {
 			const catalog = await codexModelCatalog();
@@ -406,6 +410,7 @@ class CodexAdapter extends RuntimeAdapter {
 				isDefault: model.isDefault,
 				reasoningEfforts: model.reasoningEfforts,
 				serviceTiers: model.serviceTiers,
+				supportsImages: true,
 			}));
 		} catch {
 			return super.models();
@@ -414,7 +419,7 @@ class CodexAdapter extends RuntimeAdapter {
 
 	async run(request: AiRunRequest, signal: AbortSignal, onEvent: (event: AiRunEvent) => void | Promise<void>): Promise<string> {
 		const model = request.modelId.split("/").slice(3).join("/") || request.modelId.split("/").at(-1) || "";
-		return runCodexAppServer(model, request.prompt ?? "", request.reasoningEffort, request.serviceTier, signal, onEvent);
+		return runCodexAppServer(model, request.prompt ?? "", request.resolvedImages, request.reasoningEffort, request.serviceTier, signal, onEvent);
 	}
 }
 
@@ -427,6 +432,7 @@ interface DirectSpec {
 
 export class DirectProviderAdapter implements AiBackendAdapter {
 	readonly id: DirectSpec["id"];
+	readonly supportsImages = true;
 	constructor(private readonly spec: DirectSpec, private readonly secrets: SecretStore, private readonly fetchImpl: typeof fetch = fetch) {
 		this.id = spec.id;
 	}
@@ -481,6 +487,7 @@ export class DirectProviderAdapter implements AiBackendAdapter {
 				modelId: model.id,
 				displayName: modelName(model.id),
 				isDefault: index === 0,
+				supportsImages: true,
 			}));
 	}
 
@@ -489,9 +496,16 @@ export class DirectProviderAdapter implements AiBackendAdapter {
 		if (!key) throw new Error(`${this.spec.label} is not connected.`);
 		const model = request.modelId.split("/").slice(3).join("/");
 		const url = this.id === "anthropic" ? `${this.spec.baseUrl}/v1/messages` : `${this.spec.baseUrl}/v1/responses`;
+		const images = request.resolvedImages ?? [];
 		const body = this.id === "anthropic"
-			? { model, max_tokens: 4096, stream: true, messages: [{ role: "user", content: request.prompt }] }
-			: { model, input: request.prompt, store: false, stream: true };
+			? { model, max_tokens: 4096, stream: true, messages: [{ role: "user", content: [
+				{ type: "text", text: request.prompt },
+				...images.map((image) => ({ type: "image", source: { type: "base64", media_type: image.mimeType, data: image.dataUrl.slice(image.dataUrl.indexOf(",") + 1) } })),
+			] }] }
+			: { model, input: [{ role: "user", content: [
+				{ type: "input_text", text: request.prompt },
+				...images.map((image) => ({ type: "input_image", image_url: image.dataUrl, detail: "auto" })),
+			] }], store: false, stream: true };
 		const response = await this.fetchImpl(url, {
 			method: "POST",
 			headers: this.headers(key),

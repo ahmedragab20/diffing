@@ -154,6 +154,15 @@ function renderDiffContext(context: AiDiffContext, max: number): { text: string;
 			: "",
 	].filter(Boolean).join("\n");
 
+	const explicitSelections = context.selections?.length
+		? [
+			"## Explicitly attached diff ranges (highest-priority review evidence)",
+			...context.selections.map((selection) => [
+				`### ${selection.filePath} · ${selection.side} · L${selection.startLine}${selection.endLine !== selection.startLine ? `–L${selection.endLine}` : ""}`,
+				selection.selectedText,
+			].join("\n")),
+		].join("\n\n")
+		: "";
 	const details = [
 		context.side ? `- Diff side: ${context.side}` : "",
 		context.startLine != null ? `- Lines: ${context.startLine}${context.endLine != null && context.endLine !== context.startLine ? `-${context.endLine}` : ""}` : "",
@@ -163,7 +172,7 @@ function renderDiffContext(context: AiDiffContext, max: number): { text: string;
 		context.draft ? `\n## Current draft\n${context.draft}` : "",
 	].filter(Boolean).join("\n");
 
-	if (!context.patch) return bounded([metadata, details].filter(Boolean).join("\n\n"), max);
+	if (!context.patch) return bounded([explicitSelections, metadata, details].filter(Boolean).join("\n\n"), max);
 
 	const index = buildAgentDiffIndex(context.patch, 0);
 	const manifest = index.files.length > 0
@@ -173,7 +182,7 @@ function renderDiffContext(context: AiDiffContext, max: number): { text: string;
 			...index.files.map((file) => `- [${file.kind}] ${pathForFile(file)} — ${file.hunks.length} hunk${file.hunks.length === 1 ? "" : "s"}, +${file.additions} -${file.deletions}${file.isBinary ? ", binary" : ""}`),
 		].join("\n")
 		: "## Changed-file map\nThe supplied patch has no standard per-file headers.";
-	const prelude = [metadata, manifest, details].filter(Boolean).join("\n\n");
+	const prelude = [explicitSelections, metadata, manifest, details].filter(Boolean).join("\n\n");
 	const preludeResult = bounded(prelude, max, "[review metadata truncated]");
 	if (preludeResult.truncated) return preludeResult;
 

@@ -20,6 +20,7 @@ vi.mock("../AiContext", () => ({
 			credentialRoute: "subscription",
 			providerId: "codex",
 			modelId: "gpt-test",
+			supportsImages: true,
 		}],
 		selectedModel: "codex/subscription/codex/gpt-test",
 		railWidth: 360,
@@ -50,6 +51,32 @@ describe("AiAssistantRail", () => {
 		expect(screen.getByText("focus: src/focused.ts")).toBeInTheDocument();
 		fireEvent.click(screen.getByText("Context being shared"));
 		expect(screen.getByText(/complete changed-file map plus diff content within the context limit/i)).toBeInTheDocument();
+	});
+
+	it("renders removable exact diff-range context without starting inference", async () => {
+		const onRemoveSelection = vi.fn();
+		renderRail(<AiAssistantRail open onClose={vi.fn()} onRemoveSelection={onRemoveSelection} surface="diff" context={{ kind: "diff", selections: [{ filePath: "src/device.ts", side: "additions", startLine: 14, endLine: 16, selectedText: "one\ntwo\nthree" }] }} />);
+		const chip = screen.getByRole("button", { name: "Remove src/device.ts lines 14 to 16" });
+		expect(chip).toHaveTextContent("device.ts · L14–L16");
+		expect(mocks.run).not.toHaveBeenCalled();
+		await userEvent.click(chip);
+		expect(onRemoveSelection).toHaveBeenCalledWith(0);
+	});
+
+	it("uploads and sends an image-only message as multimodal context", async () => {
+		vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+			const url = String(input);
+			if (url.includes("/api/ai/conversations?") && !init?.method) return new Response(JSON.stringify({ conversations: [] }), { status: 200 });
+			if (url.endsWith("/api/ai/conversations") && init?.method === "POST") return new Response(JSON.stringify({ conversation: { id: "c-image", title: "New conversation", surface: "diff", scopeKey: "review", createdAt: 1, updatedAt: 1, turns: [] } }), { status: 201 });
+			if (url.endsWith("/api/attachments") && init?.method === "POST") return new Response(JSON.stringify({ url: "/api/attachments/pasted_image_a.png", name: "screen.png", mimeType: "image/png", size: 3 }), { status: 200 });
+			return new Response(JSON.stringify({}), { status: 200 });
+		}));
+		renderRail(<AiAssistantRail open onClose={vi.fn()} surface="diff" context={{ kind: "diff" }} />);
+		const input = screen.getByLabelText("Attach images", { selector: "input" });
+		fireEvent.change(input, { target: { files: [new File(["png"], "screen.png", { type: "image/png" })] } });
+		await screen.findByRole("button", { name: "Remove image screen.png" });
+		await userEvent.click(screen.getByRole("button", { name: /Send/i }));
+		await waitFor(() => expect(mocks.run).toHaveBeenCalledWith(expect.objectContaining({ context: expect.objectContaining({ imageAttachments: [expect.objectContaining({ url: "/api/attachments/pasted_image_a.png" })] }) })));
 	});
 
 	it("resizes from the left edge and persists on release", () => {

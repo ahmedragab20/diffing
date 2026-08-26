@@ -155,6 +155,8 @@ import {
 import type {
 	AiAttachment,
 	AiCredentialRoute,
+	AiImageAttachmentReference,
+	AiResolvedImageAttachment,
 	AiRunEvent,
 	AiRunRequest,
 	AiSourceId,
@@ -177,6 +179,22 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+const MAX_AI_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_AI_IMAGE_COUNT = 4;
+const AI_IMAGE_MIME_TO_EXTENSION = new Map([
+	["image/png", ".png"],
+	["image/jpeg", ".jpg"],
+	["image/webp", ".webp"],
+	["image/gif", ".gif"],
+]);
+
+function hasImageSignature(content: Uint8Array, mimeType: string): boolean {
+	if (mimeType === "image/png") return content.length >= 8 && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, index) => content[index] === byte);
+	if (mimeType === "image/jpeg") return content.length >= 3 && content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff;
+	if (mimeType === "image/gif") return content.length >= 6 && ["GIF87a", "GIF89a"].includes(Buffer.from(content.subarray(0, 6)).toString("ascii"));
+	if (mimeType === "image/webp") return content.length >= 12 && Buffer.from(content.subarray(0, 4)).toString("ascii") === "RIFF" && Buffer.from(content.subarray(8, 12)).toString("ascii") === "WEBP";
+	return false;
+}
 
 function collectPrAvatarUrls(session: PrSession): Set<string> {
 	const urls = new Set<string>();
@@ -782,6 +800,33 @@ export function createApp(
 		if (buffer) aiAttachmentCache.set(cacheKey, buffer);
 		return buffer;
 	};
+	const resolveAiImageAttachment = async (reference: AiImageAttachmentReference): Promise<AiResolvedImageAttachment | null> => {
+		const prefix = "/api/attachments/";
+		if (!reference.url.startsWith(prefix)) return null;
+		const filename = reference.url.slice(prefix.length);
+		if (!/^pasted_image_[0-9a-f-]+\.(?:png|jpe?g|webp|gif)$/i.test(filename)) return null;
+		const attachmentsDir = resolve(getProjectStorageDir(), "attachments");
+		const absolutePath = resolve(attachmentsDir, filename);
+		if (dirname(absolutePath) !== attachmentsDir) return null;
+		try {
+			const file = await stat(absolutePath);
+			if (!file.isFile() || file.size <= 0 || file.size > MAX_AI_IMAGE_BYTES) return null;
+			const mimeType = MIME_TYPES[extname(filename).toLowerCase()];
+			if (!mimeType || !AI_IMAGE_MIME_TO_EXTENSION.has(mimeType)) return null;
+			const content = await readFile(absolutePath);
+			if (!hasImageSignature(content, mimeType)) return null;
+			return {
+				url: `${prefix}${filename}`,
+				name: reference.name?.slice(0, 160) || filename,
+				mimeType,
+				size: file.size,
+				absolutePath,
+				dataUrl: `data:${mimeType};base64,${content.toString("base64")}`,
+			};
+		} catch {
+			return null;
+		}
+	};
 
 	app.get("/api/file-content", async (c) => {
 		const path = c.req.query("path");
@@ -1312,6 +1357,32 @@ export function createApp(
 				return c.json({ error: "The selected diff context could not be serialized. Refresh the review and try again." }, 400);
 			}
 		}
+		if ("selections" in body.context && body.context.selections !== undefined) {
+			if (!Array.isArray(body.context.selections) || body.context.selections.length > 8) {
+				return c.json({ error: "At most 8 diff ranges can be attached to one AI request." }, 400);
+			}
+			let selectionBytes = 0;
+			for (const selection of body.context.selections) {
+				if (!selection || typeof selection.filePath !== "string" || !isReviewCommentSide(selection.side) || !Number.isInteger(selection.startLine) || !Number.isInteger(selection.endLine) || selection.startLine < 1 || selection.endLine < selection.startLine || typeof selection.selectedText !== "string") {
+					return c.json({ error: "An attached diff range is invalid." }, 400);
+				}
+				selectionBytes += Buffer.byteLength(selection.selectedText, "utf8");
+			}
+			if (selectionBytes > 64 * 1024) return c.json({ error: "Attached diff ranges exceed the 64 KB context limit." }, 413);
+		}
+		const requestedImages = Array.isArray(body.context.imageAttachments) ? body.context.imageAttachments : [];
+		if (requestedImages.length > MAX_AI_IMAGE_COUNT) {
+			return c.json({ error: `At most ${MAX_AI_IMAGE_COUNT} images can be attached to one AI request.` }, 400);
+		}
+		const resolvedImages: AiResolvedImageAttachment[] = [];
+		for (const reference of requestedImages) {
+			if (!reference || typeof reference.url !== "string" || typeof reference.name !== "string" || typeof reference.mimeType !== "string") {
+				return c.json({ error: "An image attachment reference is invalid." }, 400);
+			}
+			const resolvedImage = await resolveAiImageAttachment(reference);
+			if (!resolvedImage) return c.json({ error: `Image attachment was not found or is invalid: ${reference.name}` }, 404);
+			resolvedImages.push(resolvedImage);
+		}
 		const requestedPaths = [...new Set((body.context.attachmentPaths ?? []).filter((path): path is string => typeof path === "string" && path.trim().length > 0))];
 		if (requestedPaths.length > 8) {
 			return c.json({ error: "At most 8 files can be attached to one AI request." }, 400);
@@ -1328,7 +1399,8 @@ export function createApp(
 			attachments.push({ path, content: buffer.subarray(0, take).toString("utf8"), truncated: take < buffer.length });
 			remainingAttachmentBytes -= take;
 		}
-		body.context = { ...body.context, attachmentPaths: requestedPaths, attachments };
+		body.context = { ...body.context, attachmentPaths: requestedPaths, attachments, imageAttachments: resolvedImages.map(({ url, name, mimeType, size }) => ({ url, name, mimeType, size })) };
+		body.resolvedImages = resolvedImages;
 		return streamSSE(c, async (stream) => {
 			let runId: string | null = null;
 			stream.onAbort(() => {
@@ -3784,6 +3856,12 @@ export function createApp(
 		}
 
 		try {
+			if (file.size <= 0 || file.size > MAX_AI_IMAGE_BYTES) {
+				return c.json({ error: "Images must be between 1 byte and 10 MB." }, 413);
+			}
+			const mimeType = file.type.toLowerCase();
+			const ext = AI_IMAGE_MIME_TO_EXTENSION.get(mimeType);
+			if (!ext) return c.json({ error: "Only PNG, JPEG, WebP, and GIF images are supported." }, 415);
 			const storageDir = getProjectStorageDir();
 			const attachmentsDir = join(storageDir, "attachments");
 			await mkdir(attachmentsDir, { recursive: true });
@@ -3791,14 +3869,15 @@ export function createApp(
 			const repoRoot = getRepoRoot();
 			await writeFile(join(storageDir, "repo_path.txt"), repoRoot, "utf-8");
 
-			const ext = extname(file.name) || ".png";
 			const filename = `pasted_image_${crypto.randomUUID()}${ext}`;
 			const absolutePath = join(attachmentsDir, filename);
 
 			const arrayBuffer = await file.arrayBuffer();
-			await writeFile(absolutePath, new Uint8Array(arrayBuffer));
+			const content = new Uint8Array(arrayBuffer);
+			if (!hasImageSignature(content, mimeType)) return c.json({ error: "The uploaded file does not match its image type." }, 415);
+			await writeFile(absolutePath, content);
 
-			return c.json({ url: `/api/attachments/${filename}` });
+			return c.json({ url: `/api/attachments/${filename}`, name: file.name || filename, mimeType, size: file.size });
 		} catch (err: any) {
 			return c.json({ error: `Failed to save attachment: ${err.message}` }, 500);
 		}

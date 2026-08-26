@@ -955,7 +955,7 @@ diff --git a/gone.ts b/gone.ts
         mockWriteFile.mockResolvedValue(undefined)
 
         const formData = new FormData()
-        formData.append('file', new File(['content'], 'screenshot.png', { type: 'image/png' }))
+        formData.append('file', new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'screenshot.png', { type: 'image/png' }))
 
         const res = await app.fetch(new Request('http://localhost/api/attachments', {
           method: 'POST',
@@ -965,6 +965,7 @@ diff --git a/gone.ts b/gone.ts
         expect(res.status).toBe(200)
         const body = await res.json()
         expect(body.url).toContain('/api/attachments/pasted_image_')
+        expect(body).toMatchObject({ name: 'screenshot.png', mimeType: 'image/png', size: 8 })
         expect(mockMkdir).toHaveBeenCalledWith('/tmp/test-project-storage/attachments', { recursive: true })
         expect(mockWriteFile).toHaveBeenCalledWith('/tmp/test-project-storage/repo_path.txt', '/tmp/test-repo', 'utf-8')
       })
@@ -976,6 +977,27 @@ diff --git a/gone.ts b/gone.ts
         }))
         expect(res.status).toBe(400)
       })
+
+	  it('rejects non-image uploads', async () => {
+		const formData = new FormData()
+		formData.append('file', new File(['hello'], 'note.txt', { type: 'text/plain' }))
+		const res = await app.fetch(new Request('http://localhost/api/attachments', { method: 'POST', body: formData }))
+		expect(res.status).toBe(415)
+	  })
+
+	  it('rejects files whose bytes do not match the declared image type', async () => {
+		const formData = new FormData()
+		formData.append('file', new File(['not really a png'], 'fake.png', { type: 'image/png' }))
+		const res = await app.fetch(new Request('http://localhost/api/attachments', { method: 'POST', body: formData }))
+		expect(res.status).toBe(415)
+	  })
+
+	  it('rejects images larger than 10 MB', async () => {
+		const formData = new FormData()
+		formData.append('file', new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'huge.png', { type: 'image/png' }))
+		const res = await app.fetch(new Request('http://localhost/api/attachments', { method: 'POST', body: formData }))
+		expect(res.status).toBe(413)
+	  })
     })
   })
 
