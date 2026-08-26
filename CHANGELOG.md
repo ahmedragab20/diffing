@@ -1,3 +1,9 @@
+## 0.19.3
+
+### Patch Changes
+
+- 981f377: Preserve whole-diff review context
+
 ## 0.19.2
 
 ### Patch Changes
