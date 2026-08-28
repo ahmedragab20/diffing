@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Mockup, MockupSummary } from "../../../lib/mockup-types";
-import { MockupReviewApp } from "../MockupReviewApp";
+import {
+  MockupReviewApp,
+  extractMockupHtml,
+  isBlankMockupHtml,
+} from "../MockupReviewApp";
 
 const { submitPopoverProps, mockNavigate } = vi.hoisted(() => ({
   submitPopoverProps: { current: null as Record<string, unknown> | null },
@@ -11,7 +16,7 @@ const { submitPopoverProps, mockNavigate } = vi.hoisted(() => ({
 }));
 
 vi.mock("lucide-react", () => {
-  const icons: Record<string, any> = {};
+  const icons: Record<string, () => ReactElement> = {};
   for (const name of [
     "ArrowLeft",
     "Bot",
@@ -59,6 +64,11 @@ vi.mock("lucide-react", () => {
     "MousePointer2",
     "GitCommit",
     "PencilLine",
+    "Loader2",
+    "Sparkles",
+    "Bot",
+    "ChevronDown",
+    "Search",
   ]) {
     icons[name] = () => <svg data-testid={`lucide-${name}`} />;
   }
@@ -92,6 +102,7 @@ vi.mock("../../hooks/useSettings", () => ({
     loaded: true,
     updateSettings: vi.fn(),
   }),
+  resolveMonoFont: () => "monospace",
 }));
 
 vi.mock("../../hooks/useApplyFonts", () => ({ useApplyFonts: () => {} }));
@@ -152,6 +163,44 @@ vi.mock("../SubmitPlanReviewPopover", () => ({
     submitPopoverProps.current = props;
     return <div data-testid="submit-mockup-popover" />;
   },
+}));
+
+const { aiState } = vi.hoisted(() => ({
+  aiState: { current: null as null | Record<string, unknown> },
+}));
+
+vi.mock("../../ai/AiContext", () => ({
+  useOptionalAi: () => aiState.current,
+}));
+
+vi.mock("../../ai/AiConnectionsPanel", () => ({
+  AiConnectionsPanel: () => null,
+}));
+
+vi.mock("../../ai/AiModelPicker", () => ({
+  AiModelPicker: ({ onOpenAssistant }: { onOpenAssistant?: () => void }) =>
+    onOpenAssistant ? (
+      <button type="button" onClick={onOpenAssistant}>
+        Ask AI
+      </button>
+    ) : null,
+}));
+
+vi.mock("../../ai/AiAssistantRail", () => ({
+  AiAssistantRail: ({
+    open,
+    title,
+    surface,
+  }: {
+    open: boolean;
+    title?: string;
+    surface?: string;
+  }) =>
+    open ? (
+      <aside aria-label={title || "Ask AI"} data-surface={surface}>
+        AI rail
+      </aside>
+    ) : null,
 }));
 
 const summaries: MockupSummary[] = [
@@ -292,6 +341,7 @@ function renderApp() {
 
 beforeEach(() => {
   submitPopoverProps.current = null;
+  aiState.current = null;
   mockNavigate.mockReset();
   const rect = {
     left: 0,
@@ -335,6 +385,19 @@ function postProbeEvent(
     }),
   );
 }
+
+describe("mockup AI html helpers", () => {
+  it("treats comment-only screens as blank", () => {
+    expect(isBlankMockupHtml("<!-- empty -->")).toBe(true);
+    expect(isBlankMockupHtml("<h1>Hi</h1>")).toBe(false);
+  });
+
+  it("unwraps fenced HTML from an AI draft", () => {
+    expect(extractMockupHtml("```html\n<section>x</section>\n```")).toBe(
+      "<section>x</section>",
+    );
+  });
+});
 
 describe("MockupReviewApp", () => {
   it("fetches compact summaries for the list and the full detail for the active mockup", async () => {
@@ -539,9 +602,9 @@ describe("MockupReviewApp", () => {
     renderApp();
 
     await waitFor(() => {
-      expect(document.querySelector(".plan-review-meta-stat")?.textContent).toContain(
-        "2 screens",
-      );
+      expect(
+        document.querySelector(".plan-review-meta-stat")?.textContent,
+      ).toContain("2 screens");
     });
 
     // Tabs + actions share one header row.
@@ -560,7 +623,8 @@ describe("MockupReviewApp", () => {
       '[aria-label="Toggle comments map"]',
     );
     expect(
-      viewportGroup!.compareDocumentPosition(dot!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      viewportGroup!.compareDocumentPosition(dot!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
       dot!.compareDocumentPosition(editBtn!) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -584,9 +648,9 @@ describe("MockupReviewApp", () => {
     renderApp();
 
     await waitFor(() => {
-      expect(document.querySelector(".plan-review-meta-stat")?.textContent).toContain(
-        "2 screens",
-      );
+      expect(
+        document.querySelector(".plan-review-meta-stat")?.textContent,
+      ).toContain("2 screens");
     });
 
     // Compare off by default: single canvas, no split.
@@ -598,7 +662,9 @@ describe("MockupReviewApp", () => {
     fireEvent.change(selects[1], { target: { value: "1" } });
 
     await waitFor(() => {
-      expect(document.querySelector(".mockup-compare-split.is-split")).not.toBeNull();
+      expect(
+        document.querySelector(".mockup-compare-split.is-split"),
+      ).not.toBeNull();
     });
     // Divider is keyboard-accessible and labeled.
     const separator = screen.getByRole("separator", {
@@ -613,7 +679,9 @@ describe("MockupReviewApp", () => {
     // Turning compare back off restores the single canvas.
     fireEvent.change(selects[1], { target: { value: "off" } });
     await waitFor(() => {
-      expect(document.querySelector(".mockup-compare-split.is-split")).toBeNull();
+      expect(
+        document.querySelector(".mockup-compare-split.is-split"),
+      ).toBeNull();
     });
   });
 
@@ -670,9 +738,9 @@ describe("MockupReviewApp", () => {
     renderApp();
 
     await waitFor(() => {
-      expect(document.querySelector(".plan-review-meta-stat")?.textContent).toContain(
-        "2 screens",
-      );
+      expect(
+        document.querySelector(".plan-review-meta-stat")?.textContent,
+      ).toContain("2 screens");
     });
 
     fireEvent.keyDown(window, { key: "?", metaKey: true });
@@ -682,7 +750,10 @@ describe("MockupReviewApp", () => {
       }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { level: 2, name: "Mockup Review Shortcuts" }),
+      screen.getByRole("heading", {
+        level: 2,
+        name: "Mockup Review Shortcuts",
+      }),
     ).toBeInTheDocument();
 
     // Esc closes the dialog (base-ui Dialog handles it).
@@ -701,6 +772,83 @@ describe("MockupReviewApp", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => {
       expect(document.querySelector(".zen-mode")).toBeNull();
+    });
+  });
+
+  it("keeps Ask AI closed on mount and never hits /api/ai/run", async () => {
+    stubFetch();
+    renderApp();
+    expect(
+      await screen.findByRole("button", { name: "Ask AI" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Ask about this mockup"),
+    ).not.toBeInTheDocument();
+    expect(fetchCalls.some((c) => c.url.includes("/api/ai/run"))).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Ask AI" }));
+    expect(
+      await screen.findByLabelText("Ask about this mockup"),
+    ).toHaveAttribute("data-surface", "mockup");
+    expect(fetchCalls.some((c) => c.url.includes("/api/ai/run"))).toBe(false);
+  });
+
+  it("offers Generate this screen on a blank canvas only after confirm", async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValue({
+        text: "<section>draft</section>",
+        runId: "r1",
+        warnings: [],
+      });
+    aiState.current = {
+      models: [{ id: "codex/test" }],
+      loading: false,
+      run,
+      connections: [],
+    };
+    stubFetch();
+    const original = detail.screens[0].html;
+    detail.screens[0].html = "<!-- empty -->";
+    try {
+      renderApp();
+      expect(
+        await screen.findByRole("button", { name: "Generate this screen" }),
+      ).toBeInTheDocument();
+      expect(run).not.toHaveBeenCalled();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Generate this screen" }),
+      );
+      expect(
+        await screen.findByRole("alertdialog", {
+          name: "Generate this screen?",
+        }),
+      ).toBeInTheDocument();
+      expect(run).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+      await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+      expect(run.mock.calls[0][0]).toMatchObject({
+        surface: "mockup",
+        action: "generate-screen",
+      });
+      expect(fetchCalls.some((c) => c.url.includes("/api/ai/run"))).toBe(false);
+    } finally {
+      detail.screens[0].html = original;
+    }
+  });
+
+  it("disables HTML edit while viewing a historical version", async () => {
+    stubFetch();
+    renderApp();
+    const editBtn = await screen.findByRole("button", {
+      name: "Edit screen HTML",
+    });
+    expect(editBtn).not.toBeDisabled();
+    const selects = screen.getAllByTestId("version-select");
+    fireEvent.change(selects[0], { target: { value: "1" } });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Edit screen HTML" }),
+      ).toBeDisabled();
     });
   });
 });

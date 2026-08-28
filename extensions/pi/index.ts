@@ -34,10 +34,7 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import {
-	selfHealSkillLinks,
-	SKILLS_REL,
-} from "./skill-heal.ts";
+import { selfHealSkillLinks, SKILLS_REL } from "./skill-heal.ts";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -116,10 +113,10 @@ function runDiffing(
 			}
 		});
 		child.on("close", (code) => finish(code ?? 1));
-		if (opts.stdin !== undefined) {
-			child.stdin?.end(opts.stdin);
-		} else {
+		if (opts.stdin === undefined) {
 			child.stdin?.end();
+		} else {
+			child.stdin?.end(opts.stdin);
 		}
 	});
 }
@@ -254,9 +251,9 @@ function findGitRepoRoot(startDir: string): string | null {
 
 function isDiffingRoot(dir: string): boolean {
 	try {
-		const pkg = JSON.parse(
-			readFileSync(join(dir, "package.json"), "utf-8"),
-		) as { name?: string };
+		const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf-8")) as {
+			name?: string;
+		};
 		if (pkg.name !== "diffing") return false;
 		return existsSync(join(dir, SKILLS_REL));
 	} catch {
@@ -272,7 +269,6 @@ function findCanonicalRoot(cwd: string): string | null {
 	if (isDiffingRoot(pkgRoot)) return pkgRoot;
 	return null;
 }
-
 
 // ────────────────────────────────────────────────────────────────────────────
 // Detached review server start
@@ -301,12 +297,7 @@ async function ensureReviewUrl(
 	const existing = await diffingUrl(cwd);
 	if (existing && reuse) return { url: existing, reused: true };
 	if (existing && !reuse) return { url: existing, reused: true };
-	spawnDetachedReview(cwd, [
-		"--web",
-		"--no-open",
-		"--skip-setup",
-		...extraArgs,
-	]);
+	spawnDetachedReview(cwd, ["--web", "--no-open", "--skip-setup", ...extraArgs]);
 	const deadline = Date.now() + REVIEW_START_TIMEOUT_MS;
 	for (;;) {
 		if (signal?.aborted) break;
@@ -396,8 +387,7 @@ export default function (pi: ExtensionAPI) {
 			),
 			reuse: Type.Optional(
 				Type.Boolean({
-					description:
-						"Reuse the active session if one is running. Default: true.",
+					description: "Reuse the active session if one is running. Default: true.",
 					default: true,
 				}),
 			),
@@ -418,10 +408,9 @@ export default function (pi: ExtensionAPI) {
 					mode: params.prRef ? "gh-pr" : "web",
 				});
 			} catch (error) {
-				return textResult(
-					error instanceof Error ? error.message : String(error),
-					{ started: false },
-				);
+				return textResult(error instanceof Error ? error.message : String(error), {
+					started: false,
+				});
 			}
 		},
 	});
@@ -476,13 +465,7 @@ export default function (pi: ExtensionAPI) {
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const result = await runDiffing(
-				[
-					"reply",
-					params.commentId,
-					"-",
-					"--model",
-					modelName(ctx, params.model),
-				],
+				["reply", params.commentId, "-", "--model", modelName(ctx, params.model)],
 				ctx.cwd,
 				{
 					stdin: params.body,
@@ -505,13 +488,10 @@ export default function (pi: ExtensionAPI) {
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const result = await runDiffing(["resolve", params.commentId], ctx.cwd);
-			return textResult(
-				describe(result, `diffing resolve ${params.commentId}`),
-				{
-					exitCode: result.exitCode,
-					stderr: result.stderr.trim() || undefined,
-				},
-			);
+			return textResult(describe(result, `diffing resolve ${params.commentId}`), {
+				exitCode: result.exitCode,
+				stderr: result.stderr.trim() || undefined,
+			});
 		},
 	});
 
@@ -849,9 +829,7 @@ export default function (pi: ExtensionAPI) {
 				),
 			),
 			title: Type.Optional(Type.String()),
-			mockupId: Type.Optional(
-				Type.String({ description: "Resubmit this id." }),
-			),
+			mockupId: Type.Optional(Type.String({ description: "Resubmit this id." })),
 			model: Type.Optional(Type.String()),
 			source: Type.Optional(Type.String()),
 			mode: Type.Optional(
@@ -862,8 +840,7 @@ export default function (pi: ExtensionAPI) {
 			),
 			designSystem: Type.Optional(
 				Type.String({
-					description:
-						"Design-system id to bind (default system if omitted).",
+					description: "Design-system id to bind (default system if omitted).",
 				}),
 			),
 			planId: Type.Optional(
@@ -900,14 +877,14 @@ export default function (pi: ExtensionAPI) {
 				}
 			} else if (params.file) {
 				args.push(params.file);
-			} else if (params.html !== undefined) {
-				args.push("-");
-				stdin = params.html;
-			} else {
+			} else if (params.html === undefined) {
 				return textResult(
 					"Provide one of html (single screen), file (path/dir), or screens ([{id, html}]).",
 					{ submitted: false },
 				);
+			} else {
+				args.push("-");
+				stdin = params.html;
 			}
 			if (params.title) args.push("--title", params.title);
 			if (params.mockupId) args.push("--id", params.mockupId);
@@ -1100,7 +1077,7 @@ export default function (pi: ExtensionAPI) {
 		name: "diffing_mockup_inspect",
 		label: "Diffing Mockup Inspect",
 		description:
-			"Read compact, bounded mockup data without transferring screen HTML. view=summary (headline stats), comments (paged comment list), comment (one thread), screen (screen source), preview (rendered preview metadata). Filter by comment scope: status, screenId, viewport (desktop|tablet|mobile), version. context=none|anchor|source controls anchor detail. Prefer this over diffing_mockup_show.",
+			"Read compact, bounded mockup data without transferring screen HTML. view=summary (headline stats), comments (paged comment list), comment (one thread), screen (screen source), preview (layout report and optional screenshot metadata — never starts AI). Filter by comment scope: status, screenId, viewport (desktop|tablet|mobile), version. context=none|anchor|source controls anchor detail. Prefer this over diffing_mockup_show.",
 		parameters: Type.Object({
 			view: StringEnum(
 				["summary", "comments", "comment", "screen", "preview"] as const,
@@ -1127,17 +1104,14 @@ export default function (pi: ExtensionAPI) {
 			),
 			version: Type.Optional(
 				Type.Number({
-					description:
-						"Filter comments by the mockup version they were created on.",
+					description: "Filter comments by the mockup version they were created on.",
 				}),
 			),
 			commentId: Type.Optional(
 				Type.String({ description: "For view=comment: the thread id." }),
 			),
 			cursor: Type.Optional(Type.Number({ description: "Pagination cursor." })),
-			limit: Type.Optional(
-				Type.Number({ description: "Max results per page." }),
-			),
+			limit: Type.Optional(Type.Number({ description: "Max results per page." })),
 			context: Type.Optional(
 				StringEnum(["none", "anchor", "source"] as const, {
 					description:
@@ -1145,9 +1119,7 @@ export default function (pi: ExtensionAPI) {
 					default: "anchor",
 				}),
 			),
-			pretty: Type.Optional(
-				Type.Boolean({ description: "Indent JSON output." }),
-			),
+			pretty: Type.Optional(Type.Boolean({ description: "Indent JSON output." })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const args = ["mockup", "inspect", params.view ?? "summary"];
@@ -1160,8 +1132,7 @@ export default function (pi: ExtensionAPI) {
 			if (params.commentId) args.push("--id", params.commentId);
 			if (params.cursor !== undefined)
 				args.push("--cursor", String(params.cursor));
-			if (params.limit !== undefined)
-				args.push("--limit", String(params.limit));
+			if (params.limit !== undefined) args.push("--limit", String(params.limit));
 			if (params.context) args.push("--context", params.context);
 			if (params.pretty) args.push("--pretty");
 			const result = await runDiffing(args, ctx.cwd);
@@ -1268,8 +1239,7 @@ export default function (pi: ExtensionAPI) {
 			commentId: Type.String({ description: "Comment thread id." }),
 			replyId: Type.Optional(
 				Type.String({
-					description:
-						"For edit/delete: target a reply instead of the comment.",
+					description: "For edit/delete: target a reply instead of the comment.",
 				}),
 			),
 			body: Type.Optional(
@@ -1277,8 +1247,7 @@ export default function (pi: ExtensionAPI) {
 			),
 			model: Type.Optional(
 				Type.String({
-					description:
-						"For reply: authoring model. Defaults to the active model.",
+					description: "For reply: authoring model. Defaults to the active model.",
 				}),
 			),
 			mockupId: Type.Optional(

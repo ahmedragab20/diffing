@@ -15,6 +15,7 @@ import {
 	Palette,
 	Pencil,
 	Settings,
+	Sparkles,
 	Sun,
 	Smartphone,
 	SquareDashed,
@@ -30,8 +31,12 @@ import { commentViewport } from "../../lib/mockup-types";
 import { useRoutePath, navigate } from "../router";
 import { timeAgo } from "../utils";
 import { useMockups } from "../hooks/useMockups";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, resolveMonoFont } from "../hooks/useSettings";
+import type { AiMockupContext } from "../../lib/ai/types";
 import { AiConnectionsPanel } from "../ai/AiConnectionsPanel";
+import { AiModelPicker } from "../ai/AiModelPicker";
+import { AiAssistantRail } from "../ai/AiAssistantRail";
+import { useOptionalAi } from "../ai/AiContext";
 import { useApplyFonts } from "../hooks/useApplyFonts";
 import { usePlanCommentsSheet } from "../hooks/usePlanLayoutMedia";
 import { HapticsProvider } from "../hooks/useHaptics";
@@ -47,6 +52,8 @@ import { DesignSystemPanel } from "./DesignSystemPanel";
 import { ShortcutsHelpModal } from "./ShortcutsHelpModal";
 import { VimStatusBar } from "./VimStatusBar";
 import { InputDialog } from "../primitives/InputDialog";
+import { ConfirmDialog } from "../primitives/ConfirmDialog";
+import { PlanSourceEditor } from "./PlanSourceEditor";
 import { DESIGN_SYSTEM_ROUTE_ID } from "../../lib/design-system-types";
 import { MockupCanvas, type ProbeHit } from "./MockupCanvas";
 import { MockupCommentsRail } from "./MockupCommentsRail";
@@ -95,8 +102,21 @@ const TOOL_OPTIONS: {
 	},
 ];
 
+export function isBlankMockupHtml(html: string | undefined): boolean {
+	const stripped = (html ?? "").replace(/<!--[\s\S]*?-->/g, "").trim();
+	return stripped.length === 0;
+}
+
+export function extractMockupHtml(text: string): string {
+	const trimmed = text.trim();
+	const fenced = /```(?:html)?\s*\n?([\s\S]*?)```/i.exec(trimmed);
+	if (fenced?.[1]) return fenced[1].trim();
+	return trimmed;
+}
+
 export function MockupReviewApp() {
 	const { settings, loaded, updateSettings } = useSettings();
+	const ai = useOptionalAi();
 	useApplyFonts(loaded, settings.uiFont, settings.monoFont);
 	const path = useRoutePath();
 	const routeId = useMemo(() => {
@@ -115,6 +135,9 @@ export function MockupReviewApp() {
 		removeReply,
 		submitDecision,
 		submitting,
+		saveScreens,
+		bumpScreen,
+		applySuggestion,
 		removeMockup,
 		agentWaiting,
 		isLoading,
@@ -136,6 +159,11 @@ export function MockupReviewApp() {
 	const [themeModalOpen, setThemeModalOpen] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
+	const [aiRailOpen, setAiRailOpen] = useState(false);
+	const [generateOpen, setGenerateOpen] = useState(false);
+	const [rewriteOpen, setRewriteOpen] = useState(false);
+	const [aiBusy, setAiBusy] = useState<"generate" | "rewrite" | null>(null);
+	const [aiActionError, setAiActionError] = useState<string | null>(null);
 	const [newMockupOpen, setNewMockupOpen] = useState(false);
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
 		try {
@@ -200,6 +228,12 @@ export function MockupReviewApp() {
 	const [theme, setTheme] = useState<"light" | "dark">("light");
 	const [editing, setEditing] = useState(false);
 	const [editHtml, setEditHtml] = useState("");
+	const [editBaseline, setEditBaseline] = useState("");
+	const [editError, setEditError] = useState<string | null>(null);
+	const [editSaveState, setEditSaveState] = useState<
+		"idle" | "saving" | "saved" | "error"
+	>("idle");
+	const [discardOpen, setDiscardOpen] = useState(false);
 	const [srcdoc, setSrcdoc] = useState("");
 	const [compareSrcdoc, setCompareSrcdoc] = useState("");
 	/** Full height of the served mockup document (probe-reported) — the frame
@@ -416,6 +450,139 @@ export function MockupReviewApp() {
 	const viewingVersion = viewVersion ?? active?.version ?? 1;
 	const historical = Boolean(
 		active && viewVersion && viewVersion !== active.version,
+	);
+	const editDirty = editing && editHtml !== editBaseline;
+	const beginEdit = useCallback(() => {
+		if (historical || !currentScreenId) return;
+		const screen = screens.find((s) => s.id === currentScreenId);
+		const html = screen?.html ?? "";
+		setEditHtml(html);
+		setEditBaseline(html);
+		setEditError(null);
+		setEditSaveState("idle");
+		setEditing(true);
+	}, [historical, currentScreenId, screens]);
+	const endEdit = useCallback(() => {
+		setEditing(false);
+		setDiscardOpen(false);
+		setEditError(null);
+		setEditSaveState("idle");
+	}, []);
+	const currentScreen = screens.find((s) => s.id === currentScreenId) ?? null;
+	const currentHtml = editing ? editHtml : (currentScreen?.html ?? "");
+	const aiReady = Boolean(ai && !ai.loading && ai.models.length);
+	const mockupAiContext = useMemo((): AiMockupContext | null => {
+		if (!active || !currentScreenId) return null;
+		const screen = screens.find((s) => s.id === currentScreenId);
+		const html = editing ? editHtml : (screen?.html ?? "");
+		const previous =
+			compareVersion != null
+				? active.versions
+						?.find((v) => v.version === compareVersion)
+						?.screens.find((s) => s.id === currentScreenId)
+				: undefined;
+		if (previous && compareVersion != null) {
+			return {
+				kind: "mockup-version-compare",
+				mockupId: active.id,
+				title: active.title,
+				version: viewingVersion,
+				screenId: currentScreenId,
+				screenLabel: screen?.label,
+				viewport: viewportLabel,
+				html,
+				previousVersion: compareVersion,
+				previousHtml: previous.html,
+			};
+		}
+		return {
+			kind: "mockup",
+			mockupId: active.id,
+			title: active.title,
+			version: viewingVersion,
+			screenId: currentScreenId,
+			screenLabel: screen?.label,
+			viewport: viewportLabel,
+			html,
+		};
+	}, [
+		active,
+		compareVersion,
+		currentScreenId,
+		editHtml,
+		editing,
+		screens,
+		viewportLabel,
+		viewingVersion,
+	]);
+	const applyHtmlToEditor = useCallback((html: string, baseline: string) => {
+		setEditHtml(html);
+		setEditBaseline(baseline);
+		setEditing(true);
+		setEditError(null);
+		setEditSaveState("idle");
+	}, []);
+	const runMockupAi = useCallback(
+		async (action: "generate-screen" | "rewrite-region") => {
+			if (!ai || !mockupAiContext || !active || !currentScreenId) return;
+			setAiActionError(null);
+			setAiBusy(action === "generate-screen" ? "generate" : "rewrite");
+			try {
+				const regionHtml = pending?.html ?? pending?.snapshot;
+				const result = await ai.run({
+					surface: "mockup",
+					action,
+					context:
+						action === "rewrite-region"
+							? {
+									...mockupAiContext,
+									kind: "mockup-region",
+									selectedHtml: regionHtml,
+									region: pending?.target,
+								}
+							: mockupAiContext,
+					prompt:
+						action === "generate-screen"
+							? `Draft the "${currentScreen?.label ?? currentScreenId}" screen for ${active.title}.`
+							: `Rewrite the ${pending?.target ?? "selected"} region.`,
+				});
+				const html = extractMockupHtml(result.text);
+				const baseline = currentScreen?.html ?? "";
+				if (action === "rewrite-region") {
+					const base = editing ? editHtml : baseline;
+					const patched =
+						regionHtml && base.includes(regionHtml)
+							? base.replace(regionHtml, html)
+							: html;
+					applyHtmlToEditor(patched, baseline);
+					setToast(
+						regionHtml && base.includes(regionHtml)
+							? "Rewrite in the editor — save when you want it"
+							: "Could not patch the region in place — review the HTML before saving",
+					);
+				} else {
+					applyHtmlToEditor(html, baseline);
+					setToast("Draft in the editor — save when you want it");
+				}
+				setGenerateOpen(false);
+				setRewriteOpen(false);
+			} catch (err) {
+				setAiActionError(err instanceof Error ? err.message : String(err));
+			} finally {
+				setAiBusy(null);
+			}
+		},
+		[
+			ai,
+			applyHtmlToEditor,
+			active,
+			currentScreen,
+			currentScreenId,
+			editHtml,
+			editing,
+			mockupAiContext,
+			pending,
+		],
 	);
 	const decision = active ? DECISION_META[active.decision] : null;
 	const DecisionIcon = decision?.icon ?? DECISION_META.pending.icon;
@@ -707,11 +874,13 @@ export function MockupReviewApp() {
 			else if (e.key === "3" && !historical) setTool("point");
 			else if (e.key === "c") setCommentsRailOpen((v) => !v);
 			else if (e.key === "e" && !historical && active && currentScreenId) {
-				const screen = screens.find((s) => s.id === currentScreenId);
-				setEditHtml(screen?.html ?? "");
-				setEditing((v) => !v);
-			}
-			else if (e.key === "v") setViewOnly((v) => !v);
+				if (editing) {
+					if (editDirty) setDiscardOpen(true);
+					else endEdit();
+				} else {
+					beginEdit();
+				}
+			} else if (e.key === "v") setViewOnly((v) => !v);
 			else if (e.key === "z") setZen((v) => !v);
 			else if (e.key === "[" || e.key === "]") {
 				if (!screens.length || !currentScreenId) return;
@@ -722,6 +891,11 @@ export function MockupReviewApp() {
 						: (i - 1 + screens.length) % screens.length;
 				setScreenId(screens[next].id);
 			} else if (e.key === "Escape") {
+				if (editing) {
+					if (editDirty) setDiscardOpen(true);
+					else endEdit();
+					return;
+				}
 				if (zen) {
 					setZen(false);
 					setZenReveal(null);
@@ -737,7 +911,46 @@ export function MockupReviewApp() {
 			window.removeEventListener("keydown", onKey);
 			clearTimeout(bufferTimeout);
 		};
-	}, [screens, currentScreenId, historical, zen, active, mockups]);
+	}, [
+		screens,
+		currentScreenId,
+		historical,
+		zen,
+		active,
+		mockups,
+		editing,
+		editDirty,
+		beginEdit,
+		endEdit,
+	]);
+
+	useEffect(() => {
+		if (!editing || historical || !active || !currentScreenId) return;
+		const persisted =
+			active.screens.find((s) => s.id === currentScreenId)?.html ?? "";
+		if (editHtml === persisted) return;
+		const handle = window.setTimeout(() => {
+			void (async () => {
+				setEditSaveState("saving");
+				try {
+					await saveScreens({
+						mockupId: active.id,
+						screens: active.screens.map((s) =>
+							s.id === currentScreenId
+								? { id: s.id, html: editHtml, label: s.label }
+								: { id: s.id, html: s.html, label: s.label },
+						),
+					});
+					setEditSaveState("saved");
+					setEditError(null);
+				} catch (err) {
+					setEditSaveState("error");
+					setEditError(err instanceof Error ? err.message : "Failed to save");
+				}
+			})();
+		}, 600);
+		return () => window.clearTimeout(handle);
+	}, [editing, historical, active, currentScreenId, editHtml, saveScreens]);
 
 	const sendAnchorCheck = useCallback(() => {
 		const anchors = comments
@@ -924,7 +1137,7 @@ export function MockupReviewApp() {
 			soundsEnabled={settings.sounds ?? true}
 		>
 			<div
-				className={`app plan-app mockup-app ${zen ? "zen-mode" : ""}`}
+				className={`app plan-app mockup-app ${zen ? "zen-mode" : ""} ${aiRailOpen ? "app-ai-open" : ""}`}
 				ref={appRef}
 				style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
 			>
@@ -982,9 +1195,7 @@ export function MockupReviewApp() {
 									{systemOpen ? "Design system" : "Mockups"}
 								</h1>
 								{systemOpen ? (
-									<span className="plan-toolbar-active">
-										Tokens · type · components
-									</span>
+									<span className="plan-toolbar-active">Tokens · type · components</span>
 								) : active ? (
 									<span className="plan-toolbar-active" title={active.title}>
 										{active.title}
@@ -999,7 +1210,11 @@ export function MockupReviewApp() {
 					</div>
 
 					{!systemOpen && (
-						<div className="plan-view-toggle" role="group" aria-label="Selection tool">
+						<div
+							className="plan-view-toggle"
+							role="group"
+							aria-label="Selection tool"
+						>
 							{TOOL_OPTIONS.map(({ id, label, icon: Icon, tip, key }) => (
 								<Tooltip key={id} content={toolTip(id, tip, key)} side="bottom">
 									<button
@@ -1009,84 +1224,89 @@ export function MockupReviewApp() {
 										aria-label={toolTip(id, tip, key)}
 										disabled={toolDisabled(id)}
 										onClick={() => setTool(id)}
-								>
-									<Icon size={13} aria-hidden="true" />
-									<span>{label}</span>
-								</button>
-							</Tooltip>
-						))}
+									>
+										<Icon size={13} aria-hidden="true" />
+										<span>{label}</span>
+									</button>
+								</Tooltip>
+							))}
 						</div>
 					)}
 
 					<div className="toolbar-right">
 						{!systemOpen && (
+							<AiModelPicker onOpenAssistant={() => setAiRailOpen(true)} />
+						)}
+						{!systemOpen && (
 							<>
-							<Tooltip
-								content={
-									theme === "dark"
-										? "Mockup theme: dark — click for light"
-										: "Mockup theme: light — click for dark"
-								}
-								side="bottom"
-							>
-							<button
-								type="button"
-								className="btn btn-sm mockup-theme-btn"
-								aria-pressed={theme === "dark"}
-								aria-label={
-									theme === "dark" ? "Switch mockup to light" : "Switch mockup to dark"
-								}
-								onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-							>
-								{theme === "dark" ? <Moon size={14} /> : <Sun size={14} />}
-							</button>
-						</Tooltip>
-						<Tooltip
-							content={
-								viewOnly
-									? "Exit view-only mode (v)"
-									: "View only — interactive mockup, no selection (v)"
-							}
-							side="bottom"
-						>
-							<button
-								type="button"
-								className={`btn btn-sm ${viewOnly ? "btn-active" : ""}`}
-								aria-pressed={viewOnly}
-								title="View only (v)"
-								aria-label={viewOnly ? "Exit view-only mode" : "Enter view-only mode"}
-								onClick={() => setViewOnly((v) => !v)}
-							>
-								<Eye size={14} />
-								<span className="btn-label">{viewOnly ? "Review" : "View only"}</span>
-							</button>
-						</Tooltip>
-						<Tooltip
-							content={
-								zen
-									? "Exit zen mode (z / Esc)"
-									: "Zen mode — full-bleed mockup, auto-hide chrome (z)"
-							}
-							side="bottom"
-						>
-							<button
-								type="button"
-								className={`btn btn-sm ${zen ? "btn-active" : ""}`}
-								aria-pressed={zen}
-								title="Zen mode (z)"
-								aria-label={zen ? "Exit zen mode" : "Enter zen mode"}
-								onClick={() => {
-									const next = !zen;
-									setZen(next);
-									if (next)
-										setToast("Zen mode — hover the edges to reveal panels, Esc to exit");
-								}}
-							>
-								{zen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-								<span className="btn-label">{zen ? "Exit zen" : "Zen"}</span>
-							</button>
-						</Tooltip>
-						</>
+								<Tooltip
+									content={
+										theme === "dark"
+											? "Mockup theme: dark — click for light"
+											: "Mockup theme: light — click for dark"
+									}
+									side="bottom"
+								>
+									<button
+										type="button"
+										className="btn btn-sm mockup-theme-btn"
+										aria-pressed={theme === "dark"}
+										aria-label={
+											theme === "dark" ? "Switch mockup to light" : "Switch mockup to dark"
+										}
+										onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+									>
+										{theme === "dark" ? <Moon size={14} /> : <Sun size={14} />}
+									</button>
+								</Tooltip>
+								<Tooltip
+									content={
+										viewOnly
+											? "Exit view-only mode (v)"
+											: "View only — interactive mockup, no selection (v)"
+									}
+									side="bottom"
+								>
+									<button
+										type="button"
+										className={`btn btn-sm ${viewOnly ? "btn-active" : ""}`}
+										aria-pressed={viewOnly}
+										title="View only (v)"
+										aria-label={viewOnly ? "Exit view-only mode" : "Enter view-only mode"}
+										onClick={() => setViewOnly((v) => !v)}
+									>
+										<Eye size={14} />
+										<span className="btn-label">{viewOnly ? "Review" : "View only"}</span>
+									</button>
+								</Tooltip>
+								<Tooltip
+									content={
+										zen
+											? "Exit zen mode (z / Esc)"
+											: "Zen mode — full-bleed mockup, auto-hide chrome (z)"
+									}
+									side="bottom"
+								>
+									<button
+										type="button"
+										className={`btn btn-sm ${zen ? "btn-active" : ""}`}
+										aria-pressed={zen}
+										title="Zen mode (z)"
+										aria-label={zen ? "Exit zen mode" : "Enter zen mode"}
+										onClick={() => {
+											const next = !zen;
+											setZen(next);
+											if (next)
+												setToast(
+													"Zen mode — hover the edges to reveal panels, Esc to exit",
+												);
+										}}
+									>
+										{zen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+										<span className="btn-label">{zen ? "Exit zen" : "Zen"}</span>
+									</button>
+								</Tooltip>
+							</>
 						)}
 						<Popover
 							open={settingsOpen}
@@ -1164,7 +1384,7 @@ export function MockupReviewApp() {
 					>
 						<MockupList
 							mockups={mockups}
-							activeId={systemOpen ? null : active?.id ?? null}
+							activeId={systemOpen ? null : (active?.id ?? null)}
 							collapsed={sidebarCollapsed}
 							onToggle={() => setSidebarCollapsed((v) => !v)}
 							onSelect={(id) => {
@@ -1320,14 +1540,25 @@ export function MockupReviewApp() {
 												))}
 											</div>
 											<span className="mockup-action-dot" aria-hidden="true" />
-											<Tooltip content="Edit this screen's HTML (e)" side="bottom">
+											<Tooltip
+												content={
+													historical
+														? "Switch to the current version to edit"
+														: "Edit this screen's HTML (e)"
+												}
+												side="bottom"
+											>
 												<button
 													type="button"
 													className={`plan-icon-btn ${editing ? "is-active" : ""}`}
+													disabled={historical || !currentScreenId}
 													onClick={() => {
-														const screen = screens.find((s) => s.id === currentScreenId);
-														setEditHtml(screen?.html ?? "");
-														setEditing((v) => !v);
+														if (editing) {
+															if (editDirty) setDiscardOpen(true);
+															else endEdit();
+														} else {
+															beginEdit();
+														}
 													}}
 													title="Edit fragment (e)"
 													aria-label="Edit screen HTML"
@@ -1340,26 +1571,24 @@ export function MockupReviewApp() {
 													commentsRailOpen
 														? "Hide comments map (c)"
 														: `Show comments map (c)${totalOpenCount > 0 ? ` — ${totalOpenCount} open` : ""}`
-													}
+												}
 												side="bottom"
+											>
+												<button
+													type="button"
+													className={`plan-icon-btn ${commentsRailOpen ? "is-active" : ""}`}
+													onClick={() => setCommentsRailOpen((v) => !v)}
+													title="Toggle comments map (c)"
+													aria-label="Toggle comments map"
 												>
-													<button
-														type="button"
-														className={`plan-icon-btn ${commentsRailOpen ? "is-active" : ""}`}
-														onClick={() => setCommentsRailOpen((v) => !v)}
-														title="Toggle comments map (c)"
-														aria-label="Toggle comments map"
-													>
-														<MessageSquare size={14} aria-hidden="true" />
-														{totalOpenCount > 0 && (
-															<span className="plan-icon-btn-badge">
-																{totalOpenCount}
-															</span>
-														)}
-													</button>
-												</Tooltip>
-											</div>
+													<MessageSquare size={14} aria-hidden="true" />
+													{totalOpenCount > 0 && (
+														<span className="plan-icon-btn-badge">{totalOpenCount}</span>
+													)}
+												</button>
+											</Tooltip>
 										</div>
+									</div>
 								</header>
 								{historical && (
 									<div className="plan-review-historical-banner">
@@ -1368,59 +1597,72 @@ export function MockupReviewApp() {
 								)}
 								{editing && currentScreenId && (
 									<div className="mockup-live-edit">
-										<textarea
+										<PlanSourceEditor
 											value={editHtml}
-											onChange={(e) => setEditHtml(e.target.value)}
-											spellCheck={false}
+											onChange={setEditHtml}
+											fontSize={settings.fontSize}
+											monoFontFamily={resolveMonoFont(settings.monoFont)}
+											defaultTabSize={settings.defaultTabSize}
+											lineWrap={settings.lineWrap}
+											showLineNumbers={settings.showLineNumbers}
+											ariaLabel="Screen HTML"
+											className="mockup-live-edit-editor"
 										/>
 										<div className="mockup-live-edit-actions">
+											<span className="mockup-live-edit-status" role="status">
+												{editSaveState === "saving"
+													? "Saving…"
+													: editSaveState === "saved"
+														? "Saved"
+														: editSaveState === "error"
+															? (editError ?? "Save failed")
+															: "Autosave on"}
+											</span>
 											<button
 												type="button"
 												className="btn btn-sm"
 												onClick={async () => {
-													const screensPayload = screens.map((s) =>
-														s.id === currentScreenId
-															? { ...s, html: editHtml }
-															: s,
-													);
-													await fetch(`/api/mockups/${active.id}`, {
-														method: "PUT",
-														headers: { "Content-Type": "application/json" },
-														body: JSON.stringify({
-															screens: screensPayload.map((s) => ({
-																id: s.id,
-																html: s.html,
-																label: s.label,
-															})),
-														}),
-													});
-													setToast("Saved (same version)");
-												}}
-											>
-												Save
-											</button>
-											<button
-												type="button"
-												className="btn btn-sm"
-												onClick={async () => {
-													await fetch(
-														`/api/mockups/${active.id}/screens/${currentScreenId}`,
-														{
-															method: "PUT",
-															headers: { "Content-Type": "application/json" },
-															body: JSON.stringify({ html: editHtml }),
-														},
-													);
-													setEditing(false);
-													setToast("Saved as new version");
+													setEditSaveState("saving");
+													try {
+														await bumpScreen({
+															mockupId: active.id,
+															screenId: currentScreenId,
+															html: editHtml,
+															expectedVersion: active.version,
+														});
+														setEditBaseline(editHtml);
+														setEditSaveState("saved");
+														setEditError(null);
+														endEdit();
+														setToast("Saved as new version");
+													} catch (err) {
+														setEditSaveState("error");
+														setEditError(
+															err instanceof Error
+																? err.message
+																: "Failed to save as new version",
+														);
+													}
 												}}
 											>
 												Save as new version
 											</button>
+											{editDirty && (
+												<button
+													type="button"
+													className="btn btn-sm"
+													onClick={() => setDiscardOpen(true)}
+												>
+													Discard
+												</button>
+											)}
 											<button
 												type="button"
 												className="btn btn-sm"
-												onClick={() => setEditing(false)}
+												onClick={() => {
+													if (editDirty) setDiscardOpen(true);
+													else endEdit();
+												}}
 											>
 												Done
 											</button>
@@ -1432,140 +1674,183 @@ export function MockupReviewApp() {
 									ref={compareSplitRef}
 									style={
 										compareVersion != null && currentScreenId
-											? ({ "--mockup-split-pct": `${compareSplitRatio}%` } as React.CSSProperties)
+											? ({
+													"--mockup-split-pct": `${compareSplitRatio}%`,
+												} as React.CSSProperties)
 											: undefined
 									}
 								>
 									<div className="mockup-compare-pane mockup-compare-pane-current">
 										<MockupCanvas
-									title={active.title}
-									srcdoc={srcdoc}
-									viewport={viewport}
-									frameHeight={docHeight}
-									viewOnly={viewOnly}
-									zen={zen}
-									staleIds={staleIds}
-									comments={comments}
-									frameRef={frameRef}
-									iframeRef={iframeRef}
-									onIframeLoad={pushTool}
-									hover={hover}
-									pending={pending}
-									selected={selected}
-									selectedId={selectedId}
-									selectedIndex={selectedIndex}
-									composerDraftKey={
-										pending && currentScreenId
-											? `mockup:${active.id}:${currentScreenId}:${viewportLabel}:${pending.kind}:${pending.selector ?? pending.x}`
-											: ""
-									}
-									onPinToggle={(id) => {
-										setPending(null);
-										setSelectedId((cur) => (cur === id ? null : id));
-									}}
-									onDismissThread={() => setSelectedId(null)}
-									onCancelPending={() => setPending(null)}
-									onPostComment={postComment}
-									onThreadResolve={() =>
-										withSelected(
-											(mockupId, c) =>
-												void updateComment({
-													mockupId,
-													commentId: c.id,
-													status: "resolved",
-												}),
-										)
-									}
-									onThreadUnresolve={() =>
-										withSelected(
-											(mockupId, c) =>
-												void updateComment({
-													mockupId,
-													commentId: c.id,
-													status: "open",
-												}),
-										)
-									}
-									onThreadDelete={() => {
-										withSelected((mockupId, c) => {
-											setSelectedId(null);
-											void removeComment({ mockupId, commentId: c.id });
-										});
-									}}
-									onThreadEdit={(body) =>
-										withSelected(
-											(mockupId, c) =>
-												void updateComment({ mockupId, commentId: c.id, body }),
-										)
-									}
-									onThreadReply={(body) =>
-										withSelected(
-											(mockupId, c) => void addReply({ mockupId, commentId: c.id, body }),
-										)
-									}
-									onThreadEditReply={(replyId, body) =>
-										withSelected(
-											(mockupId, c) =>
-												void updateReply({
-													mockupId,
-													commentId: c.id,
-													replyId,
-													body,
-												}),
-										)
-									}
-									onThreadDeleteReply={(replyId) =>
-										withSelected(
-											(mockupId, c) =>
-												void removeReply({
-													mockupId,
-													commentId: c.id,
-													replyId,
-												}),
-										)
-									}
-								/>
-								</div>
-								{compareVersion != null && currentScreenId && (
-									<>
-										<div
-											className="mockup-split-resize-handle"
-											onMouseDown={handleCompareSplitStart}
-											onDoubleClick={resetCompareSplit}
-											role="separator"
-											aria-orientation="vertical"
-											aria-label="Resize current and compared mockup panes"
-											title="Drag to resize · double-click to reset 50/50"
-											aria-valuenow={Math.round(compareSplitRatio)}
-											aria-valuemin={20}
-											aria-valuemax={80}
-											tabIndex={0}
-											onKeyDown={(e) => {
-												if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-												e.preventDefault();
-												nudgeCompareSplit(e.key === "ArrowLeft" ? -2 : 2);
+											title={active.title}
+											srcdoc={srcdoc}
+											viewport={viewport}
+											frameHeight={docHeight}
+											viewOnly={viewOnly}
+											zen={zen}
+											staleIds={staleIds}
+											comments={comments}
+											frameRef={frameRef}
+											iframeRef={iframeRef}
+											onIframeLoad={pushTool}
+											hover={hover}
+											pending={pending}
+											selected={selected}
+											selectedId={selectedId}
+											selectedIndex={selectedIndex}
+											composerDraftKey={
+												pending && currentScreenId
+													? `mockup:${active.id}:${currentScreenId}:${viewportLabel}:${pending.kind}:${pending.selector ?? pending.x}`
+													: ""
+											}
+											onPinToggle={(id) => {
+												setPending(null);
+												setSelectedId((cur) => (cur === id ? null : id));
 											}}
-										>
-											<span className="plan-split-resize-grip" aria-hidden="true" />
-										</div>
-										<div className="mockup-compare-pane mockup-compare-pane-old">
+											onDismissThread={() => setSelectedId(null)}
+											onCancelPending={() => setPending(null)}
+											onPostComment={postComment}
+											onThreadResolve={() =>
+												withSelected(
+													(mockupId, c) =>
+														void updateComment({
+															mockupId,
+															commentId: c.id,
+															status: "resolved",
+														}),
+												)
+											}
+											onThreadUnresolve={() =>
+												withSelected(
+													(mockupId, c) =>
+														void updateComment({
+															mockupId,
+															commentId: c.id,
+															status: "open",
+														}),
+												)
+											}
+											onThreadDelete={() => {
+												withSelected((mockupId, c) => {
+													setSelectedId(null);
+													void removeComment({ mockupId, commentId: c.id });
+												});
+											}}
+											onThreadEdit={(body) =>
+												withSelected(
+													(mockupId, c) =>
+														void updateComment({ mockupId, commentId: c.id, body }),
+												)
+											}
+											onThreadReply={(body) =>
+												withSelected(
+													(mockupId, c) =>
+														void addReply({ mockupId, commentId: c.id, body }),
+												)
+											}
+											onThreadEditReply={(replyId, body) =>
+												withSelected(
+													(mockupId, c) =>
+														void updateReply({
+															mockupId,
+															commentId: c.id,
+															replyId,
+															body,
+														}),
+												)
+											}
+											onThreadDeleteReply={(replyId) =>
+												withSelected(
+													(mockupId, c) =>
+														void removeReply({
+															mockupId,
+															commentId: c.id,
+															replyId,
+														}),
+												)
+											}
+											onThreadApplySuggestion={async () => {
+												if (!active || !selected) {
+													throw new Error("No comment selected");
+												}
+												await applySuggestion({
+													mockupId: active.id,
+													commentId: selected.id,
+													expectedVersion: active.version,
+												});
+											}}
+											aiContext={mockupAiContext}
+											onRewriteRegion={
+												aiReady && pending?.target
+													? () => {
+															setAiActionError(null);
+															setRewriteOpen(true);
+														}
+													: undefined
+											}
+											rewriting={aiBusy === "rewrite"}
+										/>
+										{aiReady &&
+											!historical &&
+											!viewOnly &&
+											!editing &&
+											isBlankMockupHtml(currentHtml) && (
+												<div className="mockup-blank-cta">
+													<p>This screen is empty</p>
+													<button
+														type="button"
+														className="btn btn-sm"
+														onClick={() => {
+															setAiActionError(null);
+															setGenerateOpen(true);
+														}}
+													>
+														<Sparkles size={13} aria-hidden="true" />
+														Generate this screen
+													</button>
+												</div>
+											)}
+									</div>
+									{compareVersion != null && currentScreenId && (
+										<>
 											<div
-												className="mockup-compare-frame-wrap"
-												style={{
-													width: Math.min(viewport, 1600),
-													height: docHeight ? `${docHeight}px` : "100%",
+												className="mockup-split-resize-handle"
+												onMouseDown={handleCompareSplitStart}
+												onDoubleClick={resetCompareSplit}
+												role="separator"
+												aria-orientation="vertical"
+												aria-label="Resize current and compared mockup panes"
+												title="Drag to resize · double-click to reset 50/50"
+												aria-valuenow={Math.round(compareSplitRatio)}
+												aria-valuemin={20}
+												aria-valuemax={80}
+												tabIndex={0}
+												onKeyDown={(e) => {
+													if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+													e.preventDefault();
+													nudgeCompareSplit(e.key === "ArrowLeft" ? -2 : 2);
 												}}
 											>
-												<iframe
-													className="mockup-compare-frame"
-													title={`Compare v${compareVersion}`}
-													sandbox="allow-scripts allow-forms allow-modals allow-popups"
-													srcDoc={compareSrcdoc}
-												/>
+												<span className="plan-split-resize-grip" aria-hidden="true" />
 											</div>
-										</div>
-									</>
-								)}
+											<div className="mockup-compare-pane mockup-compare-pane-old">
+												<div
+													className="mockup-compare-frame-wrap"
+													style={{
+														width: Math.min(viewport, 1600),
+														height: docHeight ? `${docHeight}px` : "100%",
+													}}
+												>
+													<iframe
+														className="mockup-compare-frame"
+														title={`Compare v${compareVersion}`}
+														sandbox="allow-scripts allow-forms allow-modals allow-popups"
+														srcDoc={compareSrcdoc}
+													/>
+												</div>
+											</div>
+										</>
+									)}
 								</div>
 							</div>
 						) : (
@@ -1619,6 +1904,16 @@ export function MockupReviewApp() {
 					)}
 				</div>
 
+				{active && mockupAiContext && (
+					<AiAssistantRail
+						open={aiRailOpen}
+						onClose={() => setAiRailOpen(false)}
+						surface="mockup"
+						title="Ask about this mockup"
+						context={mockupAiContext}
+					/>
+				)}
+
 				<ThemeModal
 					open={themeModalOpen}
 					onClose={() => setThemeModalOpen(false)}
@@ -1638,6 +1933,71 @@ export function MockupReviewApp() {
 						placeholder="No active mockup (J/K to jump)"
 					/>
 				)}
+				<ConfirmDialog
+					open={discardOpen}
+					title="Discard edits?"
+					description="Restore this screen to when you started editing. Autosaved changes on this version will be overwritten."
+					confirmLabel="Discard"
+					variant="danger"
+					onConfirm={async () => {
+						if (!active || !currentScreenId) {
+							endEdit();
+							return;
+						}
+						try {
+							await saveScreens({
+								mockupId: active.id,
+								screens: active.screens.map((s) =>
+									s.id === currentScreenId
+										? { id: s.id, html: editBaseline, label: s.label }
+										: { id: s.id, html: s.html, label: s.label },
+								),
+							});
+							setEditHtml(editBaseline);
+							endEdit();
+						} catch (err) {
+							setEditSaveState("error");
+							setEditError(err instanceof Error ? err.message : "Failed to discard");
+							setDiscardOpen(false);
+						}
+					}}
+					onCancel={() => setDiscardOpen(false)}
+				/>
+				<ConfirmDialog
+					open={generateOpen}
+					title="Generate this screen?"
+					description="AI will draft HTML into the editor. Nothing is saved until you say so."
+					confirmLabel="Generate"
+					busyLabel="Generating…"
+					variant="primary"
+					icon={<Sparkles size={16} />}
+					busy={aiBusy === "generate"}
+					error={aiActionError}
+					onConfirm={() => void runMockupAi("generate-screen")}
+					onCancel={() => {
+						if (aiBusy) return;
+						setGenerateOpen(false);
+						setAiActionError(null);
+					}}
+				/>
+				<ConfirmDialog
+					open={rewriteOpen}
+					title="Rewrite this region?"
+					description="Replacement HTML lands in the editor. You apply or discard it."
+					detail={pending?.target ? `Region: ${pending.target}` : undefined}
+					confirmLabel="Rewrite"
+					busyLabel="Rewriting…"
+					variant="primary"
+					icon={<Sparkles size={16} />}
+					busy={aiBusy === "rewrite"}
+					error={aiActionError}
+					onConfirm={() => void runMockupAi("rewrite-region")}
+					onCancel={() => {
+						if (aiBusy) return;
+						setRewriteOpen(false);
+						setAiActionError(null);
+					}}
+				/>
 				<InputDialog
 					open={newMockupOpen}
 					title="New mockup"
@@ -1651,7 +2011,10 @@ export function MockupReviewApp() {
 						const res = await fetch("/api/mockups", {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ title: title.trim() || "Untitled mockup", blank: true }),
+							body: JSON.stringify({
+								title: title.trim() || "Untitled mockup",
+								blank: true,
+							}),
 						});
 						if (!res.ok) return;
 						const created = (await res.json()) as { id: string };

@@ -9662,6 +9662,50 @@ button.toolbar-last-send-btn:hover {
   align-items: center;
   gap: var(--space-2);
 }
+/* Mockup toolbar is denser than plan (tools + model + Ask AI + view/zen).
+   Equal 1fr | auto | 1fr cells overflow and stack the AI cluster on Pin. */
+.mockup-app .toolbar.plan-app-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  overflow: hidden;
+}
+.mockup-app .plan-app-toolbar .toolbar-left {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+.mockup-app .plan-view-toggle {
+  flex: 0 0 auto;
+}
+.mockup-app .plan-app-toolbar .toolbar-right {
+  flex: 0 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+}
+.mockup-app .toolbar-right .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.mockup-app .ai-toolbar-controls {
+  min-width: 0;
+  flex-shrink: 1;
+}
+.mockup-app .ai-model-trigger {
+  min-width: 0;
+  max-width: 200px;
+  flex-shrink: 1;
+}
+.mockup-app .ai-model-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 1280px) {
+  .mockup-app .toolbar-right .btn-label {
+    display: none;
+  }
+}
 .plan-toolbar-back {
   flex-shrink: 0;
   gap: 4px;
@@ -12005,7 +12049,14 @@ button.toolbar-last-send-btn:hover {
     display: inline;
   }
   .mockup-app .toolbar.plan-app-toolbar {
-    overflow-x: auto;
+    flex-wrap: wrap;
+    height: auto;
+    min-height: var(--toolbar-height);
+    overflow: visible;
+  }
+  .mockup-app .plan-view-toggle {
+    flex: 1 0 100%;
+    order: 3;
   }
   .mockup-theme-btn .btn-label {
     display: none;
@@ -13982,13 +14033,13 @@ button.toolbar-last-send-btn:hover {
   max-width: 100%;
   flex: none;
   border: 1px solid var(--border-normal);
-  background: #fff;
+  background: var(--bg-primary);
 }
 .mockup-iframe {
   width: 100%;
   height: 100%;
   border: 0;
-  background: #fff;
+  background: var(--bg-primary);
 }
 .mockup-overlays {
   position: absolute;
@@ -14077,8 +14128,13 @@ button.toolbar-last-send-btn:hover {
 .mockup-screen-tabs-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
   gap: var(--space-2);
+}
+.mockup-screen-tabs {
+  max-width: 100%;
 }
 
 /* Screen tabs (left) + actions (right) share one row in the mockup header. */
@@ -14087,6 +14143,7 @@ button.toolbar-last-send-btn:hover {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  min-width: 0;
   flex-wrap: wrap;
 }
 .mockup-action-dot {
@@ -14536,7 +14593,24 @@ button.toolbar-last-send-btn:hover {
 }
 .mockup-live-edit-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+.mockup-live-edit-editor {
+  min-height: 160px;
+  max-height: 40vh;
+  margin: 8px 0;
+}
+.mockup-live-edit-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-right: auto;
+}
+.mockup-live-edit-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 4px 0 0;
 }
 .mockup-compare-frame {
   width: 100%;
@@ -14577,6 +14651,32 @@ button.toolbar-last-send-btn:hover {
    stage/frame/iframe height chain collapses and the mockup gets clipped. */
 .mockup-compare-pane-current {
   flex: 1 1 0%;
+  position: relative;
+}
+.mockup-blank-cta {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg-primary) 58%, transparent);
+}
+.mockup-blank-cta > * {
+  pointer-events: auto;
+}
+.mockup-blank-cta p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.mockup-composer-ai-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 .mockup-compare-pane-old {
   overflow: auto;
@@ -14590,7 +14690,7 @@ button.toolbar-last-send-btn:hover {
   height: 100%;
   max-width: 100%;
   border: 1px solid var(--border-normal);
-  background: #fff;
+  background: var(--bg-primary);
 }
 .plan-list-new {
   display: inline-flex;
@@ -14643,7 +14743,12 @@ button.toolbar-last-send-btn:hover {
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--gl-accent) 18%, transparent), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--gl-accent) 18%, transparent),
+    transparent
+  );
   animation: ai-toolbar-shimmer 1.35s ease-in-out infinite;
 }
 
@@ -14667,11 +14772,18 @@ button.toolbar-last-send-btn:hover {
   border-radius: var(--radius-pill);
 }
 
-.ai-loading-copy i:first-child { width: 92%; }
-.ai-loading-copy i:last-child { width: 56%; opacity: 0.7; }
+.ai-loading-copy i:first-child {
+  width: 92%;
+}
+.ai-loading-copy i:last-child {
+  width: 56%;
+  opacity: 0.7;
+}
 
 @keyframes ai-toolbar-shimmer {
-  to { transform: translateX(100%); }
+  to {
+    transform: translateX(100%);
+  }
 }
 
 .ai-model-select {
@@ -14747,12 +14859,26 @@ button.toolbar-last-send-btn:hover {
   border-color: var(--gl-rule-subtle);
 }
 
-.ai-model-option > span:first-child { flex: 1; min-width: 0; }
+.ai-model-option > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
 .ai-model-option strong,
-.ai-model-option small { display: block; }
-.ai-model-option small { color: var(--gl-text-subtle); overflow: hidden; text-overflow: ellipsis; }
-.ai-model-empty { padding: 14px 8px; color: var(--gl-text-subtle); }
-.ai-manage-models { margin-top: 7px; }
+.ai-model-option small {
+  display: block;
+}
+.ai-model-option small {
+  color: var(--gl-text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ai-model-empty {
+  padding: 14px 8px;
+  color: var(--gl-text-subtle);
+}
+.ai-manage-models {
+  margin-top: 7px;
+}
 
 .ai-model-session-note {
   margin-top: 7px;
@@ -14834,7 +14960,9 @@ button.toolbar-last-send-btn:hover {
   left: 5px;
   width: 1px;
   background: var(--gl-rule);
-  transition: width var(--transition-fast), background var(--transition-fast);
+  transition:
+    width var(--transition-fast),
+    background var(--transition-fast);
 }
 
 .ai-rail-resize-handle svg {
@@ -14876,7 +15004,8 @@ button.toolbar-last-send-btn:hover {
   place-items: center;
   color: var(--gl-accent);
   background: var(--gl-selected);
-  border: 1px solid color-mix(in srgb, var(--gl-accent) 38%, var(--gl-rule-subtle));
+  border: 1px solid
+    color-mix(in srgb, var(--gl-accent) 38%, var(--gl-rule-subtle));
   border-radius: var(--radius-md);
 }
 
@@ -15052,7 +15181,8 @@ button.toolbar-last-send-btn:hover {
   align-items: center;
   gap: 4px;
   padding: 0 7px;
-  border: 1px solid color-mix(in srgb, var(--gl-accent) 34%, var(--gl-rule-subtle));
+  border: 1px solid
+    color-mix(in srgb, var(--gl-accent) 34%, var(--gl-rule-subtle));
   border-radius: var(--radius-pill);
   background: var(--gl-selected);
   color: var(--gl-text);
@@ -15175,7 +15305,8 @@ button.toolbar-last-send-btn:hover {
   margin: 0 auto 12px;
   color: var(--gl-accent);
   background: var(--gl-selected);
-  border: 1px solid color-mix(in srgb, var(--gl-accent) 32%, var(--gl-rule-subtle));
+  border: 1px solid
+    color-mix(in srgb, var(--gl-accent) 32%, var(--gl-rule-subtle));
   border-radius: var(--radius-lg);
 }
 
@@ -15278,8 +15409,12 @@ button.toolbar-last-send-btn:hover {
   animation: ai-loading-pulse 1s infinite alternate;
 }
 
-.ai-message-loading span:nth-child(2) { animation-delay: 0.15s; }
-.ai-message-loading span:nth-child(3) { animation-delay: 0.3s; }
+.ai-message-loading span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.ai-message-loading span:nth-child(3) {
+  animation-delay: 0.3s;
+}
 
 .ai-thinking {
   align-self: flex-start;
@@ -15309,16 +15444,31 @@ button.toolbar-last-send-btn:hover {
   height: 3px;
   border-radius: 50%;
   background: var(--gl-accent);
-  opacity: .26;
+  opacity: 0.26;
   animation: ai-thinking-pulse 1.2s ease-in-out infinite;
 }
 
-.ai-thinking-mark i:nth-child(2), .ai-thinking-mark i:nth-child(5), .ai-thinking-mark i:nth-child(8) { animation-delay: .12s; }
-.ai-thinking-mark i:nth-child(3), .ai-thinking-mark i:nth-child(6), .ai-thinking-mark i:nth-child(9) { animation-delay: .24s; }
+.ai-thinking-mark i:nth-child(2),
+.ai-thinking-mark i:nth-child(5),
+.ai-thinking-mark i:nth-child(8) {
+  animation-delay: 0.12s;
+}
+.ai-thinking-mark i:nth-child(3),
+.ai-thinking-mark i:nth-child(6),
+.ai-thinking-mark i:nth-child(9) {
+  animation-delay: 0.24s;
+}
 
 @keyframes ai-thinking-pulse {
-  0%, 100% { opacity: .24; transform: scale(.8); }
-  50% { opacity: 1; transform: scale(1); }
+  0%,
+  100% {
+    opacity: 0.24;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .ai-run-warning {
@@ -15338,7 +15488,10 @@ button.toolbar-last-send-btn:hover {
   gap: 8px;
 }
 
-.ai-run-error > span { flex: 1; min-width: 0; }
+.ai-run-error > span {
+  flex: 1;
+  min-width: 0;
+}
 
 .ai-run-error button {
   min-height: 24px;
@@ -15371,8 +15524,14 @@ button.toolbar-last-send-btn:hover {
 }
 
 @keyframes ai-loading-pulse {
-  from { opacity: 0.28; transform: translateY(1px); }
-  to { opacity: 1; transform: translateY(-1px); }
+  from {
+    opacity: 0.28;
+    transform: translateY(1px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
 }
 
 .ai-run-error,
@@ -15393,18 +15552,14 @@ button.toolbar-last-send-btn:hover {
   overflow: visible;
 }
 
-.ai-rail-composer:focus-within {
-  border-color: var(--gl-accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--gl-accent) 28%, transparent);
-}
-
 .ai-rail-composer textarea {
   width: 100%;
   min-height: 88px;
   max-height: 220px;
   resize: none;
   border: 0;
-  outline: 0;
+  outline: none;
+  box-shadow: none;
   background: transparent;
   color: var(--gl-text);
   padding: 10px 11px;
@@ -15438,7 +15593,9 @@ button.toolbar-last-send-btn:hover {
   background: color-mix(in srgb, var(--gl-element) 72%, transparent);
 }
 
-.ai-rail-composer > div:last-child > span:not(.ai-composer-hint) { flex: 1; }
+.ai-rail-composer > div:last-child > span:not(.ai-composer-hint) {
+  flex: 1;
+}
 
 .ai-composer-hint {
   display: inline-flex;
@@ -15512,7 +15669,8 @@ button.toolbar-last-send-btn:hover {
 
 .ai-image-error {
   padding: 7px 10px;
-  border-top: 1px solid color-mix(in srgb, var(--gl-negative) 35%, var(--gl-rule));
+  border-top: 1px solid
+    color-mix(in srgb, var(--gl-negative) 35%, var(--gl-rule));
   color: var(--gl-negative);
   font-size: 11px;
 }
@@ -15596,7 +15754,10 @@ button.toolbar-last-send-btn:hover {
 
 @media (prefers-reduced-motion: reduce) {
   .ai-thinking-mark i,
-  .ai-message-loading span { animation: none; opacity: .7; }
+  .ai-message-loading span {
+    animation: none;
+    opacity: 0.7;
+  }
 }
 
 .ai-send-btn {
@@ -15612,11 +15773,19 @@ button.toolbar-last-send-btn:hover {
 
 .ai-stop-btn {
   color: var(--gl-negative) !important;
-  border-color: color-mix(in srgb, var(--gl-negative) 45%, var(--gl-rule)) !important;
+  border-color: color-mix(
+    in srgb,
+    var(--gl-negative) 45%,
+    var(--gl-rule)
+  ) !important;
 }
 
 .app-ai-open .app-body {
+  min-width: 0;
   padding-right: var(--ai-rail-width, 360px);
+}
+.app-ai-open .plan-main {
+  min-width: 0;
 }
 
 .ai-settings-section {
@@ -15654,7 +15823,8 @@ button.toolbar-last-send-btn:hover {
   flex: 0 0 auto;
   color: var(--gl-accent);
   background: var(--gl-selected);
-  border: 1px solid color-mix(in srgb, var(--gl-accent) 32%, var(--gl-rule-subtle));
+  border: 1px solid
+    color-mix(in srgb, var(--gl-accent) 32%, var(--gl-rule-subtle));
   border-radius: var(--radius-sm);
 }
 
@@ -15755,9 +15925,18 @@ button.toolbar-last-send-btn:hover {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--gl-muted) 12%, transparent);
 }
 
-.ai-connection-dot.is-connected { background: var(--gl-positive); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gl-positive) 12%, transparent); }
-.ai-connection-dot.is-error { background: var(--gl-negative); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gl-negative) 12%, transparent); }
-.ai-connection-dot.is-needs-configuration { background: var(--gl-warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gl-warning) 12%, transparent); }
+.ai-connection-dot.is-connected {
+  background: var(--gl-positive);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--gl-positive) 12%, transparent);
+}
+.ai-connection-dot.is-error {
+  background: var(--gl-negative);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--gl-negative) 12%, transparent);
+}
+.ai-connection-dot.is-needs-configuration {
+  background: var(--gl-warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--gl-warning) 12%, transparent);
+}
 
 .ai-connection-copy {
   flex: 1;
@@ -15895,9 +16074,15 @@ button.toolbar-last-send-btn:hover {
   border-color: color-mix(in srgb, var(--gl-accent) 26%, var(--gl-rule));
   border-radius: var(--radius-xl);
   background:
-    radial-gradient(circle at 14% 0%, color-mix(in srgb, var(--gl-accent) 9%, transparent), transparent 38%),
+    radial-gradient(
+      circle at 14% 0%,
+      color-mix(in srgb, var(--gl-accent) 9%, transparent),
+      transparent 38%
+    ),
     var(--gl-surface);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.46), 0 0 0 1px color-mix(in srgb, var(--gl-accent) 7%, transparent);
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.46),
+    0 0 0 1px color-mix(in srgb, var(--gl-accent) 7%, transparent);
 }
 
 .ai-key-form {
@@ -16009,7 +16194,9 @@ button.toolbar-last-send-btn:hover {
   border: 1px solid var(--gl-rule);
   border-radius: var(--radius-md);
   background: var(--gl-canvas);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .ai-key-input-wrap:focus-within {
@@ -16140,9 +16327,15 @@ button.toolbar-last-send-btn:hover {
     width: min(100vw, var(--ai-rail-width, 420px)) !important;
     max-width: 100vw;
   }
-  .ai-rail-resize-handle { display: none; }
-  .app-ai-open .app-body { padding-right: 0; }
-  .ai-model-select { max-width: 160px; }
+  .ai-rail-resize-handle {
+    display: none;
+  }
+  .app-ai-open .app-body {
+    padding-right: 0;
+  }
+  .ai-model-select {
+    max-width: 160px;
+  }
 }
 
 @media (max-width: 768px) {
@@ -16160,7 +16353,13 @@ button.toolbar-last-send-btn:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ai-message-loading span { animation: none; opacity: 0.7; }
+  .ai-message-loading span {
+    animation: none;
+    opacity: 0.7;
+  }
   .ai-loading-icon::after,
-  .ai-loading-copy i::after { animation: none; display: none; }
+  .ai-loading-copy i::after {
+    animation: none;
+    display: none;
+  }
 }

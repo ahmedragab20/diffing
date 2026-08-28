@@ -209,7 +209,7 @@ describe("mockup endpoints", () => {
     );
     expect(doc.status).toBe(200);
     const html = await doc.text();
-    expect(html).toContain("data-diffing-slot=\"content\"");
+    expect(html).toContain('data-diffing-slot="content"');
     expect(html).toContain("<h1>Hi</h1>");
 
     const handoff = await app.fetch(
@@ -274,6 +274,7 @@ describe("mockup endpoints", () => {
           kind: "block",
           screenId: "main",
           body: "x",
+          selector: "button.pay",
           html: '<button class="pay">Pay $148</button>',
           contextHtml: '<section data-diffing="hero">…</section>',
           sectionX: 42,
@@ -392,6 +393,7 @@ describe("mockup endpoints", () => {
           kind: "block",
           screenId: "main",
           body: "x",
+          selector: "h1",
           ...body,
         }),
       }),
@@ -1025,7 +1027,7 @@ describe("mockup endpoints", () => {
         viewport: "desktop",
       })
     ).json();
-    const mainId = main.comments[0].id;
+    expect(main.comments[0].id).toBeTruthy();
     await postComment(mockup.id, {
       body: "checkout note",
       screenId: "checkout",
@@ -1084,5 +1086,92 @@ describe("mockup endpoints", () => {
     expect(xml).toContain("main note");
     expect(xml).not.toContain("checkout note");
     expect(xml).not.toContain("resolved note");
+  });
+
+  it("comment POST rejects invalid viewport, point without coords, and block without locator", async () => {
+    const mockup = await createMockup();
+    expect((await postComment(mockup.id, { viewport: "wide" })).status).toBe(
+      400,
+    );
+    expect(
+      (
+        await postComment(mockup.id, {
+          kind: "point",
+          selector: undefined,
+          x: undefined,
+          y: undefined,
+        })
+      ).status,
+    ).toBe(400);
+    expect((await postComment(mockup.id, { selector: "" })).status).toBe(400);
+    const ok = await postComment(mockup.id, {
+      kind: "point",
+      x: 10,
+      y: 20,
+      selector: undefined,
+    });
+    expect(ok.status).toBe(201);
+  });
+
+  it("comment POST ignores client createdAtMockupVersion", async () => {
+    const mockup = await createMockup();
+    await postMockup(app, {
+      id: mockup.id,
+      title: mockup.title,
+      html: "<h1>v2</h1>",
+    });
+    const res = await postComment(mockup.id, { createdAtMockupVersion: 1 });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      comments: Array<{ createdAtMockupVersion: number }>;
+    };
+    expect(body.comments[0].createdAtMockupVersion).toBe(2);
+  });
+
+  it("apply-suggestion replaces a tagged region and 409s on version mismatch", async () => {
+    const created = await postMockup(app, {
+      title: "S",
+      html: '<section data-diffing="hero"><h1>Old</h1></section>',
+    });
+    const mockup = (await created.json()) as { id: string; version: number };
+    const posted = await postComment(mockup.id, {
+      kind: "section",
+      target: "hero",
+      selector: undefined,
+      body: "please\n```suggestion\n<h1>New</h1>\n```",
+    });
+    expect(posted.status).toBe(201);
+    const withComment = (await posted.json()) as {
+      comments: Array<{ id: string }>;
+      version: number;
+    };
+    const commentId = withComment.comments[0].id;
+    const conflict = await app.fetch(
+      new Request(
+        `http://localhost/api/mockups/${mockup.id}/comments/${commentId}/apply-suggestion`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expectedVersion: 99 }),
+        },
+      ),
+    );
+    expect(conflict.status).toBe(409);
+    const applied = await app.fetch(
+      new Request(
+        `http://localhost/api/mockups/${mockup.id}/comments/${commentId}/apply-suggestion`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expectedVersion: withComment.version }),
+        },
+      ),
+    );
+    expect(applied.status).toBe(200);
+    const next = (await applied.json()) as {
+      screens: Array<{ html: string }>;
+    };
+    expect(next.screens[0].html).toContain("<h1>New</h1>");
+    expect(next.screens[0].html).not.toContain("<h1>Old</h1>");
   });
 });

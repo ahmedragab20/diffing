@@ -161,8 +161,13 @@ Comment forms offer Draft / Improve / Shorter / More specific / Generate
 suggestion helpers. Send review can draft a summary from open comments.
 
 Only the context preview shown in the UI is sent. Diff requests do not silently
-include plans; plan requests do not silently include diffs; mockups expose the
-shared connection Settings but no AI actions.
+include plans; plan requests do not silently include diffs; mockup requests do
+not silently include diffs or plans.
+
+Mockup review has **Ask AI** (the rail starts closed), comment chips, Generate
+this screen, Rewrite region, and Attach preview. All of those are opt-in.
+Opening `/mockup`, submitting a screen, pinning a comment, or switching versions
+never starts inference. `--model` on CLI submit/reply is provenance only.
 
 ---
 
@@ -189,7 +194,7 @@ diffing setup --check
 ```
 
 | Symptom | What to try |
-|--------|-------------|
+| -------- | ------------- |
 | `not inside a git repository` | `cd` into a repo, or run `diffing setup` outside a repo then `cd <repo> && diffing` |
 | First-run prompt every time | Run `diffing setup` to completion, or use `--skip-setup` |
 | MCP tools missing in IDE | `diffing setup mcp --write-mcp` or paste JSON from `diffing setup --yes` |

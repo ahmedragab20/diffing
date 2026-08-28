@@ -21,14 +21,32 @@ vi.mock("node:fs", async (importOriginal) => {
 	};
 });
 
-function adapter(run: AiBackendAdapter["run"] = vi.fn(async (_request, _signal, onEvent) => {
-	await onEvent({ type: "text-delta", text: "hello" });
-	return "hello";
-})): AiBackendAdapter {
+function adapter(
+	run: AiBackendAdapter["run"] = vi.fn(async (_request, _signal, onEvent) => {
+		await onEvent({ type: "text-delta", text: "hello" });
+		return "hello";
+	}),
+): AiBackendAdapter {
 	return {
 		id: "codex",
-		connection: async () => ({ id: "codex", label: "Codex", status: "connected", runtimeAvailable: true, credentialRoutes: ["subscription"], activeRoutes: ["subscription"] }),
-		models: async () => [{ id: "codex/subscription/codex/gpt-test", sourceId: "codex", credentialRoute: "subscription", providerId: "codex", modelId: "gpt-test", displayName: "GPT Test" }],
+		connection: async () => ({
+			id: "codex",
+			label: "Codex",
+			status: "connected",
+			runtimeAvailable: true,
+			credentialRoutes: ["subscription"],
+			activeRoutes: ["subscription"],
+		}),
+		models: async () => [
+			{
+				id: "codex/subscription/codex/gpt-test",
+				sourceId: "codex",
+				credentialRoute: "subscription",
+				providerId: "codex",
+				modelId: "gpt-test",
+				displayName: "GPT Test",
+			},
+		],
 		run,
 	};
 }
@@ -65,7 +83,13 @@ describe("AI endpoints", () => {
 		const response = await server.request("/api/ai/run", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ trigger: "background", modelId: "codex/subscription/codex/gpt-test", action: "ask", surface: "diff", context: { kind: "diff" } }),
+			body: JSON.stringify({
+				trigger: "background",
+				modelId: "codex/subscription/codex/gpt-test",
+				action: "ask",
+				surface: "diff",
+				context: { kind: "diff" },
+			}),
 		});
 		expect(response.status).toBe(400);
 		expect(run).not.toHaveBeenCalled();
@@ -74,18 +98,31 @@ describe("AI endpoints", () => {
 	it.each([
 		{ label: "renderer metadata text", patch: "[object Object],[object Object]" },
 		{ label: "a non-string patch", patch: [{ type: "change" }] },
-	])("rejects $label instead of sending unreadable context to the model", async ({ patch }) => {
-		const run = vi.fn(async () => "nope");
-		const server = await app(run);
-		const response = await server.request("/api/ai/run", {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ trigger: "user", conversationId: "bad-context", modelId: "codex/subscription/codex/gpt-test", action: "ask", surface: "diff", context: { kind: "file", filePath: "src/a.ts", patch } }),
-		});
-		expect(response.status).toBe(400);
-		expect(await response.json()).toEqual({ error: "The selected diff context could not be serialized. Refresh the review and try again." });
-		expect(run).not.toHaveBeenCalled();
-	});
+	])(
+		"rejects $label instead of sending unreadable context to the model",
+		async ({ patch }) => {
+			const run = vi.fn(async () => "nope");
+			const server = await app(run);
+			const response = await server.request("/api/ai/run", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					trigger: "user",
+					conversationId: "bad-context",
+					modelId: "codex/subscription/codex/gpt-test",
+					action: "ask",
+					surface: "diff",
+					context: { kind: "file", filePath: "src/a.ts", patch },
+				}),
+			});
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({
+				error:
+					"The selected diff context could not be serialized. Refresh the review and try again.",
+			});
+			expect(run).not.toHaveBeenCalled();
+		},
+	);
 
 	it("streams only after an explicit user-triggered request", async () => {
 		const run = vi.fn(async (_request, _signal, onEvent) => {
@@ -96,7 +133,14 @@ describe("AI endpoints", () => {
 		const response = await server.request("/api/ai/run", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ trigger: "user", conversationId: "c1", modelId: "codex/subscription/codex/gpt-test", action: "ask", surface: "diff", context: { kind: "diff", patch: "+x" } }),
+			body: JSON.stringify({
+				trigger: "user",
+				conversationId: "c1",
+				modelId: "codex/subscription/codex/gpt-test",
+				action: "ask",
+				surface: "diff",
+				context: { kind: "diff", patch: "+x" },
+			}),
 		});
 		expect(response.status).toBe(200);
 		const text = await response.text();
@@ -116,11 +160,23 @@ describe("AI endpoints", () => {
 		const response = await server.request("/api/ai/run", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ trigger: "user", conversationId: "c2", modelId: "codex/subscription/codex/gpt-test", action: "ask", surface: "diff", context: { kind: "diff", attachmentPaths: ["package.json"] } }),
+			body: JSON.stringify({
+				trigger: "user",
+				conversationId: "c2",
+				modelId: "codex/subscription/codex/gpt-test",
+				action: "ask",
+				surface: "diff",
+				context: { kind: "diff", attachmentPaths: ["package.json"] },
+			}),
 		});
 		expect(response.status).toBe(200);
 		await response.text();
-		expect(attached).toEqual([expect.objectContaining({ path: "package.json", content: expect.stringContaining('"name": "diffing"') })]);
+		expect(attached).toEqual([
+			expect.objectContaining({
+				path: "package.json",
+				content: expect.stringContaining('"name": "diffing"'),
+			}),
+		]);
 	});
 
 	it("persists multiple scoped conversations without mixing review surfaces", async () => {
@@ -128,19 +184,139 @@ describe("AI endpoints", () => {
 		const created = await server.request("/api/ai/conversations", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ surface: "diff", scopeKey: "repo:branch", title: "Parser review" }),
+			body: JSON.stringify({
+				surface: "diff",
+				scopeKey: "repo:branch",
+				title: "Parser review",
+			}),
 		});
 		expect(created.status).toBe(201);
 		const conversation = (await created.json()).conversation;
-		const updated = await server.request(`/api/ai/conversations/${conversation.id}`, {
-			method: "PUT",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ draft: "follow up", turns: [{ role: "user", text: "What changed?" }, { role: "assistant", text: "The parser." }] }),
-		});
+		const updated = await server.request(
+			`/api/ai/conversations/${conversation.id}`,
+			{
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					draft: "follow up",
+					turns: [
+						{ role: "user", text: "What changed?" },
+						{ role: "assistant", text: "The parser." },
+					],
+				}),
+			},
+		);
 		expect((await updated.json()).conversation.turns).toHaveLength(2);
-		const scoped = await server.request("/api/ai/conversations?surface=plan&scopeKey=repo:branch");
+		const scoped = await server.request(
+			"/api/ai/conversations?surface=plan&scopeKey=repo:branch",
+		);
 		expect((await scoped.json()).conversations).toEqual([]);
-		const listed = await server.request("/api/ai/conversations?surface=diff&scopeKey=repo:branch");
-		expect((await listed.json()).conversations[0]).toMatchObject({ title: "Parser review", turnCount: 2 });
+		const listed = await server.request(
+			"/api/ai/conversations?surface=diff&scopeKey=repo:branch",
+		);
+		expect((await listed.json()).conversations[0]).toMatchObject({
+			title: "Parser review",
+			turnCount: 2,
+		});
+	});
+
+	it("accepts mockup conversations and rejects unknown surfaces", async () => {
+		const server = await app();
+		const created = await server.request("/api/ai/conversations", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				surface: "mockup",
+				scopeKey: "mockup:mk-1",
+				title: "Checkout",
+			}),
+		});
+		expect(created.status).toBe(201);
+		expect((await created.json()).conversation.surface).toBe("mockup");
+		const bad = await server.request("/api/ai/conversations", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ surface: "canvas", scopeKey: "x" }),
+		});
+		expect(bad.status).toBe(400);
+		const listed = await server.request(
+			"/api/ai/conversations?surface=mockup&scopeKey=mockup:mk-1",
+		);
+		expect((await listed.json()).conversations[0]).toMatchObject({
+			title: "Checkout",
+			surface: "mockup",
+		});
+	});
+
+	it("runs mockup inference only with an explicit user trigger", async () => {
+		const run = vi.fn(async () => "nope");
+		const server = await app(run);
+		const blocked = await server.request("/api/ai/run", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				trigger: "background",
+				modelId: "codex/subscription/codex/gpt-test",
+				action: "critique-mockup",
+				surface: "mockup",
+				context: {
+					kind: "mockup",
+					mockupId: "mk-1",
+					title: "Checkout",
+					version: 1,
+				},
+			}),
+		});
+		expect(blocked.status).toBe(400);
+		expect(run).not.toHaveBeenCalled();
+		const invalidSurface = await server.request("/api/ai/run", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				trigger: "user",
+				conversationId: "c-mock",
+				modelId: "codex/subscription/codex/gpt-test",
+				action: "ask",
+				surface: "canvas",
+				context: {
+					kind: "mockup",
+					mockupId: "mk-1",
+					title: "Checkout",
+					version: 1,
+				},
+			}),
+		});
+		expect(invalidSurface.status).toBe(400);
+		expect(run).not.toHaveBeenCalled();
+		const allowed = await server.request("/api/ai/run", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				trigger: "user",
+				conversationId: "c-mock",
+				modelId: "codex/subscription/codex/gpt-test",
+				action: "critique-mockup",
+				surface: "mockup",
+				context: {
+					kind: "mockup-screen",
+					mockupId: "mk-1",
+					title: "Checkout",
+					version: 1,
+					html: "<h1>Pay</h1>",
+				},
+			}),
+		});
+		expect(allowed.status).toBe(200);
+		await allowed.text();
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(run).toHaveBeenCalledWith(
+			expect.objectContaining({
+				trigger: "user",
+				surface: "mockup",
+				action: "critique-mockup",
+			}),
+			expect.anything(),
+			expect.anything(),
+		);
 	});
 });

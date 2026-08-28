@@ -13,7 +13,10 @@ afterEach(() => vi.useRealTimers());
 describe("AI conversation stores", () => {
 	it("creates, scopes, updates, and deletes local conversations", async () => {
 		const store = new InMemoryAiConversationStore();
-		const created = await store.create({ surface: "diff", scopeKey: "repo:branch" });
+		const created = await store.create({
+			surface: "diff",
+			scopeKey: "repo:branch",
+		});
 		const updated = await store.update(created.id, {
 			title: "Review thread",
 			draft: "follow up",
@@ -29,21 +32,43 @@ describe("AI conversation stores", () => {
 		expect(await store.get(created.id)).toBeNull();
 	});
 
+	it("scopes mockup conversations separately from diff and plan", async () => {
+		const store = new InMemoryAiConversationStore();
+		await store.create({
+			surface: "mockup",
+			scopeKey: "mockup:mk-1",
+			title: "Checkout AI",
+		});
+		expect((await store.list({ surface: "diff" })).length).toBe(0);
+		expect((await store.list({ surface: "plan" })).length).toBe(0);
+		expect((await store.list({ surface: "mockup" }))[0]?.title).toBe(
+			"Checkout AI",
+		);
+	});
+
 	it("prunes expired file-backed conversations on load", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "diffing-ai-conversations-"));
 		const now = Date.now();
-		await writeFile(join(directory, "ai-conversations.json"), JSON.stringify([{
-			id: "expired",
-			title: "Old",
-			surface: "diff",
-			scopeKey: "repo",
-			createdAt: now - AI_CONVERSATION_RETENTION_MS - 1,
-			updatedAt: now - AI_CONVERSATION_RETENTION_MS - 1,
-			turns: [{ role: "user", text: "stale" }],
-		}]));
+		await writeFile(
+			join(directory, "ai-conversations.json"),
+			JSON.stringify([
+				{
+					id: "expired",
+					title: "Old",
+					surface: "diff",
+					scopeKey: "repo",
+					createdAt: now - AI_CONVERSATION_RETENTION_MS - 1,
+					updatedAt: now - AI_CONVERSATION_RETENTION_MS - 1,
+					turns: [{ role: "user", text: "stale" }],
+				},
+			]),
+		);
 		const store = new FileAiConversationStore(directory);
 		expect(await store.list()).toEqual([]);
-		const persisted = await readFile(join(directory, "ai-conversations.json"), "utf8");
+		const persisted = await readFile(
+			join(directory, "ai-conversations.json"),
+			"utf8",
+		);
 		expect(persisted).toBe("[]");
 	});
 });

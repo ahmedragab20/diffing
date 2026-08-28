@@ -592,7 +592,7 @@ Keep agent plan sources under `~/.diffing/<repo>/plan-sources/` — never in the
 ### Mockup review
 
 `diffing design <show|list|extract|propose|publish>` manages the per-repo
-design system under `~/.diffing/<repo>/design-system.json`. Extract writes a
+design system under `~/.diffing/<repo>-<hash>/design-system.json`. Extract writes a
 draft; `publish` makes it wrap new fragment mockups.
 
 `diffing mockup <action>` is the **mockup-review** twin of plan review: an
@@ -604,13 +604,15 @@ use `--wait` / `mockup await` only for short sync waits.
 
 Agents must **never write mockup HTML into the consumer git tree**. Prefer MCP
 `submit_mockup({ html })` or stdin. A path is only for files already under
-`~/.diffing/<repo>/mockup-sources/`. Submitting a path inside the repo prints a warning.
+`~/.diffing/<repo>-<hash>/mockup-sources/`. Submitting a path inside the repo prints a warning.
 
 ```bash
 printf '%s' "$html" | diffing mockup submit - --title T --model M
 diffing mockup submit - [--title T] [--id ID] [--model M] [--source S] [--mode fragment|document] [--system ID] [--plan-id ID] [--wait] [--timeout N]
 diffing mockup await [--timeout N]
 diffing mockup list|show|versions
+diffing mockup unresolve <comment-id>
+diffing mockup apply-suggestion <comment-id> [--expected-version N]
 ```
 
 - `submit` — prefer `-` / stdin for a single Main screen. A file or directory
@@ -757,6 +759,17 @@ selection probe is injected on serve (the stored source is never mutated):
 - **Submit review** — Approve / Request changes / Reject / Comment only, same
   verdicts as plans; the popover reports scoped open count vs total and
   releases `mockup await`. A `comment-only` submit marks mode in the handoff.
+- **Live HTML edit** — `e` opens a line-numbered editor. Autosave updates the
+  current version in place; **Save as new version** bumps. Discard / Esc roll
+  back. The pencil is disabled on historical versions.
+- **Apply suggestion** — a ` ```suggestion ` fence in a thread shows **Apply**
+  (version-guarded; 409 on conflict). Same action as `mockup apply-suggestion`.
+- **Ask AI (opt-in)** — toolbar model picker + **Ask AI**. The rail starts
+  **closed**. Comment chips, Generate this screen (blank screen, confirm first),
+  Rewrite region (tagged hit, confirm first), and Attach preview run only when
+  the human clicks them. Opening `/mockup`, submit, inspect, preview, lint, or
+  version compare never starts inference. `--model` on CLI submit/reply is
+  provenance only.
 
 ### Mockup review XML
 

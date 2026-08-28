@@ -7,7 +7,10 @@ import {
   renderMockupHtml,
 } from "../mockup-shell.js";
 import { analyzeMockupHtml } from "../mockup-preview.js";
-import { buildMockupHandoff, formatMockupHandoffXml } from "../mockup-handoff.js";
+import {
+  buildMockupHandoff,
+  formatMockupHandoffXml,
+} from "../mockup-handoff.js";
 import { extractSuggestion } from "../mockup-suggestion.js";
 import { emptyTokens } from "../design-system-types.js";
 
@@ -55,7 +58,7 @@ describe("wrapMockupFragment", () => {
       tokens: emptyTokens(),
       title: "Test",
     });
-    expect(html).toContain("data-diffing-slot=\"content\"");
+    expect(html).toContain('data-diffing-slot="content"');
     expect(html).toContain("<h1>Hi</h1>");
     expect(html).toContain("--ds-space-unit");
   });
@@ -76,7 +79,11 @@ describe("wrapMockupFragment", () => {
     const full = "<!DOCTYPE html><html><body><h1>Hi</h1></body></html>";
     const out = renderMockupHtml(full, {
       mode: "fragment",
-      system: { status: "published", tokens: emptyTokens(), components: [] } as never,
+      system: {
+        status: "published",
+        tokens: emptyTokens(),
+        components: [],
+      } as never,
     });
     expect(out).toBe(full);
     expect(out.match(/<!DOCTYPE html>/gi)?.length).toBe(1);
@@ -109,9 +116,71 @@ describe("handoff + suggestion", () => {
   });
 
   it("extracts a suggestion fence", () => {
-    expect(extractSuggestion("please use\n```suggestion\n<h1>New</h1>\n```")).toBe(
-      "<h1>New</h1>",
-    );
+    expect(
+      extractSuggestion("please use\n```suggestion\n<h1>New</h1>\n```"),
+    ).toBe("<h1>New</h1>");
     expect(extractSuggestion("no fence")).toBeNull();
+  });
+
+  it("matches components only via data-diffing, not raw id substrings", () => {
+    const handoff = buildMockupHandoff(
+      {
+        id: "m1",
+        title: "Settings",
+        version: 1,
+        decision: "approved",
+        screens: [
+          {
+            id: "main",
+            label: "Main",
+            html: '<div class="button-row" data-diffing="card">ok</div>',
+          },
+        ],
+        comments: [],
+      } as never,
+      {
+        tokens: emptyTokens(),
+        components: [
+          { id: "btn", html: "" },
+          { id: "card", html: "" },
+        ],
+      } as never,
+    );
+    expect(handoff.componentsUsed).toEqual(["card"]);
+  });
+
+  it("openNits includes untagged and nit comments, not blocking", () => {
+    const handoff = buildMockupHandoff({
+      id: "m1",
+      title: "Settings",
+      version: 1,
+      decision: "approved",
+      screens: [{ id: "main", label: "Main", html: "<p>x</p>" }],
+      comments: [
+        {
+          id: "c1",
+          screenId: "main",
+          status: "open",
+          severity: "blocking",
+          body: "must fix",
+        },
+        {
+          id: "c2",
+          screenId: "main",
+          status: "open",
+          severity: "nit",
+          body: "nit",
+        },
+        { id: "c3", screenId: "main", status: "open", body: "untagged" },
+        {
+          id: "c4",
+          screenId: "main",
+          status: "resolved",
+          severity: "nit",
+          body: "done",
+        },
+      ],
+    } as never);
+    expect(handoff.openNits.map((n) => n.id)).toEqual(["c2", "c3"]);
   });
 });

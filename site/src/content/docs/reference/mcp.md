@@ -40,7 +40,7 @@ Successful calls return readable text plus schema-validated `structuredContent`.
 Prefer bounded tools over `get_diff` for large trees.
 
 | Tool | Purpose |
-|------|---------|
+| ------ | --------- |
 | `get_diff` | Full patch (use sparingly) |
 | `diff_summary` | High-level change summary (optional `exclude: ["lockfiles"]`) |
 | `diff_files` | Paged file list (optional `path` glob; `nextCursor` is filtered) |
@@ -51,7 +51,7 @@ Prefer bounded tools over `get_diff` for large trees.
 ## Comments & handoff
 
 | Tool | Purpose |
-|------|---------|
+| ------ | --------- |
 | `create_comment` | Inline finding (path, side, line/range, body, optional severity) |
 | `await_review` | Sync wait for human Send to agent |
 | `list_comments` | Snapshot threads |
@@ -67,7 +67,7 @@ Prefer bounded tools over `get_diff` for large trees.
 ## Plan review
 
 | Tool | Purpose |
-|------|---------|
+| ------ | --------- |
 | `submit_plan` | Submit markdown (async park default) |
 | `await_plan_review` | Sync wait for verdict |
 | `list_plans` | All plans |
@@ -80,7 +80,7 @@ Prefer bounded tools over `get_diff` for large trees.
 ## Mockup review
 
 | Tool | Purpose |
-|------|---------|
+| ------ | --------- |
 | `submit_mockup` | Submit HTML screen(s) (async park default) |
 | `await_mockup_review` | Sync wait for verdict |
 | `list_mockups` | All mockups (compact summaries) |
@@ -92,6 +92,8 @@ Prefer bounded tools over `get_diff` for large trees.
 | `update_mockup_threads` | **Atomic thread batch** — reply/edit/delete/resolve/unresolve in one all-or-nothing call; never bumps the version |
 | `reply_to_mockup_comment` | Reply (single op) |
 | `resolve_mockup_comment` | Resolve thread (single op) |
+| `unresolve_mockup_comment` | Re-open a resolved thread |
+| `apply_mockup_suggestion` | Apply a ` ```suggestion ` fence to that comment's screen |
 | `get_mockup_handoff` | Compact implementation packet after `approved` |
 | `get_design_system` | Read published/draft tokens before authoring |
 | `extract_design_system` | Scan the repo into a draft (does not publish) |
@@ -103,7 +105,7 @@ Comment scope = version + screen + viewport: pass `viewport`/`version` filters t
 ## GitHub PR
 
 | Tool | Purpose |
-|------|---------|
+| ------ | --------- |
 | `gh_overview` | PR overview |
 | `gh_list_threads` | Threads |
 | `gh_list_reviews` | Reviews |

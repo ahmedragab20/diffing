@@ -44,10 +44,7 @@ import {
 import type { Plan } from "./lib/plan-types.js";
 import type { Mockup } from "./lib/mockup-types.js";
 import { formatMockupReview } from "./lib/mockup-format.js";
-import {
-	formatSubmitHints,
-	type MockupStateHint,
-} from "./lib/mockup-lint.js";
+import { formatSubmitHints, type MockupStateHint } from "./lib/mockup-lint.js";
 import type { ReviewComment } from "./lib/types.js";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
@@ -2648,11 +2645,61 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 	);
 
 	server.registerTool(
+		"unresolve_mockup_comment",
+		{
+			title: "Unresolve a mockup comment",
+			description: "Re-open a resolved mockup comment thread.",
+			inputSchema: { commentId: z.string().min(1) },
+			outputSchema: { ok: z.boolean() },
+			annotations: { readOnlyHint: false, idempotentHint: false },
+		},
+		async ({ commentId }) => {
+			const mockup = await findMockupForComment(commentId);
+			await requestBaseJson<unknown>(
+				`/api/mockups/${encodeURIComponent(mockup.id)}/comments/${encodeURIComponent(commentId)}`,
+				{
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ status: "open" }),
+				},
+			);
+			return textResult(`Unresolved ${commentId}`, { ok: true });
+		},
+	);
+
+	server.registerTool(
+		"apply_mockup_suggestion",
+		{
+			title: "Apply a mockup suggestion",
+			description:
+				"Apply the first ```suggestion fence in a mockup comment to that comment's screen. Uses replace-region when the comment has a data-diffing target, otherwise exact-text patch. Pass expectedVersion to abort with 409 on conflict.",
+			inputSchema: {
+				commentId: z.string().min(1),
+				expectedVersion: z.number().int().positive().optional(),
+			},
+			outputSchema: { ok: z.boolean() },
+			annotations: MUTATING,
+		},
+		async ({ commentId, expectedVersion }) => {
+			const mockup = await findMockupForComment(commentId);
+			await requestBaseJson<unknown>(
+				`/api/mockups/${encodeURIComponent(mockup.id)}/comments/${encodeURIComponent(commentId)}/apply-suggestion`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(expectedVersion != null ? { expectedVersion } : {}),
+				},
+			);
+			return textResult(`Applied suggestion from ${commentId}`, { ok: true });
+		},
+	);
+
+	server.registerTool(
 		"inspect_mockup",
 		{
 			title: "Inspect a mockup (bounded)",
 			description:
-				"Read compact, bounded mockup data. view=summary (headline stats), comments (paged comment list), comment (one thread), screen (screen list). Filter by comment scope: status, screenId, viewport (desktop|tablet|mobile), version. Page with cursor/limit; context=none|anchor|source controls how much anchor data is included. Prefer this over get_mockup, which returns every screen's full HTML.",
+				"Read compact, bounded mockup data. view=summary (headline stats), comments (paged comment list), comment (one thread), screen (screen list), preview (layout report and optional screenshot metadata — never starts AI). Filter by comment scope: status, screenId, viewport (desktop|tablet|mobile), version. Page with cursor/limit; context=none|anchor|source controls how much anchor data is included. Prefer this over get_mockup, which returns every screen's full HTML.",
 			inputSchema: {
 				mockupId: z.string().min(1),
 				view: z
@@ -2985,17 +3032,17 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			description:
 				"Compact handoff after a mockup is approved: tokens, screens with intent, components used, leftover nits. Prefer this over dumping every screen's HTML.",
 			inputSchema: { mockupId: z.string().min(1) },
-			outputSchema: { xml: z.string().optional(), mockupId: z.string().optional() },
+			outputSchema: {
+				xml: z.string().optional(),
+				mockupId: z.string().optional(),
+			},
 			annotations: READ_ONLY,
 		},
 		async ({ mockupId }) => {
 			const data = await requestBaseJson<Record<string, unknown>>(
 				`/api/mockups/${encodeURIComponent(mockupId)}/handoff`,
 			);
-			return textResult(
-				typeof data.xml === "string" ? data.xml : "handoff",
-				data,
-			);
+			return textResult(typeof data.xml === "string" ? data.xml : "handoff", data);
 		},
 	);
 

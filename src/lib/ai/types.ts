@@ -1,4 +1,11 @@
-export type AiSourceId = "codex" | "claude" | "opencode" | "cursor" | "openai" | "anthropic" | "xai";
+export type AiSourceId =
+	| "codex"
+	| "claude"
+	| "opencode"
+	| "cursor"
+	| "openai"
+	| "anthropic"
+	| "xai";
 
 export type AiCredentialRoute = "subscription" | "direct-key" | "runtime-key";
 
@@ -56,7 +63,7 @@ export interface AiResolvedImageAttachment extends AiImageAttachmentReference {
 	dataUrl: string;
 }
 
-export type AiSurface = "diff" | "pr-diff" | "plan";
+export type AiSurface = "diff" | "pr-diff" | "plan" | "mockup";
 
 export type AiAction =
 	| "ask"
@@ -75,7 +82,12 @@ export type AiAction =
 	| "critique-plan"
 	| "find-plan-gaps"
 	| "rewrite-plan-section"
-	| "compare-plan-versions";
+	| "compare-plan-versions"
+	| "critique-mockup"
+	| "find-mockup-gaps"
+	| "rewrite-region"
+	| "generate-screen"
+	| "compare-mockup-versions";
 
 export interface AiDiffContext {
 	kind: "diff" | "file" | "selection" | "comment-thread";
@@ -119,6 +131,32 @@ export interface AiPlanContext {
 	imageAttachments?: AiImageAttachmentReference[];
 }
 
+export interface AiMockupContext {
+	kind:
+		| "mockup"
+		| "mockup-screen"
+		| "mockup-region"
+		| "mockup-thread"
+		| "mockup-version-compare";
+	mockupId: string;
+	title: string;
+	version: number;
+	screenId?: string;
+	screenLabel?: string;
+	viewport?: "desktop" | "tablet" | "mobile";
+	html?: string;
+	selectedHtml?: string;
+	region?: string;
+	draft?: string;
+	commentBody?: string;
+	replies?: string[];
+	previousVersion?: number;
+	previousHtml?: string;
+	attachmentPaths?: string[];
+	attachments?: AiAttachment[];
+	imageAttachments?: AiImageAttachmentReference[];
+}
+
 export interface AiAttachment {
 	path: string;
 	content: string;
@@ -144,7 +182,7 @@ export interface AiConversationTurn {
 	context?: AiConversationContextLabel;
 }
 
-export type AiReviewContext = AiDiffContext | AiPlanContext;
+export type AiReviewContext = AiDiffContext | AiPlanContext | AiMockupContext;
 
 export interface AiRunRequest {
 	/** The server rejects anything except an explicit user-triggered request. */

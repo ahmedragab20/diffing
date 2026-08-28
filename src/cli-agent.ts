@@ -19,10 +19,7 @@ import type { Plan } from "./lib/plan-types.js";
 import type { Mockup } from "./lib/mockup-types.js";
 import { formatMockupReview } from "./lib/mockup-format.js";
 import { slugifyScreenId } from "./lib/mockup-types.js";
-import {
-	formatSubmitHints,
-	type MockupStateHint,
-} from "./lib/mockup-lint.js";
+import { formatSubmitHints, type MockupStateHint } from "./lib/mockup-lint.js";
 
 /**
  * Agent-facing `diffing` subcommands. These make the userâ†’agent handoff
@@ -1671,6 +1668,88 @@ async function mockupResolve(args: string[]): Promise<number> {
 	return EXIT_OK;
 }
 
+async function findMockupForCommentId(
+	commentId: string,
+): Promise<{ mockup: Mockup } | { exit: number }> {
+	const listRes = await tryApiFetch(`${baseUrl()}/api/mockups?include=comments`);
+	if (!listRes) return { exit: EXIT_NO_SERVER };
+	const all: Mockup[] = listRes.ok ? await listRes.json() : [];
+	const mockup = all.find((m) =>
+		(m.comments ?? []).some((c) => c.id === commentId),
+	);
+	if (!mockup) {
+		console.error(`Comment ${commentId} not found.`);
+		return { exit: EXIT_NOT_FOUND };
+	}
+	return { mockup };
+}
+
+async function mockupUnresolve(args: string[]): Promise<number> {
+	const { positionals } = parseArgs({ args, allowPositionals: true });
+	const commentId = positionals[0];
+	if (!commentId) {
+		console.error("Usage: diffing mockup unresolve <comment-id>");
+		return EXIT_USAGE;
+	}
+	const found = await findMockupForCommentId(commentId);
+	if ("exit" in found) return found.exit;
+	const res = await tryApiFetch(
+		`${baseUrl()}/api/mockups/${found.mockup.id}/comments/${commentId}`,
+		{
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ status: "open" }),
+		},
+	);
+	if (!res) return EXIT_NO_SERVER;
+	if (!res.ok) {
+		console.error(`Failed to unresolve: HTTP ${res.status}`);
+		return 1;
+	}
+	return EXIT_OK;
+}
+
+async function mockupApplySuggestion(args: string[]): Promise<number> {
+	const { values, positionals } = parseArgs({
+		args,
+		options: { "expected-version": { type: "string" } },
+		allowPositionals: true,
+	});
+	const commentId = positionals[0];
+	if (!commentId) {
+		console.error(
+			"Usage: diffing mockup apply-suggestion <comment-id> [--expected-version N]",
+		);
+		return EXIT_USAGE;
+	}
+	const found = await findMockupForCommentId(commentId);
+	if ("exit" in found) return found.exit;
+	const expectedVersion =
+		values["expected-version"] === undefined
+			? undefined
+			: Number(values["expected-version"]);
+	if (expectedVersion !== undefined && !Number.isFinite(expectedVersion)) {
+		console.error("--expected-version must be a number");
+		return EXIT_USAGE;
+	}
+	const res = await tryApiFetch(
+		`${baseUrl()}/api/mockups/${found.mockup.id}/comments/${commentId}/apply-suggestion`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(
+				expectedVersion === undefined ? {} : { expectedVersion },
+			),
+		},
+	);
+	if (!res) return EXIT_NO_SERVER;
+	if (!res.ok) {
+		console.error(await mockupOpErrorMessage(res));
+		return res.status === 409 ? 1 : EXIT_USAGE;
+	}
+	return EXIT_OK;
+}
+
 async function latestMockupId(base: string): Promise<string | null> {
 	const listRes = await tryApiFetch(`${base}/api/mockups`);
 	if (!listRes || !listRes.ok) return null;
@@ -2104,11 +2183,12 @@ async function mockupCommand(args: string[]): Promise<number> {
 	const action = args[0];
 	const rest = args.slice(1);
 	if (args.includes("--help") || args.includes("-h") || !action) {
-		console.log(`Usage: diffing mockup <submit|await|list|show|versions|reply|resolve|inspect|screen|threads|handoff> [options]
+		console.log(`Usage: diffing mockup <submit|await|list|show|versions|reply|resolve|unresolve|apply-suggestion|inspect|screen|threads|handoff> [options]
 
 Submit HTML mockups for visual review. Same loop as plan review.
 Never write mockup HTML into the consumer git tree. Prefer stdin or MCP inline html.
-Staging files, if needed, go under ~/.diffing/<repo>/mockup-sources/ only.
+Staging files, if needed, go under ~/.diffing/<repo>-<hash>/mockup-sources/ only.
+Ask AI in the mockup UI is opt-in (rail closed). --model on submit/reply is provenance only.
 One state per screen: never tabs/accordions/toggles/modals/JS content-swapping â€” each variant is a separate screen.
 
   submit [-] [--title T] [--screen id=path]... [--id ID] [--model M] [--wait]
@@ -2120,6 +2200,8 @@ One state per screen: never tabs/accordions/toggles/modals/JS content-swapping â
   versions <id> [--json]
   reply <comment-id> --body "..." [--model M]
   resolve <comment-id>
+  unresolve <comment-id>
+  apply-suggestion <comment-id> [--expected-version N]
   inspect <summary|comments|comment|screen|preview> [<id>] [--status S] [--screen S] [--viewport V] [--version N] [--id C] [--cursor N] [--limit N] [--context none|anchor|source] [--pretty]
   handoff [<id>] [--json]
   screen <upsert|remove|patch|replace-region> <id> <screen-id> [--file P] [--text T] [--region R] [--replacement R] [--expected-version N]
@@ -2142,6 +2224,10 @@ One state per screen: never tabs/accordions/toggles/modals/JS content-swapping â
 			return mockupReply(rest);
 		case "resolve":
 			return mockupResolve(rest);
+		case "unresolve":
+			return mockupUnresolve(rest);
+		case "apply-suggestion":
+			return mockupApplySuggestion(rest);
 		case "inspect":
 			return mockupInspect(rest);
 		case "screen":
@@ -2162,7 +2248,7 @@ async function designCommand(args: string[]): Promise<number> {
 	if (!action || args.includes("--help") || args.includes("-h")) {
 		console.log(`Usage: diffing design <show|list|extract|propose|publish> [id] [options]
 
-Per-repo design system stored under ~/.diffing/<repo>/. Agents read this before
+Per-repo design system stored under ~/.diffing/<repo>-<hash>/. Agents read this before
 authoring mockups. Extract is a draft; publish is a human action.
 
   show [id] [--json]
@@ -2205,14 +2291,18 @@ authoring mockups. Extract is a draft; publish is a human action.
 		return EXIT_OK;
 	}
 	if (action === "show") {
-		const res = await tryApiFetch(`${base}/api/design-systems/${encodeURIComponent(id)}`);
+		const res = await tryApiFetch(
+			`${base}/api/design-systems/${encodeURIComponent(id)}`,
+		);
 		if (!res) return EXIT_NO_SERVER;
 		if (res.status === 404) {
 			console.error(`Design system ${id} not found.`);
 			return EXIT_NOT_FOUND;
 		}
 		const system = await res.json();
-		process.stdout.write(JSON.stringify(system, null, values.json ? 2 : 2) + "\n");
+		process.stdout.write(
+			JSON.stringify(system, null, values.json ? 2 : 2) + "\n",
+		);
 		return EXIT_OK;
 	}
 	if (action === "extract") {
@@ -2256,7 +2346,9 @@ authoring mockups. Extract is a draft; publish is a human action.
 			console.error(`Design system ${id} not found.`);
 			return EXIT_NOT_FOUND;
 		}
-		console.error(`Proposed draft on ${id}. Publish with: diffing design publish ${id}`);
+		console.error(
+			`Proposed draft on ${id}. Publish with: diffing design publish ${id}`,
+		);
 		return EXIT_OK;
 	}
 	if (action === "publish") {

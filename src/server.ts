@@ -57,7 +57,10 @@ import {
 	DEFAULT_DESIGN_SYSTEM_ID,
 	type DesignSystem,
 } from "./lib/design-system-types.js";
-import { extractFromRepo, extractTokensFromText } from "./lib/design-system-extract.js";
+import {
+	extractFromRepo,
+	extractTokensFromText,
+} from "./lib/design-system-extract.js";
 import { renderMockupHtml, resolveRenderMode } from "./lib/mockup-shell.js";
 import { renderMockupPreview } from "./lib/mockup-preview.js";
 import {
@@ -160,6 +163,7 @@ import type {
 	AiRunEvent,
 	AiRunRequest,
 	AiSourceId,
+	AiSurface,
 } from "./lib/ai/types.js";
 
 const MIME_TYPES: Record<string, string> = {
@@ -189,10 +193,33 @@ const AI_IMAGE_MIME_TO_EXTENSION = new Map([
 ]);
 
 function hasImageSignature(content: Uint8Array, mimeType: string): boolean {
-	if (mimeType === "image/png") return content.length >= 8 && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, index) => content[index] === byte);
-	if (mimeType === "image/jpeg") return content.length >= 3 && content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff;
-	if (mimeType === "image/gif") return content.length >= 6 && ["GIF87a", "GIF89a"].includes(Buffer.from(content.subarray(0, 6)).toString("ascii"));
-	if (mimeType === "image/webp") return content.length >= 12 && Buffer.from(content.subarray(0, 4)).toString("ascii") === "RIFF" && Buffer.from(content.subarray(8, 12)).toString("ascii") === "WEBP";
+	if (mimeType === "image/png")
+		return (
+			content.length >= 8 &&
+			[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every(
+				(byte, index) => content[index] === byte,
+			)
+		);
+	if (mimeType === "image/jpeg")
+		return (
+			content.length >= 3 &&
+			content[0] === 0xff &&
+			content[1] === 0xd8 &&
+			content[2] === 0xff
+		);
+	if (mimeType === "image/gif")
+		return (
+			content.length >= 6 &&
+			["GIF87a", "GIF89a"].includes(
+				Buffer.from(content.subarray(0, 6)).toString("ascii"),
+			)
+		);
+	if (mimeType === "image/webp")
+		return (
+			content.length >= 12 &&
+			Buffer.from(content.subarray(0, 4)).toString("ascii") === "RIFF" &&
+			Buffer.from(content.subarray(8, 12)).toString("ascii") === "WEBP"
+		);
 	return false;
 }
 
@@ -800,17 +827,21 @@ export function createApp(
 		if (buffer) aiAttachmentCache.set(cacheKey, buffer);
 		return buffer;
 	};
-	const resolveAiImageAttachment = async (reference: AiImageAttachmentReference): Promise<AiResolvedImageAttachment | null> => {
+	const resolveAiImageAttachment = async (
+		reference: AiImageAttachmentReference,
+	): Promise<AiResolvedImageAttachment | null> => {
 		const prefix = "/api/attachments/";
 		if (!reference.url.startsWith(prefix)) return null;
 		const filename = reference.url.slice(prefix.length);
-		if (!/^pasted_image_[0-9a-f-]+\.(?:png|jpe?g|webp|gif)$/i.test(filename)) return null;
+		if (!/^pasted_image_[0-9a-f-]+\.(?:png|jpe?g|webp|gif)$/i.test(filename))
+			return null;
 		const attachmentsDir = resolve(getProjectStorageDir(), "attachments");
 		const absolutePath = resolve(attachmentsDir, filename);
 		if (dirname(absolutePath) !== attachmentsDir) return null;
 		try {
 			const file = await stat(absolutePath);
-			if (!file.isFile() || file.size <= 0 || file.size > MAX_AI_IMAGE_BYTES) return null;
+			if (!file.isFile() || file.size <= 0 || file.size > MAX_AI_IMAGE_BYTES)
+				return null;
 			const mimeType = MIME_TYPES[extname(filename).toLowerCase()];
 			if (!mimeType || !AI_IMAGE_MIME_TO_EXTENSION.has(mimeType)) return null;
 			const content = await readFile(absolutePath);
@@ -1246,7 +1277,10 @@ export function createApp(
 	app.post("/api/ai/connections/:source/key", async (c) => {
 		try {
 			const source = c.req.param("source") as AiSourceId;
-			const body = (await c.req.json()) as { apiKey?: unknown; remember?: unknown };
+			const body = (await c.req.json()) as {
+				apiKey?: unknown;
+				remember?: unknown;
+			};
 			if (typeof body.apiKey !== "string" || !body.apiKey.trim()) {
 				return c.json({ error: "apiKey is required" }, 400);
 			}
@@ -1256,28 +1290,44 @@ export function createApp(
 			await ai.connectKey(source, body.apiKey, body.remember === true);
 			return c.json({ ok: true });
 		} catch (error) {
-			return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+			return c.json(
+				{ error: error instanceof Error ? error.message : String(error) },
+				400,
+			);
 		}
 	});
 
 	app.post("/api/ai/connections/:source/login", async (c) => {
 		try {
 			const source = c.req.param("source") as AiSourceId;
-			const body = (await c.req.json().catch(() => ({}))) as { route?: AiCredentialRoute; providerId?: string };
+			const body = (await c.req.json().catch(() => ({}))) as {
+				route?: AiCredentialRoute;
+				providerId?: string;
+			};
 			const route = body.route ?? "subscription";
 			return c.json({ command: ai.setupCommand(source, route, body.providerId) });
 		} catch (error) {
-			return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+			return c.json(
+				{ error: error instanceof Error ? error.message : String(error) },
+				400,
+			);
 		}
 	});
 
 	app.post("/api/ai/connections/:source/configure-runtime-key", async (c) => {
 		try {
 			const source = c.req.param("source") as AiSourceId;
-			const body = (await c.req.json().catch(() => ({}))) as { providerId?: string };
-			return c.json({ command: ai.setupCommand(source, "runtime-key", body.providerId) });
+			const body = (await c.req.json().catch(() => ({}))) as {
+				providerId?: string;
+			};
+			return c.json({
+				command: ai.setupCommand(source, "runtime-key", body.providerId),
+			});
 		} catch (error) {
-			return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+			return c.json(
+				{ error: error instanceof Error ? error.message : String(error) },
+				400,
+			);
 		}
 	});
 
@@ -1286,30 +1336,45 @@ export function createApp(
 			await ai.disconnect(c.req.param("source") as AiSourceId);
 			return c.json({ ok: true });
 		} catch (error) {
-			return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+			return c.json(
+				{ error: error instanceof Error ? error.message : String(error) },
+				400,
+			);
 		}
 	});
 
-	const aiSurfaces = new Set(["diff", "pr-diff", "plan"]);
+	const aiSurfaces = new Set(["diff", "pr-diff", "plan", "mockup"]);
 	const conversationHeaders = { "Cache-Control": "no-store" };
 	app.get("/api/ai/conversations", async (c) => {
 		const surface = c.req.query("surface");
 		const scopeKey = c.req.query("scopeKey");
-		if (surface && !aiSurfaces.has(surface)) return c.json({ error: "Invalid AI conversation surface." }, 400);
+		if (surface && !aiSurfaces.has(surface))
+			return c.json({ error: "Invalid AI conversation surface." }, 400);
 		return c.json(
-			{ conversations: await aiConversations.list({ surface: surface as "diff" | "pr-diff" | "plan" | undefined, scopeKey: scopeKey || undefined }) },
+			{
+				conversations: await aiConversations.list({
+					surface: surface as AiSurface | undefined,
+					scopeKey: scopeKey || undefined,
+				}),
+			},
 			200,
 			conversationHeaders,
 		);
 	});
 
 	app.post("/api/ai/conversations", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Partial<AiConversationCreateInput>;
-		if (!aiSurfaces.has(body.surface ?? "") || typeof body.scopeKey !== "string" || !body.scopeKey.trim()) {
+		const body = (await c.req
+			.json()
+			.catch(() => ({}))) as Partial<AiConversationCreateInput>;
+		if (
+			!aiSurfaces.has(body.surface ?? "") ||
+			typeof body.scopeKey !== "string" ||
+			!body.scopeKey.trim()
+		) {
 			return c.json({ error: "surface and scopeKey are required." }, 400);
 		}
 		const conversation = await aiConversations.create({
-			surface: body.surface as "diff" | "pr-diff" | "plan",
+			surface: body.surface as AiSurface,
 			scopeKey: body.scopeKey,
 			title: body.title,
 			modelId: body.modelId,
@@ -1319,19 +1384,23 @@ export function createApp(
 
 	app.get("/api/ai/conversations/:id", async (c) => {
 		const conversation = await aiConversations.get(c.req.param("id"));
-		if (!conversation) return c.json({ error: "AI conversation not found." }, 404);
+		if (!conversation)
+			return c.json({ error: "AI conversation not found." }, 404);
 		return c.json({ conversation }, 200, conversationHeaders);
 	});
 
 	app.put("/api/ai/conversations/:id", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as AiConversationUpdateInput;
+		const body = (await c.req
+			.json()
+			.catch(() => ({}))) as AiConversationUpdateInput;
 		const conversation = await aiConversations.update(c.req.param("id"), {
 			title: typeof body.title === "string" ? body.title : undefined,
 			draft: typeof body.draft === "string" ? body.draft : undefined,
 			modelId: typeof body.modelId === "string" ? body.modelId : undefined,
 			turns: Array.isArray(body.turns) ? body.turns : undefined,
 		});
-		if (!conversation) return c.json({ error: "AI conversation not found." }, 404);
+		if (!conversation)
+			return c.json({ error: "AI conversation not found." }, 404);
 		return c.json({ conversation }, 200, conversationHeaders);
 	});
 
@@ -1344,62 +1413,143 @@ export function createApp(
 	app.post("/api/ai/run", async (c) => {
 		const body = (await c.req.json().catch(() => null)) as AiRunRequest | null;
 		if (!body || body.trigger !== "user") {
-			return c.json({ error: "AI inference requires an explicit user trigger." }, 400);
+			return c.json(
+				{ error: "AI inference requires an explicit user trigger." },
+				400,
+			);
 		}
 		if (!body.modelId || !body.action || !body.surface || !body.context) {
-			return c.json({ error: "modelId, action, surface, and context are required" }, 400);
+			return c.json(
+				{ error: "modelId, action, surface, and context are required" },
+				400,
+			);
+		}
+		if (!aiSurfaces.has(body.surface)) {
+			return c.json({ error: "Invalid AI conversation surface." }, 400);
 		}
 		if ("patch" in body.context && body.context.patch !== undefined) {
 			const patch = body.context.patch;
-			const rendererMetadataText = typeof patch === "string" &&
-				/^(?:\[object Object\](?:,\[object Object\])*)(?:\n(?:\[object Object\](?:,\[object Object\])*))*$/.test(patch.trim());
+			const rendererMetadataText =
+				typeof patch === "string" &&
+				/^(?:\[object Object\](?:,\[object Object\])*)(?:\n(?:\[object Object\](?:,\[object Object\])*))*$/.test(
+					patch.trim(),
+				);
 			if (typeof patch !== "string" || rendererMetadataText) {
-				return c.json({ error: "The selected diff context could not be serialized. Refresh the review and try again." }, 400);
+				return c.json(
+					{
+						error:
+							"The selected diff context could not be serialized. Refresh the review and try again.",
+					},
+					400,
+				);
 			}
 		}
 		if ("selections" in body.context && body.context.selections !== undefined) {
-			if (!Array.isArray(body.context.selections) || body.context.selections.length > 8) {
-				return c.json({ error: "At most 8 diff ranges can be attached to one AI request." }, 400);
+			if (
+				!Array.isArray(body.context.selections) ||
+				body.context.selections.length > 8
+			) {
+				return c.json(
+					{ error: "At most 8 diff ranges can be attached to one AI request." },
+					400,
+				);
 			}
 			let selectionBytes = 0;
 			for (const selection of body.context.selections) {
-				if (!selection || typeof selection.filePath !== "string" || !isReviewCommentSide(selection.side) || !Number.isInteger(selection.startLine) || !Number.isInteger(selection.endLine) || selection.startLine < 1 || selection.endLine < selection.startLine || typeof selection.selectedText !== "string") {
+				if (
+					!selection ||
+					typeof selection.filePath !== "string" ||
+					!isReviewCommentSide(selection.side) ||
+					!Number.isInteger(selection.startLine) ||
+					!Number.isInteger(selection.endLine) ||
+					selection.startLine < 1 ||
+					selection.endLine < selection.startLine ||
+					typeof selection.selectedText !== "string"
+				) {
 					return c.json({ error: "An attached diff range is invalid." }, 400);
 				}
 				selectionBytes += Buffer.byteLength(selection.selectedText, "utf8");
 			}
-			if (selectionBytes > 64 * 1024) return c.json({ error: "Attached diff ranges exceed the 64 KB context limit." }, 413);
+			if (selectionBytes > 64 * 1024)
+				return c.json(
+					{ error: "Attached diff ranges exceed the 64 KB context limit." },
+					413,
+				);
 		}
-		const requestedImages = Array.isArray(body.context.imageAttachments) ? body.context.imageAttachments : [];
+		const requestedImages = Array.isArray(body.context.imageAttachments)
+			? body.context.imageAttachments
+			: [];
 		if (requestedImages.length > MAX_AI_IMAGE_COUNT) {
-			return c.json({ error: `At most ${MAX_AI_IMAGE_COUNT} images can be attached to one AI request.` }, 400);
+			return c.json(
+				{
+					error: `At most ${MAX_AI_IMAGE_COUNT} images can be attached to one AI request.`,
+				},
+				400,
+			);
 		}
 		const resolvedImages: AiResolvedImageAttachment[] = [];
 		for (const reference of requestedImages) {
-			if (!reference || typeof reference.url !== "string" || typeof reference.name !== "string" || typeof reference.mimeType !== "string") {
+			if (
+				!reference ||
+				typeof reference.url !== "string" ||
+				typeof reference.name !== "string" ||
+				typeof reference.mimeType !== "string"
+			) {
 				return c.json({ error: "An image attachment reference is invalid." }, 400);
 			}
 			const resolvedImage = await resolveAiImageAttachment(reference);
-			if (!resolvedImage) return c.json({ error: `Image attachment was not found or is invalid: ${reference.name}` }, 404);
+			if (!resolvedImage)
+				return c.json(
+					{
+						error: `Image attachment was not found or is invalid: ${reference.name}`,
+					},
+					404,
+				);
 			resolvedImages.push(resolvedImage);
 		}
-		const requestedPaths = [...new Set((body.context.attachmentPaths ?? []).filter((path): path is string => typeof path === "string" && path.trim().length > 0))];
+		const requestedPaths = [
+			...new Set(
+				(body.context.attachmentPaths ?? []).filter(
+					(path): path is string =>
+						typeof path === "string" && path.trim().length > 0,
+				),
+			),
+		];
 		if (requestedPaths.length > 8) {
-			return c.json({ error: "At most 8 files can be attached to one AI request." }, 400);
+			return c.json(
+				{ error: "At most 8 files can be attached to one AI request." },
+				400,
+			);
 		}
 		const attachments: AiAttachment[] = [];
 		let remainingAttachmentBytes = 64 * 1024;
 		for (const path of requestedPaths) {
 			const buffer = await resolveAiAttachment(path);
-			if (!buffer) return c.json({ error: `Attached file was not found: ${path}` }, 404);
+			if (!buffer)
+				return c.json({ error: `Attached file was not found: ${path}` }, 404);
 			const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
-			if (sample.includes(0)) return c.json({ error: `Binary files cannot be attached: ${path}` }, 415);
+			if (sample.includes(0))
+				return c.json({ error: `Binary files cannot be attached: ${path}` }, 415);
 			if (remainingAttachmentBytes <= 0) break;
 			const take = Math.min(buffer.length, 32 * 1024, remainingAttachmentBytes);
-			attachments.push({ path, content: buffer.subarray(0, take).toString("utf8"), truncated: take < buffer.length });
+			attachments.push({
+				path,
+				content: buffer.subarray(0, take).toString("utf8"),
+				truncated: take < buffer.length,
+			});
 			remainingAttachmentBytes -= take;
 		}
-		body.context = { ...body.context, attachmentPaths: requestedPaths, attachments, imageAttachments: resolvedImages.map(({ url, name, mimeType, size }) => ({ url, name, mimeType, size })) };
+		body.context = {
+			...body.context,
+			attachmentPaths: requestedPaths,
+			attachments,
+			imageAttachments: resolvedImages.map(({ url, name, mimeType, size }) => ({
+				url,
+				name,
+				mimeType,
+				size,
+			})),
+		};
 		body.resolvedImages = resolvedImages;
 		return streamSSE(c, async (stream) => {
 			let runId: string | null = null;
@@ -1413,7 +1563,12 @@ export function createApp(
 				});
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				await stream.writeSSE({ event: "error", data: JSON.stringify({ type: "error", message }) }).catch(() => {});
+				await stream
+					.writeSSE({
+						event: "error",
+						data: JSON.stringify({ type: "error", message }),
+					})
+					.catch(() => {});
 			}
 		});
 	});
@@ -2883,7 +3038,8 @@ export function createApp(
 			id: typeof body.id === "string" ? body.id : DEFAULT_DESIGN_SYSTEM_ID,
 			title: typeof body.title === "string" ? body.title : undefined,
 			tokens: body.tokens as never,
-			guidelines: typeof body.guidelines === "string" ? body.guidelines : undefined,
+			guidelines:
+				typeof body.guidelines === "string" ? body.guidelines : undefined,
 			sources: Array.isArray(body.sources) ? (body.sources as never) : undefined,
 			status: body.status === "published" ? "published" : "draft",
 		});
@@ -2898,8 +3054,11 @@ export function createApp(
 		const system = await designSystems.propose(c.req.param("id"), {
 			title: typeof body.title === "string" ? body.title : undefined,
 			tokens: body.tokens as never,
-			guidelines: typeof body.guidelines === "string" ? body.guidelines : undefined,
-			components: Array.isArray(body.components) ? (body.components as never) : undefined,
+			guidelines:
+				typeof body.guidelines === "string" ? body.guidelines : undefined,
+			components: Array.isArray(body.components)
+				? (body.components as never)
+				: undefined,
 			sources: Array.isArray(body.sources) ? (body.sources as never) : undefined,
 		});
 		broadcast("design-system", Date.now().toString());
@@ -2936,7 +3095,14 @@ export function createApp(
 			extracted = {
 				tokens: extractTokensFromText(text),
 				sources: [{ kind: "url" as const, url }],
-				files: text ? [{ path: url, count: Object.keys(extractTokensFromText(text).raw).length }] : [],
+				files: text
+					? [
+							{
+								path: url,
+								count: Object.keys(extractTokensFromText(text).raw).length,
+							},
+						]
+					: [],
 			};
 		} else {
 			extracted = await extractFromRepo(repoRoot);
@@ -3003,7 +3169,10 @@ export function createApp(
 			c.req.param("commentId"),
 			{
 				body: typeof body.body === "string" ? body.body : undefined,
-				status: body.status === "resolved" || body.status === "open" ? body.status : undefined,
+				status:
+					body.status === "resolved" || body.status === "open"
+						? body.status
+						: undefined,
 			},
 		);
 		if (!system) return c.json({ error: "Not found" }, 404);
@@ -3122,7 +3291,9 @@ export function createApp(
 			designRevision?: number;
 		};
 		const mode = snapBinding.mode ?? mockup.mode ?? "document";
-		const theme = (c.req.query("theme") === "dark" ? "dark" : "light") as MockupTheme;
+		const theme = (
+			c.req.query("theme") === "dark" ? "dark" : "light"
+		) as MockupTheme;
 		const system = await resolveDesignSystem(
 			snapBinding.designSystemId ?? mockup.designSystemId,
 			snapBinding.designRevision ?? mockup.designRevision,
@@ -3233,7 +3404,9 @@ export function createApp(
 			const screen = mockup.screens.find((s) => s.id === screenId);
 			if (!screen) return c.json({ error: "Screen not found" }, 404);
 			const viewport = normalizeMockupViewport(c.req.query("viewport"));
-			const theme = (c.req.query("theme") === "dark" ? "dark" : "light") as MockupTheme;
+			const theme = (
+				c.req.query("theme") === "dark" ? "dark" : "light"
+			) as MockupTheme;
 			const system = await resolveDesignSystem(
 				mockup.designSystemId,
 				mockup.designRevision,
@@ -3360,7 +3533,10 @@ export function createApp(
 		if (result.error === "Exact text not found") {
 			return c.json({ error: result.error, code: "exact-text-not-found" }, 409);
 		}
-		if (result.error?.includes("not found") && result.error.startsWith("Region ")) {
+		if (
+			result.error?.includes("not found") &&
+			result.error.startsWith("Region ")
+		) {
 			return c.json({ error: result.error, code: "region-not-found" }, 409);
 		}
 		if (
@@ -3581,40 +3757,47 @@ export function createApp(
 		return c.json({ ...handoff, xml: formatMockupHandoffXml(handoff) });
 	});
 
-	app.post("/api/mockups/:id/comments/:commentId/apply-suggestion", async (c) => {
-		const mockup = await mockups.get(c.req.param("id"));
-		if (!mockup) return c.json({ error: "Mockup not found" }, 404);
-		const comment = mockup.comments.find((x) => x.id === c.req.param("commentId"));
-		if (!comment) return c.json({ error: "Comment not found" }, 404);
-		const suggestion = extractSuggestion(comment.body);
-		if (!suggestion) {
-			return c.json({ error: "No ```suggestion block in comment" }, 400);
-		}
-		const reqBody = await c.req.json().catch(() => ({}) as { expectedVersion?: number });
-		const expectedVersion = Number.isFinite(reqBody.expectedVersion)
-			? Number(reqBody.expectedVersion)
-			: mockup.version;
-		let result;
-		if (comment.target) {
-			result = await mockups.replaceRegion(
-				mockup.id,
-				comment.screenId,
-				{ region: comment.target, replacement: suggestion },
-				{ expectedVersion },
+	app.post(
+		"/api/mockups/:id/comments/:commentId/apply-suggestion",
+		async (c) => {
+			const mockup = await mockups.get(c.req.param("id"));
+			if (!mockup) return c.json({ error: "Mockup not found" }, 404);
+			const comment = mockup.comments.find(
+				(x) => x.id === c.req.param("commentId"),
 			);
-		} else if (comment.html) {
-			result = await mockups.patchScreen(
-				mockup.id,
-				comment.screenId,
-				{ expectedText: comment.html, replacement: suggestion },
-				{ expectedVersion },
-			);
-		} else {
-			return c.json({ error: "Comment has no target or html to replace" }, 400);
-		}
-		if (!result.mockup) return screenOpError(c, result);
-		return c.json(result.mockup);
-	});
+			if (!comment) return c.json({ error: "Comment not found" }, 404);
+			const suggestion = extractSuggestion(comment.body);
+			if (!suggestion) {
+				return c.json({ error: "No ```suggestion block in comment" }, 400);
+			}
+			const reqBody = await c.req
+				.json()
+				.catch(() => ({}) as { expectedVersion?: number });
+			const expectedVersion = Number.isFinite(reqBody.expectedVersion)
+				? Number(reqBody.expectedVersion)
+				: mockup.version;
+			let result;
+			if (comment.target) {
+				result = await mockups.replaceRegion(
+					mockup.id,
+					comment.screenId,
+					{ region: comment.target, replacement: suggestion },
+					{ expectedVersion },
+				);
+			} else if (comment.html) {
+				result = await mockups.patchScreen(
+					mockup.id,
+					comment.screenId,
+					{ expectedText: comment.html, replacement: suggestion },
+					{ expectedVersion },
+				);
+			} else {
+				return c.json({ error: "Comment has no target or html to replace" }, 400);
+			}
+			if (!result.mockup) return screenOpError(c, result);
+			return c.json(result.mockup);
+		},
+	);
 
 	app.delete("/api/mockups/:id", async (c) => {
 		const removed = await mockups.remove(c.req.param("id"));
@@ -3647,6 +3830,29 @@ export function createApp(
 		if (typeof body.body !== "string" || !body.body.trim()) {
 			return c.json({ error: "body is required" }, 400);
 		}
+		if (body.viewport !== undefined && !isMockupViewport(body.viewport)) {
+			return c.json({ error: "viewport must be desktop|tablet|mobile" }, 400);
+		}
+		const selector =
+			typeof body.selector === "string" && body.selector.trim()
+				? body.selector
+				: undefined;
+		const fingerprint =
+			typeof body.fingerprint === "string" && body.fingerprint.trim()
+				? body.fingerprint
+				: undefined;
+		if (kind === "block" && !selector && !fingerprint) {
+			return c.json(
+				{ error: "block comments require selector or fingerprint" },
+				400,
+			);
+		}
+		if (
+			kind === "point" &&
+			(!Number.isFinite(body.x) || !Number.isFinite(body.y))
+		) {
+			return c.json({ error: "point comments require x and y" }, 400);
+		}
 		const viewport = normalizeMockupViewport(body.viewport);
 		const theme: MockupTheme = body.theme === "dark" ? "dark" : "light";
 		const severityRaw = body.severity;
@@ -3667,9 +3873,8 @@ export function createApp(
 			screenId,
 			kind,
 			target: typeof body.target === "string" ? body.target : undefined,
-			selector: typeof body.selector === "string" ? body.selector : undefined,
-			fingerprint:
-				typeof body.fingerprint === "string" ? body.fingerprint : undefined,
+			selector,
+			fingerprint,
 			html: typeof body.html === "string" ? body.html : undefined,
 			contextHtml:
 				typeof body.contextHtml === "string" ? body.contextHtml : undefined,
@@ -3694,9 +3899,7 @@ export function createApp(
 			body: String(body.body),
 			status: "open" as const,
 			createdAt: Date.now(),
-			createdAtMockupVersion: Number.isFinite(body.createdAtMockupVersion)
-				? Number(body.createdAtMockupVersion)
-				: mockup.version,
+			createdAtMockupVersion: mockup.version,
 			viewport,
 			theme,
 			replies: [],
@@ -3861,7 +4064,11 @@ export function createApp(
 			}
 			const mimeType = file.type.toLowerCase();
 			const ext = AI_IMAGE_MIME_TO_EXTENSION.get(mimeType);
-			if (!ext) return c.json({ error: "Only PNG, JPEG, WebP, and GIF images are supported." }, 415);
+			if (!ext)
+				return c.json(
+					{ error: "Only PNG, JPEG, WebP, and GIF images are supported." },
+					415,
+				);
 			const storageDir = getProjectStorageDir();
 			const attachmentsDir = join(storageDir, "attachments");
 			await mkdir(attachmentsDir, { recursive: true });
@@ -3874,10 +4081,19 @@ export function createApp(
 
 			const arrayBuffer = await file.arrayBuffer();
 			const content = new Uint8Array(arrayBuffer);
-			if (!hasImageSignature(content, mimeType)) return c.json({ error: "The uploaded file does not match its image type." }, 415);
+			if (!hasImageSignature(content, mimeType))
+				return c.json(
+					{ error: "The uploaded file does not match its image type." },
+					415,
+				);
 			await writeFile(absolutePath, content);
 
-			return c.json({ url: `/api/attachments/${filename}`, name: file.name || filename, mimeType, size: file.size });
+			return c.json({
+				url: `/api/attachments/${filename}`,
+				name: file.name || filename,
+				mimeType,
+				size: file.size,
+			});
 		} catch (err: any) {
 			return c.json({ error: `Failed to save attachment: ${err.message}` }, 500);
 		}

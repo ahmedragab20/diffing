@@ -34,7 +34,7 @@ Submit every state in one `submit_mockup({ screens: [...] })` when you can. Cap 
 
 - Tag major regions: `data-diffing="hero"`, `data-diffing="toolbar"`, `data-diffing="empty"`. Humans can still click untagged blocks.
 - Use real product copy and realistic numbers. No lorem, no "John Doe", no purple gradients, no Inter + indigo, no `cdn.tailwindcss.com`, no Google Fonts.
-- Prefer a fragment (body contents) once a design system host shell exists. Opt out of the shell with `mode: "document"` / `--mode document` — full HTML, no wrap. Until the shell ships, `document` is the only mode.
+- Prefer a fragment (body contents). The design-system host shell wraps fragments by default (`mode: "fragment"`). Opt out with `mode: "document"` / `--mode document` — full HTML, no wrap.
 - Give stable `id` or `data-diffing` names so comments survive revisions.
 
 ## After submit

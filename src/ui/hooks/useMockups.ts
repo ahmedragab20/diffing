@@ -46,12 +46,9 @@ function asSummary(raw: unknown): MockupSummary | null {
 					: 1,
 		commentCounts: {
 			total: counts?.total ?? comments.length,
-			open:
-				counts?.open ??
-				comments.filter((c) => c.status === "open").length,
+			open: counts?.open ?? comments.filter((c) => c.status === "open").length,
 			resolved:
-				counts?.resolved ??
-				comments.filter((c) => c.status === "resolved").length,
+				counts?.resolved ?? comments.filter((c) => c.status === "resolved").length,
 		},
 		designSystemId: m.designSystemId,
 		planId: m.planId,
@@ -63,7 +60,9 @@ async function fetchMockups(): Promise<MockupSummary[]> {
 	if (!res.ok) return [];
 	const data = await res.json();
 	if (!Array.isArray(data)) return [];
-	return data.map(asSummary).filter((item): item is MockupSummary => item != null);
+	return data
+		.map(asSummary)
+		.filter((item): item is MockupSummary => item != null);
 }
 
 async function fetchMockup(id: string): Promise<Mockup | null> {
@@ -71,6 +70,15 @@ async function fetchMockup(id: string): Promise<Mockup | null> {
 	if (res.status === 404) return null;
 	if (!res.ok) throw new Error("Failed to load mockup");
 	return res.json() as Promise<Mockup>;
+}
+
+async function readApiError(res: Response, fallback: string): Promise<string> {
+	const data = (await res.json().catch(() => null)) as {
+		error?: unknown;
+	} | null;
+	return typeof data?.error === "string" && data.error.trim()
+		? data.error
+		: fallback;
 }
 
 function summarizeMockup(mockup: Mockup): MockupSummary {
@@ -214,10 +222,9 @@ export function useMockups(activeId: string | null) {
 			mockupId: string;
 			commentId: string;
 		}) => {
-			const res = await fetch(
-				`/api/mockups/${mockupId}/comments/${commentId}`,
-				{ method: "DELETE" },
-			);
+			const res = await fetch(`/api/mockups/${mockupId}/comments/${commentId}`, {
+				method: "DELETE",
+			});
 			if (!res.ok) throw new Error("Failed to delete comment");
 			return res.json() as Promise<Mockup>;
 		},
@@ -282,14 +289,11 @@ export function useMockups(activeId: string | null) {
 			body?: string;
 			status?: "open" | "resolved";
 		}) => {
-			const res = await fetch(
-				`/api/mockups/${mockupId}/comments/${commentId}`,
-				{
-					method: "PUT",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ body, status }),
-				},
-			);
+			const res = await fetch(`/api/mockups/${mockupId}/comments/${commentId}`, {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ body, status }),
+			});
 			if (!res.ok) throw new Error("Failed to update comment");
 			return res.json() as Promise<Mockup>;
 		},
@@ -353,6 +357,81 @@ export function useMockups(activeId: string | null) {
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: MOCKUPS_KEY }),
 	});
 
+	const saveScreens = useMutation({
+		mutationFn: async ({
+			mockupId,
+			screens,
+		}: {
+			mockupId: string;
+			screens: Array<{ id: string; html: string; label?: string }>;
+		}) => {
+			const res = await fetch(`/api/mockups/${mockupId}`, {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ screens }),
+			});
+			if (!res.ok) throw new Error(await readApiError(res, "Failed to save"));
+			return res.json() as Promise<Mockup>;
+		},
+		onSuccess: writeMockup,
+	});
+
+	const bumpScreen = useMutation({
+		mutationFn: async ({
+			mockupId,
+			screenId,
+			html,
+			expectedVersion,
+		}: {
+			mockupId: string;
+			screenId: string;
+			html: string;
+			expectedVersion?: number;
+		}) => {
+			const res = await fetch(
+				`/api/mockups/${mockupId}/screens/${encodeURIComponent(screenId)}`,
+				{
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ html, expectedVersion }),
+				},
+			);
+			if (!res.ok) {
+				throw new Error(await readApiError(res, "Failed to save as new version"));
+			}
+			return res.json() as Promise<Mockup>;
+		},
+		onSuccess: writeMockup,
+	});
+
+	const applySuggestion = useMutation({
+		mutationFn: async ({
+			mockupId,
+			commentId,
+			expectedVersion,
+		}: {
+			mockupId: string;
+			commentId: string;
+			expectedVersion?: number;
+		}) => {
+			const res = await fetch(
+				`/api/mockups/${mockupId}/comments/${commentId}/apply-suggestion`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ expectedVersion }),
+				},
+			);
+			if (!res.ok) {
+				throw new Error(
+					await readApiError(res, "The suggestion could not be applied."),
+				);
+			}
+			return res.json() as Promise<Mockup>;
+		},
+		onSuccess: writeMockup,
+	});
+
 	const removeMockup = useMutation({
 		mutationFn: async (id: string) => {
 			const res = await fetch(`/api/mockups/${id}`, { method: "DELETE" });
@@ -381,6 +460,9 @@ export function useMockups(activeId: string | null) {
 		removeReply: removeReply.mutateAsync,
 		submitDecision: submitDecision.mutateAsync,
 		submitting: submitDecision.isPending,
+		saveScreens: saveScreens.mutateAsync,
+		bumpScreen: bumpScreen.mutateAsync,
+		applySuggestion: applySuggestion.mutateAsync,
 		removeMockup: removeMockup.mutate,
 		agentWaiting: agentStatus.waiters > 0,
 	};

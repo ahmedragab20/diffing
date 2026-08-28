@@ -27,7 +27,8 @@ Every comment is scoped to **version + screen + viewport** (`desktop` | `tablet`
 diffing mockup submit - [--title T] [--id ID] [--model M] [--screen id=path]... [--wait]
 diffing mockup await [--timeout 570]          # sync / resume
 diffing mockup list|show|versions
-diffing mockup inspect <summary|comments|comment|screen> [<id>] [--status open] [--screen S] [--viewport V] [--version N] [--context none|anchor|source]
+diffing mockup inspect <summary|comments|comment|screen|preview> [<id>] [--status open] [--screen S] [--viewport V] [--version N] [--context none|anchor|source]
+diffing mockup apply-suggestion <comment-id> [--expected-version N]
 diffing mockup screen <upsert|remove|patch|replace-region> <id> <screen-id> [--file P|--text T --region R --replacement R] [--expected-version N]
 diffing mockup threads <reply|edit|delete|resolve|unresolve> <comment-id> [<reply-id>] [--body "…"] [--model M]
 ```
@@ -53,10 +54,12 @@ Resubmit full revisions with the **same** `--id` so history stays one conversati
 `submit_mockup`, `await_mockup_review`, `list_mockups`, `get_mockup`, `get_mockup_versions`, `get_mockup_version` — plus the redesign's preferred tools:
 
 | Tool | Purpose |
-|------|---------|
-| `inspect_mockup` | Bounded reads (`view=summary/comments/comment/screen/preview`, filters by `status`/`screenId`/`viewport`/`version`, `context=none|anchor|source`) |
+| ------ | --------- |
+| `inspect_mockup` | Bounded reads (`view=summary/comments/comment/screen/preview`, filters by `status`/`screenId`/`viewport`/`version`, `context=none | anchor | source`).`preview` is a screenshot/layout report — it does not start AI. |
 | `revise_mockup` | One-screen `op=upsert/remove/patch/replace-region` with `expectedVersion` guard |
 | `update_mockup_threads` | Atomic thread batch (reply/edit/delete/resolve/unresolve) |
+| `unresolve_mockup_comment` | Re-open a resolved thread |
+| `apply_mockup_suggestion` | Apply a ` ```suggestion ` fence to that comment's screen |
 | `get_mockup_handoff` | Compact implementation packet after `approved` |
 | `get_design_system` | Read tokens/guidelines before authoring |
 
@@ -87,10 +90,13 @@ The default `<mockup-review>` is **compact and open-only**: open comments on the
 | History | Header version switcher; read-only historical versions (comments disabled); rail shows an explicit prior-version unresolved group that jumps to that version |
 | Threads | Collapsible cards, replies, edit/delete, resolve |
 | Submit review | Approve / Request changes / Reject / Comment only; popover reports scoped vs total open counts; releases `mockup await` |
+| Live edit | `e` opens a line-numbered HTML editor; autosave current version; Save as new version bumps; pencil disabled on historical versions |
+| Apply suggestion | Thread **Apply** for ` ```suggestion ` fences (409 on version conflict) |
+| Ask AI | Opt-in only. Rail starts closed. Comment chips, Generate this screen, Rewrite region, and Attach preview run on click. Opening the page never starts inference. `--model` on CLI is provenance. |
 
 ## Keep the tree clean
 
-Never write mockup HTML or `.diffing/` directories into the consumer project. Screens are mirrored to `~/.diffing/<repo>/mockup-sources/<id>/`; or submit from stdin:
+Never write mockup HTML or `.diffing/` directories into the consumer project. Screens are mirrored to `~/.diffing/<repo>-<hash>/mockup-sources/<id>/`; or submit from stdin:
 
 ```bash
 cat mockup.html | diffing mockup submit --model "your-model"

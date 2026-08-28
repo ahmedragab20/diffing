@@ -7,6 +7,10 @@ description: Submit an HTML mockup to diffing for visual review and obey the ver
 
 Same loop as plan review: submit HTML screens, park, act on the verdict. Do not implement the UI until the mockup is approved. Create or revise the HTML with `diffing-mockup-author` first — this skill is the submit / inspect / patch loop only.
 
+## Human AI in the UI is not this loop
+
+The mockup review UI has Ask AI, comment chips, Generate this screen, Rewrite region, and Attach preview. Those run **only when the human clicks them**. Agents do not start inference. `--model` on submit/reply is provenance. Keep parking after submit; do not treat the UI rail as an agent tool.
+
 ## Never write mockups into the consumer repo
 
 **Do not create or save mockup HTML (or a mockups/ folder) in the user's project.** Diffing stores screens itself under `~/.diffing/<repo>-<hash>/mockups.json` and `mockup-sources/<id>/`.

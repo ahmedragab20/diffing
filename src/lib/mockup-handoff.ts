@@ -32,12 +32,13 @@ export function buildMockupHandoff(
 	const used = new Set<string>();
 	const blob = mockup.screens.map((s) => s.html).join("\n");
 	for (const component of system?.components ?? []) {
-		if (blob.includes(`data-diffing="${component.id}"`) || blob.includes(component.id)) {
-			used.add(component.id);
-		}
+		if (!component.id) continue;
+		if (blob.includes(`data-diffing="${component.id}"`)) used.add(component.id);
 	}
 	const openNits = (mockup.comments ?? [])
-		.filter((c) => c.status === "open")
+		.filter(
+			(c) => c.status === "open" && (c.severity == null || c.severity === "nit"),
+		)
 		.map((c) => ({ id: c.id, screenId: c.screenId, body: c.body }));
 	return {
 		mockupId: mockup.id,

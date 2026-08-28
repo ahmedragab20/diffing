@@ -17,7 +17,7 @@ Drop-in for `git diff` revisions, options, and pathspecs. On a TTY, opens the pr
 ### Server / session options
 
 | Flag | Description |
-|------|-------------|
+| ------ | ------------- |
 | `--port <port>` | Fixed port; default is a random free port |
 | `--host <host>` | Bind address (default `127.0.0.1`) |
 | `--insecure-no-auth` | Required with non-loopback binds; disables API auth |
@@ -49,7 +49,7 @@ diffing --stat              # terminal mode
 ## Subcommands
 
 | Command | Role |
-|---------|------|
+| --------- | ------ |
 | `sessions …` | List / use / open / stop live sessions |
 | `mode [web\|tui]` | Get/set default interactive mode |
 | `await-review` | Sync wait for Send to agent |
@@ -60,6 +60,8 @@ diffing --stat              # terminal mode
 | `url` | Active base URL |
 | `inspect …` | Bounded diff reads |
 | `plan …` | Plan review loop |
+| `mockup …` | Mockup review loop |
+| `design …` | Per-repo design system |
 | `gh …` | GitHub PR automation |
 | `mcp` | Stdio MCP server |
 | `setup` / `init` / `onboard` | First-time wizard |
