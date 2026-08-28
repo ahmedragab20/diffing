@@ -1,3 +1,9 @@
+## 0.19.6
+
+### Patch Changes
+
+- 2082861: Add opt-in mockup review AI
+
 ## 0.19.5
 
 ### Patch Changes
