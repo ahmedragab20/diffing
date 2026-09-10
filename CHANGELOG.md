@@ -1,3 +1,9 @@
+## 0.21.1
+
+### Patch Changes
+
+- 65bc646: Bound long reviews and report evidence coverage accurately
+
 ## 0.21.0
 
 ### Minor Changes
