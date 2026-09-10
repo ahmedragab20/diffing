@@ -159,7 +159,7 @@ export class AiRunLifecycle {
 	}
 
 	/** Provider code cannot forge start, completion, or error terminal events. */
-	providerEvent = (event: AiRunEvent): Promise<void> => {
+	providerEvent = (event: AiRunEvent, silent = false): Promise<void> => {
 		try {
 			this.check();
 			if (
@@ -176,6 +176,15 @@ export class AiRunLifecycle {
 			} else if (typeof event.message !== "string")
 				throw new AiRunError("protocol_error");
 			this.arm("idle");
+			if (silent && event.type === "text-delta") {
+				if (
+					++this.events > this.policy.maxEvents ||
+					Buffer.byteLength(JSON.stringify(event), "utf8") >
+						this.policy.maxEventBytes
+				)
+					throw new AiRunError("resource_limit");
+				return Promise.resolve();
+			}
 			return this.deliver(event);
 		} catch (error) {
 			const rejected = Promise.reject(

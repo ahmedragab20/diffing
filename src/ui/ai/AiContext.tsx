@@ -24,6 +24,7 @@ import type {
 	AiSurface,
 	AiConversationTurn,
 } from "../../lib/ai/types";
+import type { AiReviewStatus } from "../../lib/ai/review-jobs";
 
 interface AiResult {
 	runId?: string;
@@ -45,6 +46,9 @@ interface RunInput {
 	onDelta?: (text: string) => void;
 	onStart?: (runId: string) => void;
 	onWarning?: (message: string) => void;
+	reviewJobId?: string;
+	reviewConfirmed?: boolean;
+	onReviewStatus?: (review: AiReviewStatus) => void;
 }
 
 interface AiContextValue {
@@ -267,6 +271,9 @@ export function AiProvider({ children }: { children: ReactNode }) {
 			onDelta,
 			onStart,
 			onWarning,
+			reviewJobId,
+			reviewConfirmed,
+			onReviewStatus,
 		}: RunInput) => {
 			if (!selectedModel)
 				throw new Error("Connect an AI source and choose a model first.");
@@ -285,6 +292,10 @@ export function AiProvider({ children }: { children: ReactNode }) {
 					return;
 				}
 				if (!runId) throw new Error("AI stream is missing its start event.");
+				if (event.type === "review-status") {
+					onReviewStatus?.(event.review);
+					return;
+				}
 				if (event.type === "text-delta") {
 					text += event.text;
 					onDelta?.(text);
@@ -314,6 +325,8 @@ export function AiProvider({ children }: { children: ReactNode }) {
 						prompt,
 						context,
 						history,
+						reviewJobId,
+						reviewConfirmed,
 					}),
 					signal,
 				});

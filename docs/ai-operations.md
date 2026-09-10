@@ -16,6 +16,31 @@ Evidence navigation reads a review snapshot a run already captured. It reaches
 no shell, network or filesystem of its own, and cannot widen the capture it was
 given.
 
+## Bounded whole-diff risk reviews
+
+Only whole-diff `review-risks` uses multipass review. Ordinary asks, scoped
+comments, plans and mockups remain singlepass, with honest truncation
+diagnostics. Evidence packets use changed hunks and nearby original lines instead of
+file prefixes.
+
+The automatic pass permits three provider calls. Captures with more than one
+group require confirmation before provider calls; each continuation permits up
+to four calls, with 32 calls total per job. Each job retains at most 32 MiB of
+snapshots and has a 10-minute TTL. The server retains at most two jobs. There are no automatic paid
+retries. Generation is server-pinned and must remain fresh; expired or stale
+jobs require a new review.
+
+Coverage counters describe supplied and processed hunks and successful batches,
+never model attention or review quality. Missing originals, binary or oversized
+sources, and synthesis exceeding capture or prompt bounds remain explicit
+partial results; larger work is not silently called complete. Cross-file
+synthesis uses captured evidence even when batches return no findings. The
+model-budget fallback is a complete 96 KiB prompt; no model-name context
+assumptions or token-accuracy claims are advertised.
+
+Continuation is in memory only. It does not promise reload or crash persistence,
+unlimited PR sizes, or complete repository coverage.
+
 ## Feature flags
 
 | Setting | Default | Effect |

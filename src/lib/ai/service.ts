@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { buildAiPrompt } from "./context.js";
+import { buildAiPrompt, MAX_AI_PROMPT_BYTES } from "./context.js";
+import { ReviewJobStore } from "./review-jobs.js";
 import { createDefaultAdapters } from "./adapters.js";
 import { assertProviderRequest } from "./capabilities.js";
 import { resetCodexModelCatalog } from "./catalog.js";
@@ -40,6 +41,7 @@ interface PreparedState {
 
 export class AiService {
 	private readonly prepared = new WeakMap<AiPreparedRun, PreparedState>();
+	private readonly reviewJobs = new ReviewJobStore();
 	private readonly retired = new WeakMap<AiPreparedRun, AiRunError>();
 	private static readonly CATALOG_TTL_MS = 15_000;
 	private readonly adapters = new Map<AiSourceId, AiBackendAdapter>();
@@ -188,6 +190,13 @@ export class AiService {
 		signal?: AbortSignal,
 	): Promise<AiPreparedRun> {
 		if (signal?.aborted) throw new AiRunError("cancelled");
+		if (
+			Buffer.byteLength(request.prompt?.trim() ?? "", "utf8") > MAX_AI_PROMPT_BYTES
+		)
+			throw new AiRequestError(
+				413,
+				"The AI request exceeds the instruction budget; shorten your message.",
+			);
 		if (request.trigger !== "user")
 			throw new Error("AI inference requires an explicit user trigger.");
 		if (!request.conversationId?.trim())
@@ -267,7 +276,19 @@ export class AiService {
 		if (signal?.aborted) cancel();
 		try {
 			lifecycle.check();
-			if (prepare) {
+			if (request.reviewJobId) {
+				if (request.reviewConfirmed !== true)
+					throw new AiRunError("request_rejected");
+				const job = this.reviewJobs.get(request.reviewJobId, request);
+				entry.request = {
+					...job.request,
+					reviewJobId: job.id,
+					reviewConfirmed: true,
+				};
+				await lifecycle.wait(
+					lifecycle.track(job.capture.assertFresh(controller.signal)),
+				);
+			} else if (prepare) {
 				const pending = lifecycle.track(
 					Promise.resolve().then(() => {
 						lifecycle.check();
@@ -332,8 +353,68 @@ export class AiService {
 			assertProviderRequest(request, adapter.capabilities);
 			if (request.resolvedImages?.length && !adapter.supportsImages)
 				throw new AiRunError("unsupported_capability");
+			if (request.reviewCapture || request.reviewJobId) {
+				const job = request.reviewJobId
+					? this.reviewJobs.get(request.reviewJobId, request)
+					: this.reviewJobs.create(request, request.reviewCapture!);
+				await lifecycle.wait(
+					lifecycle.deliver({ type: "start", runId, modelId: request.modelId }),
+				);
+				lifecycle.startProvider();
+				phase = "provider_failed";
+				const text = await lifecycle.wait(
+					lifecycle.track(
+						job.run(
+							request.reviewConfirmed === true,
+							controller.signal,
+							async (input) => {
+								lifecycle.check();
+								lifecycle.startProvider();
+								const {
+									snapshotReader: _reader,
+									evidenceRanges: _ranges,
+									promptBudget: _budget,
+									reviewCapture: _capture,
+									reviewJobId: _job,
+									reviewConfirmed: _confirmed,
+									reviewInstruction: _instruction,
+									reviewNotes: _notes,
+									...providerRequest
+								} = input;
+								const execution = lifecycle.track(
+									Promise.resolve().then(() => {
+										lifecycle.check();
+										return adapter.run(providerRequest, controller.signal, (event) =>
+											lifecycle.providerEvent(event, true),
+										);
+									}),
+								);
+								const output = await lifecycle.wait(execution);
+								lifecycle.validateOutput(output);
+								return output;
+							},
+							(review) =>
+								lifecycle.wait(lifecycle.deliver({ type: "review-status", review })),
+						),
+					),
+				);
+				lifecycle.validateOutput(text);
+				await lifecycle.drain();
+				await lifecycle.wait(lifecycle.deliver({ type: "complete", text }));
+				return text;
+			}
 			const built = buildAiPrompt(request);
-			const { snapshotReader: _reader, ...providerInput } = request;
+			const {
+				snapshotReader: _reader,
+				evidenceRanges: _ranges,
+				promptBudget: _budget,
+				reviewCapture: _capture,
+				reviewInstruction: _instruction,
+				reviewNotes: _notes,
+				reviewJobId: _job,
+				reviewConfirmed: _confirmed,
+				...providerInput
+			} = request;
 			const providerRequest = {
 				...providerInput,
 				prompt: built.prompt,
@@ -342,12 +423,18 @@ export class AiService {
 			await lifecycle.wait(
 				lifecycle.deliver({ type: "start", runId, modelId: request.modelId }),
 			);
-			if (built.truncated)
+			const warnings = built.diagnostics.filter(
+				(diagnostic) => diagnostic.severity === "warning",
+			);
+			for (const diagnostic of warnings.slice(0, 12))
+				await lifecycle.wait(
+					lifecycle.deliver({ type: "warning", message: diagnostic.message }),
+				);
+			if (warnings.length > 12)
 				await lifecycle.wait(
 					lifecycle.deliver({
 						type: "warning",
-						message:
-							"Review evidence is incomplete or exceeded the configured context limit.",
+						message: `${warnings.length - 12} additional evidence gaps; this response does not cover the entire source.`,
 					}),
 				);
 			lifecycle.startProvider();

@@ -1,3 +1,6 @@
+import type { AiPromptBudget } from "./budget.js";
+import type { ReviewCapture, AiReviewStatus } from "./review-jobs.js";
+import type { EvidenceRange } from "./snapshot-prompt.js";
 import type {
 	AiSnapshotManifest,
 	ReviewSnapshot,
@@ -243,9 +246,20 @@ export interface AiRunRequest {
 	/** Server-only captured reader and the references actually included in the prompt. */
 	snapshotReader?: ReviewSnapshot;
 	evidence?: AiEvidenceReference[];
+	/** Server-only bounded prompt policy and selected captured ranges. */
+	promptBudget?: AiPromptBudget;
+	evidenceRanges?: EvidenceRange[];
+	/** Explicit continuation of a retained review; never automatic paid retries. */
+	reviewJobId?: string;
+	reviewConfirmed?: boolean;
+	/** Server-only capture and internal pass instructions. */
+	reviewCapture?: ReviewCapture;
+	reviewInstruction?: string;
+	reviewNotes?: string;
 }
 
 export type AiRunEvent =
+	| { type: "review-status"; review: AiReviewStatus }
 	| { type: "start"; runId: string; modelId: string }
 	| { type: "text-delta"; text: string }
 	| { type: "warning"; message: string }

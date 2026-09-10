@@ -13,7 +13,10 @@
  * capture already records that old-side expansion is unverified.
  */
 import { ByteLruCache } from "./cache.js";
-import { captureLocalOriginals, type OriginalsResult } from "./local-originals.js";
+import {
+	captureLocalOriginals,
+	type OriginalsResult,
+} from "./local-originals.js";
 import { AiSnapshotError } from "./snapshots.js";
 
 export const PR_ORIGINALS_LIMITS = Object.freeze({
@@ -49,6 +52,7 @@ export async function capturePrOriginals(
 	patch: string,
 	fetchBlob: PrBlobFetcher,
 	cache: ByteLruCache<Uint8Array> = createPrOriginalsCache(),
+	paths?: readonly string[],
 ): Promise<OriginalsResult> {
 	const target = {
 		host: identity.host,
@@ -89,6 +93,7 @@ export async function capturePrOriginals(
 	return captureLocalOriginals(
 		{
 			patch,
+			paths,
 			mode: "revision",
 			baseSha: identity.mergeBaseSha ?? identity.baseSha,
 			headSha: identity.headSha,

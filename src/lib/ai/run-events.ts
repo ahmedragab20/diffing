@@ -37,6 +37,51 @@ export function parseAiRunEvent(data: string): AiRunEvent {
 		throw invalid();
 	const event = value as Record<string, unknown>;
 	switch (event.type) {
+		case "review-status": {
+			if (
+				!event.review ||
+				typeof event.review !== "object" ||
+				Array.isArray(event.review)
+			)
+				throw invalid();
+			const review = event.review as Record<string, unknown>;
+			if (
+				typeof review.jobId !== "string" ||
+				!/^[a-f0-9-]{36}$/.test(review.jobId) ||
+				![
+					"awaiting-confirmation",
+					"running",
+					"partial",
+					"complete",
+					"cancelled",
+					"stale",
+					"failed",
+					"exhausted",
+				].includes(String(review.state)) ||
+				typeof review.canContinue !== "boolean" ||
+				[
+					"estimatedBatches",
+					"completedBatches",
+					"totalHunks",
+					"suppliedHunks",
+					"processedHunks",
+					"pendingGroups",
+					"calls",
+					"gapCount",
+				].some(
+					(key) => !Number.isSafeInteger(review[key]) || (review[key] as number) < 0,
+				)
+			)
+				throw invalid();
+			// SAFETY: every required field is validated above; TypeScript cannot narrow indexed record keys.
+			return {
+				type: "review-status",
+				review: review as unknown as Extract<
+					AiRunEvent,
+					{ type: "review-status" }
+				>["review"],
+			};
+		}
 		case "start":
 			if (
 				typeof event.runId !== "string" ||

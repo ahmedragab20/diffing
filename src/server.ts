@@ -225,6 +225,7 @@ import {
 } from "./lib/ai/pr-originals.js";
 import { captureLocalReview } from "./lib/ai/local-snapshot.js";
 import { resolveDiffSnapshot } from "./lib/ai/diff-snapshot.js";
+import { createReviewCapture } from "./lib/ai/review-capture.js";
 import { ByteLruCache } from "./lib/ai/cache.js";
 import {
 	FileAiConversationStore,
@@ -1733,7 +1734,8 @@ export function createApp(
 			repoRoot,
 			{ customMode, prMode, staged: diffOpts.staged },
 			body,
-			(published) => broadcast("code-intel-diagnostics", JSON.stringify(published)),
+			(published) =>
+				broadcast("code-intel-diagnostics", JSON.stringify(published)),
 		);
 		return c.json(result);
 	});
@@ -1746,14 +1748,12 @@ export function createApp(
 		if (body.path.startsWith("/") || body.path.includes(".."))
 			return c.json({ available: false, reason: "outside-repository" });
 		const modelId = loadSettings().aiModel;
-		if (!modelId)
-			return c.json({ available: false, reason: "not-configured" });
+		if (!modelId) return c.json({ available: false, reason: "not-configured" });
 		const source = modelId.split("/")[0] as AiSourceId;
 		const adapter = createDefaultAdapters(new SystemSecretStore()).find(
 			(entry) => entry.id === source,
 		);
-		if (!adapter)
-			return c.json({ available: false, reason: "not-configured" });
+		if (!adapter) return c.json({ available: false, reason: "not-configured" });
 		const request: AiRunRequest = {
 			trigger: "user",
 			conversationId: "edit-predict",
@@ -2040,43 +2040,115 @@ export function createApp(
 					else if (!("mockupId" in body.context)) {
 						if (body.surface !== (prMode ? "pr-diff" : "diff"))
 							throw new AiSnapshotError("invalid");
+						const wholeReview =
+							body.action === "review-risks" && body.context.kind === "diff";
+						const scopedPaths =
+							body.context.kind === "diff" || !body.context.filePath
+								? undefined
+								: [body.context.filePath];
 						if (!prCapture)
 							localCapture = await captureLocalReview(
 								getRepoRoot(),
 								diffOpts,
 								executeDiffWithMeta,
+								{ paths: scopedPaths, skipOriginals: wholeReview },
 							);
 						signal.throwIfAborted();
 						// A PR capture holds only the patch, so its originals are fetched
 						// here; a local capture already read them.
-						const prOriginals = prCapture
-							? await capturePrOriginals(
-									prCapture.identity,
-									prCapture.patch,
-									fetchPrFileContentViaGh,
-									prOriginalsCache,
-								)
-							: undefined;
+						const prOriginals =
+							prCapture && !wholeReview
+								? await capturePrOriginals(
+										prCapture.identity,
+										prCapture.patch,
+										fetchPrFileContentViaGh,
+										prOriginalsCache,
+										scopedPaths,
+									)
+								: { sources: [], omissions: [] };
 						signal.throwIfAborted();
 						const source = prCapture
 							? {
 									...prCapture,
 									originals: prOriginals!.sources,
-									omissions: [
-										...prCapture.omissions,
-										...prOriginals!.omissions,
+									omissions: [...prCapture.omissions, ...prOriginals!.omissions],
+									diagnostics: [
+										...prCapture.diagnostics,
+										...prOriginals!.omissions.map((message) => ({
+											code: "source_unavailable" as const,
+											severity: "warning" as const,
+											message,
+										})),
 									],
 								}
 							: localCapture!;
-						const captured = resolveDiffSnapshot(
-							body.context,
-							source,
-							getRepoRoot(),
-						);
-						body.context = captured.context;
-						body.snapshot = captured.snapshot.manifest;
-						body.snapshotReader = captured.snapshot;
-						snapshotStore.put(captured.snapshot);
+						if (wholeReview) {
+							const root = getRepoRoot();
+							const options = structuredClone(diffOpts);
+							const prPin = prCapture;
+							const localPin = localCapture;
+							const originalChecks: (() => Promise<void>)[] = [];
+							body.reviewCapture = createReviewCapture(
+								source,
+								async (paths, jobSignal) => {
+									jobSignal.throwIfAborted();
+									if (prPin) {
+										const originals = await capturePrOriginals(
+											prPin.identity,
+											prPin.patch,
+											fetchPrFileContentViaGh,
+											prOriginalsCache,
+											paths,
+										);
+										return {
+											...prPin,
+											originals: originals.sources,
+											omissions: [...prPin.omissions, ...originals.omissions],
+											diagnostics: [
+												...prPin.diagnostics,
+												...originals.omissions.map((message) => ({
+													code: "source_unavailable" as const,
+													severity: "warning" as const,
+													message,
+												})),
+											],
+										};
+									}
+									const next = await captureLocalReview(
+										root,
+										options,
+										executeDiffWithMeta,
+										{ paths },
+									);
+									originalChecks.push(() => next.assertFresh());
+									return next;
+								},
+								async (jobSignal) => {
+									jobSignal.throwIfAborted();
+									if (JSON.stringify(diffOpts) !== capturedOptions)
+										throw new AiSnapshotError("stale");
+									if (prPin) prPin.assertFresh(await prStore.get());
+									else await localPin!.assertFresh();
+									for (const check of originalChecks) {
+										jobSignal.throwIfAborted();
+										await check();
+									}
+									jobSignal.throwIfAborted();
+								},
+								root,
+							);
+							body.context = { ...body.context, patch: source.patch };
+						} else {
+							const captured = resolveDiffSnapshot(
+								body.context,
+								source,
+								getRepoRoot(),
+							);
+							body.context = captured.context;
+							body.snapshot = captured.snapshot.manifest;
+							body.snapshotReader = captured.snapshot;
+							snapshotStore.put(captured.snapshot);
+						}
 					}
 					const requestedImages = Array.isArray(body.context.imageAttachments)
 						? body.context.imageAttachments

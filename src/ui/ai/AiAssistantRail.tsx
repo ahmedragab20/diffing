@@ -37,11 +37,9 @@ import type {
 	AiConversation,
 	AiConversationSummary,
 } from "../../lib/ai/conversations";
-import {
-	EMPTY_ACTIVITY,
-	type RunActivity,
-} from "../../lib/ai/activity";
+import { EMPTY_ACTIVITY, type RunActivity } from "../../lib/ai/activity";
 import type { NotebookEntry } from "../../lib/ai/notebook";
+import type { AiReviewStatus } from "../../lib/ai/review-jobs";
 import { TranscriptShell } from "./TranscriptShell";
 import { FileMentionDropdown } from "../components/FileMentionDropdown";
 import { useFileMention } from "../hooks/useFileMention";
@@ -265,6 +263,11 @@ function AiAssistantRailOpen({
 	const [showJump, setShowJump] = useState(false);
 	const [copiedId, setCopiedId] = useState<string | null>(null);
 	const [runWarnings, setRunWarnings] = useState<string[]>([]);
+	const [reviewProgress, setReviewProgress] = useState<{
+		review: AiReviewStatus;
+		conversationId: string;
+		modelId: string;
+	} | null>(null);
 	const [persistenceError, setPersistenceError] = useState<string | null>(null);
 	const [renaming, setRenaming] = useState(false);
 	const [renameDraft, setRenameDraft] = useState("");
@@ -495,6 +498,7 @@ function AiAssistantRailOpen({
 		setPhase("idle");
 		setPersistenceError(null);
 		setRunWarnings([]);
+		setReviewProgress(null);
 		void listConversations(surface, scopeKey)
 			.then(async (summaries) => {
 				if (!alive) return;
@@ -618,6 +622,7 @@ function AiAssistantRailOpen({
 		action: AiAction,
 		overridePrompt?: string,
 		overrideImages?: AiImageAttachmentReference[],
+		continuationId?: string,
 	) => {
 		const requested = (overridePrompt ?? prompt).trim();
 		const requestedImages = overrideImages ?? imageAttachments;
@@ -631,6 +636,7 @@ function AiAssistantRailOpen({
 			setImageError("The selected model source cannot receive images.");
 			return;
 		}
+		if (!continuationId) setReviewProgress(null);
 		const requestedAttachments = attachedFilePaths(prompt);
 		if (!overridePrompt) {
 			saveDraft("");
@@ -691,6 +697,14 @@ function AiAssistantRailOpen({
 							: current,
 					);
 				},
+				reviewJobId: continuationId,
+				reviewConfirmed: continuationId ? true : undefined,
+				onReviewStatus: (review) =>
+					setReviewProgress({
+						review,
+						conversationId: activeConversation.id,
+						modelId: selectedModel,
+					}),
 			});
 			if (result.canceled || controller.signal.aborted) {
 				setPhase("canceled");
@@ -1033,7 +1047,8 @@ function AiAssistantRailOpen({
 		runStartedAt.current ? Date.now() - runStartedAt.current : 0,
 		turns.length > 0,
 	);
-	const showComposed = turns.length > 0 || pending !== null || findings.length > 0;
+	const showComposed =
+		turns.length > 0 || pending !== null || findings.length > 0;
 
 	return (
 		<aside
@@ -1296,18 +1311,14 @@ function AiAssistantRailOpen({
 						turns={turns}
 						activity={activity}
 						streaming={
-							pending
-								? { turn: pending.user, text: pending.assistantText }
-								: null
+							pending ? { turn: pending.user, text: pending.assistantText } : null
 						}
 						findings={findings}
 						copiedId={copiedId}
 						onCopy={handleCopy}
 						onRetry={
 							pending &&
-							(phase === "error" ||
-								phase === "canceled" ||
-								phase === "interrupted")
+							(phase === "error" || phase === "canceled" || phase === "interrupted")
 								? () => {
 										const retry = pending.user.text;
 										const retryImages = pending.user.context?.imageAttachments;
@@ -1324,6 +1335,43 @@ function AiAssistantRailOpen({
 						<span>{pending.error}</span>
 					</div>
 				)}
+				{reviewProgress &&
+					reviewProgress.conversationId === conversation?.id &&
+					reviewProgress.modelId === selectedModel &&
+					context.kind === "diff" && (
+						<div className="ai-run-warning" role="status">
+							<div>
+								<strong>
+									{phase === "canceled" ? "cancelled" : reviewProgress.review.state}
+								</strong>
+								: {reviewProgress.review.processedHunks}/
+								{reviewProgress.review.totalHunks} changed hunks processed;{" "}
+								{reviewProgress.review.suppliedHunks} supplied;{" "}
+								{reviewProgress.review.completedBatches}/
+								{reviewProgress.review.estimatedBatches} estimated batches completed;{" "}
+								{reviewProgress.review.pendingGroups} groups remaining;{" "}
+								{reviewProgress.review.calls} provider calls;{" "}
+								{reviewProgress.review.gapCount} evidence gaps.
+							</div>
+							<div>Evidence counters do not certify review quality.</div>
+							{reviewProgress.review.canContinue && (
+								<button
+									type="button"
+									disabled={isRunBusy(phase)}
+									onClick={() =>
+										void start(
+											"review-risks",
+											"Continue the bounded risk review.",
+											[],
+											reviewProgress.review.jobId,
+										)
+									}
+								>
+									Continue review (up to 4 calls)
+								</button>
+							)}
+						</div>
+					)}
 				{!pending &&
 					runWarnings.map((warning) => (
 						<div className="ai-run-warning" key={`complete-${warning}`} role="status">

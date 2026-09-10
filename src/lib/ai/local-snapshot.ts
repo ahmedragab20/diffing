@@ -3,11 +3,9 @@ import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import type { DiffOptions } from "../diff-options.js";
+import { warning, type AiDiagnostic } from "./diagnostics.js";
 import { toSafeLiteralRelativePath } from "../path.js";
-import {
-	ORIGINALS_LIMITS,
-	captureLocalOriginals,
-} from "./local-originals.js";
+import { ORIGINALS_LIMITS, captureLocalOriginals } from "./local-originals.js";
 import type { SnapshotSourceInput } from "./snapshots.js";
 import {
 	AiSnapshotError,
@@ -178,6 +176,7 @@ export async function captureLocalReview(
 	root: string,
 	options: DiffOptions,
 	readPatch: (options: DiffOptions) => Promise<LocalPatchResult>,
+	scope: { paths?: readonly string[]; skipOriginals?: boolean } = {},
 ) {
 	const opts = structuredClone(options);
 	admit(opts);
@@ -192,16 +191,19 @@ export async function captureLocalReview(
 		patchHash: hashes.patchHash,
 	};
 	Object.freeze(identity);
-	const originals = await captureLocalOriginals(
-		{
-			patch: result.patch,
-			mode: before.mode,
-			baseSha: before.baseSha,
-			headSha: before.headSha,
-		},
-		blobReader(root),
-		worktreeReader(root),
-	);
+	const originals = scope.skipOriginals
+		? { sources: [], omissions: [] }
+		: await captureLocalOriginals(
+				{
+					patch: result.patch,
+					paths: scope.paths,
+					mode: before.mode,
+					baseSha: before.baseSha,
+					headSha: before.headSha,
+				},
+				blobReader(root),
+				worktreeReader(root),
+			);
 	const originalsHash = sourceHash(
 		JSON.stringify(
 			originals.sources.map((source) => [
@@ -211,13 +213,15 @@ export async function captureLocalReview(
 			]),
 		),
 	);
+	const notes = [
+		"Local capture is optimistic, not an atomic filesystem snapshot.",
+	];
 	const omissions = [
 		...(before.repositoryHeadSha
 			? []
 			: [
 					"Repository HEAD could not be established; no repository HEAD identity is claimed.",
 				]),
-		"Local capture is optimistic, not an atomic filesystem snapshot.",
 		...originals.omissions,
 		...(before.mode === "mixed"
 			? [
@@ -233,7 +237,17 @@ export async function captureLocalReview(
 		identity,
 		patch: result.patch,
 		originals: originals.sources as SnapshotSourceInput[],
-		omissions,
+		omissions: [...notes, ...omissions],
+		diagnostics: [
+			...notes.map(
+				(message): AiDiagnostic => ({
+					code: "provenance_note",
+					severity: "info",
+					message,
+				}),
+			),
+			...omissions.map((message) => warning("upstream_omission", message)),
+		],
 		async assertFresh() {
 			if (JSON.stringify(before) !== JSON.stringify(await state(root, opts)))
 				throw new AiSnapshotError("stale");
@@ -244,16 +258,19 @@ export async function captureLocalReview(
 				throw new AiSnapshotError("stale");
 			// Working-tree originals are not covered by the index hash, so the
 			// captured contents are re-read and compared before they are used.
-			const recheck = await captureLocalOriginals(
-				{
-					patch: result.patch,
-					mode: before.mode,
-					baseSha: before.baseSha,
-					headSha: before.headSha,
-				},
-				blobReader(root),
-				worktreeReader(root),
-			);
+			const recheck = scope.skipOriginals
+				? { sources: [], omissions: [] }
+				: await captureLocalOriginals(
+						{
+							patch: result.patch,
+							paths: scope.paths,
+							mode: before.mode,
+							baseSha: before.baseSha,
+							headSha: before.headSha,
+						},
+						blobReader(root),
+						worktreeReader(root),
+					);
 			const recheckHash = sourceHash(
 				JSON.stringify(
 					recheck.sources.map((source) => [

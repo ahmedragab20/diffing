@@ -125,6 +125,8 @@ const schema = z
 		),
 		surface: z.enum(["diff", "pr-diff", "plan", "mockup"]),
 		mode: z.enum(["answer", "investigate"]).optional(),
+		reviewJobId: z.string().uuid().optional(),
+		reviewConfirmed: z.boolean().optional(),
 		action: z.enum([
 			"ask",
 			"summarize",
@@ -170,6 +172,14 @@ const schema = z
 			.optional(),
 	})
 	.strict()
+	.refine(
+		({ reviewJobId, reviewConfirmed, action, context }) =>
+			(!reviewJobId && reviewConfirmed === undefined) ||
+			(action === "review-risks" &&
+				context.kind === "diff" &&
+				Boolean(reviewJobId) &&
+				reviewConfirmed === true),
+	)
 	.refine(({ surface, context }) =>
 		surface === "plan"
 			? context.kind.startsWith("plan")

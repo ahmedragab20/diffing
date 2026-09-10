@@ -1,4 +1,5 @@
 import type { PrSession } from "../pr-session.js";
+import { warning, type AiDiagnostic } from "./diagnostics.js";
 import {
 	AiSnapshotError,
 	sourceHash,
@@ -29,6 +30,9 @@ export function capturePrReview(session: PrSession | null) {
 	};
 	Object.freeze(identity);
 	const patch = session.diff;
+	const notes = [
+		"Unified patches do not establish complete original-file coverage.",
+	];
 	const omissions = [
 		...(identity.mergeBaseSha
 			? []
@@ -41,12 +45,21 @@ export function capturePrReview(session: PrSession | null) {
 		...(session.diffCompleteness
 			? []
 			: ["PR diff completeness has not been established."]),
-		"Unified patches do not establish complete original-file coverage.",
 	];
 	return {
 		identity,
 		patch,
-		omissions,
+		omissions: [...omissions, ...notes],
+		diagnostics: [
+			...omissions.map((message) => warning("upstream_omission", message)),
+			...notes.map(
+				(message): AiDiagnostic => ({
+					code: "provenance_note",
+					severity: "info",
+					message,
+				}),
+			),
+		],
 		cacheKey(path: string) {
 			return JSON.stringify([
 				identity.host,
@@ -63,7 +76,7 @@ export function capturePrReview(session: PrSession | null) {
 				sourceHash(JSON.stringify(current.diffCompleteness ?? null)) !==
 					completenessHash ||
 				JSON.stringify(now.identity) !== JSON.stringify(identity) ||
-				JSON.stringify(now.omissions) !== JSON.stringify(omissions)
+				JSON.stringify(now.omissions) !== JSON.stringify([...omissions, ...notes])
 			)
 				throw new AiSnapshotError("stale");
 		},

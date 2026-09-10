@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { warning, type AiDiagnostic } from "./diagnostics.js";
 
 export type SnapshotIdentity =
 	| {
@@ -61,6 +62,7 @@ export interface AiSnapshotManifest {
 	identity: SnapshotIdentity;
 	sources: SnapshotSource[];
 	omissions: string[];
+	diagnostics?: AiDiagnostic[];
 }
 export interface AiEvidenceReference {
 	id: string;
@@ -122,10 +124,12 @@ export class ReviewSnapshot {
 		identity: SnapshotIdentity,
 		inputs: SnapshotSourceInput[],
 		omissions: string[] = [],
+		diagnostics?: AiDiagnostic[],
 	) {
 		if (
 			inputs.length > 256 ||
 			omissions.length > 256 ||
+			(diagnostics?.length ?? 0) > 512 ||
 			Buffer.byteLength(JSON.stringify(identity)) > 8192
 		)
 			throw new AiSnapshotError("limit");
@@ -169,6 +173,7 @@ export class ReviewSnapshot {
 				identity: pinnedIdentity,
 				sources: sources.map(({ id: _id, ...source }) => source),
 				omissions,
+				diagnostics,
 			}),
 		);
 		this.value = {
@@ -177,11 +182,32 @@ export class ReviewSnapshot {
 			identity: pinnedIdentity,
 			sources,
 			omissions: [...omissions],
+			diagnostics: structuredClone(
+				diagnostics ??
+					omissions.map((message) => warning("upstream_omission", message)),
+			),
 		};
 	}
 
 	get manifest(): AiSnapshotManifest {
 		return structuredClone(this.value);
+	}
+
+	/** Trusted server planning only. Inspection issues no model evidence or coverage. */
+	inspectSource(key: string): readonly string[] {
+		const source = this.value.sources.find((item) => item.key === key);
+		if (!source?.hash) throw new AiSnapshotError("missing");
+		return [...this.contents.get(source.id)!];
+	}
+
+	/** Recover the captured bytes, including the final newline, for retained evidence. */
+	capturedText(key: string): string {
+		const source = this.value.sources.find((item) => item.key === key);
+		if (!source?.hash) throw new AiSnapshotError("missing");
+		let text = this.inspectSource(key).join("\n");
+		if (Buffer.byteLength(text, "utf8") < source.bytes) text += "\n";
+		if (sourceHash(text) !== source.hash) throw new AiSnapshotError("invalid");
+		return text;
 	}
 
 	read(
@@ -304,9 +330,7 @@ export class ReviewSnapshot {
 			for (let index = 0; index < lines.length; index++) {
 				// Bound the work as well as the result; a wide snapshot is not a free scan.
 				if (++scanned > 200_000) return { matches, truncated: true };
-				const line = options.ignoreCase
-					? lines[index].toLowerCase()
-					: lines[index];
+				const line = options.ignoreCase ? lines[index].toLowerCase() : lines[index];
 				if (!line.includes(needle)) continue;
 				if (matches.length >= limit) {
 					truncated = true;

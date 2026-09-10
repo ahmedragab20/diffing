@@ -118,6 +118,143 @@ describe("AiProvider trigger contract", () => {
 		expect(result).toMatchObject({ runId: "run-1", text: "authoritative" });
 	});
 
+	it("delivers review status and returns authoritative completion text", async () => {
+		const review = {
+			jobId: "00000000-0000-4000-8000-000000000000",
+			state: "partial",
+			estimatedBatches: 3,
+			completedBatches: 1,
+			totalHunks: 4,
+			suppliedHunks: 2,
+			processedHunks: 2,
+			pendingGroups: 1,
+			calls: 1,
+			canContinue: true,
+			gapCount: 0,
+		};
+		mockAiFetch(
+			runBody([
+				frame({ type: "start", runId: "run-review", modelId: selectedModel }),
+				frame({ type: "review-status", review }),
+				frame({ type: "complete", text: "finalauthoritative" }),
+			]),
+		);
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<AiProvider>{children}</AiProvider>
+		);
+		const hook = renderHook(() => useAi(), { wrapper });
+		await waitFor(() =>
+			expect(hook.result.current.selectedModel).toBe(selectedModel),
+		);
+		const onReviewStatus = vi.fn();
+		const onDelta = vi.fn();
+		let result!: Awaited<ReturnType<typeof hook.result.current.run>>;
+		await act(async () => {
+			result = await hook.result.current.run({
+				surface: "diff",
+				action: "review-risks",
+				context: { kind: "diff" },
+				onReviewStatus,
+				onDelta,
+			});
+		});
+		expect(onReviewStatus).toHaveBeenCalledWith(review);
+		expect(result).toMatchObject({ text: "finalauthoritative" });
+		expect(onDelta).not.toHaveBeenCalled();
+	});
+
+	it("sends explicit review continuation without automatic continuation", async () => {
+		const jobId = "00000000-0000-4000-8000-000000000000";
+		const fetchMock = mockAiFetch(
+			runBody([
+				frame({ type: "start", runId: "run-review", modelId: selectedModel }),
+				frame({
+					type: "review-status",
+					review: {
+						jobId,
+						state: "partial",
+						estimatedBatches: 3,
+						completedBatches: 1,
+						totalHunks: 4,
+						suppliedHunks: 2,
+						processedHunks: 2,
+						pendingGroups: 1,
+						calls: 1,
+						canContinue: true,
+						gapCount: 0,
+					},
+				}),
+				frame({ type: "complete", text: "finalauthoritative" }),
+			]),
+		);
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<AiProvider>{children}</AiProvider>
+		);
+		const hook = renderHook(() => useAi(), { wrapper });
+		await waitFor(() =>
+			expect(hook.result.current.selectedModel).toBe(selectedModel),
+		);
+		await act(async () => {
+			await hook.result.current.run({
+				surface: "diff",
+				action: "review-risks",
+				context: { kind: "diff" },
+				reviewJobId: jobId,
+				reviewConfirmed: true,
+			});
+		});
+		const runCalls = fetchMock.mock.calls.filter(
+			([input, init]) =>
+				String(input).endsWith("/api/ai/run") && init?.method === "POST",
+		);
+		expect(runCalls).toHaveLength(1);
+		expect(JSON.parse(String(runCalls[0][1]?.body))).toMatchObject({
+			reviewJobId: jobId,
+			reviewConfirmed: true,
+		});
+	});
+
+	it("rejects review status missing calls without invoking its callback", async () => {
+		const onReviewStatus = vi.fn();
+		mockAiFetch(
+			runBody([
+				frame({ type: "start", runId: "run-review", modelId: selectedModel }),
+				frame({
+					type: "review-status",
+					review: {
+						jobId: "00000000-0000-4000-8000-000000000000",
+						state: "partial",
+						estimatedBatches: 3,
+						completedBatches: 1,
+						totalHunks: 4,
+						suppliedHunks: 2,
+						processedHunks: 2,
+						pendingGroups: 1,
+						canContinue: true,
+						gapCount: 0,
+					},
+				}),
+				frame({ type: "complete", text: "must not succeed" }),
+			]),
+		);
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<AiProvider>{children}</AiProvider>
+		);
+		const hook = renderHook(() => useAi(), { wrapper });
+		await waitFor(() =>
+			expect(hook.result.current.selectedModel).toBe(selectedModel),
+		);
+		await expect(
+			hook.result.current.run({
+				surface: "diff",
+				action: "review-risks",
+				context: { kind: "diff" },
+				onReviewStatus,
+			}),
+		).rejects.toThrow();
+		expect(onReviewStatus).not.toHaveBeenCalled();
+	});
+
 	it("rejects a partial stream at EOF", async () => {
 		mockAiFetch(
 			runBody([

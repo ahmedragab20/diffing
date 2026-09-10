@@ -34,6 +34,8 @@ export interface OriginalsRequest {
 	headSha: string | null;
 	/** Lower bound than the default, for a reader whose reads cost network. */
 	maxFiles?: number;
+	/** Apply scope before capture limits and I/O; match either side of renames. */
+	paths?: readonly string[];
 	/**
 	 * What to do when the patch exceeds the bound. Local capture refuses, since
 	 * a local read is cheap and a truncated capture would be surprising; a
@@ -78,10 +80,17 @@ export async function captureLocalOriginals(
 		request.maxFiles ?? ORIGINALS_LIMITS.maxFiles,
 		ORIGINALS_LIMITS.maxFiles,
 	);
-	const excess = index.files.length - maxFiles;
+	const scoped = request.paths
+		? index.files.filter((file) =>
+				request.paths!.some(
+					(path) => path === file.oldPath || path === file.newPath,
+				),
+			)
+		: index.files;
+	const excess = scoped.length - maxFiles;
 	if (excess > 0 && (request.onExcess ?? "throw") === "throw")
 		throw new AiSnapshotError("limit");
-	const files = excess > 0 ? index.files.slice(0, maxFiles) : index.files;
+	const files = excess > 0 ? scoped.slice(0, maxFiles) : scoped;
 
 	// The index side to read from, by mode. Working and staged share an old side.
 	const oldRevision = request.baseSha ?? "HEAD";
@@ -166,8 +175,7 @@ export async function captureLocalOriginals(
 						? await readBlob("", file.newPath)
 						: await readWorktree(file.newPath);
 			// Only a committed or indexed object is recorded; the working tree is not.
-			const provenance =
-				request.mode === "working" ? "reconstructed" : "recorded";
+			const provenance = request.mode === "working" ? "reconstructed" : "recorded";
 			push(
 				`new:${file.newPath}`,
 				file.newPath,
@@ -175,9 +183,7 @@ export async function captureLocalOriginals(
 				newRevision ?? (request.mode === "staged" ? "index" : "worktree"),
 				content,
 				provenance,
-				content === null
-					? `New original unavailable: ${file.newPath}`
-					: undefined,
+				content === null ? `New original unavailable: ${file.newPath}` : undefined,
 			);
 		}
 	}
