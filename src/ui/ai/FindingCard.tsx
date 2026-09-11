@@ -1,6 +1,6 @@
 import { memo } from "react";
 import type { NotebookEntry } from "../../lib/ai/notebook";
-import { dispatchJumpToLine } from "./jumpToLine";
+import { citationJumpTarget, dispatchJumpToLine } from "./jumpToLine";
 
 /**
  * One notebook entry, rendered honestly.
@@ -66,7 +66,7 @@ function FindingCardView({ entry, verification = {} }: FindingCardProps) {
 
 			<ul className="ai-finding-citations">
 				{entry.citations.map((citation, index) => {
-					const jumpable = Boolean(citation.key && citation.startLine >= 1);
+					const target = citationJumpTarget(citation.key, citation.startLine);
 					const rangeLabel = `${citation.key}:${citation.startLine}${
 						citation.endLine === citation.startLine
 							? ""
@@ -78,18 +78,12 @@ function FindingCardView({ entry, verification = {} }: FindingCardProps) {
 							className="ai-finding-citation"
 							data-status={statuses[index]}
 						>
-							{jumpable ? (
+							{target ? (
 								<button
 									type="button"
 									className="ai-finding-source ai-finding-jump"
-									onClick={() =>
-										dispatchJumpToLine({
-											filePath: citation.key,
-											line: citation.startLine,
-											side: "additions",
-										})
-									}
-									aria-label={`Jump to ${citation.key} line ${citation.startLine}`}
+									onClick={() => dispatchJumpToLine(target)}
+									aria-label={`Jump to ${target.filePath} line ${target.line}`}
 								>
 									{rangeLabel}
 								</button>

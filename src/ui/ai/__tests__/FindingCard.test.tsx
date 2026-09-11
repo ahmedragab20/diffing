@@ -42,20 +42,58 @@ describe("rendering a finding", () => {
     expect(screen.getByText("const cents = total / 100")).toBeInTheDocument();
   });
 
-  it("jumps to the cited file and line when the source is clicked", () => {
+  it("jumps to the cited file and line when the source is a new: key", () => {
     const seen: unknown[] = [];
     const handler = (event: Event) => {
       seen.push((event as CustomEvent).detail);
     };
     window.addEventListener("diffing-jump-to-line", handler);
-    render(<FindingCard entry={entry()} verification={{ "ev-1": "verified" }} />);
+    render(
+      <FindingCard
+        entry={entry({
+          citations: [
+            {
+              key: "new:src/a.ts",
+              startLine: 4,
+              endLine: 6,
+              quote: "const cents = total / 100",
+              evidenceId: "ev-1",
+            },
+          ],
+        })}
+        verification={{ "ev-1": "verified" }}
+      />,
+    );
     fireEvent.click(
-      screen.getByRole("button", { name: "Jump to a.ts line 4" }),
+      screen.getByRole("button", { name: "Jump to src/a.ts line 4" }),
     );
     expect(seen).toEqual([
-      { filePath: "a.ts", line: 4, side: "additions" },
+      { filePath: "src/a.ts", line: 4, side: "additions" },
     ]);
     window.removeEventListener("diffing-jump-to-line", handler);
+  });
+
+  it("does not make a patch: citation clickable", () => {
+    render(
+      <FindingCard
+        entry={entry({
+          citations: [
+            {
+              key: "patch:0",
+              startLine: 3,
+              endLine: 3,
+              quote: "@@",
+              evidenceId: "ev-1",
+            },
+          ],
+        })}
+        verification={{ "ev-1": "verified" }}
+      />,
+    );
+    expect(screen.getByText("patch:0:3")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Jump to/ }),
+    ).toBeNull();
   });
 
   it("renders a single-line citation without a range", () => {
