@@ -136,6 +136,7 @@ export function AiComposer({
 	};
 
 	const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
 		if (mention.handleKeyDown(event)) return;
 		if (slashOpen) {
 			if (event.key === "ArrowDown") {
@@ -203,9 +204,9 @@ export function AiComposer({
 		if (event.key !== "Enter") return;
 		if (event.shiftKey) return;
 		if (isBusy) return;
-		if (!prompt.trim() && imageAttachments.length === 0) return;
 		event.preventDefault();
 		event.stopPropagation();
+		if (!prompt.trim() && imageAttachments.length === 0) return;
 		onSend();
 	};
 

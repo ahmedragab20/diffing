@@ -827,6 +827,23 @@ describe("AiAssistantRail", () => {
 		await waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(1));
 	});
 
+	it("does not send while IME composition is active", async () => {
+		const user = userEvent.setup();
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={vi.fn()}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		const composer = screen.getByRole("textbox", { name: "Ask AI" });
+		await user.type(composer, "Hello");
+		fireEvent.keyDown(composer, { key: "Enter", isComposing: true });
+		expect(mocks.run).not.toHaveBeenCalled();
+		expect(composer).toHaveValue("Hello");
+	});
+
 	it("runs the first quick action with Mod+1", async () => {
 		renderRail(
 			<AiAssistantRail
