@@ -688,8 +688,8 @@ describe("AiAssistantRail", () => {
 		await waitFor(() => expect(created).toBe(2));
 		expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
 		expect(
-			screen.getByRole("option", { name: "Fresh conversation" }),
-		).toBeInTheDocument();
+			screen.getByRole("button", { name: "AI conversation" }),
+		).toHaveTextContent("Fresh conversation");
 	});
 
 	it("labels unverified findings as unverified, never as authoritative", async () => {
@@ -969,20 +969,20 @@ describe("AiAssistantRail", () => {
 				context={{ kind: "diff" }}
 			/>,
 		);
-		expect(await screen.findByRole("combobox", { name: "AI conversation" })).toHaveValue(
-			"c1",
-		);
+		expect(
+			await screen.findByRole("button", { name: "AI conversation" }),
+		).toHaveTextContent("First");
 		const rail = document.querySelector(".ai-assistant-rail");
 		fireEvent.keyDown(rail!, { key: "]", metaKey: true });
 		await waitFor(() =>
-			expect(screen.getByRole("combobox", { name: "AI conversation" })).toHaveValue(
-				"c2",
+			expect(screen.getByRole("button", { name: "AI conversation" })).toHaveTextContent(
+				"Second",
 			),
 		);
 		fireEvent.keyDown(rail!, { key: "[", metaKey: true });
 		await waitFor(() =>
-			expect(screen.getByRole("combobox", { name: "AI conversation" })).toHaveValue(
-				"c1",
+			expect(screen.getByRole("button", { name: "AI conversation" })).toHaveTextContent(
+				"First",
 			),
 		);
 	});

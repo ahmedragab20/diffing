@@ -15326,6 +15326,9 @@ button.toolbar-last-send-btn:hover {
 }
 
 .ai-assistant-rail {
+  --ai-accent: var(--gl-accent);
+  --ai-bubble-user: var(--gl-selected);
+  --ai-bubble-assistant: transparent;
   position: fixed;
   z-index: 90;
   top: var(--toolbar-height);
@@ -15552,8 +15555,89 @@ button.toolbar-last-send-btn:hover {
   outline: none;
 }
 
+.ai-conversation-trigger {
+  min-width: 0;
+  flex: 1;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+  border: 1px solid var(--gl-rule-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--gl-canvas);
+  color: var(--gl-text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-conversation-trigger span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-conversation-trigger:focus-visible,
 .ai-conversation-toolbar select:focus-visible {
   border-color: var(--gl-accent);
+}
+
+.ai-conversation-trigger:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ai-conversation-popover {
+  width: min(320px, calc(100vw - 24px));
+  padding: 6px;
+}
+
+.ai-conversation-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: min(360px, 50vh);
+  overflow-y: auto;
+}
+
+.ai-conversation-empty {
+  padding: 12px 8px;
+  color: var(--gl-text-subtle);
+  font-size: 12px;
+}
+
+.ai-conversation-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--gl-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-conversation-option strong,
+.ai-conversation-option small {
+  display: block;
+}
+
+.ai-conversation-option small {
+  margin-top: 2px;
+  color: var(--gl-text-subtle);
+  font-size: 10px;
+}
+
+.ai-conversation-option:hover,
+.ai-conversation-option.is-selected {
+  background: var(--gl-selected);
 }
 
 .ai-conversation-inline-edit,
@@ -15901,9 +15985,12 @@ button.toolbar-last-send-btn:hover {
 }
 
 .ai-message-user {
+  max-width: 86%;
+  margin-left: auto;
+  padding: 8px 10px;
   align-self: flex-end;
-  background: var(--gl-selected);
-  border-color: color-mix(in srgb, var(--gl-accent) 34%, var(--gl-rule-subtle));
+  background: var(--ai-bubble-user, var(--gl-selected));
+  border-color: color-mix(in srgb, var(--ai-accent, var(--gl-accent)) 34%, var(--gl-rule-subtle));
 }
 
 .ai-turn-chips {
@@ -15944,6 +16031,7 @@ button.toolbar-last-send-btn:hover {
   width: 100%;
   min-width: 0;
   padding: 2px 4px 24px;
+  background: var(--ai-bubble-assistant, transparent);
 }
 
 .ai-response-markdown {
@@ -15985,6 +16073,13 @@ button.toolbar-last-send-btn:hover {
   margin-top: 9px;
   padding-top: 7px;
   border-top: 1px solid var(--gl-rule-subtle);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.ai-response-document:hover .ai-message-actions,
+.ai-response-document:focus-within .ai-message-actions {
+  opacity: 1;
 }
 
 .ai-message-actions button {
@@ -16228,6 +16323,10 @@ button.toolbar-last-send-btn:hover {
   gap: 4px;
   color: var(--gl-muted);
   font-size: 11px;
+}
+
+.ai-assistant-rail .vim-kbd-small {
+  margin-left: 0;
 }
 
 .ai-image-input {
@@ -16975,6 +17074,9 @@ button.toolbar-last-send-btn:hover {
   .app-ai-open .sidebar-resize-handle {
     display: none;
   }
+  .ai-message-actions {
+    opacity: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -16986,5 +17088,8 @@ button.toolbar-last-send-btn:hover {
   .ai-loading-copy i::after {
     animation: none;
     display: none;
+  }
+  .ai-message-actions {
+    transition: none;
   }
 }

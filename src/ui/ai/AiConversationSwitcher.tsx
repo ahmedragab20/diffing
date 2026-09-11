@@ -1,8 +1,11 @@
-import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
+import { useState } from "react";
+import { Check, ChevronDown, Pencil, Plus, Trash2, X } from "lucide-react";
 import type {
 	AiConversation,
 	AiConversationSummary,
 } from "../../lib/ai/conversations";
+import { Popover } from "../primitives/Popover";
+import { timeAgo } from "../utils";
 
 export interface AiConversationSwitcherProps {
 	conversation: AiConversation | null;
@@ -41,22 +44,58 @@ export function AiConversationSwitcher({
 	onConfirmDelete,
 	onCancelDelete,
 }: AiConversationSwitcherProps) {
+	const [menuOpen, setMenuOpen] = useState(false);
+	const disabled = conversationLoading || isBusy;
+
 	return (
 		<>
 			<div className="ai-conversation-toolbar" aria-label="AI conversations">
-				<select
-					aria-label="AI conversation"
-					value={conversation?.id ?? ""}
-					disabled={conversationLoading || isBusy}
-					onChange={(event) => void onSelect(event.target.value)}
+				<Popover
+					open={menuOpen}
+					onOpenChange={setMenuOpen}
+					ariaLabel="AI conversations"
+					className="ai-conversation-popover"
+					align="start"
+					trigger={
+						<button
+							type="button"
+							className="ai-conversation-trigger"
+							aria-label="AI conversation"
+							disabled={disabled}
+						>
+							<span>
+								{conversation?.title ?? "New conversation"}
+							</span>
+							<ChevronDown size={12} />
+						</button>
+					}
 				>
-					{!conversation && <option value="">New conversation</option>}
-					{conversationSummaries.map((item) => (
-						<option key={item.id} value={item.id}>
-							{item.title}
-						</option>
-					))}
-				</select>
+					<div className="ai-conversation-menu">
+						{conversationSummaries.length === 0 && (
+							<div className="ai-conversation-empty">No conversations yet.</div>
+						)}
+						{conversationSummaries.map((item) => (
+							<button
+								type="button"
+								key={item.id}
+								className={`ai-conversation-option ${item.id === conversation?.id ? "is-selected" : ""}`}
+								onClick={() => {
+									onSelect(item.id);
+									setMenuOpen(false);
+								}}
+							>
+								<span>
+									<strong>{item.title}</strong>
+									<small>
+										{timeAgo(item.updatedAt)} · {item.turnCount}{" "}
+										{item.turnCount === 1 ? "turn" : "turns"}
+									</small>
+								</span>
+								{item.id === conversation?.id && <span>✓</span>}
+							</button>
+						))}
+					</div>
+				</Popover>
 				<button
 					type="button"
 					className="ai-rail-icon-btn"
