@@ -22,10 +22,12 @@ function makeActions() {
     onToggleLineNumbers: vi.fn(),
     onOpenTheme: vi.fn(),
     onOpenShortcuts: vi.fn(),
+    onToggleAiAssistant: vi.fn(),
+    onOpenAiNewConversation: vi.fn(),
   }
 }
 
-function Harness({ actions }: { actions: ReturnType<typeof makeActions> }) {
+function Harness({ actions }: { actions: Parameters<typeof usePlanReviewKeymaps>[0] }) {
   usePlanReviewKeymaps(actions)
   return null
 }
@@ -108,5 +110,31 @@ describe('plan review keymaps', () => {
 
     fireEvent.keyDown(window, { key: 'z' })
     expect(actions.onToggleZenMode).not.toHaveBeenCalled()
+  })
+
+  it('toggles Ask AI with a, A, and Mod+I', () => {
+    const actions = makeActions()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'a' })
+    fireEvent.keyDown(window, { key: 'A' })
+    fireEvent.keyDown(window, { key: 'i', metaKey: true })
+
+    expect(actions.onToggleAiAssistant).toHaveBeenCalledTimes(2)
+    expect(actions.onOpenAiNewConversation).toHaveBeenCalledOnce()
+  })
+
+  it('does not fire a while typing, but Mod+I still works', () => {
+    const actions = makeActions()
+    const { container } = render(<Harness actions={actions} />)
+    const textarea = document.createElement('textarea')
+    container.appendChild(textarea)
+    textarea.focus()
+
+    fireEvent.keyDown(textarea, { key: 'a' })
+    expect(actions.onToggleAiAssistant).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(textarea, { key: 'i', ctrlKey: true })
+    expect(actions.onToggleAiAssistant).toHaveBeenCalledOnce()
   })
 })

@@ -55,7 +55,7 @@ import {
 import type { FileTreeChipFilter } from "./FileTree";
 import type { Scope } from "../lib/searchTypes";
 import { getUiStateItem, setUiStateItem } from "../utils/uiState";
-import { SHIKI_THEME_MAP } from "../utils";
+import { SHIKI_THEME_MAP, scrollToLine } from "../utils";
 import { navigate } from "../router";
 import { DiffViewer, sortFilesByName } from "./DiffViewer";
 import { FileTree } from "./FileTree";
@@ -73,8 +73,15 @@ import { SearchPalette } from "./SearchPalette";
 import { ShortcutsHelpModal } from "./ShortcutsHelpModal";
 import { ThemeModal } from "./ThemeModal";
 import { VimStatusBar } from "./VimStatusBar";
-import { AiAssistantRail } from "../ai/AiAssistantRail";
+import { AiAssistantRail, type AiAssistantRailHandle } from "../ai/AiAssistantRail";
 import { diffReviewContextForAi } from "../ai/diffContext";
+import {
+  askAboutActiveFile,
+  openAskAiNewConversation,
+  restoreAiRailFocus,
+  toggleAskAiRail,
+} from "../ai/aiRailToggle";
+import type { AiDiffSelection } from "../../lib/ai/types";
 
 /** GitHub-specific variant of the main review shell. */
 export function PrReviewApp() {
@@ -149,6 +156,9 @@ export function PrReviewApp() {
   const [submissionToast, setSubmissionToast] =
     useState<SubmitPrReviewResult | null>(null);
   const [aiRailOpen, setAiRailOpen] = useState(false);
+  const [aiSelections, setAiSelections] = useState<AiDiffSelection[]>([]);
+  const aiRailRef = useRef<AiAssistantRailHandle>(null);
+  const aiPreviousFocusRef = useRef<HTMLElement | null>(null);
   const [timelineCursor, setTimelineCursor] = useState(0);
 
   const appRef = useRef<HTMLDivElement>(null);
@@ -291,6 +301,23 @@ export function PrReviewApp() {
     setActiveFile(filePath);
     navigateToFile(filePath);
   }, []);
+
+  useEffect(() => {
+    const onJump = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{
+          filePath?: string;
+          line?: number;
+          side?: "additions" | "deletions";
+        }>
+      ).detail;
+      if (!detail?.filePath || !detail.line) return;
+      handleFileClick(detail.filePath);
+      scrollToLine(detail.filePath, detail.line, detail.side ?? "additions");
+    };
+    window.addEventListener("diffing-jump-to-line", onJump);
+    return () => window.removeEventListener("diffing-jump-to-line", onJump);
+  }, [handleFileClick]);
 
   const scrollToNextFile = useScrollToNextFile(filteredFiles);
   useEffect(() => () => cancelDiffNavigation(), []);
@@ -573,6 +600,53 @@ export function PrReviewApp() {
     setPalette((value) => ({ ...value, changedOnly }));
   }, []);
 
+  const addSelectionToAsk = useCallback((selection: AiDiffSelection) => {
+    setAiSelections((current) => {
+      const key = `${selection.filePath}:${selection.side}:${selection.startLine}:${selection.endLine}`;
+      if (
+        current.some(
+          (item) =>
+            `${item.filePath}:${item.side}:${item.startLine}:${item.endLine}` ===
+            key,
+        )
+      )
+        return current;
+      return [...current, selection].slice(-8);
+    });
+    setAiRailOpen(true);
+  }, []);
+
+  const closeAiRail = useCallback(() => {
+    setAiRailOpen(false);
+    restoreAiRailFocus(aiPreviousFocusRef);
+  }, []);
+
+  const toggleAiAssistant = useCallback(() => {
+    toggleAskAiRail({
+      open: aiRailOpen,
+      setOpen: setAiRailOpen,
+      railRef: aiRailRef,
+      previousFocusRef: aiPreviousFocusRef,
+    });
+  }, [aiRailOpen]);
+
+  const openAiNewConversation = useCallback(() => {
+    openAskAiNewConversation({
+      setOpen: setAiRailOpen,
+      railRef: aiRailRef,
+      previousFocusRef: aiPreviousFocusRef,
+    });
+  }, []);
+
+  const askAboutFile = useCallback(() => {
+    askAboutActiveFile({
+      filePath: activeFile,
+      setOpen: setAiRailOpen,
+      railRef: aiRailRef,
+      previousFocusRef: aiPreviousFocusRef,
+    });
+  }, [activeFile]);
+
   const keymapActions = useMemo(
     () => ({
       onNavigateFile: navigateFile,
@@ -623,6 +697,9 @@ export function PrReviewApp() {
       onPrevSearchHit: prevHit,
       onOpenTheme: () => setThemeModalOpen(true),
       onOpenShortcuts: () => setShortcutsHelpOpen(true),
+      onToggleAiAssistant: toggleAiAssistant,
+      onOpenAiNewConversation: openAiNewConversation,
+      onAskAboutActiveFile: askAboutFile,
     }),
     [
       navigateFile,
@@ -641,6 +718,9 @@ export function PrReviewApp() {
       fileSearch.filePath,
       nextHit,
       prevHit,
+      toggleAiAssistant,
+      openAiNewConversation,
+      askAboutFile,
     ],
   );
   useDiffReviewKeymaps(keymapActions);
@@ -921,21 +1001,32 @@ export function PrReviewApp() {
                 onSetExistingResolved={setExistingThreadResolved}
                 onApplyExisting={applyExistingSuggestion}
                 expectedHeadSha={session.headSha}
+                onAddSelectionToAsk={addSelectionToAsk}
               />
             )}
           </main>
         </div>
 
         <AiAssistantRail
+          ref={aiRailRef}
           open={aiRailOpen}
-          onClose={() => setAiRailOpen(false)}
+          onClose={closeAiRail}
           surface="pr-diff"
           title="Ask about this pull request"
-          context={diffReviewContextForAi(patch, {
-            repoName: session.repo,
-            branch: `${session.headRefName} → ${session.baseRefName}`,
-            focusedFilePath: activeFile,
-          })}
+          context={{
+            ...diffReviewContextForAi(patch, {
+              repoName: session.repo,
+              branch: `${session.headRefName} → ${session.baseRefName}`,
+              focusedFilePath: activeFile,
+            }),
+            selections: aiSelections,
+          }}
+          initialFocus="composer"
+          onRemoveSelection={(index) =>
+            setAiSelections((current) =>
+              current.filter((_, itemIndex) => itemIndex !== index),
+            )
+          }
         />
 
         <SearchPalette
@@ -1022,6 +1113,7 @@ function PrDiffSurface({
   onSetExistingResolved,
   onApplyExisting,
   expectedHeadSha,
+  onAddSelectionToAsk,
 }: {
   commentActions: CommentActions;
   files: FileDiffMetadata[];
@@ -1055,6 +1147,7 @@ function PrDiffSurface({
   onSetExistingResolved: (threadId: string, resolved: boolean) => Promise<void>;
   onApplyExisting: (commentId: number) => Promise<void>;
   expectedHeadSha?: string;
+  onAddSelectionToAsk?: (selection: AiDiffSelection) => void;
 }) {
   return (
     <div className="pr-diff-surface">
@@ -1109,6 +1202,7 @@ function PrDiffSurface({
         allowLocalActions={false}
         fileSearch={fileSearch}
         onOpenFileSearch={onOpenFileSearch}
+        onAddSelectionToAsk={onAddSelectionToAsk}
       />
       </CommentActionsProvider>
     </div>

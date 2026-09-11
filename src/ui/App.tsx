@@ -74,8 +74,15 @@ import { CommitWalkBar, stepCommitWalk } from "./components/CommitWalkBar";
 import { ConfirmDialog } from "./primitives/ConfirmDialog";
 import { AgentProgressToast } from "./components/AgentProgressToast";
 import { useSinceLastRound } from "./hooks/useSinceLastRound";
-import { AiAssistantRail } from "./ai/AiAssistantRail";
+import { AiAssistantRail, type AiAssistantRailHandle } from "./ai/AiAssistantRail";
 import { diffReviewContextForAi } from "./ai/diffContext";
+import {
+	askAboutActiveFile,
+	openAskAiNewConversation,
+	restoreAiRailFocus,
+	toggleAskAiRail,
+} from "./ai/aiRailToggle";
+import { getPendingDiffSelection } from "./ai/pendingDiffSelection";
 import type { AiDiffSelection } from "../lib/ai/types";
 
 export function App() {
@@ -246,6 +253,8 @@ export function App() {
 	const [activeFile, setActiveFile] = useState<string | null>(null);
 	const [aiRailOpen, setAiRailOpen] = useState(false);
 	const [aiSelections, setAiSelections] = useState<AiDiffSelection[]>([]);
+	const aiRailRef = useRef<AiAssistantRailHandle>(null);
+	const aiPreviousFocusRef = useRef<HTMLElement | null>(null);
 	/**
 	 * Timestamp of the last *explicit* active-file selection (click, J/K,
 	 * deep link) plus the programmatic smooth scrolls they trigger. Fed to
@@ -548,6 +557,50 @@ export function App() {
 		setAiRailOpen(true);
 	}, []);
 
+	const closeAiRail = useCallback(() => {
+		setAiRailOpen(false);
+		restoreAiRailFocus(aiPreviousFocusRef);
+	}, []);
+
+	const toggleAiAssistant = useCallback(() => {
+		toggleAskAiRail({
+			open: aiRailOpen,
+			setOpen: setAiRailOpen,
+			railRef: aiRailRef,
+			previousFocusRef: aiPreviousFocusRef,
+		});
+	}, [aiRailOpen]);
+
+	const openAiNewConversation = useCallback(() => {
+		openAskAiNewConversation({
+			setOpen: setAiRailOpen,
+			railRef: aiRailRef,
+			previousFocusRef: aiPreviousFocusRef,
+		});
+	}, []);
+
+	const askAboutFile = useCallback(() => {
+		askAboutActiveFile({
+			filePath: activeFile,
+			setOpen: setAiRailOpen,
+			railRef: aiRailRef,
+			previousFocusRef: aiPreviousFocusRef,
+		});
+	}, [activeFile]);
+
+	const addPendingSelectionToAsk = useCallback(() => {
+		const pending = getPendingDiffSelection();
+		if (pending) addSelectionToAsk(pending);
+		else {
+			toggleAskAiRail({
+				open: aiRailOpen,
+				setOpen: setAiRailOpen,
+				railRef: aiRailRef,
+				previousFocusRef: aiPreviousFocusRef,
+			});
+		}
+	}, [addSelectionToAsk, aiRailOpen]);
+
 	const files = useMemo(() => {
 		if (!activePatch) return [];
 		try {
@@ -785,6 +838,21 @@ export function App() {
 		setActiveFile(filePath);
 		navigateToFile(filePath);
 	}, []);
+
+	useEffect(() => {
+		const onJump = (event: Event) => {
+			const detail = (event as CustomEvent<{
+				filePath?: string;
+				line?: number;
+				side?: "additions" | "deletions";
+			}>).detail;
+			if (!detail?.filePath || !detail.line) return;
+			handleFileClick(detail.filePath);
+			scrollToLine(detail.filePath, detail.line, detail.side ?? "additions");
+		};
+		window.addEventListener("diffing-jump-to-line", onJump);
+		return () => window.removeEventListener("diffing-jump-to-line", onJump);
+	}, [handleFileClick]);
 
 	const handleApplyExtensions = useCallback((extensions: string[]) => {
 		// Defer the expensive DiffViewer remount so the Apply click paints first.
@@ -1137,6 +1205,10 @@ export function App() {
 			// zen, the centered dialog in zen. Suppressed while an overlay is
 			// open so its own ⌘Enter handling (e.g. palette peek) keeps working.
 			onOpenSendReview: overlayOpen ? undefined : () => setSendOpen(true),
+			onToggleAiAssistant: toggleAiAssistant,
+			onOpenAiNewConversation: openAiNewConversation,
+			onAskAboutActiveFile: askAboutFile,
+			onAddSelectionToAsk: addPendingSelectionToAsk,
 		}),
 		[
 			navigateFile,
@@ -1166,6 +1238,10 @@ export function App() {
 			toggleZenMode,
 			zenMode,
 			overlayOpen,
+			toggleAiAssistant,
+			openAiNewConversation,
+			askAboutFile,
+			addPendingSelectionToAsk,
 		],
 	);
 	useDiffReviewKeymaps(keymapActions);
@@ -1657,11 +1733,13 @@ export function App() {
 						</main>
 					</div>
 					<AiAssistantRail
+						ref={aiRailRef}
 						open={aiRailOpen}
-						onClose={() => setAiRailOpen(false)}
+						onClose={closeAiRail}
 						surface="diff"
 						title="Ask about this diff"
 						context={aiReviewContext}
+						initialFocus="composer"
 						onRemoveSelection={(index) =>
 							setAiSelections((current) =>
 								current.filter((_, itemIndex) => itemIndex !== index),

@@ -110,4 +110,57 @@ describe("turn affordances", () => {
     expect(container.querySelector('[data-turn-id="a"]')).not.toBeNull();
     expect(screen.getByTestId("markdown").textContent).toBe("one");
   });
+
+  it("renders retry and quote actions and fires their callbacks", () => {
+    const onRetryFromHere = vi.fn();
+    const onQuote = vi.fn();
+    render(
+      <TranscriptTurn
+        turn={turn("a", "one")}
+        copied={false}
+        onCopy={() => {}}
+        onRetryFromHere={onRetryFromHere}
+        onQuote={onQuote}
+        modelLabel="GPT Test"
+      />,
+    );
+    expect(screen.getByText("GPT Test")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Retry from here a/ }));
+    expect(onRetryFromHere).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "a", text: "one" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Quote in composer a/ }));
+    expect(onQuote).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "a" }),
+      "one",
+    );
+  });
+
+  it("does not re-parse when retry and quote callbacks stay stable", () => {
+    renders = [];
+    const onCopy = () => {};
+    const onRetryFromHere = () => {};
+    const onQuote = () => {};
+    const { rerender } = render(
+      <TranscriptTurn
+        turn={turn("a", "one")}
+        copied={false}
+        onCopy={onCopy}
+        onRetryFromHere={onRetryFromHere}
+        onQuote={onQuote}
+        modelLabel="GPT Test"
+      />,
+    );
+    rerender(
+      <TranscriptTurn
+        turn={turn("a", "one")}
+        copied={false}
+        onCopy={onCopy}
+        onRetryFromHere={onRetryFromHere}
+        onQuote={onQuote}
+        modelLabel="GPT Test"
+      />,
+    );
+    expect(renders.length).toBe(1);
+  });
 });

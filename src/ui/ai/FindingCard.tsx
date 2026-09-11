@@ -1,5 +1,6 @@
 import { memo } from "react";
 import type { NotebookEntry } from "../../lib/ai/notebook";
+import { citationJumpTarget, dispatchJumpToLine } from "./jumpToLine";
 
 /**
  * One notebook entry, rendered honestly.
@@ -64,22 +65,36 @@ function FindingCardView({ entry, verification = {} }: FindingCardProps) {
 			)}
 
 			<ul className="ai-finding-citations">
-				{entry.citations.map((citation, index) => (
-					<li
-						key={citation.evidenceId}
-						className="ai-finding-citation"
-						data-status={statuses[index]}
-					>
-						<span className="ai-finding-source">
-							{citation.key}:{citation.startLine}
-							{citation.endLine === citation.startLine
-								? ""
-								: `-${citation.endLine}`}
-						</span>
-						<span className="ai-finding-status">{statuses[index]}</span>
-						<code className="ai-finding-quote">{citation.quote}</code>
-					</li>
-				))}
+				{entry.citations.map((citation, index) => {
+					const target = citationJumpTarget(citation.key, citation.startLine);
+					const rangeLabel = `${citation.key}:${citation.startLine}${
+						citation.endLine === citation.startLine
+							? ""
+							: `-${citation.endLine}`
+					}`;
+					return (
+						<li
+							key={citation.evidenceId}
+							className="ai-finding-citation"
+							data-status={statuses[index]}
+						>
+							{target ? (
+								<button
+									type="button"
+									className="ai-finding-source ai-finding-jump"
+									onClick={() => dispatchJumpToLine(target)}
+									aria-label={`Jump to ${target.filePath} line ${target.line}`}
+								>
+									{rangeLabel}
+								</button>
+							) : (
+								<span className="ai-finding-source">{rangeLabel}</span>
+							)}
+							<span className="ai-finding-status">{statuses[index]}</span>
+							<code className="ai-finding-quote">{citation.quote}</code>
+						</li>
+					);
+				})}
 			</ul>
 
 			<footer className="ai-finding-foot">

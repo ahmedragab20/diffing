@@ -34,8 +34,13 @@ import { SubmitPlanReviewPopover } from './SubmitPlanReviewPopover'
 import { VimStatusBar } from './VimStatusBar'
 import { ShortcutsHelpModal } from './ShortcutsHelpModal'
 import { AiModelPicker } from '../ai/AiModelPicker'
-import { AiAssistantRail } from '../ai/AiAssistantRail'
+import { AiAssistantRail, type AiAssistantRailHandle } from '../ai/AiAssistantRail'
 import { AiConnectionsPanel } from '../ai/AiConnectionsPanel'
+import {
+  openAskAiNewConversation,
+  restoreAiRailFocus,
+  toggleAskAiRail,
+} from '../ai/aiRailToggle'
 
 const FONT_SIZE_OPTS = [12, 13, 14, 15, 16, 17, 18].map((n) => ({
   value: String(n),
@@ -78,6 +83,8 @@ export function PlanReviewApp() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
   const [aiRailOpen, setAiRailOpen] = useState(false)
+  const aiRailRef = useRef<AiAssistantRailHandle>(null)
+  const aiPreviousFocusRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -393,6 +400,28 @@ export function PlanReviewApp() {
     [],
   )
 
+  const closeAiRail = useCallback(() => {
+    setAiRailOpen(false)
+    restoreAiRailFocus(aiPreviousFocusRef)
+  }, [])
+
+  const toggleAiAssistant = useCallback(() => {
+    toggleAskAiRail({
+      open: aiRailOpen,
+      setOpen: setAiRailOpen,
+      railRef: aiRailRef,
+      previousFocusRef: aiPreviousFocusRef,
+    })
+  }, [aiRailOpen])
+
+  const openAiNewConversation = useCallback(() => {
+    openAskAiNewConversation({
+      setOpen: setAiRailOpen,
+      railRef: aiRailRef,
+      previousFocusRef: aiPreviousFocusRef,
+    })
+  }, [])
+
   const planKeymapActions = useMemo(
     () => ({
       onNavigatePlan: navigatePlan,
@@ -406,6 +435,8 @@ export function PlanReviewApp() {
       onToggleLineNumbers: toggleLineNumbers,
       onOpenTheme: () => setThemeModalOpen(true),
       onOpenShortcuts: () => setShortcutsHelpOpen(true),
+      onToggleAiAssistant: toggleAiAssistant,
+      onOpenAiNewConversation: openAiNewConversation,
     }),
     [
       navigatePlan,
@@ -417,6 +448,8 @@ export function PlanReviewApp() {
       toggleSidebar,
       toggleLineWrap,
       toggleLineNumbers,
+      toggleAiAssistant,
+      openAiNewConversation,
     ],
   )
   usePlanReviewKeymaps(planKeymapActions)
@@ -766,8 +799,9 @@ export function PlanReviewApp() {
 
         {activePlan && (
           <AiAssistantRail
+            ref={aiRailRef}
             open={aiRailOpen}
-            onClose={() => setAiRailOpen(false)}
+            onClose={closeAiRail}
             surface="plan"
             title="Ask about this plan"
             context={{
@@ -777,6 +811,8 @@ export function PlanReviewApp() {
               version: activePlan.version,
               body: activePlan.body,
             }}
+            initialFocus="composer"
+            onOpenConnections={() => setSettingsOpen(true)}
           />
         )}
 

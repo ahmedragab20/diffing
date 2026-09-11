@@ -1,244 +1,87 @@
 import {
 	useCallback,
 	useEffect,
+	useImperativeHandle,
 	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
+	type KeyboardEvent as ReactKeyboardEvent,
 	type MouseEvent as ReactMouseEvent,
+	type Ref,
 } from "react";
-import { clampRailWidth, railWidthBounds } from "./railWidth.js";
-import {
-	Check,
-	Copy,
-	FileText,
-	GripVertical,
-	ImagePlus,
-	ListTree,
-	Paperclip,
-	Pencil,
-	Plus,
-	Send,
-	ShieldAlert,
-	Sparkles,
-	Square,
-	Trash2,
-	X,
-} from "lucide-react";
+import { FileText, GripVertical, Paperclip, X } from "lucide-react";
 import type {
-	AiAction,
-	AiConversationContextLabel,
 	AiConversationTurn,
 	AiImageAttachmentReference,
 	AiReviewContext,
 	AiSurface,
 } from "../../lib/ai/types";
-import type {
-	AiConversation,
-	AiConversationSummary,
-} from "../../lib/ai/conversations";
-import { EMPTY_ACTIVITY, type RunActivity } from "../../lib/ai/activity";
 import type { NotebookEntry } from "../../lib/ai/notebook";
-import type { AiReviewStatus } from "../../lib/ai/review-jobs";
+import { clampRailWidth, railWidthBounds } from "./railWidth.js";
 import { TranscriptShell } from "./TranscriptShell";
-import { FileMentionDropdown } from "../components/FileMentionDropdown";
 import { useFileMention } from "../hooks/useFileMention";
 import { useOptionalAi } from "./AiContext";
-import { aiSourceLabel } from "./labels";
 import {
-	createConversation,
-	deleteConversation,
-	getConversation,
-	listConversations,
-	updateConversation,
-} from "./conversationApi";
+	attachedFilePaths,
+	quickActionsFor,
+	slashActionsFor,
+	type AiClient,
+} from "./railHelpers";
+import { deriveRailActivity, isRunBusy, useAiRun } from "./useAiRun";
+import { useAiConversations } from "./useAiConversations";
+import { matchesAiShortcut } from "./aiShortcuts";
+import { AiRailHeader } from "./AiRailHeader";
+import { AiQuickActions } from "./AiQuickActions";
+import { AiComposer } from "./AiComposer";
+import { nextReasoningEffort, reasoningEffortLabel } from "./AiModelPicker";
+import { AiRailStatusLine } from "./AiRailStatusLine";
+import { AiEmptyState } from "./AiEmptyState";
 
-function attachedFilePaths(text: string): string[] {
-	const paths: string[] = [];
-	const seen = new Set<string>();
-	for (const match of text.matchAll(/(?:^|\s)@([^\s@]+)/g)) {
-		const path = match[1]?.trim();
-		if (!path || seen.has(path)) continue;
-		seen.add(path);
-		paths.push(path);
-	}
-	return paths.slice(0, 8);
+export interface AiAssistantRailHandle {
+	focusComposer(): void;
+	newConversation(): void;
+	insertMention(path: string): void;
 }
 
-function conversationScopeKey(
-	surface: AiSurface,
-	context: AiReviewContext,
-): string {
-	if (surface === "mockup" && "mockupId" in context)
-		return `${surface}:${context.mockupId}`;
-	if (surface === "plan" && "planId" in context)
-		return `${surface}:${context.planId}`;
-	const root =
-		"repoName" in context && context.repoName ? context.repoName : "review";
-	const branch =
-		"branch" in context && context.branch ? context.branch : "working-tree";
-	return `${surface}:${root}:${branch}`;
-}
-
-function contextLabel(
-	context: AiReviewContext,
-	attachmentPaths: string[],
-	imageAttachments: AiImageAttachmentReference[],
-): AiConversationContextLabel {
-	const label: AiConversationContextLabel = {
-		kind: context.kind,
-		attachmentPaths,
-		imageAttachments,
-	};
-	if ("filePath" in context && context.filePath)
-		label.filePath = context.filePath;
-	if ("version" in context) label.version = context.version;
-	if (context.kind === "selection" && "selectedText" in context)
-		label.label = "Selected context";
-	if (context.kind === "comment-thread" && "commentBody" in context)
-		label.label = "Review thread";
-	if (context.kind === "mockup-thread") label.label = "Mockup thread";
-	if (context.kind === "mockup-region") label.label = "Selected region";
-	if ("selections" in context && context.selections?.length) {
-		label.selectionLabels = context.selections.map(
-			(selection) =>
-				`${selection.filePath} · L${selection.startLine}${selection.endLine === selection.startLine ? "" : `–L${selection.endLine}`}`,
-		);
-	}
-	return label;
-}
-
-function titleForPrompt(prompt: string): string {
-	const title = prompt.replace(/\s+/g, " ").trim();
-	return title.length > 54
-		? `${title.slice(0, 53).trimEnd()}…`
-		: title || "New conversation";
-}
-
-function localConversation(
-	surface: AiSurface,
-	scopeKey: string,
-	modelId: string,
-): AiConversation {
-	const now = Date.now();
-	return {
-		id: `local-${crypto.randomUUID()}`,
-		title: "New conversation",
-		surface,
-		scopeKey,
-		createdAt: now,
-		updatedAt: now,
-		modelId,
-		turns: [],
-	};
-}
-
-type RunPhase =
-	| "idle"
-	| "thinking"
-	| "streaming"
-	| "stopping"
-	| "error"
-	| "canceled"
-	| "interrupted";
-
-function isRunBusy(phase: RunPhase): boolean {
-	return phase === "thinking" || phase === "streaming" || phase === "stopping";
-}
-
-function deriveRailActivity(
-	phase: RunPhase,
-	pending: PendingTurn | null,
-	elapsedMs: number,
-	hasTurns: boolean,
-): RunActivity {
-	const warnings = pending?.warnings ?? [];
-	const text = pending?.assistantText ?? "";
-	if (phase === "thinking")
-		return {
-			...EMPTY_ACTIVITY,
-			phase: "preparing",
-			warnings,
-			text,
-			partial: true,
-			elapsedMs,
-		};
-	if (phase === "streaming")
-		return {
-			...EMPTY_ACTIVITY,
-			phase: "responding",
-			warnings,
-			text,
-			partial: true,
-			elapsedMs,
-		};
-	if (phase === "stopping")
-		return {
-			...EMPTY_ACTIVITY,
-			phase: "cancel-requested",
-			warnings,
-			text,
-			partial: true,
-			elapsedMs,
-		};
-	if (phase === "error")
-		return {
-			...EMPTY_ACTIVITY,
-			phase: "failed",
-			warnings,
-			text,
-			partial: Boolean(text),
-			errorCode: "provider_failed",
-			elapsedMs,
-		};
-	if (phase === "canceled")
-		return {
-			...EMPTY_ACTIVITY,
-			phase: "canceled",
-			warnings,
-			text,
-			partial: true,
-			elapsedMs,
-		};
-	if (phase === "interrupted")
-		return {
-			...EMPTY_ACTIVITY,
-			phase: "interrupted",
-			warnings,
-			text,
-			partial: true,
-			elapsedMs,
-		};
-	if (hasTurns)
-		return {
-			...EMPTY_ACTIVITY,
-			phase: "complete",
-			succeeded: true,
-			elapsedMs,
-		};
-	return EMPTY_ACTIVITY;
-}
-
-interface PendingTurn {
-	user: AiConversationTurn;
-	assistantText: string;
-	warnings: string[];
-	error?: string;
-}
-
-interface AiAssistantRailProps {
+export interface AiAssistantRailProps {
 	open: boolean;
 	onClose: () => void;
 	surface: AiSurface;
 	context: AiReviewContext;
 	title?: string;
 	onRemoveSelection?: (index: number) => void;
+	onOpenConnections?: () => void;
+	initialFocus?: "composer";
+	ref?: Ref<AiAssistantRailHandle | null>;
 }
 
-export function AiAssistantRail(props: AiAssistantRailProps) {
+export function AiAssistantRail({
+	open,
+	onClose,
+	surface,
+	context,
+	title = "Ask AI",
+	onRemoveSelection,
+	onOpenConnections,
+	initialFocus,
+	ref,
+}: AiAssistantRailProps) {
 	const ai = useOptionalAi();
-	if (!props.open || !ai) return null;
-	return <AiAssistantRailOpen {...props} ai={ai} />;
+	if (!open || !ai) return null;
+	return (
+		<AiAssistantRailOpen
+			onClose={onClose}
+			surface={surface}
+			context={context}
+			title={title}
+			onRemoveSelection={onRemoveSelection}
+			onOpenConnections={onOpenConnections}
+			initialFocus={initialFocus}
+			ai={ai}
+			handleRef={ref}
+		/>
+	);
 }
 
 function AiAssistantRailOpen({
@@ -247,31 +90,18 @@ function AiAssistantRailOpen({
 	context,
 	title = "Ask AI",
 	onRemoveSelection,
+	onOpenConnections,
+	initialFocus,
 	ai,
-}: AiAssistantRailProps & {
-	ai: NonNullable<ReturnType<typeof useOptionalAi>>;
+	handleRef,
+}: Omit<AiAssistantRailProps, "open" | "ref"> & {
+	ai: AiClient;
+	handleRef?: Ref<AiAssistantRailHandle | null>;
 }) {
 	const [prompt, setPrompt] = useState("");
-	const [conversation, setConversation] = useState<AiConversation | null>(null);
-	const [conversationSummaries, setConversationSummaries] = useState<
-		AiConversationSummary[]
-	>([]);
-	const [conversationLoading, setConversationLoading] = useState(true);
-	const [phase, setPhase] = useState<RunPhase>("idle");
-	const [pending, setPending] = useState<PendingTurn | null>(null);
 	const [localWidth, setLocalWidth] = useState(ai.railWidth ?? 360);
 	const [showJump, setShowJump] = useState(false);
 	const [copiedId, setCopiedId] = useState<string | null>(null);
-	const [runWarnings, setRunWarnings] = useState<string[]>([]);
-	const [reviewProgress, setReviewProgress] = useState<{
-		review: AiReviewStatus;
-		conversationId: string;
-		modelId: string;
-	} | null>(null);
-	const [persistenceError, setPersistenceError] = useState<string | null>(null);
-	const [renaming, setRenaming] = useState(false);
-	const [renameDraft, setRenameDraft] = useState("");
-	const [deletePending, setDeletePending] = useState(false);
 	const [imageAttachments, setImageAttachments] = useState<
 		AiImageAttachmentReference[]
 	>([]);
@@ -280,20 +110,22 @@ function AiAssistantRailOpen({
 	const [imageError, setImageError] = useState<string | null>(null);
 	const [draggingImage, setDraggingImage] = useState(false);
 	const [findings, setFindings] = useState<NotebookEntry[]>([]);
-	const runId = useRef<string | null>(null);
-	const runStartedAt = useRef<number | null>(null);
-	const abortController = useRef<AbortController | null>(null);
+	const [modelMenuOpen, setModelMenuOpen] = useState(false);
+	const [statusMessage, setStatusMessage] = useState<string | null>(null);
+	const [statusNonce, setStatusNonce] = useState(0);
 	const resizeCleanup = useRef<(() => void) | null>(null);
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
 	const conversationRef = useRef<HTMLDivElement | null>(null);
+	const contextDetailsRef = useRef<HTMLDetailsElement | null>(null);
+	const clearedComposerRef = useRef<{
+		prompt: string;
+		images: AiImageAttachmentReference[];
+	} | null>(null);
 	const followOutputRef = useRef(true);
-	const forceScrollRef = useRef(false);
-	const draftTimer = useRef<number | null>(null);
-	const deltaFrameRef = useRef<number | null>(null);
-	const latestDeltaRef = useRef("");
-	const latestConversationRef = useRef<AiConversation | null>(null);
-	const latestPromptRef = useRef("");
+	const forceScrollRef = useRef(true);
+	const isBusyRef = useRef(false);
+	const resetRunRef = useRef<() => void>(() => {});
 	const model = useMemo(
 		() => ai.models.find((item) => item.id === ai.selectedModel),
 		[ai.models, ai.selectedModel],
@@ -305,10 +137,51 @@ function AiAssistantRailOpen({
 			: false);
 	const mention = useFileMention(prompt, setPrompt);
 	const attachmentPaths = useMemo(() => attachedFilePaths(prompt), [prompt]);
-	const scopeKey = useMemo(
-		() => conversationScopeKey(surface, context),
-		[surface, context],
-	);
+	const resetComposer = useCallback(() => {
+		setImageAttachments([]);
+		setImageError(null);
+	}, []);
+
+	const conversations = useAiConversations({
+		surface,
+		context,
+		selectedModel: ai.selectedModel,
+		setPrompt,
+		resetComposer,
+		isBusyRef,
+		resetRunRef,
+		forceScrollRef,
+	});
+
+	const run = useAiRun({
+		ai,
+		surface,
+		context,
+		setConversation: conversations.setConversation,
+		setConversationSummaries: conversations.setConversationSummaries,
+		setPersistenceError: conversations.setPersistenceError,
+		prompt,
+		setPrompt,
+		imageAttachments,
+		setImageAttachments,
+		imageCapable,
+		setImageError,
+		ensureConversation: conversations.ensureConversation,
+		saveDraft: conversations.saveDraft,
+		resizeComposer: () => {
+			const textarea = textareaRef.current;
+			if (!textarea) return;
+			textarea.style.height = "auto";
+			textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
+		},
+		textareaRef,
+		forceScrollRef,
+	});
+
+	resetRunRef.current = run.resetRunVisuals;
+	isBusyRef.current = run.isBusy;
+
+	const { setRailWidth } = ai;
 
 	const uploadImages = useCallback(
 		async (files: File[]) => {
@@ -419,7 +292,6 @@ function AiAssistantRailOpen({
 		if (ai.railWidth) setLocalWidth(ai.railWidth);
 	}, [ai.railWidth]);
 
-	// A width persisted on a wide display must not overflow a narrower window.
 	useEffect(() => {
 		if (typeof window === "undefined") return;
 		const reclamp = () => {
@@ -433,29 +305,13 @@ function AiAssistantRailOpen({
 		return () => window.removeEventListener("resize", reclamp);
 	}, []);
 
-	useEffect(() => {
-		latestConversationRef.current = conversation;
-	}, [conversation]);
-
-	useEffect(() => {
-		latestPromptRef.current = prompt;
-	}, [prompt]);
-
 	useEffect(
 		() => () => {
 			resizeCleanup.current?.();
-			if (draftTimer.current) window.clearTimeout(draftTimer.current);
-			if (deltaFrameRef.current !== null)
-				window.cancelAnimationFrame(deltaFrameRef.current);
-			const latestConversation = latestConversationRef.current;
-			if (latestConversation && !latestConversation.id.startsWith("local-")) {
-				void updateConversation(latestConversation.id, {
-					draft: latestPromptRef.current,
-				}).catch(() => {});
-			}
-			abortController.current?.abort();
+			conversations.disposeDraftTimer();
+			run.dispose();
 		},
-		[],
+		[conversations.disposeDraftTimer, run.dispose],
 	);
 
 	const resizeComposer = useCallback(() => {
@@ -467,63 +323,9 @@ function AiAssistantRailOpen({
 
 	useLayoutEffect(() => resizeComposer(), [prompt, resizeComposer]);
 
-	const saveDraft = useCallback(
-		(nextDraft: string) => {
-			if (!conversation || conversation.id.startsWith("local-")) return;
-			if (draftTimer.current) window.clearTimeout(draftTimer.current);
-			draftTimer.current = window.setTimeout(() => {
-				void updateConversation(conversation.id, { draft: nextDraft })
-					.then((next) => {
-						setConversation((current) =>
-							current?.id === next.id
-								? { ...current, draft: next.draft, updatedAt: next.updatedAt }
-								: current,
-						);
-					})
-					.catch((error) =>
-						setPersistenceError(
-							error instanceof Error ? error.message : String(error),
-						),
-					);
-			}, 350);
-		},
-		[conversation],
-	);
-
 	useEffect(() => {
-		let alive = true;
-		setConversationLoading(true);
-		setConversation(null);
-		setPending(null);
-		setPhase("idle");
-		setPersistenceError(null);
-		setRunWarnings([]);
-		setReviewProgress(null);
-		void listConversations(surface, scopeKey)
-			.then(async (summaries) => {
-				if (!alive) return;
-				setConversationSummaries(summaries);
-				const first = summaries[0];
-				if (!first) return;
-				const loaded = await getConversation(first.id);
-				if (!alive) return;
-				setConversation(loaded);
-				setPrompt(loaded.draft ?? "");
-				forceScrollRef.current = true;
-			})
-			.catch((error) => {
-				if (alive)
-					setPersistenceError(
-						error instanceof Error ? error.message : String(error),
-					);
-			})
-			.finally(() => {
-				if (alive) setConversationLoading(false);
-			});
-		return () => {
-			alive = false;
-		};
-	}, [scopeKey, surface]);
+		conversations.latestPromptRef.current = prompt;
+	}, [conversations.latestPromptRef, prompt]);
 
 	useEffect(() => {
 		let alive = true;
@@ -553,52 +355,12 @@ function AiAssistantRailOpen({
 		return () => {
 			alive = false;
 		};
-	}, [conversation?.id, conversation?.turns.length, scopeKey, surface]);
-
-	const { run, cancel, selectedModel, setRailWidth } = ai;
-
-	const queueDelta = (text: string) => {
-		latestDeltaRef.current = text;
-		if (deltaFrameRef.current !== null) return;
-		deltaFrameRef.current = window.requestAnimationFrame(() => {
-			deltaFrameRef.current = null;
-			setPhase("streaming");
-			setPending((current) =>
-				current ? { ...current, assistantText: latestDeltaRef.current } : current,
-			);
-		});
-	};
-
-	const ensureConversation = useCallback(async (): Promise<AiConversation> => {
-		if (conversation) return conversation;
-		try {
-			const created = await createConversation({
-				surface,
-				scopeKey,
-				modelId: selectedModel,
-			});
-			setConversationSummaries((current) => [
-				{
-					id: created.id,
-					title: created.title,
-					surface: created.surface,
-					scopeKey: created.scopeKey,
-					createdAt: created.createdAt,
-					updatedAt: created.updatedAt,
-					turnCount: 0,
-					modelId: created.modelId,
-				},
-				...current.filter((item) => item.id !== created.id),
-			]);
-			setConversation(created);
-			return created;
-		} catch (error) {
-			setPersistenceError(error instanceof Error ? error.message : String(error));
-			const fallback = localConversation(surface, scopeKey, selectedModel);
-			setConversation(fallback);
-			return fallback;
-		}
-	}, [conversation, scopeKey, selectedModel, surface]);
+	}, [
+		conversations.conversation?.id,
+		conversations.conversation?.turns.length,
+		conversations.scopeKey,
+		surface,
+	]);
 
 	const scrollToLatest = useCallback((behavior: ScrollBehavior = "smooth") => {
 		const element = conversationRef.current;
@@ -616,184 +378,40 @@ function AiAssistantRailOpen({
 			forceScrollRef.current = false;
 			setShowJump(false);
 		}
-	}, [conversation?.turns.length, pending?.assistantText, phase]);
+	}, [conversations.conversation?.turns.length, run.pending?.assistantText, run.phase]);
 
-	const start = async (
-		action: AiAction,
-		overridePrompt?: string,
-		overrideImages?: AiImageAttachmentReference[],
-		continuationId?: string,
-	) => {
-		const requested = (overridePrompt ?? prompt).trim();
-		const requestedImages = overrideImages ?? imageAttachments;
-		if (
-			(!requested && requestedImages.length === 0) ||
-			!selectedModel ||
-			isRunBusy(phase)
-		)
-			return;
-		if (requestedImages.length && !imageCapable) {
-			setImageError("The selected model source cannot receive images.");
-			return;
-		}
-		if (!continuationId) setReviewProgress(null);
-		const requestedAttachments = attachedFilePaths(prompt);
-		if (!overridePrompt) {
-			saveDraft("");
-			setPrompt("");
-			setImageAttachments([]);
-			requestAnimationFrame(() => {
-				resizeComposer();
-				textareaRef.current?.focus();
+	useEffect(() => {
+		if (initialFocus === "composer") textareaRef.current?.focus();
+	}, [initialFocus]);
+
+	const insertMention = useCallback(
+		(path: string) => {
+			const insertion = `@${path} `;
+			setPrompt((current) => {
+				if (current.includes(`@${path}`)) return current;
+				const trimmed = current.trimEnd();
+				const next = trimmed ? `${trimmed} ${insertion}` : insertion;
+				conversations.saveDraft(next);
+				return next;
 			});
-		}
-		setPersistenceError(null);
-		const activeConversation = await ensureConversation();
-		const userTurn: AiConversationTurn = {
-			id: crypto.randomUUID(),
-			role: "user",
-			text:
-				requested ||
-				`Sent ${requestedImages.length} image${requestedImages.length === 1 ? "" : "s"}`,
-			createdAt: Date.now(),
-			context: contextLabel(context, requestedAttachments, requestedImages),
-		};
-		const controller = new AbortController();
-		abortController.current = controller;
-		setPending({ user: userTurn, assistantText: "", warnings: [] });
-		setPhase("thinking");
-		runStartedAt.current = Date.now();
-		forceScrollRef.current = true;
-		try {
-			const result = await run({
-				surface,
-				action,
-				context: {
-					...context,
-					attachmentPaths: requestedAttachments,
-					imageAttachments: requestedImages,
-				},
-				prompt:
-					requested || "Analyze the attached image in the supplied review context.",
-				history: activeConversation.turns,
-				conversationId: activeConversation.id,
-				signal: controller.signal,
-				onStart: (id) => {
-					runId.current = id;
-				},
-				onDelta: queueDelta,
-				onWarning: (message) => {
-					setRunWarnings((current) =>
-						current.includes(message) ? current : [...current, message],
-					);
-					setPending((current) =>
-						current
-							? {
-									...current,
-									warnings: current.warnings.includes(message)
-										? current.warnings
-										: [...current.warnings, message],
-								}
-							: current,
-					);
-				},
-				reviewJobId: continuationId,
-				reviewConfirmed: continuationId ? true : undefined,
-				onReviewStatus: (review) =>
-					setReviewProgress({
-						review,
-						conversationId: activeConversation.id,
-						modelId: selectedModel,
-					}),
-			});
-			if (result.canceled || controller.signal.aborted) {
-				setPhase("canceled");
-				return;
-			}
-			const assistantTurn: AiConversationTurn = {
-				id: crypto.randomUUID(),
-				role: "assistant",
-				text: result.text,
-				createdAt: Date.now(),
-				modelId: selectedModel,
-				context: userTurn.context,
-			};
-			const nextTitle =
-				activeConversation.turns.length === 0
-					? titleForPrompt(
-							requested || requestedImages.map((image) => image.name).join(", "),
-						)
-					: activeConversation.title;
-			const nextConversation: AiConversation = {
-				...activeConversation,
-				title: nextTitle,
-				draft: "",
-				modelId: selectedModel,
-				updatedAt: Date.now(),
-				turns: [...activeConversation.turns, userTurn, assistantTurn],
-			};
-			setConversation(nextConversation);
-			setConversationSummaries((current) =>
-				current.map((item) =>
-					item.id === nextConversation.id
-						? {
-								...item,
-								title: nextTitle,
-								updatedAt: nextConversation.updatedAt,
-								turnCount: nextConversation.turns.length,
-								modelId: selectedModel,
-							}
-						: item,
-				),
-			);
-			setPending(null);
-			setPhase("idle");
-			if (!activeConversation.id.startsWith("local-")) {
-				try {
-					await updateConversation(activeConversation.id, {
-						title: nextTitle,
-						draft: "",
-						modelId: selectedModel,
-						turns: nextConversation.turns,
-					});
-				} catch (error) {
-					setPersistenceError(
-						error instanceof Error ? error.message : String(error),
-					);
-				}
-			}
 			requestAnimationFrame(() => textareaRef.current?.focus());
-		} catch (nextError) {
-			if (controller.signal.aborted) {
-				setPhase("canceled");
-				return;
-			}
-			const message =
-				nextError instanceof Error ? nextError.message : String(nextError);
-			setPending((current) =>
-				current
-					? {
-							...current,
-							error: message,
-						}
-					: current,
-			);
-			setPhase(
-				/incomplete|ended before completion/i.test(message)
-					? "interrupted"
-					: "error",
-			);
-		} finally {
-			runId.current = null;
-			abortController.current = null;
-		}
-	};
+		},
+		[conversations.saveDraft],
+	);
 
-	const stop = async () => {
-		setPhase("stopping");
-		abortController.current?.abort();
-		if (runId.current) await cancel(runId.current).catch(() => {});
-	};
+	useImperativeHandle(
+		handleRef,
+		() => ({
+			focusComposer() {
+				textareaRef.current?.focus();
+			},
+			newConversation() {
+				void conversations.newConversation();
+			},
+			insertMention,
+		}),
+		[conversations.newConversation, insertMention],
+	);
 
 	const resizeStart = (event: ReactMouseEvent<HTMLDivElement>) => {
 		event.preventDefault();
@@ -801,8 +419,6 @@ function AiAssistantRailOpen({
 		const startWidth = localWidth;
 		let latest = startWidth;
 		const move = (next: MouseEvent) => {
-			// Same rule as the keyboard path: a drag must not overflow the window
-			// or squeeze out the diff either.
 			const width = clampRailWidth(
 				startWidth + startX - next.clientX,
 				window.innerWidth,
@@ -827,8 +443,6 @@ function AiAssistantRailOpen({
 		document.body.style.userSelect = "none";
 	};
 
-	// The announced range must match what a resize can really produce in this
-	// window, not the nominal bounds.
 	const announcedBounds = railWidthBounds(
 		typeof window === "undefined" ? Number.NaN : window.innerWidth,
 	);
@@ -838,122 +452,11 @@ function AiAssistantRailOpen({
 			next,
 			typeof window === "undefined" ? Number.NaN : window.innerWidth,
 		);
-		// A window too narrow for a usable rail keeps the last width rather than
-		// rendering something unreadable; the rail itself is hidden instead.
 		if (width === null) return;
 		setLocalWidth(width);
 		void setRailWidth(width);
 	};
 
-	const newConversation = async () => {
-		if (isRunBusy(phase)) return;
-		setDeletePending(false);
-		setRenaming(false);
-		setPrompt("");
-		setImageAttachments([]);
-		setPending(null);
-		setPhase("idle");
-		try {
-			const created = await createConversation({
-				surface,
-				scopeKey,
-				modelId: selectedModel,
-			});
-			setConversation(created);
-			setConversationSummaries((current) => [
-				{
-					id: created.id,
-					title: created.title,
-					surface: created.surface,
-					scopeKey: created.scopeKey,
-					createdAt: created.createdAt,
-					updatedAt: created.updatedAt,
-					turnCount: 0,
-					modelId: created.modelId,
-				},
-				...current,
-			]);
-		} catch (error) {
-			setPersistenceError(error instanceof Error ? error.message : String(error));
-			setConversation(localConversation(surface, scopeKey, selectedModel));
-		}
-	};
-
-	const selectConversation = async (id: string) => {
-		if (isRunBusy(phase) || id === conversation?.id) return;
-		setPending(null);
-		setPhase("idle");
-		setConversationLoading(true);
-		try {
-			const loaded = await getConversation(id);
-			setConversation(loaded);
-			setPrompt(loaded.draft ?? "");
-			setImageAttachments([]);
-			setPending(null);
-			setRenaming(false);
-			setDeletePending(false);
-			forceScrollRef.current = true;
-		} catch (error) {
-			setPersistenceError(error instanceof Error ? error.message : String(error));
-		} finally {
-			setConversationLoading(false);
-		}
-	};
-
-	const saveRename = async () => {
-		if (!conversation || !renameDraft.trim()) return;
-		if (conversation.id.startsWith("local-")) {
-			setConversation({ ...conversation, title: renameDraft.trim() });
-		} else {
-			try {
-				const next = await updateConversation(conversation.id, {
-					title: renameDraft.trim(),
-				});
-				setConversation(next);
-				setConversationSummaries((current) =>
-					current.map((item) =>
-						item.id === next.id
-							? { ...item, title: next.title, updatedAt: next.updatedAt }
-							: item,
-					),
-				);
-			} catch (error) {
-				setPersistenceError(error instanceof Error ? error.message : String(error));
-			}
-		}
-		setRenaming(false);
-	};
-
-	const removeCurrentConversation = async () => {
-		if (!conversation || isRunBusy(phase)) return;
-		setPending(null);
-		setPhase("idle");
-		if (conversation.id.startsWith("local-")) {
-			setConversation(null);
-			setDeletePending(false);
-			return;
-		}
-		try {
-			await deleteConversation(conversation.id);
-			const remaining = conversationSummaries.filter(
-				(item) => item.id !== conversation.id,
-			);
-			setConversationSummaries(remaining);
-			setConversation(null);
-			setPrompt("");
-			if (remaining[0]) await selectConversation(remaining[0].id);
-		} catch (error) {
-			setPersistenceError(error instanceof Error ? error.message : String(error));
-		}
-		setDeletePending(false);
-	};
-
-	/**
-	 * Stable across renders on purpose: a completed turn is memoized on its
-	 * props, so a fresh handler each render would re-render every turn on each
-	 * streamed token and the memoization would buy nothing. It closes over
-	 * nothing but `setCopiedId`, which React keeps stable.
-	 */
 	const copyMarkdown = useCallback(async (turn: AiConversationTurn) => {
 		try {
 			await navigator.clipboard.writeText(turn.text);
@@ -974,87 +477,219 @@ function AiAssistantRailOpen({
 		[copyMarkdown],
 	);
 
-	const isMockup = surface === "mockup";
-	const isPlan = surface === "plan";
-	const thirdAction = isMockup
-		? {
-				action: "critique-mockup" as const,
-				prompt:
-					"Critique this mockup for missing states, accessibility, viewport issues, and copy.",
-				label: "Critique mockup",
-				hint: "Challenge the screen",
-				icon: ListTree,
-			}
-		: isPlan
-			? {
-					action: "critique-plan" as const,
-					prompt: "Critique this plan for missing decisions and sequencing risks.",
-					label: "Critique plan",
-					hint: "Challenge assumptions",
-					icon: ListTree,
-				}
-			: context.kind === "diff"
-				? {
-						action: "review-map" as const,
-						prompt: "Generate a review order. Do not mark anything reviewed.",
-						label: "Review map",
-						hint: "Prioritize the diff",
-						icon: ListTree,
-					}
-				: {
-						action: "explain-hunk" as const,
-						prompt:
-							"Explain the intent, risks, and missing tests in this file context.",
-						label: "Explain context",
-						hint: "Trace this change",
-						icon: FileText,
-					};
-	const quickActions = [
-		{
-			action: "summarize" as const,
-			prompt: "Summarize this review context.",
-			label: "Summarize",
-			hint: "Intent and impact",
-			icon: FileText,
-		},
-		{
-			action: isMockup
-				? ("find-mockup-gaps" as const)
-				: isPlan
-					? ("find-plan-gaps" as const)
-					: ("review-risks" as const),
-			prompt: isMockup
-				? "Find material gaps in this mockup."
-				: isPlan
-					? "Find material gaps in this plan."
-					: "Find material review risks.",
-			label: isMockup || isPlan ? "Find gaps" : "Review risks",
-			hint: isMockup
-				? "Missing states and a11y"
-				: isPlan
-					? "Missing decisions"
-					: "Correctness and safety",
-			icon: ShieldAlert,
-		},
-		thirdAction,
-	];
+	const flashStatus = useCallback((message: string) => {
+		setStatusMessage(message);
+		setStatusNonce((current) => current + 1);
+	}, []);
 
-	const turns = conversation?.turns ?? [];
-	const isBusy = isRunBusy(phase);
+	const startRef = useRef(run.start);
+	startRef.current = run.start;
+	const turnsRef = useRef(conversations.conversation?.turns ?? []);
+	turnsRef.current = conversations.conversation?.turns ?? [];
+	const saveDraftRef = useRef(conversations.saveDraft);
+	saveDraftRef.current = conversations.saveDraft;
+
+	const handleRetryFromHere = useCallback((assistantTurn: AiConversationTurn) => {
+		const list = turnsRef.current;
+		const index = list.findIndex((item) => item.id === assistantTurn.id);
+		const preceding = [...list.slice(0, index >= 0 ? index : 0)]
+			.reverse()
+			.find((item) => item.role === "user");
+		if (!preceding?.text.trim()) return;
+		void startRef.current("ask", preceding.text);
+	}, []);
+
+	const handleQuote = useCallback((turn: AiConversationTurn, text: string) => {
+		const source = text.trim() || turn.text;
+		const quoted = source
+			.split("\n")
+			.map((line) => `> ${line}`)
+			.join("\n");
+		setPrompt((current) => {
+			const next = current.trim()
+				? `${current.replace(/\s+$/, "")}\n\n${quoted}\n\n`
+				: `${quoted}\n\n`;
+			saveDraftRef.current(next);
+			return next;
+		});
+		requestAnimationFrame(() => textareaRef.current?.focus());
+	}, []);
+
+	const quickActions = quickActionsFor(surface, context);
+	const slashItems = slashActionsFor(surface, context);
+	const turns = conversations.conversation?.turns ?? [];
+	const isBusy = run.isBusy;
+
+	const copyLastResponse = useCallback(() => {
+		const last = [...turns].reverse().find((turn) => turn.role === "assistant");
+		if (last) void copyMarkdown(last);
+	}, [copyMarkdown, turns]);
+
+	const selectRelativeConversation = useCallback(
+		(delta: number) => {
+			const list = conversations.conversationSummaries;
+			if (!list.length) return;
+			const currentId = conversations.conversation?.id;
+			const index = list.findIndex((item) => item.id === currentId);
+			const nextIndex =
+				index < 0
+					? 0
+					: (index + delta + list.length) % list.length;
+			const next = list[nextIndex];
+			if (next) void conversations.selectConversation(next.id);
+		},
+		[
+			conversations.conversation?.id,
+			conversations.conversationSummaries,
+			conversations.selectConversation,
+		],
+	);
+
+	const clearComposer = useCallback(() => {
+		clearedComposerRef.current = {
+			prompt,
+			images: imageAttachments,
+		};
+		setPrompt("");
+		setImageAttachments([]);
+		conversations.saveDraft("");
+	}, [conversations.saveDraft, imageAttachments, prompt]);
+
+	const undoClearComposer = useCallback(() => {
+		const snapshot = clearedComposerRef.current;
+		if (!snapshot) return;
+		setPrompt(snapshot.prompt);
+		setImageAttachments(snapshot.images);
+		conversations.saveDraft(snapshot.prompt);
+		clearedComposerRef.current = null;
+	}, [conversations.saveDraft]);
+
+	const insertMentionTrigger = useCallback(() => {
+		const textarea = textareaRef.current;
+		const start = textarea?.selectionStart ?? prompt.length;
+		const end = textarea?.selectionEnd ?? start;
+		const next = `${prompt.slice(0, start)}@${prompt.slice(end)}`;
+		setPrompt(next);
+		conversations.saveDraft(next);
+		requestAnimationFrame(() => {
+			if (!textarea) return;
+			const pos = start + 1;
+			textarea.selectionStart = textarea.selectionEnd = pos;
+			textarea.focus();
+		});
+	}, [conversations.saveDraft, prompt]);
+
+	const handleRailKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+		if (event.defaultPrevented) return;
+		if (modelMenuOpen) return;
+		const target = event.target;
+		if (target instanceof Element && target.closest(".ui-popover")) return;
+		if (conversations.renaming) return;
+		if (conversations.deletePending) {
+			if (matchesAiShortcut(event, "close-rail")) {
+				event.preventDefault();
+				event.stopPropagation();
+				conversations.setDeletePending(false);
+			}
+			return;
+		}
+		if (matchesAiShortcut(event, "stop") && isBusy) {
+			event.preventDefault();
+			event.stopPropagation();
+			void run.stop();
+			return;
+		}
+		if (matchesAiShortcut(event, "new-conversation") && (event.metaKey || event.ctrlKey)) {
+			event.preventDefault();
+			event.stopPropagation();
+			void conversations.newConversation();
+			return;
+		}
+		if (matchesAiShortcut(event, "prev-conversation")) {
+			event.preventDefault();
+			event.stopPropagation();
+			selectRelativeConversation(-1);
+			return;
+		}
+		if (matchesAiShortcut(event, "next-conversation")) {
+			event.preventDefault();
+			event.stopPropagation();
+			selectRelativeConversation(1);
+			return;
+		}
+		if (matchesAiShortcut(event, "quick-action-1") && quickActions[0] && !isBusy && ai.selectedModel) {
+			event.preventDefault();
+			event.stopPropagation();
+			void run.start(quickActions[0].action, quickActions[0].prompt);
+			return;
+		}
+		if (matchesAiShortcut(event, "quick-action-2") && quickActions[1] && !isBusy && ai.selectedModel) {
+			event.preventDefault();
+			event.stopPropagation();
+			void run.start(quickActions[1].action, quickActions[1].prompt);
+			return;
+		}
+		if (matchesAiShortcut(event, "quick-action-3") && quickActions[2] && !isBusy && ai.selectedModel) {
+			event.preventDefault();
+			event.stopPropagation();
+			void run.start(quickActions[2].action, quickActions[2].prompt);
+			return;
+		}
+		if (matchesAiShortcut(event, "open-model-picker")) {
+			event.preventDefault();
+			event.stopPropagation();
+			setModelMenuOpen(true);
+			return;
+		}
+		if (matchesAiShortcut(event, "cycle-reasoning") && ai.setReasoningEffort) {
+			event.preventDefault();
+			event.stopPropagation();
+			const next = nextReasoningEffort(ai.reasoningEffort ?? "");
+			void ai.setReasoningEffort(next);
+			flashStatus(`Reasoning: ${reasoningEffortLabel(next)}`);
+			return;
+		}
+		if (matchesAiShortcut(event, "copy-last-response")) {
+			event.preventDefault();
+			event.stopPropagation();
+			copyLastResponse();
+			return;
+		}
+		if (matchesAiShortcut(event, "retry-last") && run.pending && (run.phase === "error" || run.phase === "canceled" || run.phase === "interrupted")) {
+			event.preventDefault();
+			event.stopPropagation();
+			run.retry();
+			return;
+		}
+		if (matchesAiShortcut(event, "toggle-context-details")) {
+			event.preventDefault();
+			event.stopPropagation();
+			const details = contextDetailsRef.current;
+			if (details) details.open = !details.open;
+			return;
+		}
+		if (matchesAiShortcut(event, "close-rail")) {
+			if (mention.isOpen) return;
+			event.preventDefault();
+			event.stopPropagation();
+			onClose();
+		}
+	};
 	const activity = deriveRailActivity(
-		phase,
-		pending,
-		runStartedAt.current ? Date.now() - runStartedAt.current : 0,
+		run.phase,
+		run.pending,
+		run.runStartedAt.current ? Date.now() - run.runStartedAt.current : 0,
 		turns.length > 0,
 	);
 	const showComposed =
-		turns.length > 0 || pending !== null || findings.length > 0;
+		turns.length > 0 || run.pending !== null || findings.length > 0;
 
 	return (
 		<aside
 			className="ai-assistant-rail"
 			aria-label={title}
 			style={{ width: localWidth }}
+			onKeyDown={handleRailKeyDown}
 		>
 			<div
 				className="ai-rail-resize-handle"
@@ -1079,118 +714,50 @@ function AiAssistantRailOpen({
 			>
 				<GripVertical size={13} />
 			</div>
-			<header className="ai-rail-header">
-				<div className="ai-rail-title-icon">
-					<Sparkles size={15} />
-				</div>
-				<div className="ai-rail-title">
-					<strong>{title}</strong>
-					<span>
-						{model
-							? `${model.displayName} · ${aiSourceLabel(model.sourceId)}${model.credentialRoute === "runtime-key" ? " BYOK" : ""}`
-							: "No model selected"}
-					</span>
-				</div>
-				<button
-					type="button"
-					className="ai-rail-icon-btn"
-					onClick={onClose}
-					aria-label="Close AI assistant"
-				>
-					<X size={15} />
-				</button>
-			</header>
-
-			<div className="ai-conversation-toolbar" aria-label="AI conversations">
-				<select
-					aria-label="AI conversation"
-					value={conversation?.id ?? ""}
-					disabled={conversationLoading || isBusy}
-					onChange={(event) => void selectConversation(event.target.value)}
-				>
-					{!conversation && <option value="">New conversation</option>}
-					{conversationSummaries.map((item) => (
-						<option key={item.id} value={item.id}>
-							{item.title}
-						</option>
-					))}
-				</select>
-				<button
-					type="button"
-					className="ai-rail-icon-btn"
-					onClick={() => void newConversation()}
-					disabled={isBusy}
-					aria-label="New conversation"
-					title="New conversation"
-				>
-					<Plus size={14} />
-				</button>
-				{conversation && (
-					<>
-						<button
-							type="button"
-							className="ai-rail-icon-btn"
-							onClick={() => {
-								setRenameDraft(conversation.title);
-								setRenaming(true);
-							}}
-							disabled={isBusy}
-							aria-label="Rename conversation"
-							title="Rename conversation"
-						>
-							<Pencil size={13} />
-						</button>
-						<button
-							type="button"
-							className="ai-rail-icon-btn"
-							onClick={() => setDeletePending(true)}
-							disabled={isBusy}
-							aria-label="Delete conversation"
-							title="Delete conversation"
-						>
-							<Trash2 size={13} />
-						</button>
-					</>
-				)}
-			</div>
-			{renaming && conversation && (
-				<div className="ai-conversation-inline-edit">
-					<input
-						aria-label="Conversation name"
-						value={renameDraft}
-						onChange={(event) => setRenameDraft(event.target.value)}
-						onKeyDown={(event) => {
-							if (event.key === "Enter") void saveRename();
-							if (event.key === "Escape") setRenaming(false);
-						}}
-					/>
-					<button
-						type="button"
-						onClick={() => void saveRename()}
-						aria-label="Save conversation name"
-					>
-						<Check size={13} />
-					</button>
-					<button
-						type="button"
-						onClick={() => setRenaming(false)}
-						aria-label="Cancel rename"
-					>
-						<X size={13} />
-					</button>
-				</div>
-			)}
-			{deletePending && conversation && (
-				<div className="ai-conversation-delete-confirm" role="alert">
-					<span>Delete “{conversation.title}”?</span>
-					<button type="button" onClick={() => void removeCurrentConversation()}>
-						Delete
-					</button>
-					<button type="button" onClick={() => setDeletePending(false)}>
-						Cancel
-					</button>
-				</div>
-			)}
+			<AiRailHeader
+				title={title}
+				model={model}
+				models={ai.models}
+				selectedModel={ai.selectedModel}
+				onSelectModel={(modelId) => {
+					void ai.selectModel?.(modelId);
+				}}
+				reasoningEffort={ai.reasoningEffort ?? ""}
+				onReasoningEffortChange={(effort) => {
+					void ai.setReasoningEffort?.(effort);
+					flashStatus(`Reasoning: ${reasoningEffortLabel(effort)}`);
+				}}
+				onCycleReasoning={() => {
+					const next = nextReasoningEffort(ai.reasoningEffort ?? "");
+					void ai.setReasoningEffort?.(next);
+					flashStatus(`Reasoning: ${reasoningEffortLabel(next)}`);
+				}}
+				modelMenuOpen={modelMenuOpen}
+				onModelMenuOpenChange={setModelMenuOpen}
+				onClose={onClose}
+				switcher={{
+					conversation: conversations.conversation,
+					conversationSummaries: conversations.conversationSummaries,
+					conversationLoading: conversations.conversationLoading,
+					isBusy,
+					renaming: conversations.renaming,
+					renameDraft: conversations.renameDraft,
+					deletePending: conversations.deletePending,
+					onSelect: (id) => void conversations.selectConversation(id),
+					onNew: () => void conversations.newConversation(),
+					onBeginRename: () => {
+						if (!conversations.conversation) return;
+						conversations.setRenameDraft(conversations.conversation.title);
+						conversations.setRenaming(true);
+					},
+					onRenameDraftChange: conversations.setRenameDraft,
+					onSaveRename: () => void conversations.saveRename(),
+					onCancelRename: () => conversations.setRenaming(false),
+					onBeginDelete: () => conversations.setDeletePending(true),
+					onConfirmDelete: () => void conversations.removeCurrentConversation(),
+					onCancelDelete: () => conversations.setDeletePending(false),
+				}}
+			/>
 
 			<div className="ai-context-bar">
 				<div className="ai-context-chips">
@@ -1249,7 +816,7 @@ function AiAssistantRailOpen({
 						</button>
 					))}
 				</div>
-				<details className="ai-share-details">
+				<details className="ai-share-details" ref={contextDetailsRef}>
 					<summary>Context being shared</summary>
 					<p>
 						{context.kind === "diff"
@@ -1262,24 +829,11 @@ function AiAssistantRailOpen({
 				</details>
 			</div>
 
-			<div className="ai-quick-actions" aria-label="AI quick actions">
-				{quickActions.map(
-					({ action, prompt: actionPrompt, label, hint, icon: Icon }) => (
-						<button
-							type="button"
-							key={action}
-							disabled={isBusy || !selectedModel}
-							onClick={() => void start(action, actionPrompt)}
-						>
-							<Icon size={14} />
-							<span>
-								<strong>{label}</strong>
-								<small>{hint}</small>
-							</span>
-						</button>
-					),
-				)}
-			</div>
+			<AiQuickActions
+				actions={quickActions}
+				disabled={isBusy || !ai.selectedModel}
+				onRun={(action) => void run.start(action.action, action.prompt)}
+			/>
 
 			<div
 				className={`ai-conversation ${!showComposed ? "is-empty" : ""}`}
@@ -1290,80 +844,84 @@ function AiAssistantRailOpen({
 						element.scrollHeight - element.scrollTop - element.clientHeight;
 					const nearBottom = distance < 72;
 					followOutputRef.current = nearBottom;
-					setShowJump(!nearBottom && (isBusy || !!pending));
+					setShowJump(!nearBottom && (isBusy || !!run.pending));
 				}}
 				aria-live="polite"
 			>
 				{!showComposed && (
-					<div className="ai-empty-state">
-						<div>
-							<Sparkles size={20} />
-						</div>
-						<strong>What do you want to understand?</strong>
-						<p>
-							Ask a focused question, or choose a review action above. Nothing runs
-							until you tell it to.
-						</p>
-					</div>
+					<AiEmptyState
+						surface={surface}
+						onPickExample={(example) => {
+							setPrompt(example);
+							conversations.saveDraft(example);
+							requestAnimationFrame(() => textareaRef.current?.focus());
+						}}
+						showConnect={ai.models.length === 0}
+						onOpenConnections={onOpenConnections}
+					/>
 				)}
 				{showComposed && (
 					<TranscriptShell
 						turns={turns}
 						activity={activity}
 						streaming={
-							pending ? { turn: pending.user, text: pending.assistantText } : null
+							run.pending
+								? { turn: run.pending.user, text: run.pending.assistantText }
+								: null
 						}
 						findings={findings}
 						copiedId={copiedId}
 						onCopy={handleCopy}
 						onRetry={
-							pending &&
-							(phase === "error" || phase === "canceled" || phase === "interrupted")
-								? () => {
-										const retry = pending.user.text;
-										const retryImages = pending.user.context?.imageAttachments;
-										setPending(null);
-										setPhase("idle");
-										void start("ask", retry, retryImages);
-									}
+							run.pending &&
+							(run.phase === "error" ||
+								run.phase === "canceled" ||
+								run.phase === "interrupted")
+								? () => run.retry()
 								: undefined
 						}
+						onRetryFromHere={handleRetryFromHere}
+						onQuote={handleQuote}
+						models={ai.models}
+						streamingModel={model?.displayName}
 					/>
 				)}
-				{pending?.error && (
+				{run.pending?.error && (
 					<div className="ai-run-error" role="alert">
-						<span>{pending.error}</span>
+						<span>{run.pending.error}</span>
 					</div>
 				)}
-				{reviewProgress &&
-					reviewProgress.conversationId === conversation?.id &&
-					reviewProgress.modelId === selectedModel &&
+				{run.reviewProgress &&
+					run.reviewProgress.conversationId === conversations.conversation?.id &&
+					run.reviewProgress.modelId === ai.selectedModel &&
 					context.kind === "diff" && (
 						<div className="ai-run-warning" role="status">
 							<div>
 								<strong>
-									{phase === "canceled" ? "cancelled" : reviewProgress.review.state}
+									{run.phase === "canceled"
+										? "cancelled"
+										: run.reviewProgress.review.state}
 								</strong>
-								: {reviewProgress.review.processedHunks}/
-								{reviewProgress.review.totalHunks} changed hunks processed;{" "}
-								{reviewProgress.review.suppliedHunks} supplied;{" "}
-								{reviewProgress.review.completedBatches}/
-								{reviewProgress.review.estimatedBatches} estimated batches completed;{" "}
-								{reviewProgress.review.pendingGroups} groups remaining;{" "}
-								{reviewProgress.review.calls} provider calls;{" "}
-								{reviewProgress.review.gapCount} evidence gaps.
+								: {run.reviewProgress.review.processedHunks}/
+								{run.reviewProgress.review.totalHunks} changed hunks processed;{" "}
+								{run.reviewProgress.review.suppliedHunks} supplied;{" "}
+								{run.reviewProgress.review.completedBatches}/
+								{run.reviewProgress.review.estimatedBatches} estimated batches
+								completed; {run.reviewProgress.review.pendingGroups} groups remaining;{" "}
+								{run.reviewProgress.review.calls} provider calls;{" "}
+								{run.reviewProgress.review.gapCount} evidence gaps.
 							</div>
 							<div>Evidence counters do not certify review quality.</div>
-							{reviewProgress.review.canContinue && (
+							{run.reviewProgress.review.canContinue && (
 								<button
 									type="button"
-									disabled={isRunBusy(phase)}
+									disabled={isRunBusy(run.phase)}
 									onClick={() =>
-										void start(
+										void run.start(
 											"review-risks",
 											"Continue the bounded risk review.",
 											[],
-											reviewProgress.review.jobId,
+											run.reviewProgress?.review.jobId,
 										)
 									}
 								>
@@ -1372,15 +930,15 @@ function AiAssistantRailOpen({
 							)}
 						</div>
 					)}
-				{!pending &&
-					runWarnings.map((warning) => (
+				{!run.pending &&
+					run.runWarnings.map((warning) => (
 						<div className="ai-run-warning" key={`complete-${warning}`} role="status">
 							{warning}
 						</div>
 					))}
-				{persistenceError && (
+				{conversations.persistenceError && (
 					<div className="ai-run-warning" role="status">
-						Conversation history unavailable: {persistenceError}
+						Conversation history unavailable: {conversations.persistenceError}
 					</div>
 				)}
 				{showJump && (
@@ -1394,176 +952,50 @@ function AiAssistantRailOpen({
 				)}
 			</div>
 
-			<div
-				className={`ai-rail-composer ${draggingImage ? "is-dragging-image" : ""}`}
-				onDragEnter={(event) => {
-					if (event.dataTransfer.types.includes("Files")) {
-						event.preventDefault();
-						setDraggingImage(true);
-					}
+			<AiComposer
+				surface={surface}
+				context={context}
+				prompt={prompt}
+				onPromptChange={(value) => {
+					setPrompt(value);
+					conversations.saveDraft(value);
 				}}
-				onDragOver={(event) => {
-					if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+				mention={mention}
+				textareaRef={textareaRef}
+				imageInputRef={imageInputRef}
+				imageAttachments={imageAttachments}
+				onRemoveImage={(url) =>
+					setImageAttachments((current) => current.filter((item) => item.url !== url))
+				}
+				onUploadImages={(files) => void uploadImages(files)}
+				onAttachPreview={() => void attachMockupPreview()}
+				imageCapable={imageCapable}
+				imageUploading={imageUploading}
+				previewAttaching={previewAttaching}
+				imageError={imageError}
+				draggingImage={draggingImage}
+				onDraggingImage={setDraggingImage}
+				phase={run.phase}
+				conversationLoading={conversations.conversationLoading}
+				selectedModel={ai.selectedModel}
+				onSend={() => void run.start("ask")}
+				onStop={() => void run.stop()}
+				onAttachImage={
+					imageCapable
+						? () => imageInputRef.current?.click()
+						: undefined
+				}
+				onClearComposer={clearComposer}
+				onUndoClear={undoClearComposer}
+				onInsertMentionTrigger={insertMentionTrigger}
+				slashItems={slashItems}
+				onSlashRun={(item) => {
+					setPrompt("");
+					conversations.saveDraft("");
+					void run.start(item.action, item.prompt);
 				}}
-				onDragLeave={(event) => {
-					if (!event.currentTarget.contains(event.relatedTarget as Node | null))
-						setDraggingImage(false);
-				}}
-				onDrop={(event) => {
-					event.preventDefault();
-					setDraggingImage(false);
-					void uploadImages(Array.from(event.dataTransfer.files));
-				}}
-			>
-				<input
-					ref={imageInputRef}
-					className="ai-image-input"
-					type="file"
-					accept="image/png,image/jpeg,image/webp,image/gif"
-					multiple
-					onChange={(event) => {
-						void uploadImages(Array.from(event.target.files ?? []));
-						event.currentTarget.value = "";
-					}}
-					aria-label="Attach images"
-				/>
-				{imageAttachments.length > 0 && (
-					<div className="ai-composer-images">
-						{imageAttachments.map((image) => (
-							<div className="ai-composer-image" key={image.url}>
-								<img src={image.url} alt="" />
-								<span title={image.name}>{image.name}</span>
-								<button
-									type="button"
-									onClick={() =>
-										setImageAttachments((current) =>
-											current.filter((item) => item.url !== image.url),
-										)
-									}
-									aria-label={`Remove image ${image.name}`}
-								>
-									<X size={13} />
-								</button>
-							</div>
-						))}
-					</div>
-				)}
-				<div className="ai-composer-editor">
-					<textarea
-						ref={(element) => {
-							textareaRef.current = element;
-							mention.setTextareaRef(element);
-						}}
-						value={prompt}
-						onChange={(event) => {
-							setPrompt(event.target.value);
-							saveDraft(event.target.value);
-						}}
-						onPaste={(event) => {
-							const files = Array.from(event.clipboardData.files).filter((file) =>
-								file.type.startsWith("image/"),
-							);
-							if (files.length) {
-								event.preventDefault();
-								void uploadImages(files);
-							}
-						}}
-						onKeyDown={(event) => {
-							if (mention.handleKeyDown(event)) return;
-							if (
-								event.key === "Enter" &&
-								(event.metaKey || event.ctrlKey) &&
-								(prompt.trim() || imageAttachments.length > 0) &&
-								!isBusy
-							) {
-								event.preventDefault();
-								void start("ask");
-							}
-						}}
-						placeholder="Ask about this review context… Type @ to attach files"
-						aria-label="Ask AI"
-					/>
-					{mention.isOpen && (
-						<FileMentionDropdown
-							results={mention.results}
-							focusedIndex={mention.focusedIndex}
-							query={mention.query}
-							cursorTop={mention.cursorTop}
-							onSelect={mention.onSelect}
-							onHover={mention.setFocusedIndex}
-						/>
-					)}
-				</div>
-				{imageError && (
-					<div className="ai-image-error" role="alert">
-						{imageError}
-					</div>
-				)}
-				<div>
-					<button
-						type="button"
-						className="ai-attach-image-btn"
-						onClick={() => imageInputRef.current?.click()}
-						disabled={!imageCapable || imageUploading || previewAttaching || isBusy}
-						aria-label="Attach images"
-						title={
-							imageCapable
-								? "Attach images"
-								: "Selected model source does not support images"
-						}
-					>
-						<ImagePlus size={15} />
-						{imageUploading ? "Uploading…" : "Image"}
-					</button>
-					{surface === "mockup" && "mockupId" in context && (
-						<button
-							type="button"
-							className="ai-attach-image-btn"
-							onClick={() => void attachMockupPreview()}
-							disabled={!imageCapable || imageUploading || previewAttaching || isBusy}
-							aria-label="Attach preview"
-							title={
-								imageCapable
-									? "Capture this screen and attach it to the next message"
-									: "Selected model source does not support images"
-							}
-						>
-							<ImagePlus size={15} />
-							{previewAttaching ? "Capturing…" : "Attach preview"}
-						</button>
-					)}
-					<span className="ai-composer-hint">
-						<Paperclip size={12} /> @ attach files · ⌘↵ send
-					</span>
-					<span />
-					{isBusy ? (
-						<button
-							type="button"
-							className="ai-stop-btn"
-							onClick={() => void stop()}
-							disabled={phase === "stopping"}
-							aria-label="Stop AI request"
-						>
-							<Square size={13} /> {phase === "stopping" ? "Stopping" : "Stop"}
-						</button>
-					) : (
-						<button
-							type="button"
-							className="ai-send-btn"
-							disabled={
-								(!prompt.trim() && imageAttachments.length === 0) ||
-								!selectedModel ||
-								conversationLoading ||
-								imageUploading ||
-								(imageAttachments.length > 0 && !imageCapable)
-							}
-							onClick={() => void start("ask")}
-						>
-							<Send size={15} /> Send
-						</button>
-					)}
-				</div>
-			</div>
+			/>
+			<AiRailStatusLine message={statusMessage} nonce={statusNonce} />
 		</aside>
 	);
 }

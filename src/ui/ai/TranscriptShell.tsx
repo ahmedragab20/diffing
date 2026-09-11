@@ -1,11 +1,11 @@
-import { memo } from "react";
+import { Fragment, memo } from "react";
 import { Markdown } from "../components/Markdown";
 import { ActivityList } from "./ActivityList";
 import { FindingCard } from "./FindingCard";
 import { TranscriptTurn } from "./TranscriptTurn";
 import type { RunActivity } from "../../lib/ai/activity";
 import type { NotebookEntry } from "../../lib/ai/notebook";
-import type { AiConversationTurn } from "../../lib/ai/types";
+import type { AiConversationTurn, AiModel } from "../../lib/ai/types";
 import type { CitationStatus } from "./FindingCard";
 
 /**
@@ -31,13 +31,71 @@ export interface TranscriptShellProps {
 	copiedId?: string | null;
 	onCopy: (turn: AiConversationTurn) => void;
 	onRetry?: () => void;
+	onRetryFromHere?: (turn: AiConversationTurn) => void;
+	onQuote?: (turn: AiConversationTurn, text: string) => void;
+	models?: AiModel[];
+	streamingModel?: string;
+}
+
+function dayKey(timestamp?: number): string | null {
+	if (!timestamp) return null;
+	const date = new Date(timestamp);
+	return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+function formatDay(timestamp: number): string {
+	return new Date(timestamp).toLocaleDateString(undefined, {
+		month: "short",
+		day: "numeric",
+		year: "numeric",
+	});
+}
+
+function modelLabelFor(
+	turn: AiConversationTurn,
+	models: AiModel[] | undefined,
+): string | undefined {
+	if (!turn.modelId) return undefined;
+	return (
+		models?.find((model) => model.id === turn.modelId)?.displayName ??
+		turn.modelId
+	);
 }
 
 function UserTurn({ turn }: { turn: AiConversationTurn }) {
 	const images = turn.context?.imageAttachments ?? [];
+	const attachments = turn.context?.attachmentPaths ?? [];
+	const selections = turn.context?.selectionLabels ?? [];
+	const hasChips =
+		!!turn.context?.filePath ||
+		!!turn.context?.label ||
+		attachments.length > 0 ||
+		selections.length > 0;
 	return (
 		<article className="ai-message ai-message-user" data-turn-id={turn.id}>
 			<span>{turn.text}</span>
+			{hasChips && (
+				<div className="ai-turn-chips">
+					{turn.context?.label && (
+						<span className="ai-turn-chip">{turn.context.label}</span>
+					)}
+					{turn.context?.filePath && (
+						<span className="ai-turn-chip" title={turn.context.filePath}>
+							{turn.context.filePath}
+						</span>
+					)}
+					{selections.map((label) => (
+						<span className="ai-turn-chip" key={label}>
+							{label}
+						</span>
+					))}
+					{attachments.map((path) => (
+						<span className="ai-turn-chip" key={path}>
+							@{path}
+						</span>
+					))}
+				</div>
+			)}
 			{images.length > 0 && (
 				<div className="ai-message-images">
 					{images.map((image) => (
@@ -63,6 +121,10 @@ function TranscriptShellView({
 	copiedId,
 	onCopy,
 	onRetry,
+	onRetryFromHere,
+	onQuote,
+	models,
+	streamingModel,
 }: TranscriptShellProps) {
 	const terminalFailure =
 		activity.phase === "failed" ||
@@ -81,18 +143,34 @@ function TranscriptShellView({
 				</p>
 			)}
 
-			{turns.map((turn) =>
-				turn.role === "user" ? (
-					<UserTurn key={turn.id} turn={turn} />
-				) : (
-					<TranscriptTurn
-						key={turn.id}
-						turn={turn}
-						copied={copiedId === turn.id}
-						onCopy={onCopy}
-					/>
-				),
-			)}
+			{turns.map((turn, index) => {
+				const previous = turns[index - 1];
+				const showDay =
+					!!turn.createdAt &&
+					dayKey(previous?.createdAt) !== dayKey(turn.createdAt) &&
+					(index === 0 || dayKey(previous?.createdAt) !== null);
+				const body =
+					turn.role === "user" ? (
+						<UserTurn turn={turn} />
+					) : (
+						<TranscriptTurn
+							turn={turn}
+							copied={copiedId === turn.id}
+							onCopy={onCopy}
+							onRetryFromHere={onRetryFromHere}
+							onQuote={onQuote}
+							modelLabel={modelLabelFor(turn, models)}
+						/>
+					);
+				return (
+					<Fragment key={turn.id ?? `${turn.role}-${index}`}>
+						{showDay && turn.createdAt && (
+							<div className="ai-day-separator">{formatDay(turn.createdAt)}</div>
+						)}
+						{body}
+					</Fragment>
+				);
+			})}
 
 			{findings.length > 0 && (
 				<section className="ai-transcript-findings" aria-label="Cited findings">
@@ -110,12 +188,18 @@ function TranscriptShellView({
 				<>
 					<UserTurn turn={streaming.turn} />
 					{streaming.text ? (
-						<article className="ai-response-document" data-streaming="true">
-							<Markdown
-								content={streaming.text}
-								className="markdown-body ai-response-markdown"
-							/>
-						</article>
+						<>
+							<article className="ai-response-document" data-streaming="true">
+								<Markdown
+									content={streaming.text}
+									className="markdown-body ai-response-markdown"
+								/>
+							</article>
+							<div className="ai-streaming-meta" role="status">
+								{streamingModel || "Model"} ·{" "}
+								{(activity.elapsedMs / 1000).toFixed(1)}s
+							</div>
+						</>
 					) : waiting ? (
 						<div className="ai-thinking" role="status">
 							<span className="ai-thinking-mark" aria-hidden="true" />

@@ -6,7 +6,9 @@ order: 2
 section: guides
 ---
 
-The web review UI can run an optional **Ask AI** assistant beside a diff or plan. It is separate from agent handoff (MCP / `await-review`): this surface helps *you* while reviewing. Nothing runs until you click a labeled action.
+The web review UI can run an optional **Ask AI** assistant beside a diff, PR, plan, or mockup. It is separate from agent handoff (MCP / `await-review`): this surface helps *you* while reviewing. Nothing runs until you click a labeled action or send from the composer.
+
+Open the rail with **Ask AI** in the toolbar, or press <kbd>a</kbd> / <kbd>⌘/Ctrl+I</kbd> (the chord also works while typing). <kbd>A</kbd> starts a new conversation. Press <kbd>?</kbd> for the full shortcut list.
 
 ## Connect providers
 
@@ -24,26 +26,30 @@ The connections section is collapsed by default and remembers its expanded state
 
 ## Ask AI rail
 
-In a local or PR diff, or on a plan, use the toolbar model picker and **Ask AI**.
+In a local or PR diff, plan, or mockup, use the toolbar model picker and **Ask AI**, or the shortcuts above. The rail header switches model and reasoning effort inline (Auto / Low / Medium / High).
 
-Quick actions (surface-dependent):
+Quick actions (surface-dependent; also <kbd>⌘/Ctrl+1..3</kbd>, or type <kbd>/</kbd> in an empty composer):
 
-| Diff / PR | Plan |
-|-----------|------|
-| Summarize | Summarize |
-| Review risks | Find gaps |
-| Review map (whole diff) or Explain context (file/selection) | Critique plan |
+| Diff / PR | Plan | Mockup |
+|-----------|------|--------|
+| Summarize | Summarize | Summarize |
+| Review risks | Find gaps | Find gaps |
+| Review map (whole diff) or Explain context (file/selection) | Critique plan | Critique mockup |
+
+Slash extras include Explain, Draft review summary (diff/PR), Compare plan versions (when `version > 1`), and Compare mockup versions (version-compare context). **Ask** waits for you to type; every other entry runs immediately.
 
 Composer extras:
 
-- Type `@` to attach repository files (same FFF / frecency search as in-app search). Up to **8** text files / **64 KB** total; chips are removable; content loads only when you send.
+- Type `@` (or <kbd>⌘/Ctrl+Shift+F</kbd>) to attach repository files (same FFF / frecency search as in-app search). Up to **8** text files / **64 KB** total; chips are removable; content loads only when you send.
 - Paste, drag, or attach images (PNG, JPEG, WebP, GIF; up to **4** / **10 MB** each) when the selected model source supports images.
-- Responses stream into the rail as GFM Markdown (tables, fenced code, Mermaid, copy).
+- <kbd>Enter</kbd> sends; <kbd>Shift+Enter</kbd> inserts a newline.
+- <kbd>⌘/Ctrl+Shift+Y</kbd> copies the last assistant response, <kbd>⌘/Ctrl+Shift+E</kbd> cycles reasoning effort, and <kbd>⌘/Ctrl+Shift+X</kbd> clears the composer (<kbd>⌘/Ctrl+Z</kbd> undoes when empty).
+- Responses stream into the rail as GFM Markdown (tables, fenced code, Mermaid, copy). Each assistant turn has **Copy**, **Retry from here** (a new attempt, never a rewrite), and **Quote**. Cited findings on diffs jump to the file and line.
 - **Stop** cancels an in-flight run.
 
 ### Conversations
 
-Chats persist under the per-repo store as `ai-conversations.json` (scoped by surface + repo/branch, or plan id). You can switch, rename, or delete threads. Retention is capped (about **40** conversations, **30** days, bounded message size).
+Chats persist under the per-repo store as `ai-conversations.json` (scoped by surface + repo/branch, plan id, or mockup id). You can switch, rename, or delete threads. Retention is capped (about **40** conversations, **30** days, bounded message size).
 
 ### Context rules
 
@@ -51,7 +57,7 @@ Chats persist under the per-repo store as `ai-conversations.json` (scoped by sur
 - A **whole-diff** ask sends the review’s changed-file map and diff content within the context budget. The focused file is a **navigation hint only** — it does not narrow the scope.
 - You can attach up to **8** explicit line ranges (**64 KB** total); those ranges are prioritized.
 - Diff requests do not silently include plans; plan requests do not silently include diffs.
-- Mockups share connection Settings but expose **no** AI actions.
+- Mockups use the same Ask AI rail (critique, find gaps, attach preview). Opening `/mockup` never starts inference.
 
 ## Comment and send helpers
 
@@ -72,5 +78,6 @@ AI is **always user-triggered**. Loading a review, selecting lines, hovering, re
 - [Code review](/docs/guides/code-review/)
 - [Plan review](/docs/guides/plan-review/)
 - [Settings](/docs/reference/settings/)
+- [Keyboard shortcuts](/docs/reference/keyboard/)
 - [HTTP API](/docs/reference/http-api/) — `/api/ai/*`
 - [Storage](/docs/concepts/storage/)

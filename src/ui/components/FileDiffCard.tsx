@@ -86,6 +86,7 @@ import { CommentBubble } from "./CommentBubble";
 import { ExistingPrCommentBubble } from "./ExistingPrCommentBubble";
 import { DiffMinimap } from "./DiffMinimap";
 import { SHIKI_THEME_MAP, scrollToLine } from "../utils";
+import { setPendingDiffSelection } from "../ai/pendingDiffSelection";
 import {
   clearFindHighlights,
   syncFindHighlights,
@@ -641,6 +642,25 @@ export const FileDiffCard = memo(function FileDiffCard({
     setLiveSelectionCount(0);
     draftSessionRef.current = null;
   }, []);
+
+  useEffect(() => {
+    if (!pending) {
+      setPendingDiffSelection(null);
+      return;
+    }
+    const ordered = pendingOrderedRange(pending);
+    const selection: AiDiffSelection = {
+      filePath,
+      side: pending.side,
+      startLine: ordered.start,
+      endLine: ordered.end,
+      selectedText: selectionContentRef.current ?? "",
+    };
+    setPendingDiffSelection(selection);
+    return () => {
+      setPendingDiffSelection(null);
+    };
+  }, [pending, filePath]);
 
   // A live comment draft has no place in an edit session: clear it on enter.
   useEffect(() => {

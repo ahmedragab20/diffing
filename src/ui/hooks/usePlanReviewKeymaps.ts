@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { fireFeedback, playSound } from './useHaptics'
 import { isTypingInFocus } from '../utils'
+import { matchesAiShortcut } from '../ai/aiShortcuts'
 
 export interface PlanReviewKeymapActions {
   onNavigatePlan: (direction: 'next' | 'prev') => void
@@ -14,6 +15,8 @@ export interface PlanReviewKeymapActions {
   onToggleLineNumbers: () => void
   onOpenTheme: () => void
   onOpenShortcuts: () => void
+  onToggleAiAssistant?: () => void
+  onOpenAiNewConversation?: () => void
 }
 
 /** Vim-style keyboard model for the plan review surface. */
@@ -29,6 +32,19 @@ export function usePlanReviewKeymaps(actions: PlanReviewKeymapActions) {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      // ⌘I / Ctrl+I toggles Ask AI even while an editor is focused, like ⌘K.
+      if (
+        matchesAiShortcut(event, 'toggle-rail') &&
+        (event.metaKey || event.ctrlKey) &&
+        actions.onToggleAiAssistant
+      ) {
+        event.preventDefault()
+        actions.onToggleAiAssistant()
+        fireFeedback('medium', 'open')
+        resetBuffer()
+        return
+      }
+
       // Never fire shortcuts while typing, including in contenteditable
       // surfaces inside shadow roots (document.activeElement retargets to the
       // shadow host there, so the check must descend).
@@ -108,6 +124,10 @@ export function usePlanReviewKeymaps(actions: PlanReviewKeymapActions) {
         handled(actions.onOpenTheme, 'open')
       } else if (keyBuffer === '?') {
         handled(actions.onOpenShortcuts, 'open')
+      } else if (keyBuffer === 'a' && actions.onToggleAiAssistant) {
+        handled(actions.onToggleAiAssistant, 'open')
+      } else if (keyBuffer === 'A' && actions.onOpenAiNewConversation) {
+        handled(actions.onOpenAiNewConversation, 'open')
       } else if (keyBuffer.length >= 2) {
         resetBuffer()
       }

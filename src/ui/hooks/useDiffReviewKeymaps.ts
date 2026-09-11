@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import type { Scope } from "../lib/searchTypes";
 import { fireFeedback, playSound } from "./useHaptics";
 import { isTypingInFocus, isEditableKeyEvent } from "../utils";
+import { matchesAiShortcut } from "../ai/aiShortcuts";
 
 interface DiffReviewKeymapActions {
   onNavigateFile: (direction: "next" | "prev") => void;
@@ -39,6 +40,14 @@ interface DiffReviewKeymapActions {
   onExitZen?: () => void;
   /** Open the centered Submit-review dialog (Cmd/Ctrl+Enter). */
   onOpenSendReview?: () => void;
+  /** Toggle the Ask AI rail (`a` / ⌘I). */
+  onToggleAiAssistant?: () => void;
+  /** Open Ask AI on a fresh conversation (`A`). */
+  onOpenAiNewConversation?: () => void;
+  /** Open Ask AI and @-mention the active file (`ga`). */
+  onAskAboutActiveFile?: () => void;
+  /** Add the pending line selection to Ask, or just open the rail. */
+  onAddSelectionToAsk?: () => void;
 }
 
 /** Shared keyboard model for local and GitHub diff review surfaces. */
@@ -68,6 +77,19 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
         event.preventDefault();
         if (actions.onTogglePalette) actions.onTogglePalette();
         else actions.onOpenPalette("all");
+        resetBuffer();
+        return;
+      }
+
+      // ⌘I / Ctrl+I toggles Ask AI even while an editor is focused, like ⌘K.
+      if (
+        matchesAiShortcut(event, "toggle-rail") &&
+        (event.metaKey || event.ctrlKey) &&
+        actions.onToggleAiAssistant
+      ) {
+        event.preventDefault();
+        actions.onToggleAiAssistant();
+        fireFeedback("medium", "open");
         resetBuffer();
         return;
       }
@@ -129,6 +151,17 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
       ) {
         event.preventDefault();
         actions.onOpenSendReview();
+        fireFeedback("medium", "open");
+        resetBuffer();
+        return;
+      }
+
+      if (
+        matchesAiShortcut(event, "add-selection-to-ask") &&
+        actions.onAddSelectionToAsk
+      ) {
+        event.preventDefault();
+        actions.onAddSelectionToAsk();
         fireFeedback("medium", "open");
         resetBuffer();
         return;
@@ -266,6 +299,12 @@ export function useDiffReviewKeymaps(actions: DiffReviewKeymapActions) {
         handled(actions.onToggleZen);
       } else if (keyBuffer === "?") {
         handled(actions.onOpenShortcuts, "open");
+      } else if (keyBuffer === "a" && actions.onToggleAiAssistant) {
+        handled(actions.onToggleAiAssistant, "open");
+      } else if (keyBuffer === "A" && actions.onOpenAiNewConversation) {
+        handled(actions.onOpenAiNewConversation, "open");
+      } else if (keyBuffer === "ga" && actions.onAskAboutActiveFile) {
+        handled(actions.onAskAboutActiveFile, "open");
       } else if (keyBuffer.length >= 2) {
         resetBuffer();
       }
