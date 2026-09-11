@@ -766,4 +766,282 @@ describe("AiAssistantRail", () => {
 		expect(document.querySelector('[data-unverified="true"]')).not.toBeNull();
 		expect(document.querySelector('[data-unverified="false"]')).toBeNull();
 	});
+
+	it("sends on Enter and inserts a newline on Shift+Enter", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input, init) => {
+				const url = String(input);
+				if (url.includes("/api/ai/conversations?") && !init?.method)
+					return new Response(JSON.stringify({ conversations: [] }), {
+						status: 200,
+					});
+				if (url.endsWith("/api/ai/conversations") && init?.method === "POST")
+					return new Response(
+						JSON.stringify({
+							conversation: {
+								id: "c-enter",
+								title: "New conversation",
+								surface: "diff",
+								scopeKey: "review",
+								createdAt: 1,
+								updatedAt: 1,
+								turns: [],
+							},
+						}),
+						{ status: 201 },
+					);
+				return new Response(JSON.stringify({}), { status: 200 });
+			}),
+		);
+		const user = userEvent.setup();
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={vi.fn()}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		const composer = screen.getByRole("textbox", { name: "Ask AI" });
+		await user.type(composer, "Hello");
+		fireEvent.keyDown(composer, { key: "Enter", shiftKey: true });
+		expect(mocks.run).not.toHaveBeenCalled();
+		expect(composer).toHaveValue("Hello");
+		fireEvent.keyDown(composer, { key: "Enter" });
+		await waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(1));
+	});
+
+	it("runs the first quick action with Mod+1", async () => {
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={vi.fn()}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		const rail = document.querySelector(".ai-assistant-rail");
+		expect(rail).not.toBeNull();
+		fireEvent.keyDown(rail!, { key: "1", metaKey: true });
+		await waitFor(() =>
+			expect(mocks.run).toHaveBeenCalledWith(
+				expect.objectContaining({ action: "summarize" }),
+			),
+		);
+	});
+
+	it("stops a running request with Mod+.", async () => {
+		mocks.run.mockImplementation(async ({ onStart }) => {
+			onStart?.("r-stop");
+			return new Promise(() => {});
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input, init) => {
+				const url = String(input);
+				if (url.includes("/api/ai/conversations?") && !init?.method)
+					return new Response(JSON.stringify({ conversations: [] }), {
+						status: 200,
+					});
+				if (url.endsWith("/api/ai/conversations") && init?.method === "POST")
+					return new Response(
+						JSON.stringify({
+							conversation: {
+								id: "c-stop",
+								title: "New conversation",
+								surface: "diff",
+								scopeKey: "review",
+								createdAt: 1,
+								updatedAt: 1,
+								turns: [],
+							},
+						}),
+						{ status: 201 },
+					);
+				return new Response(JSON.stringify({}), { status: 200 });
+			}),
+		);
+		const user = userEvent.setup();
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={vi.fn()}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		const composer = screen.getByRole("textbox", { name: "Ask AI" });
+		await user.type(composer, "Explain");
+		await user.click(screen.getByRole("button", { name: /Send/i }));
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Stop AI request" })).toBeInTheDocument(),
+		);
+		const rail = document.querySelector(".ai-assistant-rail");
+		fireEvent.keyDown(rail!, { key: ".", metaKey: true });
+		await waitFor(() => expect(mocks.cancel).toHaveBeenCalled());
+	});
+
+	it("switches conversations with Mod+[ and Mod+]", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input, init) => {
+				const url = String(input);
+				if (url.includes("/api/ai/conversations?") && !init?.method)
+					return new Response(
+						JSON.stringify({
+							conversations: [
+								{
+									id: "c1",
+									title: "First",
+									surface: "diff",
+									scopeKey: "diff:review:working-tree",
+									createdAt: 1,
+									updatedAt: 2,
+									turnCount: 0,
+								},
+								{
+									id: "c2",
+									title: "Second",
+									surface: "diff",
+									scopeKey: "diff:review:working-tree",
+									createdAt: 1,
+									updatedAt: 1,
+									turnCount: 0,
+								},
+							],
+						}),
+						{ status: 200 },
+					);
+				if (url.includes("/api/ai/conversations/c1") && !init?.method)
+					return new Response(
+						JSON.stringify({
+							conversation: {
+								id: "c1",
+								title: "First",
+								surface: "diff",
+								scopeKey: "diff:review:working-tree",
+								createdAt: 1,
+								updatedAt: 2,
+								turns: [],
+							},
+						}),
+						{ status: 200 },
+					);
+				if (url.includes("/api/ai/conversations/c2") && !init?.method)
+					return new Response(
+						JSON.stringify({
+							conversation: {
+								id: "c2",
+								title: "Second",
+								surface: "diff",
+								scopeKey: "diff:review:working-tree",
+								createdAt: 1,
+								updatedAt: 1,
+								turns: [],
+							},
+						}),
+						{ status: 200 },
+					);
+				return new Response(JSON.stringify({}), { status: 200 });
+			}),
+		);
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={vi.fn()}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		expect(await screen.findByRole("combobox", { name: "AI conversation" })).toHaveValue(
+			"c1",
+		);
+		const rail = document.querySelector(".ai-assistant-rail");
+		fireEvent.keyDown(rail!, { key: "]", metaKey: true });
+		await waitFor(() =>
+			expect(screen.getByRole("combobox", { name: "AI conversation" })).toHaveValue(
+				"c2",
+			),
+		);
+		fireEvent.keyDown(rail!, { key: "[", metaKey: true });
+		await waitFor(() =>
+			expect(screen.getByRole("combobox", { name: "AI conversation" })).toHaveValue(
+				"c1",
+			),
+		);
+	});
+
+	it("copies the last assistant response with Mod+Shift+C", async () => {
+		const writeText = vi.fn(async () => {});
+		vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+		const conversation = {
+			id: "c1",
+			title: "Existing",
+			surface: "diff",
+			scopeKey: "diff:review:working-tree",
+			createdAt: 1,
+			updatedAt: 1,
+			turns: [
+				{ id: "u1", role: "user", text: "why this?" },
+				{ id: "a1", role: "assistant", text: "settled answer" },
+			],
+		};
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input, init) => {
+				const url = String(input);
+				if (url.includes("/api/ai/conversations?") && !init?.method)
+					return new Response(
+						JSON.stringify({
+							conversations: [
+								{
+									id: "c1",
+									title: "Existing",
+									surface: "diff",
+									scopeKey: "diff:review:working-tree",
+									createdAt: 1,
+									updatedAt: 1,
+									turnCount: 2,
+								},
+							],
+						}),
+						{ status: 200 },
+					);
+				if (url.includes("/api/ai/conversations/c1") && !init?.method)
+					return new Response(JSON.stringify({ conversation }), { status: 200 });
+				return new Response(JSON.stringify({}), { status: 200 });
+			}),
+		);
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={vi.fn()}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		expect(await screen.findByText("settled answer")).toBeInTheDocument();
+		const rail = document.querySelector(".ai-assistant-rail");
+		fireEvent.keyDown(rail!, { key: "C", metaKey: true, shiftKey: true });
+		await waitFor(() => expect(writeText).toHaveBeenCalledWith("settled answer"));
+	});
+
+	it("closes the rail on Escape and restores focus", async () => {
+		const onClose = vi.fn();
+		renderRail(
+			<>
+				<button type="button">Outside</button>
+				<AiAssistantRail
+					open
+					onClose={onClose}
+					surface="diff"
+					context={{ kind: "diff" }}
+				/>
+			</>,
+		);
+		const rail = document.querySelector(".ai-assistant-rail");
+		fireEvent.keyDown(rail!, { key: "Escape" });
+		expect(onClose).toHaveBeenCalled();
+	});
 });

@@ -10,6 +10,7 @@ import { FileMentionDropdown } from "../components/FileMentionDropdown";
 import type { UseFileMentionResult } from "../hooks/useFileMention";
 import type { RunPhase } from "./useAiRun";
 import { isRunBusy } from "./useAiRun";
+import { matchesAiShortcut } from "./aiShortcuts";
 
 export interface AiComposerProps {
 	surface: AiSurface;
@@ -34,6 +35,11 @@ export interface AiComposerProps {
 	selectedModel: string;
 	onSend: () => void;
 	onStop: () => void;
+	onAttachImage?: () => void;
+	onClearComposer?: () => void;
+	onUndoClear?: () => void;
+	onInsertMentionTrigger?: () => void;
+	slashOpen?: boolean;
 }
 
 export function AiComposer({
@@ -59,6 +65,11 @@ export function AiComposer({
 	selectedModel,
 	onSend,
 	onStop,
+	onAttachImage,
+	onClearComposer,
+	onUndoClear,
+	onInsertMentionTrigger,
+	slashOpen = false,
 }: AiComposerProps) {
 	const isBusy = isRunBusy(phase);
 	const setTextareaRef = (element: HTMLTextAreaElement | null) => {
@@ -71,15 +82,46 @@ export function AiComposer({
 
 	const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
 		if (mention.handleKeyDown(event)) return;
+		if (slashOpen && (event.key === "Enter" || event.key === "Tab" || event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Escape"))
+			return;
+		if (matchesAiShortcut(event, "attach-image") && onAttachImage) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAttachImage();
+			return;
+		}
+		if (matchesAiShortcut(event, "clear-composer") && onClearComposer) {
+			event.preventDefault();
+			event.stopPropagation();
+			onClearComposer();
+			return;
+		}
 		if (
-			event.key === "Enter" &&
 			(event.metaKey || event.ctrlKey) &&
-			(prompt.trim() || imageAttachments.length > 0) &&
-			!isBusy
+			event.key.toLowerCase() === "z" &&
+			!event.shiftKey &&
+			!prompt &&
+			imageAttachments.length === 0 &&
+			onUndoClear
 		) {
 			event.preventDefault();
-			onSend();
+			event.stopPropagation();
+			onUndoClear();
+			return;
 		}
+		if (matchesAiShortcut(event, "insert-file-mention") && onInsertMentionTrigger) {
+			event.preventDefault();
+			event.stopPropagation();
+			onInsertMentionTrigger();
+			return;
+		}
+		if (event.key !== "Enter") return;
+		if (event.shiftKey) return;
+		if (isBusy) return;
+		if (!prompt.trim() && imageAttachments.length === 0) return;
+		event.preventDefault();
+		event.stopPropagation();
+		onSend();
 	};
 
 	return (

@@ -6,6 +6,7 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	type KeyboardEvent as ReactKeyboardEvent,
 	type MouseEvent as ReactMouseEvent,
 	type Ref,
 } from "react";
@@ -24,6 +25,7 @@ import { useOptionalAi } from "./AiContext";
 import { attachedFilePaths, quickActionsFor, type AiClient } from "./railHelpers";
 import { deriveRailActivity, isRunBusy, useAiRun } from "./useAiRun";
 import { useAiConversations } from "./useAiConversations";
+import { matchesAiShortcut } from "./aiShortcuts";
 import { AiRailHeader } from "./AiRailHeader";
 import { AiQuickActions } from "./AiQuickActions";
 import { AiComposer } from "./AiComposer";
@@ -100,6 +102,11 @@ function AiAssistantRailOpen({
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
 	const conversationRef = useRef<HTMLDivElement | null>(null);
+	const contextDetailsRef = useRef<HTMLDetailsElement | null>(null);
+	const clearedComposerRef = useRef<{
+		prompt: string;
+		images: AiImageAttachmentReference[];
+	} | null>(null);
 	const followOutputRef = useRef(true);
 	const forceScrollRef = useRef(true);
 	const isBusyRef = useRef(false);
@@ -458,6 +465,136 @@ function AiAssistantRailOpen({
 	const quickActions = quickActionsFor(surface, context);
 	const turns = conversations.conversation?.turns ?? [];
 	const isBusy = run.isBusy;
+
+	const copyLastResponse = useCallback(() => {
+		const last = [...turns].reverse().find((turn) => turn.role === "assistant");
+		if (last) void copyMarkdown(last);
+	}, [copyMarkdown, turns]);
+
+	const selectRelativeConversation = useCallback(
+		(delta: number) => {
+			const list = conversations.conversationSummaries;
+			if (!list.length) return;
+			const currentId = conversations.conversation?.id;
+			const index = list.findIndex((item) => item.id === currentId);
+			const nextIndex =
+				index < 0
+					? 0
+					: (index + delta + list.length) % list.length;
+			const next = list[nextIndex];
+			if (next) void conversations.selectConversation(next.id);
+		},
+		[
+			conversations.conversation?.id,
+			conversations.conversationSummaries,
+			conversations.selectConversation,
+		],
+	);
+
+	const clearComposer = useCallback(() => {
+		clearedComposerRef.current = {
+			prompt,
+			images: imageAttachments,
+		};
+		setPrompt("");
+		setImageAttachments([]);
+		conversations.saveDraft("");
+	}, [conversations.saveDraft, imageAttachments, prompt]);
+
+	const undoClearComposer = useCallback(() => {
+		const snapshot = clearedComposerRef.current;
+		if (!snapshot) return;
+		setPrompt(snapshot.prompt);
+		setImageAttachments(snapshot.images);
+		conversations.saveDraft(snapshot.prompt);
+		clearedComposerRef.current = null;
+	}, [conversations.saveDraft]);
+
+	const insertMentionTrigger = useCallback(() => {
+		const textarea = textareaRef.current;
+		const start = textarea?.selectionStart ?? prompt.length;
+		const end = textarea?.selectionEnd ?? start;
+		const next = `${prompt.slice(0, start)}@${prompt.slice(end)}`;
+		setPrompt(next);
+		conversations.saveDraft(next);
+		requestAnimationFrame(() => {
+			if (!textarea) return;
+			const pos = start + 1;
+			textarea.selectionStart = textarea.selectionEnd = pos;
+			textarea.focus();
+		});
+	}, [conversations.saveDraft, prompt]);
+
+	const handleRailKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+		if (conversations.renaming) return;
+		if (matchesAiShortcut(event, "stop") && isBusy) {
+			event.preventDefault();
+			event.stopPropagation();
+			void run.stop();
+			return;
+		}
+		if (matchesAiShortcut(event, "new-conversation") && (event.metaKey || event.ctrlKey)) {
+			event.preventDefault();
+			event.stopPropagation();
+			void conversations.newConversation();
+			return;
+		}
+		if (matchesAiShortcut(event, "prev-conversation")) {
+			event.preventDefault();
+			event.stopPropagation();
+			selectRelativeConversation(-1);
+			return;
+		}
+		if (matchesAiShortcut(event, "next-conversation")) {
+			event.preventDefault();
+			event.stopPropagation();
+			selectRelativeConversation(1);
+			return;
+		}
+		if (matchesAiShortcut(event, "quick-action-1") && quickActions[0] && !isBusy && ai.selectedModel) {
+			event.preventDefault();
+			event.stopPropagation();
+			void run.start(quickActions[0].action, quickActions[0].prompt);
+			return;
+		}
+		if (matchesAiShortcut(event, "quick-action-2") && quickActions[1] && !isBusy && ai.selectedModel) {
+			event.preventDefault();
+			event.stopPropagation();
+			void run.start(quickActions[1].action, quickActions[1].prompt);
+			return;
+		}
+		if (matchesAiShortcut(event, "quick-action-3") && quickActions[2] && !isBusy && ai.selectedModel) {
+			event.preventDefault();
+			event.stopPropagation();
+			void run.start(quickActions[2].action, quickActions[2].prompt);
+			return;
+		}
+		if (matchesAiShortcut(event, "copy-last-response")) {
+			event.preventDefault();
+			event.stopPropagation();
+			copyLastResponse();
+			return;
+		}
+		if (matchesAiShortcut(event, "retry-last") && run.pending && (run.phase === "error" || run.phase === "canceled" || run.phase === "interrupted")) {
+			event.preventDefault();
+			event.stopPropagation();
+			run.retry();
+			return;
+		}
+		if (matchesAiShortcut(event, "toggle-context-details")) {
+			event.preventDefault();
+			event.stopPropagation();
+			const details = contextDetailsRef.current;
+			if (details) details.open = !details.open;
+			return;
+		}
+		if (matchesAiShortcut(event, "close-rail")) {
+			if (mention.isOpen) return;
+			event.preventDefault();
+			event.stopPropagation();
+			onClose();
+		}
+	};
 	const activity = deriveRailActivity(
 		run.phase,
 		run.pending,
@@ -472,6 +609,7 @@ function AiAssistantRailOpen({
 			className="ai-assistant-rail"
 			aria-label={title}
 			style={{ width: localWidth }}
+			onKeyDown={handleRailKeyDown}
 		>
 			<div
 				className="ai-rail-resize-handle"
@@ -581,7 +719,7 @@ function AiAssistantRailOpen({
 						</button>
 					))}
 				</div>
-				<details className="ai-share-details">
+				<details className="ai-share-details" ref={contextDetailsRef}>
 					<summary>Context being shared</summary>
 					<p>
 						{context.kind === "diff"
@@ -741,6 +879,14 @@ function AiAssistantRailOpen({
 				selectedModel={ai.selectedModel}
 				onSend={() => void run.start("ask")}
 				onStop={() => void run.stop()}
+				onAttachImage={
+					imageCapable
+						? () => imageInputRef.current?.click()
+						: undefined
+				}
+				onClearComposer={clearComposer}
+				onUndoClear={undoClearComposer}
+				onInsertMentionTrigger={insertMentionTrigger}
 			/>
 		</aside>
 	);
