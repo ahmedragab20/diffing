@@ -40,6 +40,10 @@ function makeActions(): TestActions {
     onToggleZen: vi.fn(),
     onExitZen: vi.fn(),
     onOpenSendReview: vi.fn(),
+    onToggleAiAssistant: undefined as TestActions['onToggleAiAssistant'],
+    onOpenAiNewConversation: undefined as TestActions['onOpenAiNewConversation'],
+    onAskAboutActiveFile: undefined as TestActions['onAskAboutActiveFile'],
+    onAddSelectionToAsk: undefined as TestActions['onAddSelectionToAsk'],
   }
 }
 
@@ -379,5 +383,95 @@ describe('shared diff review keymaps', () => {
 
     expect(actions.onOpenFileSearch).not.toHaveBeenCalled()
     expect(actions.onOpenPalette).toHaveBeenCalledWith('files')
+  })
+
+  it('toggles Ask AI with a and opens a new conversation with A', () => {
+    const actions = makeActions()
+    actions.onToggleAiAssistant = vi.fn()
+    actions.onOpenAiNewConversation = vi.fn()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'a' })
+    fireEvent.keyDown(window, { key: 'A' })
+
+    expect(actions.onToggleAiAssistant).toHaveBeenCalledOnce()
+    expect(actions.onOpenAiNewConversation).toHaveBeenCalledOnce()
+  })
+
+  it('asks about the active file with ga', () => {
+    const actions = makeActions()
+    actions.onToggleAiAssistant = vi.fn()
+    actions.onAskAboutActiveFile = vi.fn()
+    render(<Harness actions={actions} />)
+
+    fireEvent.keyDown(window, { key: 'g' })
+    fireEvent.keyDown(window, { key: 'a' })
+
+    expect(actions.onAskAboutActiveFile).toHaveBeenCalledOnce()
+    expect(actions.onToggleAiAssistant).not.toHaveBeenCalled()
+  })
+
+  it('toggles Ask AI with Mod+I while a textarea is focused', () => {
+    const actions = makeActions()
+    actions.onToggleAiAssistant = vi.fn()
+    render(
+      <Harness actions={actions}>
+        <textarea data-testid="composer" />
+      </Harness>,
+    )
+
+    const textarea = screen.getByTestId('composer')
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: 'i', metaKey: true })
+    fireEvent.keyDown(textarea, { key: 'i', ctrlKey: true })
+
+    expect(actions.onToggleAiAssistant).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not fire a or A while typing, but Mod+I still works', () => {
+    const actions = makeActions()
+    actions.onToggleAiAssistant = vi.fn()
+    actions.onOpenAiNewConversation = vi.fn()
+    render(
+      <Harness actions={actions}>
+        <textarea data-testid="composer" />
+      </Harness>,
+    )
+
+    const textarea = screen.getByTestId('composer')
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: 'a' })
+    fireEvent.keyDown(textarea, { key: 'A' })
+    expect(actions.onToggleAiAssistant).not.toHaveBeenCalled()
+    expect(actions.onOpenAiNewConversation).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(textarea, { key: 'i', metaKey: true })
+    expect(actions.onToggleAiAssistant).toHaveBeenCalledOnce()
+  })
+
+  it('does not fire AI shortcuts while a dialog is open', () => {
+    const actions = makeActions()
+    actions.onToggleAiAssistant = vi.fn()
+    actions.onOpenAiNewConversation = vi.fn()
+    actions.onAskAboutActiveFile = vi.fn()
+    actions.onAddSelectionToAsk = vi.fn()
+    render(
+      <Harness actions={actions}>
+        <div role="dialog" data-testid="dialog" />
+      </Harness>,
+    )
+
+    const dialog = screen.getByTestId('dialog')
+    fireEvent.keyDown(dialog, { key: 'a' })
+    fireEvent.keyDown(dialog, { key: 'A' })
+    fireEvent.keyDown(dialog, { key: 'g' })
+    fireEvent.keyDown(dialog, { key: 'a' })
+    fireEvent.keyDown(dialog, { key: 'i', metaKey: true })
+    fireEvent.keyDown(dialog, { key: 'A', metaKey: true, shiftKey: true })
+
+    expect(actions.onToggleAiAssistant).not.toHaveBeenCalled()
+    expect(actions.onOpenAiNewConversation).not.toHaveBeenCalled()
+    expect(actions.onAskAboutActiveFile).not.toHaveBeenCalled()
+    expect(actions.onAddSelectionToAsk).not.toHaveBeenCalled()
   })
 })

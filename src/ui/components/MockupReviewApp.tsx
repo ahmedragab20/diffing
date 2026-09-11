@@ -35,8 +35,13 @@ import { useSettings, resolveMonoFont } from "../hooks/useSettings";
 import type { AiMockupContext } from "../../lib/ai/types";
 import { AiConnectionsPanel } from "../ai/AiConnectionsPanel";
 import { AiModelPicker } from "../ai/AiModelPicker";
-import { AiAssistantRail } from "../ai/AiAssistantRail";
+import { AiAssistantRail, type AiAssistantRailHandle } from "../ai/AiAssistantRail";
 import { useOptionalAi } from "../ai/AiContext";
+import {
+	openAskAiNewConversation,
+	restoreAiRailFocus,
+	toggleAskAiRail,
+} from "../ai/aiRailToggle";
 import { useApplyFonts } from "../hooks/useApplyFonts";
 import { usePlanCommentsSheet } from "../hooks/usePlanLayoutMedia";
 import { HapticsProvider } from "../hooks/useHaptics";
@@ -160,6 +165,8 @@ export function MockupReviewApp() {
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
 	const [aiRailOpen, setAiRailOpen] = useState(false);
+	const aiRailRef = useRef<AiAssistantRailHandle>(null);
+	const aiPreviousFocusRef = useRef<HTMLElement | null>(null);
 	const [generateOpen, setGenerateOpen] = useState(false);
 	const [rewriteOpen, setRewriteOpen] = useState(false);
 	const [aiBusy, setAiBusy] = useState<"generate" | "rewrite" | null>(null);
@@ -766,6 +773,28 @@ export function MockupReviewApp() {
 		}
 	}, [viewOnly]);
 
+	const closeAiRail = useCallback(() => {
+		setAiRailOpen(false);
+		restoreAiRailFocus(aiPreviousFocusRef);
+	}, []);
+
+	const toggleAiAssistant = useCallback(() => {
+		toggleAskAiRail({
+			open: aiRailOpen,
+			setOpen: setAiRailOpen,
+			railRef: aiRailRef,
+			previousFocusRef: aiPreviousFocusRef,
+		});
+	}, [aiRailOpen]);
+
+	const openAiNewConversation = useCallback(() => {
+		openAskAiNewConversation({
+			setOpen: setAiRailOpen,
+			railRef: aiRailRef,
+			previousFocusRef: aiPreviousFocusRef,
+		});
+	}, []);
+
 	useEffect(() => {
 		let keyBuffer = "";
 		let bufferTimeout: ReturnType<typeof setTimeout>;
@@ -784,6 +813,16 @@ export function MockupReviewApp() {
 		const currentIdx = active ? mockupIds.indexOf(active.id) : -1;
 
 		const onKey = (e: KeyboardEvent) => {
+			if (
+				(e.metaKey || e.ctrlKey) &&
+				e.key.toLowerCase() === "i" &&
+				!e.shiftKey
+			) {
+				e.preventDefault();
+				toggleAiAssistant();
+				return;
+			}
+
 			const tag = (e.target as HTMLElement)?.tagName;
 			if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
@@ -868,6 +907,16 @@ export function MockupReviewApp() {
 				setShortcutsHelpOpen(true);
 				return;
 			}
+			if (e.key === "a") {
+				e.preventDefault();
+				toggleAiAssistant();
+				return;
+			}
+			if (e.key === "A") {
+				e.preventDefault();
+				openAiNewConversation();
+				return;
+			}
 			if (e.key === "b") setSidebarCollapsed((v) => !v);
 			else if (e.key === "1" && !historical) setTool("section");
 			else if (e.key === "2" && !historical) setTool("block");
@@ -922,6 +971,8 @@ export function MockupReviewApp() {
 		editDirty,
 		beginEdit,
 		endEdit,
+		toggleAiAssistant,
+		openAiNewConversation,
 	]);
 
 	useEffect(() => {
@@ -1906,11 +1957,13 @@ export function MockupReviewApp() {
 
 				{active && mockupAiContext && (
 					<AiAssistantRail
+						ref={aiRailRef}
 						open={aiRailOpen}
-						onClose={() => setAiRailOpen(false)}
+						onClose={closeAiRail}
 						surface="mockup"
 						title="Ask about this mockup"
 						context={mockupAiContext}
+						initialFocus="composer"
 					/>
 				)}
 

@@ -792,6 +792,21 @@ describe("MockupReviewApp", () => {
     expect(fetchCalls.some((c) => c.url.includes("/api/ai/run"))).toBe(false);
   });
 
+  it("opens Ask AI with a and keeps it closed until then", async () => {
+    stubFetch();
+    renderApp();
+    expect(
+      await screen.findByRole("button", { name: "Ask AI" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Ask about this mockup"),
+    ).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "a" });
+    expect(
+      await screen.findByLabelText("Ask about this mockup"),
+    ).toHaveAttribute("data-surface", "mockup");
+  });
+
   it("offers Generate this screen on a blank canvas only after confirm", async () => {
     const run = vi
       .fn()
