@@ -1,3 +1,9 @@
+## Unreleased
+
+### Minor Changes
+
+- Ask AI keyboard shortcuts on every surface, slash commands, inline model and reasoning switching, and per-turn copy/retry/quote actions
+
 ## 0.21.1
 
 ### Patch Changes

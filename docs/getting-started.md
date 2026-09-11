@@ -133,24 +133,30 @@ written to `settings.json`.
 AI is **always user-triggered**. Loading a review, selecting lines, hovering,
 refreshing a diff, switching plan versions, or changing Settings never starts
 inference. Use a labeled Ask AI, Summarize, Review risks, Draft, or Improve
-action. Generated text remains a draft until you explicitly insert or submit it.
+action, or press `a` / `⌘/Ctrl+I` to open the rail (`A` starts a new
+conversation). Generated text remains a draft until you explicitly insert or
+submit it.
 
 The toolbar model picker (and **Settings → AI connections → Default model**)
 persist the chosen model in `aiModel` across reloads. The connections section is
-collapsed by default and remembers its expanded state.
+collapsed by default and remembers its expanded state. Inside the rail you can
+also switch model and reasoning effort (Auto / Low / Medium / High) from the
+header chips.
 
 **Ask AI** opens a resizable rail with surface-specific quick actions
 (Summarize, Review risks / Find gaps, Review map / Explain context / Critique
-plan). Conversations persist under the per-repo store (`ai-conversations.json`),
-scoped by surface + repo/branch or plan id — list, rename, or delete threads as
-needed.
+plan or mockup). Type `/` in an empty composer for the same actions plus extras
+such as Explain. Conversations persist under the per-repo store
+(`ai-conversations.json`), scoped by surface + repo/branch, plan id, or mockup
+id — list, rename, or delete threads as needed.
 
-Inside the AI composer, type `@` to attach repository files. Suggestions use
-the same FFF index and frecency ranking as diffing search. Attached text is
-loaded only when you explicitly send the request, is bounded to eight text
-files / 64 KB total, and is shown as removable context chips. Paste, drag, or
-attach images (PNG/JPEG/WebP/GIF; up to four, 10 MB each) when the selected
-model source supports images.
+Inside the AI composer, `Enter` sends and `Shift+Enter` inserts a newline. Type
+`@` to attach repository files. Suggestions use the same FFF index and frecency
+ranking as diffing search. Attached text is loaded only when you explicitly
+send the request, is bounded to eight text files / 64 KB total, and is shown as
+removable context chips. Paste, drag, or attach images (PNG/JPEG/WebP/GIF; up
+to four, 10 MB each) when the selected model source supports images. Completed
+turns offer Copy, Retry from here (a new attempt), and Quote.
 
 A whole-diff ask sends the review’s changed-file map and diff content within
 the context budget; the focused file is only a navigation hint. You can attach
