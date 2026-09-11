@@ -10,7 +10,7 @@ import {
 	type MouseEvent as ReactMouseEvent,
 	type Ref,
 } from "react";
-import { FileText, GripVertical, Paperclip, Sparkles, X } from "lucide-react";
+import { FileText, GripVertical, Paperclip, X } from "lucide-react";
 import type {
 	AiConversationTurn,
 	AiImageAttachmentReference,
@@ -22,7 +22,12 @@ import { clampRailWidth, railWidthBounds } from "./railWidth.js";
 import { TranscriptShell } from "./TranscriptShell";
 import { useFileMention } from "../hooks/useFileMention";
 import { useOptionalAi } from "./AiContext";
-import { attachedFilePaths, quickActionsFor, type AiClient } from "./railHelpers";
+import {
+	attachedFilePaths,
+	quickActionsFor,
+	slashActionsFor,
+	type AiClient,
+} from "./railHelpers";
 import { deriveRailActivity, isRunBusy, useAiRun } from "./useAiRun";
 import { useAiConversations } from "./useAiConversations";
 import { matchesAiShortcut } from "./aiShortcuts";
@@ -31,6 +36,7 @@ import { AiQuickActions } from "./AiQuickActions";
 import { AiComposer } from "./AiComposer";
 import { nextReasoningEffort, reasoningEffortLabel } from "./AiModelPicker";
 import { AiRailStatusLine } from "./AiRailStatusLine";
+import { AiEmptyState } from "./AiEmptyState";
 
 export interface AiAssistantRailHandle {
 	focusComposer(): void;
@@ -45,6 +51,7 @@ export interface AiAssistantRailProps {
 	context: AiReviewContext;
 	title?: string;
 	onRemoveSelection?: (index: number) => void;
+	onOpenConnections?: () => void;
 	initialFocus?: "composer";
 	ref?: Ref<AiAssistantRailHandle | null>;
 }
@@ -56,6 +63,7 @@ export function AiAssistantRail({
 	context,
 	title = "Ask AI",
 	onRemoveSelection,
+	onOpenConnections,
 	initialFocus,
 	ref,
 }: AiAssistantRailProps) {
@@ -68,6 +76,7 @@ export function AiAssistantRail({
 			context={context}
 			title={title}
 			onRemoveSelection={onRemoveSelection}
+			onOpenConnections={onOpenConnections}
 			initialFocus={initialFocus}
 			ai={ai}
 			handleRef={ref}
@@ -81,6 +90,7 @@ function AiAssistantRailOpen({
 	context,
 	title = "Ask AI",
 	onRemoveSelection,
+	onOpenConnections,
 	initialFocus,
 	ai,
 	handleRef,
@@ -467,6 +477,7 @@ function AiAssistantRailOpen({
 	);
 
 	const quickActions = quickActionsFor(surface, context);
+	const slashItems = slashActionsFor(surface, context);
 	const turns = conversations.conversation?.turns ?? [];
 	const isBusy = run.isBusy;
 
@@ -787,16 +798,16 @@ function AiAssistantRailOpen({
 				aria-live="polite"
 			>
 				{!showComposed && (
-					<div className="ai-empty-state">
-						<div>
-							<Sparkles size={20} />
-						</div>
-						<strong>What do you want to understand?</strong>
-						<p>
-							Ask a focused question, or choose a review action above. Nothing runs
-							until you tell it to.
-						</p>
-					</div>
+					<AiEmptyState
+						surface={surface}
+						onPickExample={(example) => {
+							setPrompt(example);
+							conversations.saveDraft(example);
+							requestAnimationFrame(() => textareaRef.current?.focus());
+						}}
+						showConnect={ai.models.length === 0}
+						onOpenConnections={onOpenConnections}
+					/>
 				)}
 				{showComposed && (
 					<TranscriptShell
@@ -922,6 +933,12 @@ function AiAssistantRailOpen({
 				onClearComposer={clearComposer}
 				onUndoClear={undoClearComposer}
 				onInsertMentionTrigger={insertMentionTrigger}
+				slashItems={slashItems}
+				onSlashRun={(item) => {
+					setPrompt("");
+					conversations.saveDraft("");
+					void run.start(item.action, item.prompt);
+				}}
 			/>
 			<AiRailStatusLine message={statusMessage} />
 		</aside>

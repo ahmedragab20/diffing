@@ -110,8 +110,9 @@ describe("AiAssistantRail", () => {
 			screen.getByText("What do you want to understand?"),
 		).toBeInTheDocument();
 		expect(
-			screen.getByText(/Nothing runs until you tell it to/),
+			screen.getByText("What is the riskiest change here?"),
 		).toBeInTheDocument();
+		expect(screen.getByText(/toggles this panel/)).toBeInTheDocument();
 		expect(mocks.run).not.toHaveBeenCalled();
 	});
 
@@ -1088,5 +1089,49 @@ describe("AiAssistantRail", () => {
 		);
 		await user.click(screen.getByRole("button", { name: "Cycle reasoning effort" }));
 		expect(mocks.setReasoningEffort).toHaveBeenCalledWith("low");
+	});
+
+	it("opens the slash palette from an empty composer and Enter runs the selected action", async () => {
+		const user = userEvent.setup();
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={vi.fn()}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		const composer = screen.getByRole("textbox", { name: "Ask AI" });
+		await user.type(composer, "/");
+		expect(screen.getByRole("listbox", { name: "AI actions" })).toBeInTheDocument();
+		expect(screen.getByRole("option", { name: "Summarize" })).toHaveAttribute(
+			"aria-selected",
+			"true",
+		);
+		await user.keyboard("{Enter}");
+		await waitFor(() =>
+			expect(mocks.run).toHaveBeenCalledWith(
+				expect.objectContaining({ action: "summarize" }),
+			),
+		);
+	});
+
+	it("fills the composer from an empty-state example chip without running", async () => {
+		const user = userEvent.setup();
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={vi.fn()}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		await user.click(
+			screen.getByRole("button", { name: "What is the riskiest change here?" }),
+		);
+		expect(screen.getByRole("textbox", { name: "Ask AI" })).toHaveValue(
+			"What is the riskiest change here?",
+		);
+		expect(mocks.run).not.toHaveBeenCalled();
 	});
 });

@@ -6,7 +6,14 @@ import type {
 	AiSurface,
 } from "../../lib/ai/types";
 import type { AiConversation } from "../../lib/ai/conversations";
-import { FileText, ListTree, ShieldAlert, type LucideIcon } from "lucide-react";
+import {
+	FileText,
+	GitCompare,
+	ListTree,
+	MessageCircle,
+	ShieldAlert,
+	type LucideIcon,
+} from "lucide-react";
 import type { useOptionalAi } from "./AiContext";
 
 export type AiClient = NonNullable<ReturnType<typeof useOptionalAi>>;
@@ -97,6 +104,7 @@ export interface RailQuickAction {
 	label: string;
 	hint: string;
 	icon: LucideIcon;
+	needsInput?: boolean;
 }
 
 export function quickActionsFor(
@@ -167,4 +175,106 @@ export function quickActionsFor(
 		},
 		thirdAction,
 	];
+}
+
+export function extraSlashActionsFor(
+	surface: AiSurface,
+	context: AiReviewContext,
+): RailQuickAction[] {
+	const extras: RailQuickAction[] = [
+		{
+			action: "ask",
+			prompt: "",
+			label: "Ask",
+			hint: "Type a question, then send",
+			icon: MessageCircle,
+			needsInput: true,
+		},
+		{
+			action: "explain",
+			prompt: "Explain the current context.",
+			label: "Explain",
+			hint: "Explain the current context",
+			icon: FileText,
+		},
+	];
+	if (surface === "diff" || surface === "pr-diff") {
+		extras.push({
+			action: "draft-review-summary",
+			prompt: "Draft a review summary from this diff.",
+			label: "Draft review summary",
+			hint: "Summarize for the review",
+			icon: ListTree,
+		});
+	}
+	if (surface === "plan" && "version" in context && (context.version ?? 0) > 1) {
+		extras.push({
+			action: "compare-plan-versions",
+			prompt: "Compare this plan version with the previous one.",
+			label: "Compare plan versions",
+			hint: "What changed between versions",
+			icon: GitCompare,
+		});
+	}
+	if (surface === "mockup" && context.kind === "mockup-version-compare") {
+		extras.push({
+			action: "compare-mockup-versions",
+			prompt: "Compare these mockup versions.",
+			label: "Compare mockup versions",
+			hint: "What changed between screens",
+			icon: GitCompare,
+		});
+	}
+	return extras;
+}
+
+export function slashActionsFor(
+	surface: AiSurface,
+	context: AiReviewContext,
+): RailQuickAction[] {
+	const seen = new Set<AiAction>();
+	const items: RailQuickAction[] = [];
+	for (const item of [
+		...quickActionsFor(surface, context),
+		...extraSlashActionsFor(surface, context),
+	]) {
+		if (seen.has(item.action)) continue;
+		seen.add(item.action);
+		items.push(item);
+	}
+	return items;
+}
+
+export function emptyStateCopy(surface: AiSurface): {
+	title: string;
+	examples: readonly [string, string, string];
+} {
+	if (surface === "plan") {
+		return {
+			title: "What should this plan still decide?",
+			examples: [
+				"What decisions are still open?",
+				"What is the sequencing risk?",
+				"Summarize this plan in 5 bullets",
+			],
+		};
+	}
+	if (surface === "mockup") {
+		return {
+			title: "What should this screen still cover?",
+			examples: [
+				"Which states are missing?",
+				"Any accessibility problems?",
+				"Does copy match the product tone?",
+			],
+		};
+	}
+	return {
+		title: "What do you want to understand?",
+		examples: [
+			"What is the riskiest change here?",
+			"Which files should I read first?",
+			"Are there missing tests?",
+		],
+	};
 }

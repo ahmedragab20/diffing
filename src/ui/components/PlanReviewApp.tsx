@@ -812,6 +812,7 @@ export function PlanReviewApp() {
               body: activePlan.body,
             }}
             initialFocus="composer"
+            onOpenConnections={() => setSettingsOpen(true)}
           />
         )}
 

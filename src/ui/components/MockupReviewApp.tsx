@@ -1964,6 +1964,7 @@ export function MockupReviewApp() {
 						title="Ask about this mockup"
 						context={mockupAiContext}
 						initialFocus="composer"
+						onOpenConnections={() => setSettingsOpen(true)}
 					/>
 				)}
 

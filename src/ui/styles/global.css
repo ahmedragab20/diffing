@@ -15829,6 +15829,68 @@ button.toolbar-last-send-btn:hover {
   line-height: 1.55;
 }
 
+.ai-empty-examples {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.ai-empty-example {
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--gl-rule-subtle);
+  border-radius: var(--radius-md);
+  background: var(--gl-canvas);
+  color: var(--gl-text);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-empty-example:hover {
+  border-color: var(--gl-accent);
+  background: var(--gl-selected);
+}
+
+.ai-empty-connect {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--gl-rule-subtle);
+  border-radius: var(--radius-md);
+  background: var(--gl-selected);
+  color: var(--gl-accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ai-empty-shortcuts {
+  color: var(--gl-muted);
+  font-size: 11px;
+}
+
+.ai-slash-palette {
+  top: auto !important;
+}
+
+.ai-composer-counter {
+  font-size: 11px;
+  color: var(--gl-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-quick-actions button kbd {
+  margin-left: auto;
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
 .ai-message {
   max-width: 92%;
   padding: 10px 11px;

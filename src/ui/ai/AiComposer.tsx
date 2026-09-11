@@ -1,16 +1,21 @@
-import type {
-	KeyboardEvent as ReactKeyboardEvent,
-	MutableRefObject,
-	RefCallback,
-	RefObject,
+import {
+	useEffect,
+	useMemo,
+	useState,
+	type KeyboardEvent as ReactKeyboardEvent,
+	type MutableRefObject,
+	type RefCallback,
+	type RefObject,
 } from "react";
-import { ImagePlus, Paperclip, Send, Square, X } from "lucide-react";
+import { ImagePlus, Send, Square, X } from "lucide-react";
 import type { AiImageAttachmentReference, AiReviewContext, AiSurface } from "../../lib/ai/types";
 import { FileMentionDropdown } from "../components/FileMentionDropdown";
 import type { UseFileMentionResult } from "../hooks/useFileMention";
 import type { RunPhase } from "./useAiRun";
 import { isRunBusy } from "./useAiRun";
 import { matchesAiShortcut } from "./aiShortcuts";
+import { AiSlashPalette } from "./AiSlashPalette";
+import type { RailQuickAction } from "./railHelpers";
 
 export interface AiComposerProps {
 	surface: AiSurface;
@@ -39,7 +44,19 @@ export interface AiComposerProps {
 	onClearComposer?: () => void;
 	onUndoClear?: () => void;
 	onInsertMentionTrigger?: () => void;
-	slashOpen?: boolean;
+	slashItems?: RailQuickAction[];
+	onSlashRun?: (item: RailQuickAction) => void;
+}
+
+function filterSlashItems(
+	items: RailQuickAction[],
+	query: string,
+): RailQuickAction[] {
+	const needle = query.trim().toLowerCase();
+	if (!needle) return items;
+	return items.filter((item) =>
+		`${item.label} ${item.action} ${item.hint}`.toLowerCase().includes(needle),
+	);
 }
 
 export function AiComposer({
@@ -69,9 +86,38 @@ export function AiComposer({
 	onClearComposer,
 	onUndoClear,
 	onInsertMentionTrigger,
-	slashOpen = false,
+	slashItems = [],
+	onSlashRun,
 }: AiComposerProps) {
 	const isBusy = isRunBusy(phase);
+	const [slashDismissed, setSlashDismissed] = useState(false);
+	const [slashIndex, setSlashIndex] = useState(0);
+	const slashQuery =
+		prompt.startsWith("/") && !prompt.includes("\n") ? prompt.slice(1) : null;
+	const filteredSlash = useMemo(
+		() =>
+			slashQuery === null ? [] : filterSlashItems(slashItems, slashQuery),
+		[slashItems, slashQuery],
+	);
+	const slashOpen =
+		slashQuery !== null &&
+		!slashDismissed &&
+		!mention.isOpen &&
+		filteredSlash.length > 0;
+
+	useEffect(() => {
+		if (!prompt.startsWith("/")) setSlashDismissed(false);
+	}, [prompt]);
+
+	useEffect(() => {
+		setSlashIndex(0);
+	}, [slashQuery]);
+
+	useEffect(() => {
+		if (slashIndex >= filteredSlash.length)
+			setSlashIndex(Math.max(0, filteredSlash.length - 1));
+	}, [filteredSlash.length, slashIndex]);
+
 	const setTextareaRef = (element: HTMLTextAreaElement | null) => {
 		mention.setTextareaRef(element);
 		if (typeof textareaRef === "function") textareaRef(element);
@@ -80,10 +126,49 @@ export function AiComposer({
 				element;
 	};
 
+	const pickSlash = (item: RailQuickAction) => {
+		setSlashDismissed(true);
+		if (item.needsInput) {
+			onPromptChange("");
+			return;
+		}
+		onSlashRun?.(item);
+	};
+
 	const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
 		if (mention.handleKeyDown(event)) return;
-		if (slashOpen && (event.key === "Enter" || event.key === "Tab" || event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Escape"))
-			return;
+		if (slashOpen) {
+			if (event.key === "ArrowDown") {
+				event.preventDefault();
+				event.stopPropagation();
+				setSlashIndex((index) => (index + 1) % filteredSlash.length);
+				return;
+			}
+			if (event.key === "ArrowUp") {
+				event.preventDefault();
+				event.stopPropagation();
+				setSlashIndex(
+					(index) =>
+						(index - 1 + filteredSlash.length) % filteredSlash.length,
+				);
+				return;
+			}
+			if (event.key === "Enter" || event.key === "Tab") {
+				const item = filteredSlash[slashIndex] ?? filteredSlash[0];
+				if (item) {
+					event.preventDefault();
+					event.stopPropagation();
+					pickSlash(item);
+				}
+				return;
+			}
+			if (event.key === "Escape") {
+				event.preventDefault();
+				event.stopPropagation();
+				setSlashDismissed(true);
+				return;
+			}
+		}
 		if (matchesAiShortcut(event, "attach-image") && onAttachImage) {
 			event.preventDefault();
 			event.stopPropagation();
@@ -123,6 +208,27 @@ export function AiComposer({
 		event.stopPropagation();
 		onSend();
 	};
+
+	const sendDisabled =
+		(!prompt.trim() && imageAttachments.length === 0) ||
+		!selectedModel ||
+		conversationLoading ||
+		imageUploading ||
+		(imageAttachments.length > 0 && !imageCapable);
+	const sendTitle = !selectedModel
+		? "Connect a model to send"
+		: conversationLoading
+			? "Loading conversation"
+			: imageUploading
+				? "Wait for images to finish uploading"
+				: imageAttachments.length > 0 && !imageCapable
+					? "Selected model source does not support images"
+					: undefined;
+	const imageTitle = !imageCapable
+		? "Selected model source does not support images"
+		: imageUploading
+			? "Wait for images to finish uploading"
+			: "Attach images";
 
 	return (
 		<div
@@ -190,7 +296,7 @@ export function AiComposer({
 						}
 					}}
 					onKeyDown={handleComposerKeyDown}
-					placeholder="Ask about this review context… Type @ to attach files"
+					placeholder="Ask about this review context… Type / for actions, @ to attach files"
 					aria-label="Ask AI"
 				/>
 				{mention.isOpen && (
@@ -201,6 +307,15 @@ export function AiComposer({
 						cursorTop={mention.cursorTop}
 						onSelect={mention.onSelect}
 						onHover={mention.setFocusedIndex}
+					/>
+				)}
+				{slashOpen && (
+					<AiSlashPalette
+						items={filteredSlash}
+						focusedIndex={slashIndex}
+						query={slashQuery ?? ""}
+						onSelect={pickSlash}
+						onHover={setSlashIndex}
 					/>
 				)}
 			</div>
@@ -216,11 +331,7 @@ export function AiComposer({
 					onClick={() => imageInputRef.current?.click()}
 					disabled={!imageCapable || imageUploading || previewAttaching || isBusy}
 					aria-label="Attach images"
-					title={
-						imageCapable
-							? "Attach images"
-							: "Selected model source does not support images"
-					}
+					title={imageTitle}
 				>
 					<ImagePlus size={15} />
 					{imageUploading ? "Uploading…" : "Image"}
@@ -243,9 +354,11 @@ export function AiComposer({
 					</button>
 				)}
 				<span className="ai-composer-hint">
-					<Paperclip size={12} /> @ attach files · ⌘↵ send
+					↵ send · ⇧↵ newline · / actions · @ files
 				</span>
-				<span />
+				<span className="ai-composer-counter">
+					{prompt.length > 2000 ? `${prompt.length}` : ""}
+				</span>
 				{isBusy ? (
 					<button
 						type="button"
@@ -260,13 +373,8 @@ export function AiComposer({
 					<button
 						type="button"
 						className="ai-send-btn"
-						disabled={
-							(!prompt.trim() && imageAttachments.length === 0) ||
-							!selectedModel ||
-							conversationLoading ||
-							imageUploading ||
-							(imageAttachments.length > 0 && !imageCapable)
-						}
+						disabled={sendDisabled}
+						title={sendDisabled ? sendTitle : undefined}
 						onClick={() => onSend()}
 					>
 						<Send size={15} /> Send
