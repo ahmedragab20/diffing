@@ -1004,7 +1004,7 @@ describe("AiAssistantRail", () => {
 		);
 	});
 
-	it("copies the last assistant response with Mod+Shift+C", async () => {
+	it("copies the last assistant response with Mod+Shift+Y", async () => {
 		const writeText = vi.fn(async () => {});
 		vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
 		const conversation = {
@@ -1055,7 +1055,7 @@ describe("AiAssistantRail", () => {
 		);
 		expect(await screen.findByText("settled answer")).toBeInTheDocument();
 		const rail = document.querySelector(".ai-assistant-rail");
-		fireEvent.keyDown(rail!, { key: "C", metaKey: true, shiftKey: true });
+		fireEvent.keyDown(rail!, { key: "Y", metaKey: true, shiftKey: true });
 		await waitFor(() => expect(writeText).toHaveBeenCalledWith("settled answer"));
 	});
 

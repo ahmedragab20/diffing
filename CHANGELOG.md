@@ -2,7 +2,7 @@
 
 ### Minor Changes
 
-- Ask AI keyboard shortcuts on every surface, slash commands, inline model and reasoning switching, and per-turn copy/retry/quote actions
+- Ask AI keyboard shortcuts on every surface, slash commands, inline model and reasoning switching, and per-turn copy/retry/quote actions. Copy / reasoning / clear use `⌘/Ctrl+Shift+Y`, `E`, and `X` so they do not collide with Inspect, hard reload, or the address bar.
 
 ## 0.21.1
 

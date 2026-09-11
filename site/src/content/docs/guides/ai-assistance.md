@@ -43,6 +43,7 @@ Composer extras:
 - Type `@` (or <kbd>⌘/Ctrl+Shift+F</kbd>) to attach repository files (same FFF / frecency search as in-app search). Up to **8** text files / **64 KB** total; chips are removable; content loads only when you send.
 - Paste, drag, or attach images (PNG, JPEG, WebP, GIF; up to **4** / **10 MB** each) when the selected model source supports images.
 - <kbd>Enter</kbd> sends; <kbd>Shift+Enter</kbd> inserts a newline.
+- <kbd>⌘/Ctrl+Shift+Y</kbd> copies the last assistant response, <kbd>⌘/Ctrl+Shift+E</kbd> cycles reasoning effort, and <kbd>⌘/Ctrl+Shift+X</kbd> clears the composer (<kbd>⌘/Ctrl+Z</kbd> undoes when empty).
 - Responses stream into the rail as GFM Markdown (tables, fenced code, Mermaid, copy). Each assistant turn has **Copy**, **Retry from here** (a new attempt, never a rewrite), and **Quote**. Cited findings on diffs jump to the file and line.
 - **Stop** cancels an in-flight run.
 

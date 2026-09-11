@@ -134,14 +134,14 @@ export const AI_SHORTCUTS: readonly AiShortcut[] = [
 	},
 	{
 		id: "cycle-reasoning",
-		keys: [MOD, "Shift", "R"],
+		keys: [MOD, "Shift", "E"],
 		description: "Cycle reasoning effort",
 		scope: "rail",
 		surfaces: "all",
 	},
 	{
 		id: "copy-last-response",
-		keys: [MOD, "Shift", "C"],
+		keys: [MOD, "Shift", "Y"],
 		description: "Copy the last assistant response",
 		scope: "rail",
 		surfaces: "all",
@@ -162,7 +162,7 @@ export const AI_SHORTCUTS: readonly AiShortcut[] = [
 	},
 	{
 		id: "clear-composer",
-		keys: [MOD, "L"],
+		keys: [MOD, "Shift", "X"],
 		description: "Clear the composer",
 		scope: "composer",
 		surfaces: "all",

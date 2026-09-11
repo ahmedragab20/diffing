@@ -111,6 +111,45 @@ describe("AI shortcut registry", () => {
 		).toBe(false);
 	});
 
+	it("uses yank, effort, and clear chords that avoid browser collisions", () => {
+		expect(aiShortcutKeys("copy-last-response")).toEqual(["⌘", "Shift", "Y"]);
+		expect(aiShortcutKeys("cycle-reasoning")).toEqual(["⌘", "Shift", "E"]);
+		expect(aiShortcutKeys("clear-composer")).toEqual(["⌘", "Shift", "X"]);
+		expect(
+			matchesAiShortcut(
+				event("c", { metaKey: true, shiftKey: true }),
+				"copy-last-response",
+			),
+		).toBe(false);
+		expect(
+			matchesAiShortcut(
+				event("r", { metaKey: true, shiftKey: true }),
+				"cycle-reasoning",
+			),
+		).toBe(false);
+		expect(
+			matchesAiShortcut(event("l", { metaKey: true }), "clear-composer"),
+		).toBe(false);
+		expect(
+			matchesAiShortcut(
+				event("y", { metaKey: true, shiftKey: true }),
+				"copy-last-response",
+			),
+		).toBe(true);
+		expect(
+			matchesAiShortcut(
+				event("e", { metaKey: true, shiftKey: true }),
+				"cycle-reasoning",
+			),
+		).toBe(true);
+		expect(
+			matchesAiShortcut(
+				event("x", { metaKey: true, shiftKey: true }),
+				"clear-composer",
+			),
+		).toBe(true);
+	});
+
 	it("does not treat sequence bindings as single-event chords", () => {
 		expect(matchesAiShortcut(event("g"), "ask-about-active-file")).toBe(false);
 		expect(matchesAiShortcut(event("a"), "ask-about-active-file")).toBe(false);

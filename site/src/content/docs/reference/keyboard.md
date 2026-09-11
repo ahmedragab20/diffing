@@ -71,11 +71,11 @@ Ask AI is available on local diffs, PR review, plans, and mockups. Bare keys go 
 | <kbd>⌘/Ctrl+[</kbd> / <kbd>⌘/Ctrl+]</kbd> | Previous / next conversation |
 | <kbd>⌘/Ctrl+1</kbd> <kbd>2</kbd> <kbd>3</kbd> | Run quick action 1 / 2 / 3 |
 | <kbd>⌘/Ctrl+M</kbd> | Open the inline model picker |
-| <kbd>⌘/Ctrl+Shift+R</kbd> | Cycle reasoning effort (Auto → Low → Medium → High) |
-| <kbd>⌘/Ctrl+Shift+C</kbd> | Copy the last assistant response |
+| <kbd>⌘/Ctrl+Shift+E</kbd> | Cycle reasoning effort (Auto → Low → Medium → High) |
+| <kbd>⌘/Ctrl+Shift+Y</kbd> | Copy the last assistant response |
 | <kbd>⌘/Ctrl+Shift+Enter</kbd> | Retry the last failed / canceled request |
 | <kbd>⌘/Ctrl+U</kbd> | Attach an image |
-| <kbd>⌘/Ctrl+L</kbd> | Clear the composer (<kbd>⌘/Ctrl+Z</kbd> undoes when empty) |
+| <kbd>⌘/Ctrl+Shift+X</kbd> | Clear the composer (<kbd>⌘/Ctrl+Z</kbd> undoes when empty) |
 | <kbd>⌘/Ctrl+Shift+F</kbd> | Insert `@` to attach a file |
 | <kbd>Esc</kbd> | Close Ask AI (closes the mention or slash palette first) |
 | <kbd>⌘/Ctrl+Shift+.</kbd> | Toggle “Context being shared” |

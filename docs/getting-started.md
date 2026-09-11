@@ -150,7 +150,10 @@ such as Explain. Conversations persist under the per-repo store
 (`ai-conversations.json`), scoped by surface + repo/branch, plan id, or mockup
 id — list, rename, or delete threads as needed.
 
-Inside the AI composer, `Enter` sends and `Shift+Enter` inserts a newline. Type
+Inside the AI composer, `Enter` sends and `Shift+Enter` inserts a newline.
+`⌘/Ctrl+Shift+Y` copies the last assistant response, `⌘/Ctrl+Shift+E` cycles
+reasoning effort, and `⌘/Ctrl+Shift+X` clears the composer (`⌘/Ctrl+Z` undoes
+when empty). Type
 `@` to attach repository files. Suggestions use the same FFF index and frecency
 ranking as diffing search. Attached text is loaded only when you explicitly
 send the request, is bounded to eight text files / 64 KB total, and is shown as
