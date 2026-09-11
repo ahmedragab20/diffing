@@ -1,3 +1,10 @@
+## 0.21.2
+
+### Patch Changes
+
+- acfbb23: Keep split diffs readable and restore changed-line contrast
+- 0253812: Nicer Ask AI chat experience and keyboard shortcuts for every AI interaction (#14)
+
 ## Unreleased
 
 ### Minor Changes
