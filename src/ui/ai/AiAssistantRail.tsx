@@ -585,6 +585,14 @@ function AiAssistantRailOpen({
 		const target = event.target;
 		if (target instanceof Element && target.closest(".ui-popover")) return;
 		if (conversations.renaming) return;
+		if (conversations.deletePending) {
+			if (matchesAiShortcut(event, "close-rail")) {
+				event.preventDefault();
+				event.stopPropagation();
+				conversations.setDeletePending(false);
+			}
+			return;
+		}
 		if (matchesAiShortcut(event, "stop") && isBusy) {
 			event.preventDefault();
 			event.stopPropagation();

@@ -1096,6 +1096,63 @@ describe("AiAssistantRail", () => {
 		expect(onClose).not.toHaveBeenCalled();
 	});
 
+	it("cancels a pending conversation delete on Escape instead of closing the rail", async () => {
+		const onClose = vi.fn();
+		const conversation = {
+			id: "c1",
+			title: "Existing",
+			surface: "diff",
+			scopeKey: "diff:review:working-tree",
+			createdAt: 1,
+			updatedAt: 1,
+			turns: [],
+		};
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input, init) => {
+				const url = String(input);
+				if (url.includes("/api/ai/conversations?") && !init?.method)
+					return new Response(
+						JSON.stringify({
+							conversations: [
+								{
+									id: "c1",
+									title: "Existing",
+									surface: "diff",
+									scopeKey: "diff:review:working-tree",
+									createdAt: 1,
+									updatedAt: 1,
+									turnCount: 0,
+								},
+							],
+						}),
+						{ status: 200 },
+					);
+				if (url.includes("/api/ai/conversations/c1") && !init?.method)
+					return new Response(JSON.stringify({ conversation }), { status: 200 });
+				return new Response(JSON.stringify({}), { status: 200 });
+			}),
+		);
+		const user = userEvent.setup();
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={onClose}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		expect(
+			await screen.findByRole("button", { name: "AI conversation" }),
+		).toHaveTextContent("Existing");
+		await user.click(screen.getByRole("button", { name: "Delete conversation" }));
+		expect(screen.getByRole("alert")).toHaveTextContent('Delete “Existing”?');
+		const rail = document.querySelector(".ai-assistant-rail");
+		fireEvent.keyDown(rail!, { key: "Escape" });
+		expect(onClose).not.toHaveBeenCalled();
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
 	it("opens the model picker from the header chip and selects a model", async () => {
 		const user = userEvent.setup();
 		renderRail(
