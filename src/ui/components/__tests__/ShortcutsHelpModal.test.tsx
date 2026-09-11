@@ -8,7 +8,7 @@ import { ShortcutsHelpModal } from '../ShortcutsHelpModal'
 vi.mock('lucide-react', () => {
   const Stub = () => null
   const proxy: Record<string, unknown> = {}
-  const keys = ['X', 'Keyboard', 'Navigation', 'Eye', 'MessageSquare', 'GitCommit', 'MousePointer2']
+  const keys = ['X', 'Keyboard', 'Navigation', 'Eye', 'MessageSquare', 'GitCommit', 'MousePointer2', 'Sparkles']
   for (const k of keys) proxy[k] = Stub
   return proxy
 })
@@ -158,5 +158,18 @@ describe('ShortcutsHelpModal', () => {
       expect(screen.queryByText('Jump to Next Plan in list')).not.toBeInTheDocument()
       expect(screen.queryByText('Jump to Next File Diff')).not.toBeInTheDocument()
     })
+  })
+
+  describe('AI assistant category', () => {
+    it.each(['diff', 'plan', 'pr', 'mockup'] as const)(
+      'lists the a toggle in %s mode',
+      (mode) => {
+        render(<ShortcutsHelpModal isOpen={true} onClose={() => {}} mode={mode} />)
+        expect(screen.getByText('AI assistant')).toBeInTheDocument()
+        const section = screen.getByText('AI assistant').closest('.shortcuts-section')
+        expect(section).not.toBeNull()
+        expect(within(section as HTMLElement).getAllByText('a').length).toBeGreaterThan(0)
+      },
+    )
   })
 })

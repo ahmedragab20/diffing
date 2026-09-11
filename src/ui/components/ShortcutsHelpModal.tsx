@@ -1,7 +1,9 @@
 import { memo } from 'react'
-import { X, Keyboard, Navigation, Eye, MessageSquare, GitCommit, MousePointer2 } from 'lucide-react'
+import { X, Keyboard, Navigation, Eye, MessageSquare, GitCommit, MousePointer2, Sparkles } from 'lucide-react'
 import { Modal } from '../primitives/Modal'
 import { BrandMark } from './BrandMark'
+import { helpItemsForSurface } from '../ai/aiShortcuts'
+import type { AiSurface } from '../../lib/ai/types'
 
 interface ShortcutsHelpModalProps {
   isOpen: boolean
@@ -306,14 +308,23 @@ export const ShortcutsHelpModal = memo(function ShortcutsHelpModal({
     },
   ]
 
+  const modeToSurface = (helpMode: typeof mode): AiSurface =>
+    helpMode === 'pr' ? 'pr-diff' : helpMode === 'plan' ? 'plan' : helpMode === 'mockup' ? 'mockup' : 'diff'
+
+  const aiCategory: ShortcutCategory = {
+    title: 'AI assistant',
+    icon: <Sparkles size={15} />,
+    items: helpItemsForSurface(modeToSurface(mode)),
+  }
+
   const categories =
     mode === 'plan'
-      ? planCategories
+      ? [...planCategories, aiCategory]
       : mode === 'pr'
-        ? prCategories
+        ? [...prCategories, aiCategory]
         : mode === 'mockup'
-          ? mockupCategories
-          : diffCategories
+          ? [...mockupCategories, aiCategory]
+          : [...diffCategories, aiCategory]
   const intro =
     mode === 'plan'
       ? 'Vim-style keybindings for plan review. Cycle Source / Read / Split with m, jump plans with J/K, and comment from line selection or text highlight.'
