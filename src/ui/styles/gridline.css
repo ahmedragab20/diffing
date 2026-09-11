@@ -28,7 +28,6 @@
   --gl-text-subtle: color-mix(in srgb, var(--text-secondary) 12%, var(--text-primary));
   --gl-muted: color-mix(in srgb, var(--text-secondary) 18%, var(--text-primary));
   --gl-code: var(--text-primary);
-  --gl-gutter: var(--text-muted);
   --gl-rule-subtle: var(--border-weak);
   --gl-rule: var(--border-normal);
   --gl-focus: var(--border-focus);
@@ -37,15 +36,6 @@
   --gl-positive: var(--feedback-success-text);
   --gl-warning: var(--feedback-warning-text);
   --gl-negative: var(--feedback-danger-text);
-  --gl-added-surface: color-mix(in srgb, var(--gl-positive) 20%, var(--gl-canvas));
-  --gl-removed-surface: color-mix(in srgb, var(--gl-negative) 20%, var(--gl-canvas));
-  /*
-   * How far syntax tokens on added/removed diff lines mix toward
-   * --text-primary before rendering. The tinted diff wash (above) can sink
-   * muted theme colours below readable contrast; themes tune this per palette
-   * (e.g. rose-pine sets 45%). 0% leaves every theme untouched.
-   */
-  --gl-diff-text-lift: 0%;
 
   /* Four-pixel geometry with deliberately shallow browser corners. */
   --gl-unit: 4px;
@@ -92,6 +82,23 @@
   --feedback-danger: var(--gl-negative);
   --bg-warning: var(--feedback-warning-bg);
   --text-warning: var(--gl-warning);
+}
+
+/*
+ * Zero-specificity defaults so a theme's [data-theme] block can replace the
+ * wash, gutter, and syntax lift. :root here would tie them and ignore
+ * rose-pine's hex surfaces.
+ */
+:where(:root) {
+  --gl-gutter: var(--text-muted);
+  --gl-added-surface: color-mix(in srgb, var(--gl-positive) 20%, var(--gl-canvas));
+  --gl-removed-surface: color-mix(in srgb, var(--gl-negative) 20%, var(--gl-canvas));
+  /*
+   * How far Pierre syntax tokens on added/removed lines mix toward
+   * --text-primary. Mixes --diffs-token-dark/light (not currentColor, which
+   * is the inherited line colour). Rose-pine sets 30%; 0% leaves others as-is.
+   */
+  --gl-diff-text-lift: 0%;
 }
 
 html {

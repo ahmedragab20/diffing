@@ -113,6 +113,11 @@ describe("AiAssistantRail", () => {
 			screen.getByText("What is the riskiest change here?"),
 		).toBeInTheDocument();
 		expect(screen.getByText(/toggles this panel/)).toBeInTheDocument();
+		expect(document.querySelector(".ai-empty-icon")).not.toBeNull();
+		expect(document.querySelector(".ai-empty-examples")).not.toBeNull();
+		expect(document.querySelector(".ai-empty-examples")).not.toHaveClass(
+			"ai-empty-icon",
+		);
 		expect(mocks.run).not.toHaveBeenCalled();
 	});
 

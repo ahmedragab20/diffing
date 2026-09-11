@@ -136,7 +136,7 @@ textarea,
   --accent-subtle: rgba(235, 188, 186, 0.15);
   --border-weak: #26233a;
   --border-normal: #403d52;
-  --border-strong: #c4a7e7;
+  --border-strong: #524f67;
   --feedback-success-bg: rgba(156, 207, 216, 0.15);
   --feedback-success-border: #9ccfd8;
   --feedback-success-text: #9ccfd8;
@@ -1434,11 +1434,11 @@ textarea,
    base #191724  surface #1f1d2e  overlay #26233a  muted #6e6a86
    subtle #908caa  text #e0def4
    love #eb6f92  gold #f6c177  rose #ebbcba  pine #31748f  foam #9ccfd8  iris #c4a7e7
-   Diff colours: additions → foam (mint), deletions → love (rose/red) so the
-   added/removed line tint inherits the Rosé Pine character instead of a flat
-   green/red. --gl-diff-text-lift 45% mixes syntax tokens toward --text-primary
-   on changed lines, keeping every Rosé Pine hue while lifting the muted
-   palette (comments #6e6a86, pine #31748f) above readable contrast on the tint. */
+   Diff wash (row tint) is pine/love at low mix so added and removed rows sit
+   at the same luminance; accent (sign, bar, word chips) stays foam/love.
+   --gl-diff-text-lift 30% mixes Pierre token colours toward --text-primary
+   on changed lines — enough for muted comments on the wash without
+   flattening the palette. */
 [data-theme="rose-pine"] {
   --bg-primary: #191724;
   --bg-secondary: #1f1d2e;
@@ -1461,7 +1461,7 @@ textarea,
   --accent-subtle: rgba(235, 188, 186, 0.15);
   --border-weak: #26233a;
   --border-normal: #403d52;
-  --border-strong: #c4a7e7;
+  --border-strong: #524f67;
   --feedback-success-bg: rgba(156, 207, 216, 0.15);
   --feedback-success-border: #9ccfd8;
   --feedback-success-text: #9ccfd8;
@@ -1471,7 +1471,10 @@ textarea,
   --feedback-warning-bg: rgba(246, 193, 119, 0.15);
   --feedback-warning-border: #f6c177;
   --feedback-warning-text: #f6c177;
-  --gl-diff-text-lift: 45%;
+  --gl-added-surface: #1e2b3c;
+  --gl-removed-surface: #3b2536;
+  --gl-diff-text-lift: 30%;
+  --gl-gutter: #908caa;
 }
 
 /* Rosé Pine Moon — official palette tuned for diff review.
@@ -1499,7 +1502,7 @@ textarea,
   --accent-subtle: rgba(234, 154, 151, 0.15);
   --border-weak: #393552;
   --border-normal: #4a4664;
-  --border-strong: #c4a7e7;
+  --border-strong: #56526e;
   --feedback-success-bg: rgba(156, 207, 216, 0.15);
   --feedback-success-border: #9ccfd8;
   --feedback-success-text: #9ccfd8;
@@ -1509,7 +1512,10 @@ textarea,
   --feedback-warning-bg: rgba(246, 193, 119, 0.15);
   --feedback-warning-border: #f6c177;
   --feedback-warning-text: #f6c177;
-  --gl-diff-text-lift: 45%;
+  --gl-added-surface: #293951;
+  --gl-removed-surface: #432e45;
+  --gl-diff-text-lift: 30%;
+  --gl-gutter: #908caa;
 }
 
 /* Rosé Pine Dawn — official palette (rosepineetheme.com).
@@ -1539,7 +1545,7 @@ textarea,
   --accent-subtle: rgba(215, 130, 126, 0.12);
   --border-weak: #f2e9de;
   --border-normal: #e6dfd9;
-  --border-strong: #907aa9;
+  --border-strong: #cecacd;
   --feedback-success-bg: rgba(40, 105, 131, 0.08);
   --feedback-success-border: #286983;
   --feedback-success-text: #286983;
@@ -1549,7 +1555,10 @@ textarea,
   --feedback-warning-bg: rgba(234, 157, 52, 0.08);
   --feedback-warning-border: #ea9d34;
   --feedback-warning-text: #c07a1c;
-  --gl-diff-text-lift: 45%;
+  --gl-added-surface: #e2e6e4;
+  --gl-removed-surface: #f2e3df;
+  --gl-diff-text-lift: 30%;
+  --gl-gutter: #797593;
 }
 
 /* Slack Dark */
@@ -15888,7 +15897,7 @@ button.toolbar-last-send-btn:hover {
   color: var(--gl-text-subtle);
 }
 
-.ai-empty-state > div {
+.ai-empty-icon {
   width: 44px;
   height: 44px;
   display: grid;

@@ -14,6 +14,7 @@ import {
   registerDiffTarget,
   scheduleDiffNavigation,
 } from "../lib/diffNavigation";
+import { effectiveDiffStyle } from "../lib/diffLayout";
 import { openDefinitionPeek } from "../lib/definitionPeek";
 import {
   useCodeIntel,
@@ -361,6 +362,18 @@ export const FileDiffCard = memo(function FileDiffCard({
   /** Live selection text for edit-mode comment drafts (patch arrays are stale mid-session). */
   const selectionContentRef = useRef<string | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const [cardWidth, setCardWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const update = () => setCardWidth(el.getBoundingClientRect().width);
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [collapsed]);
+  const layoutDiffStyle = effectiveDiffStyle(diffStyle, cardWidth);
   const rendererRef = useRef<{
     node: HTMLElement;
     instance: VirtualizedFileDiff<CardAnnotationMetadata>;
@@ -1775,7 +1788,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 options={{
                   ...tokenHandlers,
                   onPostRender,
-                  diffStyle,
+                  diffStyle: layoutDiffStyle,
                   // Line selection + gutter utility are read-mode comment
                   // affordances; the editor owns selection while editing.
                   enableGutterUtility: false,
@@ -1842,7 +1855,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 options={{
                   ...tokenHandlers,
                   onPostRender,
-                  diffStyle,
+                  diffStyle: layoutDiffStyle,
                   enableGutterUtility: true,
                   enableLineSelection: true,
                   disableFileHeader: true,
@@ -1918,7 +1931,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 options={{
                   ...tokenHandlers,
                   onPostRender,
-                  diffStyle,
+                  diffStyle: layoutDiffStyle,
                   enableGutterUtility: true,
                   enableLineSelection: true,
                   disableFileHeader: true, // Disable built-in header to use custom header
@@ -2125,6 +2138,18 @@ export function buildUnsafeCSS(
       --diffs-border: var(--gl-rule) !important;
       --diffs-bg: var(--gl-canvas) !important;
       --diffs-line-height: ${Math.round(fontSize * 1.7)}px !important;
+      --diffs-addition-color: var(--gl-positive) !important;
+      --diffs-deletion-color: var(--gl-negative) !important;
+      --diffs-modified-color: var(--gl-accent) !important;
+    }
+    /* 1fr min is min-content, so long lines inflate the grid past the card
+       and split panes paint on top of each other. Allow the code column to
+       shrink; overflow:scroll still pans long lines. */
+    [data-diff], [data-file] {
+      --diffs-code-grid: var(--diffs-grid-number-column-width, minmax(min-content, max-content)) minmax(0, 1fr) !important;
+    }
+    [data-line], [data-content] {
+      min-width: 0 !important;
     }
     [data-column-number], [data-line], [data-line] * {
       font-family: ${fontFamily} !important;
@@ -2143,20 +2168,25 @@ export function buildUnsafeCSS(
       opacity: 1 !important;
       color: var(--gl-accent) !important;
     }
-    [data-line][data-line-type="addition"] {
+    [data-line][data-line-type="addition"],
+    [data-line][data-line-type="change-addition"] {
       background-color: var(--gl-added-surface) !important;
       box-shadow: inset 2px 0 var(--gl-positive) !important;
     }
-    [data-line][data-line-type="deletion"] {
+    [data-line][data-line-type="deletion"],
+    [data-line][data-line-type="change-deletion"] {
       background-color: var(--gl-removed-surface) !important;
       box-shadow: inset 2px 0 var(--gl-negative) !important;
     }
     /* Lift syntax tokens toward --text-primary on changed lines so muted
        theme colours (e.g. rose-pine comments) stay readable on the tinted
-       diff wash. Themes tune --gl-diff-text-lift; 0% = unchanged. */
+       wash. Mix Pierre's per-span token vars — currentColor is the
+       inherited line colour and would flatten every token to text. */
     [data-line][data-line-type="addition"] *,
-    [data-line][data-line-type="deletion"] * {
-      color: color-mix(in srgb, var(--text-primary) var(--gl-diff-text-lift, 0%), currentColor) !important;
+    [data-line][data-line-type="change-addition"] *,
+    [data-line][data-line-type="deletion"] *,
+    [data-line][data-line-type="change-deletion"] * {
+      color: color-mix(in srgb, var(--text-primary) var(--gl-diff-text-lift, 0%), light-dark(var(--diffs-token-light, var(--diffs-light)), var(--diffs-token-dark, var(--diffs-dark)))) !important;
     }
     [data-line].selected-line {
       outline: 1px solid var(--gl-focus) !important;

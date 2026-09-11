@@ -18,7 +18,7 @@ export function AiEmptyState({
 	const copy = emptyStateCopy(surface);
 	return (
 		<div className="ai-empty-state">
-			<div>
+			<div className="ai-empty-icon">
 				<Sparkles size={20} />
 			</div>
 			<strong>{copy.title}</strong>

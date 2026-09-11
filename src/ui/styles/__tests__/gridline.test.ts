@@ -341,6 +341,36 @@ describe('Gridline Web design-system contract', () => {
       }
     }
   })
+
+  it('gives Rosé Pine hex diff washes that keep primary text readable', () => {
+    const rosePineThemes = [
+      ...globalCss.matchAll(/\[data-theme="(rose-pine(?:-moon|-dawn)?)"\]\s*\{([^}]+)\}/g),
+    ].map((match): [string, Record<string, string>] => [match[1], declarations(match[2])])
+
+    expect(rosePineThemes.map(([name]) => name)).toEqual([
+      'rose-pine',
+      'rose-pine-moon',
+      'rose-pine-dawn',
+    ])
+
+    for (const [name, values] of rosePineThemes) {
+      expect(values['gl-added-surface'], `${name} added wash`).toMatch(/^#[0-9a-fA-F]{6}$/)
+      expect(values['gl-removed-surface'], `${name} removed wash`).toMatch(/^#[0-9a-fA-F]{6}$/)
+      // Dawn's official text on base is already below AAA (7:1); keep AA there.
+      const minContrast = name === 'rose-pine-dawn' ? 4.5 : 7
+      expect(
+        contrast(values['text-primary'], values['gl-added-surface']),
+        `${name} text on added wash`,
+      ).toBeGreaterThanOrEqual(minContrast)
+      expect(
+        contrast(values['text-primary'], values['gl-removed-surface']),
+        `${name} text on removed wash`,
+      ).toBeGreaterThanOrEqual(minContrast)
+    }
+
+    expect(gridline).toContain(':where(:root)')
+    expect(gridline).toMatch(/:where\(:root\)\s*\{[\s\S]*?--gl-added-surface:/)
+  })
 })
 
 describe('AI finding cards', () => {
@@ -362,5 +392,13 @@ describe('AI finding cards', () => {
   it('keeps a long quote scrollable instead of overflowing the rail', () => {
     expect(block).toContain('overflow-x: auto')
     expect(block).toMatch(/min-width:\s*0/)
+  })
+})
+
+describe('AI empty state', () => {
+  it('does not crush example prompts into the sparkle icon box', () => {
+    expect(globalCss).not.toMatch(/\.ai-empty-state\s*>\s*div\s*\{/)
+    expect(globalCss).toContain('.ai-empty-icon')
+    expect(globalCss).toContain('.ai-empty-examples')
   })
 })
