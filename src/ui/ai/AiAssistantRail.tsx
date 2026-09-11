@@ -112,6 +112,7 @@ function AiAssistantRailOpen({
 	const [findings, setFindings] = useState<NotebookEntry[]>([]);
 	const [modelMenuOpen, setModelMenuOpen] = useState(false);
 	const [statusMessage, setStatusMessage] = useState<string | null>(null);
+	const [statusNonce, setStatusNonce] = useState(0);
 	const resizeCleanup = useRef<(() => void) | null>(null);
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -476,6 +477,11 @@ function AiAssistantRailOpen({
 		[copyMarkdown],
 	);
 
+	const flashStatus = useCallback((message: string) => {
+		setStatusMessage(message);
+		setStatusNonce((current) => current + 1);
+	}, []);
+
 	const startRef = useRef(run.start);
 	startRef.current = run.start;
 	const turnsRef = useRef(conversations.conversation?.turns ?? []);
@@ -632,7 +638,7 @@ function AiAssistantRailOpen({
 			event.stopPropagation();
 			const next = nextReasoningEffort(ai.reasoningEffort ?? "");
 			void ai.setReasoningEffort(next);
-			setStatusMessage(`Reasoning: ${reasoningEffortLabel(next)}`);
+			flashStatus(`Reasoning: ${reasoningEffortLabel(next)}`);
 			return;
 		}
 		if (matchesAiShortcut(event, "copy-last-response")) {
@@ -711,12 +717,12 @@ function AiAssistantRailOpen({
 				reasoningEffort={ai.reasoningEffort ?? ""}
 				onReasoningEffortChange={(effort) => {
 					void ai.setReasoningEffort?.(effort);
-					setStatusMessage(`Reasoning: ${reasoningEffortLabel(effort)}`);
+					flashStatus(`Reasoning: ${reasoningEffortLabel(effort)}`);
 				}}
 				onCycleReasoning={() => {
 					const next = nextReasoningEffort(ai.reasoningEffort ?? "");
 					void ai.setReasoningEffort?.(next);
-					setStatusMessage(`Reasoning: ${reasoningEffortLabel(next)}`);
+					flashStatus(`Reasoning: ${reasoningEffortLabel(next)}`);
 				}}
 				modelMenuOpen={modelMenuOpen}
 				onModelMenuOpenChange={setModelMenuOpen}
@@ -981,7 +987,7 @@ function AiAssistantRailOpen({
 					void run.start(item.action, item.prompt);
 				}}
 			/>
-			<AiRailStatusLine message={statusMessage} />
+			<AiRailStatusLine message={statusMessage} nonce={statusNonce} />
 		</aside>
 	);
 }
