@@ -574,6 +574,10 @@ function AiAssistantRailOpen({
 	}, [conversations.saveDraft, prompt]);
 
 	const handleRailKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+		if (event.defaultPrevented) return;
+		if (modelMenuOpen) return;
+		const target = event.target;
+		if (target instanceof Element && target.closest(".ui-popover")) return;
 		if (conversations.renaming) return;
 		if (matchesAiShortcut(event, "stop") && isBusy) {
 			event.preventDefault();

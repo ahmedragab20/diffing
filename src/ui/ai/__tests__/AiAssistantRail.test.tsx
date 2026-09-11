@@ -1077,6 +1077,25 @@ describe("AiAssistantRail", () => {
 		expect(onClose).toHaveBeenCalled();
 	});
 
+	it("does not close the rail when Escape is pressed in the model picker", async () => {
+		const onClose = vi.fn();
+		const user = userEvent.setup();
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={onClose}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		await user.click(screen.getByRole("button", { name: "Choose AI model" }));
+		const search = await screen.findByRole("textbox", {
+			name: "Search connected models",
+		});
+		fireEvent.keyDown(search, { key: "Escape" });
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
 	it("opens the model picker from the header chip and selects a model", async () => {
 		const user = userEvent.setup();
 		renderRail(
