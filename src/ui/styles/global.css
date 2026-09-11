@@ -15906,6 +15906,39 @@ button.toolbar-last-send-btn:hover {
   border-color: color-mix(in srgb, var(--gl-accent) 34%, var(--gl-rule-subtle));
 }
 
+.ai-turn-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.ai-turn-chip {
+  max-width: 100%;
+  padding: 1px 6px;
+  border: 1px solid var(--gl-rule-subtle);
+  border-radius: 999px;
+  color: var(--gl-text-subtle);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-day-separator {
+  align-self: stretch;
+  margin: 8px 0 4px;
+  color: var(--gl-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.ai-streaming-meta {
+  margin: 0 4px 8px;
+  color: var(--gl-muted);
+  font-size: 11px;
+}
+
 .ai-response-document {
   align-self: stretch;
   width: 100%;
@@ -15961,6 +15994,23 @@ button.toolbar-last-send-btn:hover {
   gap: 5px;
   padding: 0 7px;
   color: var(--gl-text-subtle);
+}
+
+.ai-turn-model-badge {
+  margin-right: auto;
+  color: var(--gl-muted);
+  font-size: 11px;
+}
+
+.ai-finding-jump {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--gl-accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .ai-message-loading {

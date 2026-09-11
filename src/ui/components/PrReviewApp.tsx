@@ -55,7 +55,7 @@ import {
 import type { FileTreeChipFilter } from "./FileTree";
 import type { Scope } from "../lib/searchTypes";
 import { getUiStateItem, setUiStateItem } from "../utils/uiState";
-import { SHIKI_THEME_MAP } from "../utils";
+import { SHIKI_THEME_MAP, scrollToLine } from "../utils";
 import { navigate } from "../router";
 import { DiffViewer, sortFilesByName } from "./DiffViewer";
 import { FileTree } from "./FileTree";
@@ -301,6 +301,23 @@ export function PrReviewApp() {
     setActiveFile(filePath);
     navigateToFile(filePath);
   }, []);
+
+  useEffect(() => {
+    const onJump = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{
+          filePath?: string;
+          line?: number;
+          side?: "additions" | "deletions";
+        }>
+      ).detail;
+      if (!detail?.filePath || !detail.line) return;
+      handleFileClick(detail.filePath);
+      scrollToLine(detail.filePath, detail.line, detail.side ?? "additions");
+    };
+    window.addEventListener("diffing-jump-to-line", onJump);
+    return () => window.removeEventListener("diffing-jump-to-line", onJump);
+  }, [handleFileClick]);
 
   const scrollToNextFile = useScrollToNextFile(filteredFiles);
   useEffect(() => () => cancelDiffNavigation(), []);

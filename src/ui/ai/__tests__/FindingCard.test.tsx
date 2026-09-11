@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { FindingCard } from "../FindingCard";
 import type { NotebookEntry } from "../../../lib/ai/notebook";
@@ -40,6 +40,22 @@ describe("rendering a finding", () => {
     render(<FindingCard entry={entry()} verification={{ "ev-1": "verified" }} />);
     expect(screen.getByText("a.ts:4-6")).toBeInTheDocument();
     expect(screen.getByText("const cents = total / 100")).toBeInTheDocument();
+  });
+
+  it("jumps to the cited file and line when the source is clicked", () => {
+    const seen: unknown[] = [];
+    const handler = (event: Event) => {
+      seen.push((event as CustomEvent).detail);
+    };
+    window.addEventListener("diffing-jump-to-line", handler);
+    render(<FindingCard entry={entry()} verification={{ "ev-1": "verified" }} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Jump to a.ts line 4" }),
+    );
+    expect(seen).toEqual([
+      { filePath: "a.ts", line: 4, side: "additions" },
+    ]);
+    window.removeEventListener("diffing-jump-to-line", handler);
   });
 
   it("renders a single-line citation without a range", () => {

@@ -839,6 +839,21 @@ export function App() {
 		navigateToFile(filePath);
 	}, []);
 
+	useEffect(() => {
+		const onJump = (event: Event) => {
+			const detail = (event as CustomEvent<{
+				filePath?: string;
+				line?: number;
+				side?: "additions" | "deletions";
+			}>).detail;
+			if (!detail?.filePath || !detail.line) return;
+			handleFileClick(detail.filePath);
+			scrollToLine(detail.filePath, detail.line, detail.side ?? "additions");
+		};
+		window.addEventListener("diffing-jump-to-line", onJump);
+		return () => window.removeEventListener("diffing-jump-to-line", onJump);
+	}, [handleFileClick]);
+
 	const handleApplyExtensions = useCallback((extensions: string[]) => {
 		// Defer the expensive DiffViewer remount so the Apply click paints first.
 		startTransition(() => {

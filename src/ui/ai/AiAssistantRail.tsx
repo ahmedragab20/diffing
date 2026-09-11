@@ -476,6 +476,39 @@ function AiAssistantRailOpen({
 		[copyMarkdown],
 	);
 
+	const startRef = useRef(run.start);
+	startRef.current = run.start;
+	const turnsRef = useRef(conversations.conversation?.turns ?? []);
+	turnsRef.current = conversations.conversation?.turns ?? [];
+	const saveDraftRef = useRef(conversations.saveDraft);
+	saveDraftRef.current = conversations.saveDraft;
+
+	const handleRetryFromHere = useCallback((assistantTurn: AiConversationTurn) => {
+		const list = turnsRef.current;
+		const index = list.findIndex((item) => item.id === assistantTurn.id);
+		const preceding = [...list.slice(0, index >= 0 ? index : 0)]
+			.reverse()
+			.find((item) => item.role === "user");
+		if (!preceding?.text.trim()) return;
+		void startRef.current("ask", preceding.text);
+	}, []);
+
+	const handleQuote = useCallback((turn: AiConversationTurn, text: string) => {
+		const source = text.trim() || turn.text;
+		const quoted = source
+			.split("\n")
+			.map((line) => `> ${line}`)
+			.join("\n");
+		setPrompt((current) => {
+			const next = current.trim()
+				? `${current.replace(/\s+$/, "")}\n\n${quoted}\n\n`
+				: `${quoted}\n\n`;
+			saveDraftRef.current(next);
+			return next;
+		});
+		requestAnimationFrame(() => textareaRef.current?.focus());
+	}, []);
+
 	const quickActions = quickActionsFor(surface, context);
 	const slashItems = slashActionsFor(surface, context);
 	const turns = conversations.conversation?.turns ?? [];
@@ -829,6 +862,10 @@ function AiAssistantRailOpen({
 								? () => run.retry()
 								: undefined
 						}
+						onRetryFromHere={handleRetryFromHere}
+						onQuote={handleQuote}
+						models={ai.models}
+						streamingModel={model?.displayName}
 					/>
 				)}
 				{run.pending?.error && (

@@ -1,5 +1,6 @@
 import { memo } from "react";
 import type { NotebookEntry } from "../../lib/ai/notebook";
+import { dispatchJumpToLine } from "./jumpToLine";
 
 /**
  * One notebook entry, rendered honestly.
@@ -64,22 +65,42 @@ function FindingCardView({ entry, verification = {} }: FindingCardProps) {
 			)}
 
 			<ul className="ai-finding-citations">
-				{entry.citations.map((citation, index) => (
-					<li
-						key={citation.evidenceId}
-						className="ai-finding-citation"
-						data-status={statuses[index]}
-					>
-						<span className="ai-finding-source">
-							{citation.key}:{citation.startLine}
-							{citation.endLine === citation.startLine
-								? ""
-								: `-${citation.endLine}`}
-						</span>
-						<span className="ai-finding-status">{statuses[index]}</span>
-						<code className="ai-finding-quote">{citation.quote}</code>
-					</li>
-				))}
+				{entry.citations.map((citation, index) => {
+					const jumpable = Boolean(citation.key && citation.startLine >= 1);
+					const rangeLabel = `${citation.key}:${citation.startLine}${
+						citation.endLine === citation.startLine
+							? ""
+							: `-${citation.endLine}`
+					}`;
+					return (
+						<li
+							key={citation.evidenceId}
+							className="ai-finding-citation"
+							data-status={statuses[index]}
+						>
+							{jumpable ? (
+								<button
+									type="button"
+									className="ai-finding-source ai-finding-jump"
+									onClick={() =>
+										dispatchJumpToLine({
+											filePath: citation.key,
+											line: citation.startLine,
+											side: "additions",
+										})
+									}
+									aria-label={`Jump to ${citation.key} line ${citation.startLine}`}
+								>
+									{rangeLabel}
+								</button>
+							) : (
+								<span className="ai-finding-source">{rangeLabel}</span>
+							)}
+							<span className="ai-finding-status">{statuses[index]}</span>
+							<code className="ai-finding-quote">{citation.quote}</code>
+						</li>
+					);
+				})}
 			</ul>
 
 			<footer className="ai-finding-foot">
