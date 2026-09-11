@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
 	setRailWidth: vi.fn(async (_width: number) => {}),
 	run: vi.fn(),
 	cancel: vi.fn(async () => {}),
+	selectModel: vi.fn(async (_id: string) => {}),
+	setReasoningEffort: vi.fn(async (_effort: string) => {}),
 }));
 
 vi.mock("../AiContext", () => ({
@@ -23,12 +25,24 @@ vi.mock("../AiContext", () => ({
 				modelId: "gpt-test",
 				supportsImages: true,
 			},
+			{
+				id: "codex/subscription/codex/gpt-other",
+				displayName: "GPT Other",
+				sourceId: "codex",
+				credentialRoute: "subscription",
+				providerId: "codex",
+				modelId: "gpt-other",
+				supportsImages: true,
+			},
 		],
 		selectedModel: "codex/subscription/codex/gpt-test",
+		reasoningEffort: "",
 		railWidth: 360,
 		setRailWidth: mocks.setRailWidth,
 		run: mocks.run,
 		cancel: mocks.cancel,
+		selectModel: mocks.selectModel,
+		setReasoningEffort: mocks.setReasoningEffort,
 	}),
 }));
 
@@ -1043,5 +1057,36 @@ describe("AiAssistantRail", () => {
 		const rail = document.querySelector(".ai-assistant-rail");
 		fireEvent.keyDown(rail!, { key: "Escape" });
 		expect(onClose).toHaveBeenCalled();
+	});
+
+	it("opens the model picker from the header chip and selects a model", async () => {
+		const user = userEvent.setup();
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={vi.fn()}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		await user.click(screen.getByRole("button", { name: "Choose AI model" }));
+		await user.click(await screen.findByRole("button", { name: /GPT Other/ }));
+		expect(mocks.selectModel).toHaveBeenCalledWith(
+			"codex/subscription/codex/gpt-other",
+		);
+	});
+
+	it("cycles reasoning effort from the header chip", async () => {
+		const user = userEvent.setup();
+		renderRail(
+			<AiAssistantRail
+				open
+				onClose={vi.fn()}
+				surface="diff"
+				context={{ kind: "diff" }}
+			/>,
+		);
+		await user.click(screen.getByRole("button", { name: "Cycle reasoning effort" }));
+		expect(mocks.setReasoningEffort).toHaveBeenCalledWith("low");
 	});
 });

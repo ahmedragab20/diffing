@@ -29,6 +29,8 @@ import { matchesAiShortcut } from "./aiShortcuts";
 import { AiRailHeader } from "./AiRailHeader";
 import { AiQuickActions } from "./AiQuickActions";
 import { AiComposer } from "./AiComposer";
+import { nextReasoningEffort, reasoningEffortLabel } from "./AiModelPicker";
+import { AiRailStatusLine } from "./AiRailStatusLine";
 
 export interface AiAssistantRailHandle {
 	focusComposer(): void;
@@ -98,6 +100,8 @@ function AiAssistantRailOpen({
 	const [imageError, setImageError] = useState<string | null>(null);
 	const [draggingImage, setDraggingImage] = useState(false);
 	const [findings, setFindings] = useState<NotebookEntry[]>([]);
+	const [modelMenuOpen, setModelMenuOpen] = useState(false);
+	const [statusMessage, setStatusMessage] = useState<string | null>(null);
 	const resizeCleanup = useRef<(() => void) | null>(null);
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -569,6 +573,20 @@ function AiAssistantRailOpen({
 			void run.start(quickActions[2].action, quickActions[2].prompt);
 			return;
 		}
+		if (matchesAiShortcut(event, "open-model-picker")) {
+			event.preventDefault();
+			event.stopPropagation();
+			setModelMenuOpen(true);
+			return;
+		}
+		if (matchesAiShortcut(event, "cycle-reasoning") && ai.setReasoningEffort) {
+			event.preventDefault();
+			event.stopPropagation();
+			const next = nextReasoningEffort(ai.reasoningEffort ?? "");
+			void ai.setReasoningEffort(next);
+			setStatusMessage(`Reasoning: ${reasoningEffortLabel(next)}`);
+			return;
+		}
 		if (matchesAiShortcut(event, "copy-last-response")) {
 			event.preventDefault();
 			event.stopPropagation();
@@ -637,6 +655,23 @@ function AiAssistantRailOpen({
 			<AiRailHeader
 				title={title}
 				model={model}
+				models={ai.models}
+				selectedModel={ai.selectedModel}
+				onSelectModel={(modelId) => {
+					void ai.selectModel?.(modelId);
+				}}
+				reasoningEffort={ai.reasoningEffort ?? ""}
+				onReasoningEffortChange={(effort) => {
+					void ai.setReasoningEffort?.(effort);
+					setStatusMessage(`Reasoning: ${reasoningEffortLabel(effort)}`);
+				}}
+				onCycleReasoning={() => {
+					const next = nextReasoningEffort(ai.reasoningEffort ?? "");
+					void ai.setReasoningEffort?.(next);
+					setStatusMessage(`Reasoning: ${reasoningEffortLabel(next)}`);
+				}}
+				modelMenuOpen={modelMenuOpen}
+				onModelMenuOpenChange={setModelMenuOpen}
 				onClose={onClose}
 				switcher={{
 					conversation: conversations.conversation,
@@ -888,6 +923,7 @@ function AiAssistantRailOpen({
 				onUndoClear={undoClearComposer}
 				onInsertMentionTrigger={insertMentionTrigger}
 			/>
+			<AiRailStatusLine message={statusMessage} />
 		</aside>
 	);
 }
