@@ -1,3 +1,9 @@
+## 0.21.3
+
+### Patch Changes
+
+- fad1657: Stop PR review from rebuilding every diff on scroll and comment sync
+
 ## 0.21.2
 
 ### Patch Changes
