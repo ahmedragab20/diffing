@@ -12,10 +12,33 @@ type TreeProps = ComponentProps<typeof import("../components/FileTree").FileTree
 
 type Frame = FrameRequestCallback;
 const addComment = vi.fn();
+const removeComment = vi.fn();
+const addReply = vi.fn();
+const resolveComment = vi.fn();
+const unresolveComment = vi.fn();
+const editComment = vi.fn();
 const setViewed = vi.fn();
 const cardProps = new Map<string, CardProps>();
+const renderCounts = new Map<string, number>();
+const tracking: { onChange?: (path: string) => void } = {};
 const virtualizers: unknown[] = [];
 const scrollIntoView = vi.fn();
+const queryClient = {
+  invalidateQueries: vi.fn(),
+  setQueryData: vi.fn(),
+};
+const fileSearchSession = {
+  filePath: null as string | null,
+  query: "",
+  hits: [] as unknown[],
+  index: 0,
+  focusNonce: 0,
+  open: vi.fn(),
+  close: vi.fn(),
+  setQuery: vi.fn(),
+  next: vi.fn(),
+  prev: vi.fn(),
+};
 const workerPool = {
   setRenderOptions: vi.fn().mockResolvedValue(undefined),
 };
@@ -121,19 +144,24 @@ const session = {
   comments: [draft("a.ts"), draft("b.ts")],
   existingComments: [existing("a.ts", 1), existing("b.ts", 2)],
 };
+// Mutable so a test can swap in new session/comment data between renders.
+const live: { session: typeof session; comments: ReviewComment[] } = {
+  session,
+  comments: session.comments,
+};
 
 vi.mock("../hooks/usePrSession", () => ({
-  usePrSession: () => ({ session, loaded: true, error: null }),
+  usePrSession: () => ({ session: live.session, loaded: true, error: null }),
   usePrCommentSync: () => undefined,
   usePrComments: () => ({
-    comments: session.comments,
+    comments: live.comments,
     addComment,
-    removeComment: vi.fn(),
+    removeComment,
     updateComment: vi.fn(),
-    addReply: vi.fn(),
-    resolveComment: vi.fn(),
-    unresolveComment: vi.fn(),
-    editComment: vi.fn(),
+    addReply,
+    resolveComment,
+    unresolveComment,
+    editComment,
     editReply: vi.fn(),
     removeReply: vi.fn(),
   }),
@@ -155,31 +183,26 @@ vi.mock("../hooks/useDiffReviewKeymaps", () => ({
   useDiffReviewKeymaps: () => undefined,
 }));
 vi.mock("../hooks/useViewportActiveFile", () => ({
-  useViewportActiveFileTracking: () => undefined,
+  useViewportActiveFileTracking: (
+    _files: unknown,
+    _active: unknown,
+    onChange: (path: string) => void,
+  ) => {
+    tracking.onChange = onChange;
+  },
 }));
 vi.mock("../hooks/useDiffSearch", () => ({
   useDiffSearch: () => [],
   buildFileSearchCorpus: () => "",
 }));
 vi.mock("../hooks/useFileSearch", () => ({
-  useFileSearch: () => ({
-    filePath: null,
-    query: "",
-    hits: [],
-    index: 0,
-    focusNonce: 0,
-    open: vi.fn(),
-    close: vi.fn(),
-    setQuery: vi.fn(),
-    next: vi.fn(),
-    prev: vi.fn(),
-  }),
+  useFileSearch: () => fileSearchSession,
 }));
 vi.mock("../hooks/useSearchSession", () => ({ useSearchSession: () => ({}) }));
 vi.mock("../router", () => ({ useRoutePath: () => "/gh/pr", navigate: vi.fn() }));
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-query")>()),
-  useQueryClient: () => ({ invalidateQueries: vi.fn(), setQueryData: vi.fn() }),
+  useQueryClient: () => queryClient,
 }));
 vi.mock("@pierre/diffs/react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@pierre/diffs/react")>()),
@@ -188,7 +211,11 @@ vi.mock("@pierre/diffs/react", async (importOriginal) => ({
 
 vi.mock("../components/FileDiffCard", async () => {
   const { useVirtualizer } = await import("@pierre/diffs/react");
+  const { memo } = await import("react");
+  // memo'd like the real card so the render-count assertion below exercises
+  // the same prop-identity boundary production relies on.
   function MockFileDiffCard(props: CardProps) {
+    renderCounts.set(props.filePath, (renderCounts.get(props.filePath) ?? 0) + 1);
     const virtualizer = useVirtualizer();
     virtualizers.push(virtualizer);
     cardProps.set(props.filePath, props);
@@ -221,7 +248,7 @@ vi.mock("../components/FileDiffCard", async () => {
       </div>
     );
   }
-  return { FileDiffCard: MockFileDiffCard };
+  return { FileDiffCard: memo(MockFileDiffCard) };
 });
 vi.mock("../components/FileTree", () => ({
   FileTree: (props: TreeProps) => (
@@ -318,6 +345,10 @@ function renderApp() {
 
 beforeEach(() => {
   cardProps.clear();
+  renderCounts.clear();
+  tracking.onChange = undefined;
+  live.session = session;
+  live.comments = session.comments;
   virtualizers.length = 0;
   addComment.mockClear();
   setViewed.mockClear();
@@ -470,5 +501,38 @@ describe("PR review scrolling regression", () => {
     await flush();
     expect(scrollIntoView).not.toHaveBeenCalled();
     expect(frames.size).toBe(0);
+  });
+
+  it("does not re-render file cards when scroll tracking changes the active file", () => {
+    renderApp();
+    const before = new Map(renderCounts);
+    const propsBefore = cardProps.get("b.ts")!;
+    act(() => tracking.onChange!("b.ts"));
+    act(() => tracking.onChange!("a.ts"));
+    expect(renderCounts).toEqual(before);
+    expect(cardProps.get("b.ts")).toBe(propsBefore);
+  });
+
+  it("keeps untouched files' comment arrays when another file gains comments", () => {
+    renderApp();
+    const aBefore = cardProps.get("a.ts")!;
+    const aRenders = renderCounts.get("a.ts");
+    const bRenders = renderCounts.get("b.ts");
+    // New top-level arrays (as a refetch produces) but a.ts items are the same
+    // objects (as TanStack structural sharing / setQueryData(map) produce).
+    live.session = {
+      ...session,
+      existingComments: [session.existingComments[0], existing("b.ts", 3)],
+    };
+    live.comments = [...session.comments, { ...draft("b.ts"), id: "draft-b2" }];
+    act(() => tracking.onChange!("b.ts"));
+    const aAfter = cardProps.get("a.ts")!;
+    expect(aAfter.existingComments).toBe(aBefore.existingComments);
+    expect(aAfter.annotations).toBe(aBefore.annotations);
+    expect(renderCounts.get("a.ts")).toBe(aRenders);
+    expect(renderCounts.get("b.ts")).toBe((bRenders ?? 0) + 1);
+    expect(cardProps.get("b.ts")!.existingComments).toHaveLength(1);
+    expect(cardProps.get("b.ts")!.existingComments?.[0].id).toBe(3);
+    expect(cardProps.get("b.ts")!.annotations).toHaveLength(2);
   });
 });

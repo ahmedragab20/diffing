@@ -1,11 +1,13 @@
 import { CommentActionsProvider, type CommentActions } from "./CommentActionsProvider";
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   useTransition,
+  type ComponentProps,
 } from "react";
 import {
   getFiletypeFromFileName,
@@ -23,7 +25,7 @@ import {
 } from "lucide-react";
 import type { ReviewComment } from "../../lib/types";
 import type { PrExistingComment, PrSession } from "../../lib/pr-session";
-import { useDiff } from "../hooks/useDiff";
+import { useDiff, type BinaryFileInfo } from "../hooks/useDiff";
 import {
   usePrCommentSync,
   usePrComments,
@@ -82,6 +84,32 @@ import {
   toggleAskAiRail,
 } from "../ai/aiRailToggle";
 import type { AiDiffSelection } from "../../lib/ai/types";
+
+const EMPTY_TAB_SIZE_MAP: Record<string, number> = {};
+const EMPTY_BINARY_FILES = new Map<string, BinaryFileInfo>();
+
+/**
+ * Keep the previous per-file list when its items are unchanged so a comment
+ * landing on one file doesn't hand every other memoized card a fresh array.
+ * Pierre compares `lineAnnotations` by reference and force-rebuilds the whole
+ * diff DOM on any new identity, so this is what keeps untouched files still.
+ */
+function reuseUnchangedLists<T>(
+  prev: Map<string, T[]>,
+  next: Map<string, T[]>,
+  same: (a: T, b: T) => boolean,
+): Map<string, T[]> {
+  for (const [key, list] of next) {
+    const before = prev.get(key);
+    if (
+      before &&
+      before.length === list.length &&
+      before.every((item, index) => same(item, list[index]))
+    )
+      next.set(key, before);
+  }
+  return next;
+}
 
 /** GitHub-specific variant of the main review shell. */
 export function PrReviewApp() {
@@ -188,23 +216,35 @@ export function PrReviewApp() {
     }
   }, [patch]);
 
+  const existingComments = session?.existingComments;
+  // TanStack structurally shares query data, so unchanged comment objects keep
+  // their identity across syncs; reuse per-file arrays built from them too.
+  const existingCommentsByFileRef = useRef(
+    new Map<string, PrExistingComment[]>(),
+  );
   const existingCommentsByFile = useMemo(() => {
     const map = new Map<string, PrExistingComment[]>();
-    for (const comment of session?.existingComments ?? []) {
+    for (const comment of existingComments ?? []) {
       const list = map.get(comment.path) ?? [];
       list.push(comment);
       map.set(comment.path, list);
     }
-    return map;
-  }, [session]);
+    const reused = reuseUnchangedLists(
+      existingCommentsByFileRef.current,
+      map,
+      (a, b) => a === b,
+    );
+    existingCommentsByFileRef.current = reused;
+    return reused;
+  }, [existingComments]);
 
   const inboxComments = useMemo(
     () =>
       commentsMissingFromPatch(
-        session?.existingComments ?? [],
+        existingComments ?? [],
         files.map((file) => file.name),
       ),
-    [session, files],
+    [existingComments, files],
   );
 
   const timelineItems = useMemo(
@@ -221,10 +261,10 @@ export function PrReviewApp() {
     const counts: Record<string, number> = {};
     for (const comment of comments)
       counts[comment.filePath] = (counts[comment.filePath] ?? 0) + 1;
-    for (const comment of session?.existingComments ?? [])
+    for (const comment of existingComments ?? [])
       counts[comment.path] = (counts[comment.path] ?? 0) + 1;
     return counts;
-  }, [comments, session]);
+  }, [comments, existingComments]);
 
   const filteredFiles = useMemo(() => {
     let next = files;
@@ -249,15 +289,14 @@ export function PrReviewApp() {
     explicitActiveFileRef,
   );
 
+  type DraftAnnotation = {
+    side: ReviewComment["side"];
+    lineNumber: number;
+    metadata: ReviewComment;
+  };
+  const fileAnnotationsRef = useRef(new Map<string, DraftAnnotation[]>());
   const fileAnnotations = useMemo(() => {
-    const map = new Map<
-      string,
-      Array<{
-        side: ReviewComment["side"];
-        lineNumber: number;
-        metadata: ReviewComment;
-      }>
-    >();
+    const map = new Map<string, DraftAnnotation[]>();
     for (const comment of comments) {
       const list = map.get(comment.filePath) ?? [];
       list.push({
@@ -267,7 +306,14 @@ export function PrReviewApp() {
       });
       map.set(comment.filePath, list);
     }
-    return map;
+    // side/lineNumber derive from the comment, so comment identity is enough.
+    const reused = reuseUnchangedLists(
+      fileAnnotationsRef.current,
+      map,
+      (a, b) => a.metadata === b.metadata,
+    );
+    fileAnnotationsRef.current = reused;
+    return reused;
   }, [comments]);
 
   const diffSearchEntries = useDiffSearch(filteredFiles);
@@ -409,6 +455,24 @@ export function PrReviewApp() {
       await queryClient.invalidateQueries({ queryKey: ["pr-session"] });
     },
     [queryClient],
+  );
+
+  const editExisting = useCallback(
+    (id: number, body: string) => mutateExistingComment("PATCH", id, body),
+    [mutateExistingComment],
+  );
+  const deleteExisting = useCallback(
+    (id: number) => mutateExistingComment("DELETE", id),
+    [mutateExistingComment],
+  );
+  const commentActions = useMemo<CommentActions>(
+    () => ({
+      addReply: (id, body) => addReply({ id, body }),
+      resolveComment,
+      unresolveComment,
+      editComment,
+    }),
+    [addReply, resolveComment, unresolveComment, editComment],
   );
 
   const handleSidebarResizeStart = useCallback((event: React.MouseEvent) => {
@@ -981,7 +1045,7 @@ export function PrReviewApp() {
               </div>
             ) : (
               <PrDiffSurface
-                commentActions={{ addReply: (id, body) => addReply({ id, body }), resolveComment, unresolveComment, editComment }}
+                commentActions={commentActions}
                 files={filteredFiles}
                 fileAnnotations={fileAnnotations}
                 existingCommentsByFile={existingCommentsByFile}
@@ -990,14 +1054,12 @@ export function PrReviewApp() {
                 monoFontFamily={monoFontFamily}
                 fileSearch={fileSearch}
                 onOpenFileSearch={openFileSearch}
-                onAddComment={(params) => addComment(params)}
+                onAddComment={addComment}
                 onDeleteComment={removeComment}
                 onViewedChange={handleViewedChange}
                 onReplyExisting={replyToExisting}
-                onEditExisting={(id, body) =>
-                  mutateExistingComment("PATCH", id, body)
-                }
-                onDeleteExisting={(id) => mutateExistingComment("DELETE", id)}
+                onEditExisting={editExisting}
+                onDeleteExisting={deleteExisting}
                 onSetExistingResolved={setExistingThreadResolved}
                 onApplyExisting={applyExistingSuggestion}
                 expectedHeadSha={session.headSha}
@@ -1094,7 +1156,7 @@ export function PrReviewApp() {
   );
 }
 
-function PrDiffSurface({
+const PrDiffSurface = memo(function PrDiffSurface({
   commentActions,
   files,
   fileAnnotations,
@@ -1149,16 +1211,30 @@ function PrDiffSurface({
   expectedHeadSha?: string;
   onAddSelectionToAsk?: (selection: AiDiffSelection) => void;
 }) {
+  const handleAddComment = useCallback<
+    NonNullable<ComponentProps<typeof DiffViewer>["onAddComment"]>
+  >(
+    (filePath, side, lineNumber, lineContent, body, startLineNumber) =>
+      onAddComment({
+        filePath,
+        side,
+        lineNumber,
+        lineContent,
+        body,
+        startLineNumber,
+      }),
+    [onAddComment],
+  );
   return (
     <div className="pr-diff-surface">
       <CommentActionsProvider actions={commentActions}>
       <DiffViewer
         files={files}
         diffStyle={settings.diffStyle}
-        tabSizeMap={{}}
+        tabSizeMap={EMPTY_TAB_SIZE_MAP}
         defaultTabSize={settings.defaultTabSize}
         viewedFiles={viewedFiles}
-        binaryFiles={new Map()}
+        binaryFiles={EMPTY_BINARY_FILES}
         theme={settings.theme || "rose-pine"}
         lineDiffType={settings.lineDiffType}
         lineWrap={settings.lineWrap}
@@ -1175,23 +1251,7 @@ function PrDiffSurface({
         onViewedChange={onViewedChange}
         fileAnnotationsMap={fileAnnotations}
         existingCommentsMap={existingCommentsByFile}
-        onAddComment={(
-          filePath,
-          side,
-          lineNumber,
-          lineContent,
-          body,
-          startLineNumber,
-        ) =>
-          onAddComment({
-            filePath,
-            side,
-            lineNumber,
-            lineContent,
-            body,
-            startLineNumber,
-          })
-        }
+        onAddComment={handleAddComment}
         onDeleteComment={onDeleteComment}
         onReplyExisting={onReplyExisting}
         onEditExisting={onEditExisting}
@@ -1207,4 +1267,4 @@ function PrDiffSurface({
       </CommentActionsProvider>
     </div>
   );
-}
+});

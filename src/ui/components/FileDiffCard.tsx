@@ -542,6 +542,14 @@ export const FileDiffCard = memo(function FileDiffCard({
 
   const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP["rose-pine"];
 
+  const rendererTheme = useMemo(
+    () => ({
+      dark: shikiConfig.type === "dark" ? shikiConfig.themeName : "rose-pine",
+      light: shikiConfig.type === "light" ? shikiConfig.themeName : "github-light",
+    }),
+    [shikiConfig],
+  );
+
   // Stable across re-renders triggered by unrelated prop changes (e.g. toggling
   // split/unified) so the diff renderer isn't handed a brand-new CSS string
   // every time. Only tabSize/fontSize actually affect it.
@@ -1020,24 +1028,37 @@ export const FileDiffCard = memo(function FileDiffCard({
     }
   };
 
-  const fileLevelAnnotations = annotations.filter((a) => a.lineNumber === 0);
+  const fileLevelAnnotations = useMemo(
+    () => annotations.filter((a) => a.lineNumber === 0),
+    [annotations],
+  );
   // Treat persisted/API data as untrusted at the third-party renderer boundary.
   // Pierre assumes every annotation side is valid and otherwise throws while
   // indexing the line, blanking the entire diff surface.
-  const lineAnnotations = filterSupportedLineAnnotations(annotations);
+  const lineAnnotations = useMemo(
+    () => filterSupportedLineAnnotations(annotations),
+    [annotations],
+  );
 
-  const existingLineAnnotations: DiffLineAnnotation<{
-    _existingPr: true;
-    comment: PrExistingComment;
-  }>[] = existingComments
-    .filter((comment) => canAnchorPrComment(fileDiff, comment))
-    .map((comment) => ({
-      side: comment.side === "LEFT" ? "deletions" : "additions",
-      lineNumber: comment.line!,
-      metadata: { _existingPr: true, comment },
-    }));
-  const existingFileLevelComments = existingComments.filter(
-    (comment) => !canAnchorPrComment(fileDiff, comment),
+  const existingLineAnnotations = useMemo<
+    DiffLineAnnotation<{ _existingPr: true; comment: PrExistingComment }>[]
+  >(
+    () =>
+      existingComments
+        .filter((comment) => canAnchorPrComment(fileDiff, comment))
+        .map((comment) => ({
+          side: comment.side === "LEFT" ? "deletions" : "additions",
+          lineNumber: comment.line!,
+          metadata: { _existingPr: true, comment },
+        })),
+    [existingComments, fileDiff],
+  );
+  const existingFileLevelComments = useMemo(
+    () =>
+      existingComments.filter(
+        (comment) => !canAnchorPrComment(fileDiff, comment),
+      ),
+    [existingComments, fileDiff],
   );
 
   const renderAnnotationFn = (
@@ -1192,23 +1213,202 @@ export const FileDiffCard = memo(function FileDiffCard({
     [openPending],
   );
 
-  const allAnnotations: DiffLineAnnotation<
-    | ReviewComment
-    | { _pending: true }
-    | { _existingPr: true; comment: PrExistingComment }
-  >[] = [
-    ...(pending
-      ? [
-          {
-            side: pending.side,
-            lineNumber: pending.lineNumber,
-            metadata: { _pending: true as const },
-          },
-        ]
-      : []),
-    ...lineAnnotations,
-    ...existingLineAnnotations,
-  ];
+  // Copy a permalink for the clicked line number. Stable so the pierre
+  // `options` objects below keep their identity — pierre compares options
+  // key-by-key with `!==` and force-rebuilds the whole diff DOM on any change.
+  const handleLineNumberClick = useCallback<
+    NonNullable<
+      FileDiffOptions<CardAnnotationMetadata, undefined>["onLineNumberClick"]
+    >
+  >(
+    (props) => {
+      const side =
+        props.annotationSide === "deletions" ? "deletions" : "additions";
+      const short = `${filePath}:${side === "deletions" ? "-" : "+"}${props.lineNumber}`;
+      const params = new URLSearchParams({
+        file: filePath,
+        line: String(props.lineNumber),
+        side,
+      });
+      const full =
+        typeof window === "undefined"
+          ? short
+          : `${window.location.origin}${window.location.pathname}?${params}`;
+      navigator.clipboard?.writeText(full).then(
+        () => {
+          setPermalinkFlash(short);
+          setTimeout(() => setPermalinkFlash(null), 1600);
+        },
+        () => {},
+      );
+    },
+    [filePath],
+  );
+
+  const editRendererOptions = useMemo<
+    FileDiffOptions<CardAnnotationMetadata, undefined>
+  >(
+    () => ({
+      ...tokenHandlers,
+      onPostRender,
+      diffStyle: layoutDiffStyle,
+      // Line selection + gutter utility are read-mode comment
+      // affordances; the editor owns selection while editing.
+      enableGutterUtility: false,
+      enableLineSelection: false,
+      disableFileHeader: true,
+      lineDiffType,
+      overflow: lineWrap ? "wrap" : "scroll",
+      diffIndicators,
+      disableLineNumbers: !showLineNumbers,
+      hunkSeparators,
+      lineHoverHighlight,
+      expandUnchanged: false,
+      collapsedContextThreshold,
+      expansionLineCount,
+      onLineNumberClick: handleLineNumberClick,
+      theme: rendererTheme,
+      themeType: shikiConfig.type,
+      unsafeCSS,
+    }),
+    [
+      tokenHandlers,
+      onPostRender,
+      layoutDiffStyle,
+      lineDiffType,
+      lineWrap,
+      diffIndicators,
+      showLineNumbers,
+      hunkSeparators,
+      lineHoverHighlight,
+      collapsedContextThreshold,
+      expansionLineCount,
+      handleLineNumberClick,
+      rendererTheme,
+      shikiConfig,
+      unsafeCSS,
+    ],
+  );
+
+  const fullContextRendererOptions = useMemo<
+    FileDiffOptions<CardAnnotationMetadata, undefined>
+  >(
+    () => ({
+      ...tokenHandlers,
+      onPostRender,
+      diffStyle: layoutDiffStyle,
+      enableGutterUtility: true,
+      enableLineSelection: true,
+      disableFileHeader: true,
+      lineDiffType,
+      overflow: lineWrap ? "wrap" : "scroll",
+      diffIndicators,
+      disableLineNumbers: !showLineNumbers,
+      hunkSeparators,
+      lineHoverHighlight,
+      expandUnchanged: false,
+      collapsedContextThreshold,
+      expansionLineCount,
+      onLineSelectionStart: handleSelectionStart,
+      onLineSelectionChange: handleSelectionChange,
+      onLineSelectionEnd: handleSelectionEnd,
+      onGutterUtilityClick: handleGutterUtilityClick,
+      onLineNumberClick: handleLineNumberClick,
+      theme: rendererTheme,
+      themeType: shikiConfig.type,
+      unsafeCSS,
+    }),
+    [
+      tokenHandlers,
+      onPostRender,
+      layoutDiffStyle,
+      lineDiffType,
+      lineWrap,
+      diffIndicators,
+      showLineNumbers,
+      hunkSeparators,
+      lineHoverHighlight,
+      collapsedContextThreshold,
+      expansionLineCount,
+      handleSelectionStart,
+      handleSelectionChange,
+      handleSelectionEnd,
+      handleGutterUtilityClick,
+      handleLineNumberClick,
+      rendererTheme,
+      shikiConfig,
+      unsafeCSS,
+    ],
+  );
+
+  const patchRendererOptions = useMemo<
+    FileDiffOptions<CardAnnotationMetadata, undefined>
+  >(
+    () => ({
+      ...tokenHandlers,
+      onPostRender,
+      diffStyle: layoutDiffStyle,
+      enableGutterUtility: true,
+      enableLineSelection: true,
+      disableFileHeader: true, // Disable built-in header to use custom header
+      lineDiffType,
+      overflow: lineWrap ? "wrap" : "scroll",
+      diffIndicators,
+      disableLineNumbers: !showLineNumbers,
+      hunkSeparators,
+      lineHoverHighlight,
+      onLineSelectionStart: handleSelectionStart,
+      onLineSelectionChange: handleSelectionChange,
+      onLineSelectionEnd: handleSelectionEnd,
+      onGutterUtilityClick: handleGutterUtilityClick,
+      onLineNumberClick: handleLineNumberClick,
+      theme: rendererTheme,
+      themeType: shikiConfig.type,
+      unsafeCSS,
+    }),
+    [
+      tokenHandlers,
+      onPostRender,
+      layoutDiffStyle,
+      lineDiffType,
+      lineWrap,
+      diffIndicators,
+      showLineNumbers,
+      hunkSeparators,
+      lineHoverHighlight,
+      handleSelectionStart,
+      handleSelectionChange,
+      handleSelectionEnd,
+      handleGutterUtilityClick,
+      handleLineNumberClick,
+      rendererTheme,
+      shikiConfig,
+      unsafeCSS,
+    ],
+  );
+
+  const allAnnotations = useMemo<
+    DiffLineAnnotation<
+      | ReviewComment
+      | { _pending: true }
+      | { _existingPr: true; comment: PrExistingComment }
+    >[]
+  >(
+    () => [
+      ...(pending
+        ? [
+            {
+              side: pending.side,
+              lineNumber: pending.lineNumber,
+              metadata: { _pending: true as const },
+            },
+          ]
+        : []),
+      ...lineAnnotations,
+      ...existingLineAnnotations,
+    ],
+    [pending, lineAnnotations, existingLineAnnotations],
+  );
 
   return (
     <div
@@ -1785,60 +1985,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 }
                 onEditComplete={() => "reject"}
                 editorOptions={editorOptions}
-                options={{
-                  ...tokenHandlers,
-                  onPostRender,
-                  diffStyle: layoutDiffStyle,
-                  // Line selection + gutter utility are read-mode comment
-                  // affordances; the editor owns selection while editing.
-                  enableGutterUtility: false,
-                  enableLineSelection: false,
-                  disableFileHeader: true,
-                  lineDiffType,
-                  overflow: lineWrap ? "wrap" : "scroll",
-                  diffIndicators,
-                  disableLineNumbers: !showLineNumbers,
-                  hunkSeparators,
-                  lineHoverHighlight,
-                  expandUnchanged: false,
-                  collapsedContextThreshold,
-                  expansionLineCount,
-                  onLineNumberClick: (props) => {
-                    const side =
-                      props.annotationSide === "deletions"
-                        ? "deletions"
-                        : "additions";
-                    const short = `${filePath}:${side === "deletions" ? "-" : "+"}${props.lineNumber}`;
-                    const params = new URLSearchParams({
-                      file: filePath,
-                      line: String(props.lineNumber),
-                      side,
-                    });
-                    const full =
-                      typeof window === "undefined"
-                        ? short
-                        : `${window.location.origin}${window.location.pathname}?${params}`;
-                    navigator.clipboard?.writeText(full).then(
-                      () => {
-                        setPermalinkFlash(short);
-                        setTimeout(() => setPermalinkFlash(null), 1600);
-                      },
-                      () => {},
-                    );
-                  },
-                  theme: {
-                    dark:
-                      shikiConfig.type === "dark"
-                        ? shikiConfig.themeName
-                        : "rose-pine",
-                    light:
-                      shikiConfig.type === "light"
-                        ? shikiConfig.themeName
-                        : "github-light",
-                  },
-                  themeType: shikiConfig.type,
-                  unsafeCSS,
-                }}
+                options={editRendererOptions}
                 metrics={virtualMetrics}
                 lineAnnotations={allAnnotations}
                 renderHeaderMetadata={() => null}
@@ -1852,62 +1999,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               >
                 oldFile={{ name: oldFilePath, contents: oldContent ?? "" }}
                 newFile={{ name: filePath, contents: newContent ?? "" }}
-                options={{
-                  ...tokenHandlers,
-                  onPostRender,
-                  diffStyle: layoutDiffStyle,
-                  enableGutterUtility: true,
-                  enableLineSelection: true,
-                  disableFileHeader: true,
-                  lineDiffType,
-                  overflow: lineWrap ? "wrap" : "scroll",
-                  diffIndicators,
-                  disableLineNumbers: !showLineNumbers,
-                  hunkSeparators,
-                  lineHoverHighlight,
-                  expandUnchanged: false,
-                  collapsedContextThreshold,
-                  expansionLineCount,
-                  onLineSelectionStart: handleSelectionStart,
-                  onLineSelectionChange: handleSelectionChange,
-                  onLineSelectionEnd: handleSelectionEnd,
-                  onGutterUtilityClick: handleGutterUtilityClick,
-                  onLineNumberClick: (props) => {
-                    const side =
-                      props.annotationSide === "deletions"
-                        ? "deletions"
-                        : "additions";
-                    const short = `${filePath}:${side === "deletions" ? "-" : "+"}${props.lineNumber}`;
-                    const params = new URLSearchParams({
-                      file: filePath,
-                      line: String(props.lineNumber),
-                      side,
-                    });
-                    const full =
-                      typeof window === "undefined"
-                        ? short
-                        : `${window.location.origin}${window.location.pathname}?${params}`;
-                    navigator.clipboard?.writeText(full).then(
-                      () => {
-                        setPermalinkFlash(short);
-                        setTimeout(() => setPermalinkFlash(null), 1600);
-                      },
-                      () => {},
-                    );
-                  },
-                  theme: {
-                    dark:
-                      shikiConfig.type === "dark"
-                        ? shikiConfig.themeName
-                        : "rose-pine",
-                    light:
-                      shikiConfig.type === "light"
-                        ? shikiConfig.themeName
-                        : "github-light",
-                  },
-                  themeType: shikiConfig.type,
-                  unsafeCSS,
-                }}
+                options={fullContextRendererOptions}
                 metrics={virtualMetrics}
                 // Only control selection while a draft is open — never push null mid-drag.
                 selectedLines={pending ? selectedRange : undefined}
@@ -1928,59 +2020,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 | { _existingPr: true; comment: PrExistingComment }
               >
                 fileDiff={fileDiff}
-                options={{
-                  ...tokenHandlers,
-                  onPostRender,
-                  diffStyle: layoutDiffStyle,
-                  enableGutterUtility: true,
-                  enableLineSelection: true,
-                  disableFileHeader: true, // Disable built-in header to use custom header
-                  lineDiffType,
-                  overflow: lineWrap ? "wrap" : "scroll",
-                  diffIndicators,
-                  disableLineNumbers: !showLineNumbers,
-                  hunkSeparators,
-                  lineHoverHighlight,
-                  onLineSelectionStart: handleSelectionStart,
-                  onLineSelectionChange: handleSelectionChange,
-                  onLineSelectionEnd: handleSelectionEnd,
-                  onGutterUtilityClick: handleGutterUtilityClick,
-                  onLineNumberClick: (props) => {
-                    const side =
-                      props.annotationSide === "deletions"
-                        ? "deletions"
-                        : "additions";
-                    const short = `${filePath}:${side === "deletions" ? "-" : "+"}${props.lineNumber}`;
-                    const params = new URLSearchParams({
-                      file: filePath,
-                      line: String(props.lineNumber),
-                      side,
-                    });
-                    const full =
-                      typeof window === "undefined"
-                        ? short
-                        : `${window.location.origin}${window.location.pathname}?${params}`;
-                    navigator.clipboard?.writeText(full).then(
-                      () => {
-                        setPermalinkFlash(short);
-                        setTimeout(() => setPermalinkFlash(null), 1600);
-                      },
-                      () => {},
-                    );
-                  },
-                  theme: {
-                    dark:
-                      shikiConfig.type === "dark"
-                        ? shikiConfig.themeName
-                        : "rose-pine",
-                    light:
-                      shikiConfig.type === "light"
-                        ? shikiConfig.themeName
-                        : "github-light",
-                  },
-                  themeType: shikiConfig.type,
-                  unsafeCSS,
-                }}
+                options={patchRendererOptions}
                 metrics={virtualMetrics}
                 selectedLines={pending ? selectedRange : undefined}
                 lineAnnotations={allAnnotations}

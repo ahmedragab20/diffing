@@ -276,20 +276,26 @@ export function usePrComments(enabled: boolean) {
     },
   });
 
+  const { mutateAsync: updateAsync } = updateMutation;
+
   const resolveComment = useCallback(
     (id: string) => {
-      return updateMutation.mutateAsync({ id, status: "resolved" });
+      return updateAsync({ id, status: "resolved" });
     },
-    [updateMutation],
+    [updateAsync],
   );
 
   const unresolveComment = useCallback(
     (id: string) => {
-      return updateMutation.mutateAsync({ id, status: "open" });
+      return updateAsync({ id, status: "open" });
     },
-    [updateMutation],
+    [updateAsync],
   );
 
+  const editComment = useCallback(
+    (id: string, body: string) => updateAsync({ id, body }),
+    [updateAsync],
+  );
 
   return {
     comments,
@@ -299,9 +305,7 @@ export function usePrComments(enabled: boolean) {
     addReply: replyMutation.mutateAsync,
     resolveComment,
     unresolveComment,
-    editComment: (id: string, body: string) =>
-      updateMutation.mutateAsync({ id, body }),
-
+    editComment,
   };
 }
 

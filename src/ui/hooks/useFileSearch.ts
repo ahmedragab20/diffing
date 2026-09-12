@@ -98,16 +98,21 @@ export function useFileSearch(diffEntries: DiffLineEntry[]) {
     setIndex(0)
   }, [])
 
-  return {
-    filePath,
-    query,
-    hits,
-    index: clampedIndex,
-    focusNonce,
-    open,
-    close,
-    setQuery: changeQuery,
-    next,
-    prev,
-  }
+  // Stable identity so memoized diff surfaces don't re-render on every
+  // parent render (every member above is already state or a stable callback).
+  return useMemo(
+    () => ({
+      filePath,
+      query,
+      hits,
+      index: clampedIndex,
+      focusNonce,
+      open,
+      close,
+      setQuery: changeQuery,
+      next,
+      prev,
+    }),
+    [filePath, query, hits, clampedIndex, focusNonce, open, close, changeQuery, next, prev],
+  )
 }
