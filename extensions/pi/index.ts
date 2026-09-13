@@ -28,7 +28,6 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { StringEnum } from "@earendil-works/pi-ai";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -43,6 +42,16 @@ import { selfHealSkillLinks, SKILLS_REL } from "./skill-heal.ts";
 const MAX_OUTPUT_BYTES = 48 * 1024;
 const REVIEW_START_TIMEOUT_MS = 15_000;
 const REVIEW_START_POLL_MS = 400;
+
+function stringEnum(
+	values: readonly string[],
+	options?: Parameters<typeof Type.Union>[1],
+) {
+	return Type.Union(
+		values.map((value) => Type.Literal(value)),
+		options,
+	);
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // CLI runner
@@ -429,7 +438,7 @@ export default function (pi: ExtensionAPI) {
 				}),
 			),
 			format: Type.Optional(
-				StringEnum(["xml", "json", "md"] as const, {
+				stringEnum(["xml", "json", "md"] as const, {
 					description: "Output format. Default: xml.",
 				}),
 			),
@@ -833,7 +842,7 @@ export default function (pi: ExtensionAPI) {
 			model: Type.Optional(Type.String()),
 			source: Type.Optional(Type.String()),
 			mode: Type.Optional(
-				StringEnum(["fragment", "document"] as const, {
+				stringEnum(["fragment", "document"] as const, {
 					description:
 						"fragment = body contents wrapped by the published design-system shell. document = full HTML, no wrap. Default: server default.",
 				}),
@@ -1079,7 +1088,7 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Read compact, bounded mockup data without transferring screen HTML. view=summary (headline stats), comments (paged comment list), comment (one thread), screen (screen source), preview (layout report and optional screenshot metadata — never starts AI). Filter by comment scope: status, screenId, viewport (desktop|tablet|mobile), version. context=none|anchor|source controls anchor detail. Prefer this over diffing_mockup_show.",
 		parameters: Type.Object({
-			view: StringEnum(
+			view: stringEnum(
 				["summary", "comments", "comment", "screen", "preview"] as const,
 				{
 					description: "What to read. Default: summary.",
@@ -1090,7 +1099,7 @@ export default function (pi: ExtensionAPI) {
 				Type.String({ description: "Mockup id. Default: latest." }),
 			),
 			status: Type.Optional(
-				StringEnum(["open", "resolved"] as const, {
+				stringEnum(["open", "resolved"] as const, {
 					description: "Filter comments by status.",
 				}),
 			),
@@ -1098,7 +1107,7 @@ export default function (pi: ExtensionAPI) {
 				Type.String({ description: "Filter by screen id." }),
 			),
 			viewport: Type.Optional(
-				StringEnum(["desktop", "tablet", "mobile"] as const, {
+				stringEnum(["desktop", "tablet", "mobile"] as const, {
 					description: "Filter by viewport.",
 				}),
 			),
@@ -1113,7 +1122,7 @@ export default function (pi: ExtensionAPI) {
 			cursor: Type.Optional(Type.Number({ description: "Pagination cursor." })),
 			limit: Type.Optional(Type.Number({ description: "Max results per page." })),
 			context: Type.Optional(
-				StringEnum(["none", "anchor", "source"] as const, {
+				stringEnum(["none", "anchor", "source"] as const, {
 					description:
 						"Anchor detail: none, anchor (locators), source (+contextHtml). Default: anchor.",
 					default: "anchor",
@@ -1149,7 +1158,7 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"One-screen revision of an HTML mockup. action=upsert adds/replaces a screen (html or file), remove deletes a screen, patch replaces the first exact occurrence of text with replacement, replace-region replaces the inner HTML of the first [data-diffing=region] element (prefer this when the comment has a data-diffing target). Every success bumps the mockup version; pass expectedVersion to guard racing edits (409 version-mismatch, nothing applied). For multi-screen revisions, resubmit via diffing_mockup_submit with the same mockupId.",
 		parameters: Type.Object({
-			action: StringEnum(
+			action: stringEnum(
 				["upsert", "remove", "patch", "replace-region"] as const,
 				{ description: "Revision op." },
 			),
@@ -1232,7 +1241,7 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Atomic single-op mockup thread mutation: reply (agent answer), edit (comment body or a reply), delete (comment or reply), resolve, unresolve. Thread ops never bump the mockup version. For several ops, call once per op; each call is validated before apply.",
 		parameters: Type.Object({
-			action: StringEnum(
+			action: stringEnum(
 				["reply", "edit", "delete", "resolve", "unresolve"] as const,
 				{ description: "Thread op." },
 			),
@@ -1302,7 +1311,7 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Per-repo design system used before authoring mockup HTML. show/list: read tokens, guidelines, components. extract: scan the consumer repo and write a draft (does not publish). propose: update the draft. publish: human action only — do not publish unless the human asked. Omit id for the default system.",
 		parameters: Type.Object({
-			action: StringEnum(
+			action: stringEnum(
 				["show", "list", "extract", "propose", "publish"] as const,
 				{ description: "Design-system op. Default: show." },
 			),
@@ -1313,7 +1322,7 @@ export default function (pi: ExtensionAPI) {
 				Type.Boolean({ description: "Emit raw JSON. Default: false." }),
 			),
 			from: Type.Optional(
-				StringEnum(["css", "text"] as const, {
+				stringEnum(["css", "text"] as const, {
 					description: "For extract: scan source. Default: css.",
 				}),
 			),
@@ -1366,7 +1375,7 @@ export default function (pi: ExtensionAPI) {
 			"List, select, or stop live diffing review sessions for this repo. use: retarget agent commands to a session id prefix. stop: graceful shutdown of a session.",
 		parameters: Type.Object({
 			action: Type.Optional(
-				StringEnum(["list", "use", "stop"] as const, {
+				stringEnum(["list", "use", "stop"] as const, {
 					description: "Action. Default: list.",
 				}),
 			),
