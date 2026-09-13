@@ -40,7 +40,7 @@ describe("pi extension contract", () => {
 			]),
 		);
 		expect(indexSrc).toMatch(
-			/StringEnum\(\s*\[["']upsert["'],\s*["']remove["'],\s*["']patch["'],\s*["']replace-region["']\]/,
+			/stringEnum\(\s*\[["']upsert["'],\s*["']remove["'],\s*["']patch["'],\s*["']replace-region["']\]/,
 		);
 		expect(indexSrc).toMatch(
 			/\[["']summary["'],\s*["']comments["'],\s*["']comment["'],\s*["']screen["'],\s*["']preview["']\]/,
