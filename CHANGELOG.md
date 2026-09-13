@@ -1,3 +1,9 @@
+## 0.21.4
+
+### Patch Changes
+
+- 22ab281: Stabilize search results and previews
+
 ## 0.21.3
 
 ### Patch Changes
