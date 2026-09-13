@@ -8,63 +8,69 @@
  * Vite client never reaches across that boundary.
  */
 
-export type MatchRange = [number, number]
+export type MatchRange = [number, number];
 
 export interface FileHit {
-  path: string
-  fileName: string
-  gitStatus: string
-  matchType: string
-  exact: boolean
+ path: string;
+ fileName: string;
+ gitStatus: string;
+ matchType: string;
+ exact: boolean;
 }
 
 export interface ContentHit {
-  path: string
-  fileName: string
-  line: number
-  col: number
-  content: string
-  matchRanges: MatchRange[]
-  gitStatus: string
+ path: string;
+ fileName: string;
+ line: number;
+ col: number;
+ content: string;
+ matchRanges: MatchRange[];
+ gitStatus: string;
 }
 
 export interface SymbolHit {
-  name: string
-  kind: string
-  path: string
-  fileName: string
-  line: number
-  content: string
-  matchRanges: MatchRange[]
-  gitStatus: string
+ name: string;
+ kind: string;
+ path: string;
+ fileName: string;
+ line: number;
+ content: string;
+ matchRanges: MatchRange[];
+ gitStatus: string;
 }
 
-export type Scope = 'all' | 'files' | 'text' | 'symbols'
+export type Scope = "all" | "files" | "text" | "symbols";
 
 interface BaseResponse {
-  total: number
-  indexing: boolean
-  error?: string
-  regexError?: string
+ total: number;
+ /** More matches may exist beyond the returned results or scan budget. */
+ hasMore?: boolean;
+ indexing: boolean;
+ error?: string;
+ regexError?: string;
 }
 export interface FilesResponse extends BaseResponse {
-  scope: 'files'
-  items: FileHit[]
+ scope: "files";
+ items: FileHit[];
 }
 export interface ContentResponse extends BaseResponse {
-  scope: 'text'
-  items: ContentHit[]
+ scope: "text";
+ items: ContentHit[];
 }
 export interface SymbolsResponse extends BaseResponse {
-  scope: 'symbols'
-  items: SymbolHit[]
+ scope: "symbols";
+ items: SymbolHit[];
 }
 export interface AllResponse extends BaseResponse {
-  scope: 'all'
-  items: (
-    | { kind: 'file'; hit: FileHit }
-    | { kind: 'text'; hit: ContentHit }
-    | { kind: 'symbol'; hit: SymbolHit }
-  )[]
+ scope: "all";
+ items: (
+  | { kind: "file"; hit: FileHit }
+  | { kind: "text"; hit: ContentHit }
+  | { kind: "symbol"; hit: SymbolHit }
+ )[];
 }
-export type SearchResponse = FilesResponse | ContentResponse | SymbolsResponse | AllResponse
+export type SearchResponse =
+ | FilesResponse
+ | ContentResponse
+ | SymbolsResponse
+ | AllResponse;

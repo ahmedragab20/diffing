@@ -17,251 +17,328 @@
  *    classified with the shared {@link classifySymbolLine} patterns — fff 0.8.x
  *    does not populate `isDefinition`, so we do the classification ourselves.
  */
-import { join } from 'node:path'
-import { mkdirSync } from 'node:fs'
-import type { FileFinder, GrepMatch } from '@ff-labs/fff-node'
-import { getRepoRoot, getProjectStorageDir } from './git.js'
-import { classifySymbolLine } from './symbols.js'
+import { join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import type { FileFinder, GrepCursor, GrepMatch } from "@ff-labs/fff-node";
+import { getRepoRoot, getProjectStorageDir } from "./git.js";
+import { classifySymbolLine } from "./symbols.js";
 
-export type MatchRange = [number, number]
+export type MatchRange = [number, number];
 
 export interface FileHit {
-  path: string
-  fileName: string
-  gitStatus: string
-  matchType: string
-  exact: boolean
+  path: string;
+  fileName: string;
+  gitStatus: string;
+  matchType: string;
+  exact: boolean;
 }
 
 export interface ContentHit {
-  path: string
-  fileName: string
-  line: number
-  col: number
-  content: string
-  matchRanges: MatchRange[]
-  gitStatus: string
+  path: string;
+  fileName: string;
+  line: number;
+  col: number;
+  content: string;
+  matchRanges: MatchRange[];
+  gitStatus: string;
 }
 
 export interface SymbolHit {
-  name: string
-  kind: string
-  path: string
-  fileName: string
-  line: number
-  content: string
-  matchRanges: MatchRange[]
-  gitStatus: string
+  name: string;
+  kind: string;
+  path: string;
+  fileName: string;
+  line: number;
+  content: string;
+  matchRanges: MatchRange[];
+  gitStatus: string;
 }
 
 export interface SearchMeta {
   /** Total matches fff reports (may exceed the returned page). */
-  total: number
+  total: number;
+  /** The returned count is a lower bound; more matches may exist. */
+  hasMore?: boolean;
   /** True while the initial index scan is still running. */
-  indexing: boolean
+  indexing: boolean;
   /** Engine/initialization error, if search is unavailable. */
-  error?: string
+  error?: string;
   /** Set when a regex query failed to parse and was treated literally. */
-  regexError?: string
+  regexError?: string;
 }
 
 export interface FilesResponse extends SearchMeta {
-  scope: 'files'
-  items: FileHit[]
+  scope: "files";
+  items: FileHit[];
 }
 export interface ContentResponse extends SearchMeta {
-  scope: 'text'
-  items: ContentHit[]
+  scope: "text";
+  items: ContentHit[];
 }
 export interface SymbolsResponse extends SearchMeta {
-  scope: 'symbols'
-  items: SymbolHit[]
+  scope: "symbols";
+  items: SymbolHit[];
 }
 export interface AllResponse extends SearchMeta {
-  scope: 'all'
+  scope: "all";
   items: (
-    | { kind: 'file'; hit: FileHit }
-    | { kind: 'text'; hit: ContentHit }
-    | { kind: 'symbol'; hit: SymbolHit }
-  )[]
+    | { kind: "file"; hit: FileHit }
+    | { kind: "text"; hit: ContentHit }
+    | { kind: "symbol"; hit: SymbolHit }
+  )[];
 }
 
 export interface SearchStatus {
-  available: boolean
-  indexing: boolean
-  indexedFiles: number
-  error?: string
+  available: boolean;
+  indexing: boolean;
+  indexedFiles: number;
+  error?: string;
 }
 
 interface SearchOpts {
-  limit?: number
+  limit?: number;
   /** When provided, restrict results to this exact set of repo paths. */
-  paths?: string[]
+  paths?: string[];
 }
 interface ContentOpts extends SearchOpts {
-  regex?: boolean
+  regex?: boolean;
 }
 
-const DEFAULT_LIMIT = 60
-const MAX_LIMIT = 200
+const DEFAULT_LIMIT = 60;
+const MAX_LIMIT = 200;
 /** Internal page size when no path filter — generous so diff-first client
  *  ranking has enough to work with. */
-const SCAN_PAGE = 200
-/** Larger page size when filtering to a path set, so the post-filter is
- *  effectively complete for normal-sized diffs/repos. */
-const SCAN_PAGE_FILTERED = 1000
+const SCAN_PAGE = 200;
+/** Page across the engine before declaring a filtered search empty. */
+const SCAN_PAGE_FILTERED = 1000;
+const MAX_SCAN_MS = 1000;
 
-let finder: FileFinder | null = null
-let initPromise: Promise<FileFinder | null> | null = null
-let initError: string | null = null
-let shutdownHooked = false
+let finder: FileFinder | null = null;
+let initPromise: Promise<FileFinder | null> | null = null;
+let initError: string | null = null;
+let shutdownHooked = false;
 
 function clampLimit(limit?: number): number {
-  if (!limit || limit < 1) return DEFAULT_LIMIT
-  return Math.min(limit, MAX_LIMIT)
+  if (!limit || limit < 1) return DEFAULT_LIMIT;
+  return Math.min(limit, MAX_LIMIT);
 }
 
 async function init(): Promise<FileFinder | null> {
   try {
     // Dynamic import: isolates a missing/broken native binary to search only.
-    const { FileFinder } = await import('@ff-labs/fff-node')
-    const root = getRepoRoot()
-    const dbDir = join(getProjectStorageDir(root), 'fff')
-    mkdirSync(dbDir, { recursive: true })
+    const { FileFinder } = await import("@ff-labs/fff-node");
+    const root = getRepoRoot();
+    const dbDir = join(getProjectStorageDir(root), "fff");
+    mkdirSync(dbDir, { recursive: true });
 
     const created = FileFinder.create({
       basePath: root,
-      frecencyDbPath: join(dbDir, 'frecency.db'),
-      historyDbPath: join(dbDir, 'history.db'),
-      logLevel: 'error',
-    })
+      frecencyDbPath: join(dbDir, "frecency.db"),
+      historyDbPath: join(dbDir, "history.db"),
+      logLevel: "error",
+    });
     if (!created.ok) {
-      initError = created.error
-      return null
+      initError = created.error;
+      return null;
     }
-    const f = created.value
+    const f = created.value;
     if (!shutdownHooked) {
-      shutdownHooked = true
+      shutdownHooked = true;
       // Best-effort: stop the native watcher when the process exits.
-      process.once('exit', () => {
+      process.once("exit", () => {
         try {
-          f.destroy()
+          f.destroy();
         } catch {
           // ignore
         }
-      })
+      });
     }
     // Wait (bounded) for the initial scan; searches still work on a partial
     // index, and the watcher keeps indexing afterwards.
-    await f.waitForScan(8000)
-    finder = f
-    return f
+    await f.waitForScan(8000);
+    finder = f;
+    return f;
   } catch (err: any) {
-    initError = err?.message ?? String(err)
-    return null
+    initError = err?.message ?? String(err);
+    return null;
   }
 }
 
 async function getFinder(): Promise<FileFinder | null> {
-  if (finder) return finder
-  if (initError) return null
-  if (!initPromise) initPromise = init()
-  return initPromise
+  if (finder) return finder;
+  if (initError) return null;
+  if (!initPromise) initPromise = init();
+  return initPromise;
 }
 
 function isIndexing(f: FileFinder): boolean {
   try {
-    return f.isScanning()
+    return f.isScanning();
   } catch {
-    return false
+    return false;
   }
 }
 
 /** Highlight ranges for `query` inside `content` (case-insensitive). */
 function rangesFor(content: string, query: string): MatchRange[] {
-  if (!query) return []
-  const ranges: MatchRange[] = []
-  const hay = content.toLowerCase()
-  const needle = query.toLowerCase()
-  let from = 0
+  if (!query) return [];
+  const ranges: MatchRange[] = [];
+  const hay = content.toLowerCase();
+  const needle = query.toLowerCase();
+  let from = 0;
   while (from <= hay.length) {
-    const idx = hay.indexOf(needle, from)
-    if (idx === -1) break
-    ranges.push([idx, idx + needle.length])
-    from = idx + needle.length
+    const idx = hay.indexOf(needle, from);
+    if (idx === -1) break;
+    ranges.push([idx, idx + needle.length]);
+    from = idx + needle.length;
   }
-  return ranges
+  return ranges;
 }
 
-export async function searchFiles(query: string, opts: ContentOpts = {}): Promise<FilesResponse> {
-  const f = await getFinder()
-  if (!f) return { scope: 'files', items: [], total: 0, indexing: false, error: initError ?? 'Search unavailable' }
+export async function searchFiles(
+  query: string,
+  opts: ContentOpts = {},
+): Promise<FilesResponse> {
+  const f = await getFinder();
+  if (!f)
+    return {
+      scope: "files",
+      items: [],
+      total: 0,
+      indexing: false,
+      error: initError ?? "Search unavailable",
+    };
 
-  const limit = clampLimit(opts.limit)
-  const pathSet = opts.paths ? new Set(opts.paths) : null
-  const pageSize = pathSet ? SCAN_PAGE_FILTERED : Math.max(SCAN_PAGE, limit)
+  const limit = clampLimit(opts.limit);
+  const pathSet = opts.paths ? new Set(opts.paths) : null;
+  const pageSize = pathSet ? SCAN_PAGE_FILTERED : Math.max(SCAN_PAGE, limit);
 
-  const res = f.fileSearch(query, { pageSize })
-  if (!res.ok) return { scope: 'files', items: [], total: 0, indexing: isIndexing(f), error: res.error }
-
-  const items: FileHit[] = []
-  let filteredTotal = 0
-  const { items: raw, scores } = res.value
-  for (let i = 0; i < raw.length; i++) {
-    const it = raw[i]
-    if (pathSet && !pathSet.has(it.relativePath)) continue
-    filteredTotal++
-    if (items.length >= limit) continue
-    const score = scores[i]
-    items.push({
-      path: it.relativePath,
-      fileName: it.fileName,
-      gitStatus: it.gitStatus,
-      matchType: score?.matchType ?? '',
-      exact: !!score?.exactMatch,
-    })
+  const items: FileHit[] = [];
+  let total = 0;
+  let hasMore = false;
+  const deadline = Date.now() + MAX_SCAN_MS;
+  if (pathSet?.size === 0)
+    return { scope: "files", items, total, indexing: isIndexing(f) };
+  for (let pageIndex = 0; ; pageIndex++) {
+    const res = f.fileSearch(query, { pageSize, pageIndex });
+    if (!res.ok)
+      return {
+        scope: "files",
+        items: [],
+        total: 0,
+        indexing: isIndexing(f),
+        error: res.error,
+      };
+    const { items: raw, scores } = res.value;
+    for (let i = 0; i < raw.length; i++) {
+      const it = raw[i];
+      if (pathSet && !pathSet.has(it.relativePath)) continue;
+      total++;
+      if (items.length >= limit) continue;
+      items.push({
+        path: it.relativePath,
+        fileName: it.fileName,
+        gitStatus: it.gitStatus,
+        matchType: scores[i]?.matchType ?? "",
+        exact: !!scores[i]?.exactMatch,
+      });
+    }
+    const remaining = (pageIndex + 1) * pageSize < res.value.totalMatched;
+    if (!pathSet) total = res.value.totalMatched;
+    hasMore = remaining || total > items.length;
+    if (
+      !pathSet ||
+      !remaining ||
+      items.length >= limit ||
+      Date.now() >= deadline ||
+      raw.length === 0
+    )
+      break;
+    await yieldToEventLoop();
   }
-  return {
-    scope: 'files',
-    items,
-    total: pathSet ? filteredTotal : res.value.totalMatched,
-    indexing: isIndexing(f),
-  }
+  return { scope: "files", items, total, hasMore, indexing: isIndexing(f) };
 }
 
-export async function searchContent(query: string, opts: ContentOpts = {}): Promise<ContentResponse> {
-  const f = await getFinder()
-  if (!f) return { scope: 'text', items: [], total: 0, indexing: false, error: initError ?? 'Search unavailable' }
-  if (!query) return { scope: 'text', items: [], total: 0, indexing: isIndexing(f) }
+export async function searchContent(
+  query: string,
+  opts: ContentOpts = {},
+): Promise<ContentResponse> {
+  const f = await getFinder();
+  if (!f)
+    return {
+      scope: "text",
+      items: [],
+      total: 0,
+      indexing: false,
+      error: initError ?? "Search unavailable",
+    };
+  if (!query)
+    return { scope: "text", items: [], total: 0, indexing: isIndexing(f) };
 
-  const limit = clampLimit(opts.limit)
-  const pathSet = opts.paths ? new Set(opts.paths) : null
-  const pageSize = pathSet ? SCAN_PAGE_FILTERED : Math.max(SCAN_PAGE, limit)
+  const result = await collectGrep(f, query, opts, toContentHit);
+  return { scope: "text", ...result, indexing: isIndexing(f) };
+}
 
-  const res = f.grep(query, {
-    mode: opts.regex ? 'regex' : 'plain',
-    smartCase: true,
-    beforeContext: 0,
-    afterContext: 0,
-    pageSize,
-  })
-  if (!res.ok) return { scope: 'text', items: [], total: 0, indexing: isIndexing(f), error: res.error }
-
-  const items: ContentHit[] = []
-  let filteredTotal = 0
-  for (const m of res.value.items) {
-    if (pathSet && !pathSet.has(m.relativePath)) continue
-    filteredTotal++
-    if (items.length >= limit) continue
-    items.push(toContentHit(m))
-  }
-  return {
-    scope: 'text',
-    items,
-    total: pathSet ? filteredTotal : res.value.totalMatched,
-    indexing: isIndexing(f),
-    regexError: res.value.regexFallbackError || undefined,
-  }
+async function collectGrep<T>(
+  f: FileFinder,
+  query: string,
+  opts: ContentOpts,
+  convert: (match: GrepMatch) => T | undefined,
+): Promise<{
+  items: T[];
+  total: number;
+  hasMore: boolean;
+  error?: string;
+  regexError?: string;
+}> {
+  const limit = clampLimit(opts.limit);
+  const paths = opts.paths ? new Set(opts.paths) : null;
+  const items: T[] = [];
+  let total = 0;
+  let cursor: GrepCursor | null = null;
+  let regexError: string | undefined;
+  let hasMore = false;
+  const deadline = Date.now() + MAX_SCAN_MS;
+  if (paths?.size === 0) return { items, total, hasMore };
+  do {
+    const res = f.grep(query, {
+      mode: opts.regex ? "regex" : "plain",
+      smartCase: true,
+      beforeContext: 0,
+      afterContext: 0,
+      cursor,
+      pageSize: SCAN_PAGE_FILTERED,
+      maxMatchesPerFile: SCAN_PAGE_FILTERED,
+      timeBudgetMs: 50,
+    });
+    if (!res.ok)
+      return { items: [], total: 0, hasMore: false, error: res.error };
+    regexError = res.value.regexFallbackError || regexError;
+    for (const match of res.value.items) {
+      if (paths && !paths.has(match.relativePath)) continue;
+      const hit = convert(match);
+      if (!hit) continue;
+      total++;
+      if (items.length < limit) items.push(hit);
+    }
+    // Native cursors advance by file, not line. A full page may also have
+    // clipped matches inside its final file, even after later pages are read.
+    hasMore ||= res.value.items.length >= SCAN_PAGE_FILTERED;
+    const nextCursor = res.value.nextCursor;
+    if (!nextCursor) break;
+    if (
+      items.length >= limit ||
+      Date.now() >= deadline ||
+      nextCursor._offset === cursor?._offset
+    ) {
+      hasMore = true;
+      break;
+    }
+    cursor = nextCursor;
+    await yieldToEventLoop();
+  } while (true);
+  return { items, total, hasMore: hasMore || total > items.length, regexError };
 }
 
 function toContentHit(m: GrepMatch): ContentHit {
@@ -273,64 +350,63 @@ function toContentHit(m: GrepMatch): ContentHit {
     content: m.lineContent,
     matchRanges: (m.matchRanges as MatchRange[]) ?? [],
     gitStatus: m.gitStatus,
-  }
+  };
 }
 
-export async function searchSymbols(query: string, opts: SearchOpts = {}): Promise<SymbolsResponse> {
-  const f = await getFinder()
-  if (!f) return { scope: 'symbols', items: [], total: 0, indexing: false, error: initError ?? 'Search unavailable' }
-  if (!query) return { scope: 'symbols', items: [], total: 0, indexing: isIndexing(f) }
+export async function searchSymbols(
+  query: string,
+  opts: SearchOpts = {},
+): Promise<SymbolsResponse> {
+  const f = await getFinder();
+  if (!f)
+    return {
+      scope: "symbols",
+      items: [],
+      total: 0,
+      indexing: false,
+      error: initError ?? "Search unavailable",
+    };
+  if (!query)
+    return { scope: "symbols", items: [], total: 0, indexing: isIndexing(f) };
 
-  const limit = clampLimit(opts.limit)
-  const pathSet = opts.paths ? new Set(opts.paths) : null
-  // Over-fetch: most grep hits won't be symbol *definitions*, so we scan wide
-  // and classify down to the ones that are.
-  const pageSize = pathSet ? SCAN_PAGE_FILTERED : Math.max(SCAN_PAGE_FILTERED, limit * 8)
-
-  const res = f.grep(query, { mode: 'plain', smartCase: true, beforeContext: 0, afterContext: 0, pageSize })
-  if (!res.ok) return { scope: 'symbols', items: [], total: 0, indexing: isIndexing(f), error: res.error }
-
-  const items: SymbolHit[] = []
-  const ql = query.toLowerCase()
-  const seen = new Set<string>()
-  let total = 0
-  for (const m of res.value.items) {
-    if (pathSet && !pathSet.has(m.relativePath)) continue
-    const sym = classifySymbolLine(m.lineContent)
-    if (!sym) continue
-    if (!sym.name.toLowerCase().includes(ql)) continue
-    const key = `${m.relativePath}:${m.lineNumber}:${sym.name}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    total++
-    if (items.length >= limit) continue
-    // Highlight the symbol name within the line rather than the raw grep range.
-    const nameIdx = m.lineContent.indexOf(sym.name)
-    const matchRanges: MatchRange[] =
-      nameIdx >= 0 ? [[nameIdx, nameIdx + sym.name.length]] : (m.matchRanges as MatchRange[]) ?? []
-    items.push({
+  const ql = query.toLowerCase();
+  const seen = new Set<string>();
+  const result = await collectGrep<SymbolHit>(f, query, opts, (m) => {
+    const sym = classifySymbolLine(m.lineContent);
+    if (!sym || !sym.name.toLowerCase().includes(ql)) return;
+    const key = `${m.relativePath}:${m.lineNumber}:${sym.name}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const nameIdx = m.lineContent.indexOf(sym.name);
+    return {
       name: sym.name,
       kind: sym.kind,
       path: m.relativePath,
       fileName: m.fileName,
       line: m.lineNumber,
       content: m.lineContent,
-      matchRanges,
+      matchRanges:
+        nameIdx >= 0
+          ? [[nameIdx, nameIdx + sym.name.length]]
+          : ((m.matchRanges as MatchRange[]) ?? []),
       gitStatus: m.gitStatus,
-    })
-  }
-  return { scope: 'symbols', items, total, indexing: isIndexing(f) }
+    };
+  });
+  return { scope: "symbols", ...result, indexing: isIndexing(f) };
 }
 
-export async function searchAll(query: string, opts: ContentOpts = {}): Promise<AllResponse> {
-  const limit = clampLimit(opts.limit)
+export async function searchAll(
+  query: string,
+  opts: ContentOpts = {},
+): Promise<AllResponse> {
+  const limit = clampLimit(opts.limit);
   const [filesRes, contentRes, symbolsRes] = await Promise.all([
     searchFiles(query, { ...opts, limit }),
     searchContent(query, { ...opts, limit }),
     searchSymbols(query, { ...opts, limit }),
-  ])
+  ]);
 
-  return mergeSearchResponses(filesRes, contentRes, symbolsRes, limit)
+  return mergeSearchResponses(filesRes, contentRes, symbolsRes, limit);
 }
 
 /** Merge the three engines into the All scope without duplicating definition
@@ -342,80 +418,103 @@ export function mergeSearchResponses(
   symbolsRes: SymbolsResponse,
   limit = DEFAULT_LIMIT,
 ): AllResponse {
-  const boundedLimit = clampLimit(limit)
+  const boundedLimit = clampLimit(limit);
 
   type AllItem =
-    | { kind: 'file'; hit: FileHit }
-    | { kind: 'text'; hit: ContentHit }
-    | { kind: 'symbol'; hit: SymbolHit }
-  const fileItems: AllItem[] = filesRes.items.map((hit) => ({ kind: 'file', hit }))
-  const symbolLocations = new Set<string>()
+    | { kind: "file"; hit: FileHit }
+    | { kind: "text"; hit: ContentHit }
+    | { kind: "symbol"; hit: SymbolHit };
+  const fileItems: AllItem[] = filesRes.items.map((hit) => ({
+    kind: "file",
+    hit,
+  }));
+  const symbolLocations = new Set<string>();
   const symbolItems: AllItem[] = symbolsRes.items.map((hit) => {
-    symbolLocations.add(`${hit.path}:${hit.line}`)
-    return { kind: 'symbol', hit }
-  })
-  const textItems: AllItem[] = []
+    symbolLocations.add(`${hit.path}:${hit.line}`);
+    return { kind: "symbol", hit };
+  });
+  const textItems: AllItem[] = [];
   for (const hit of contentRes.items) {
     // Symbol results are enriched versions of grep results at the same line.
     // Keep the richer row and do not render/count the definition twice.
-    if (symbolLocations.has(`${hit.path}:${hit.line}`)) continue
-    textItems.push({ kind: 'text', hit })
+    if (symbolLocations.has(`${hit.path}:${hit.line}`)) continue;
+    textItems.push({ kind: "text", hit });
   }
-  const items: AllItem[] = []
-  const groups = [fileItems, symbolItems, textItems]
+  const items: AllItem[] = [];
+  const groups = [fileItems, symbolItems, textItems];
   for (let row = 0; items.length < boundedLimit; row++) {
-    let appended = false
+    let appended = false;
     for (const group of groups) {
-      const item = group[row]
-      if (!item) continue
-      items.push(item)
-      appended = true
-      if (items.length === boundedLimit) break
+      const item = group[row];
+      if (!item) continue;
+      items.push(item);
+      appended = true;
+      if (items.length === boundedLimit) break;
     }
-    if (!appended) break
+    if (!appended) break;
   }
 
   // Every symbol originates from the content result set, so the unique total
   // is files + text; symbol rows replace their text counterparts above.
-  const total = (filesRes.total || 0) + (contentRes.total || 0)
-  const indexing = filesRes.indexing || contentRes.indexing || symbolsRes.indexing
-  const error = filesRes.error || contentRes.error || symbolsRes.error
-  const regexError = contentRes.regexError
+  const total = (filesRes.total || 0) + (contentRes.total || 0);
+  const indexing =
+    filesRes.indexing || contentRes.indexing || symbolsRes.indexing;
+  const error = filesRes.error || contentRes.error || symbolsRes.error;
+  const regexError = contentRes.regexError;
 
   return {
-    scope: 'all',
+    scope: "all",
     items,
-    total,
+    total: Math.max(
+      total,
+      fileItems.length + symbolItems.length + textItems.length,
+    ),
+    hasMore: !!(
+      filesRes.hasMore ||
+      contentRes.hasMore ||
+      symbolsRes.hasMore ||
+      total > items.length ||
+      fileItems.length + symbolItems.length + textItems.length > items.length
+    ),
     indexing,
     error,
     regexError,
-  }
+  };
 }
 
 export async function getSearchStatus(): Promise<SearchStatus> {
-  const f = await getFinder()
-  if (!f) return { available: false, indexing: false, indexedFiles: 0, error: initError ?? 'Search unavailable' }
-  let indexedFiles = 0
-  let indexing = false
+  const f = await getFinder();
+  if (!f)
+    return {
+      available: false,
+      indexing: false,
+      indexedFiles: 0,
+      error: initError ?? "Search unavailable",
+    };
+  let indexedFiles = 0;
+  let indexing = false;
   try {
-    const prog = f.getScanProgress()
+    const prog = f.getScanProgress();
     if (prog.ok) {
-      indexedFiles = prog.value.scannedFilesCount
-      indexing = prog.value.isScanning
+      indexedFiles = prog.value.scannedFilesCount;
+      indexing = prog.value.isScanning;
     }
   } catch {
     // ignore
   }
-  return { available: true, indexing, indexedFiles }
+  return { available: true, indexing, indexedFiles };
 }
 
 /** Record that the user opened `path` from a query, improving fff's frecency
  *  ranking for future searches. Best-effort, never throws. */
-export async function trackSelection(query: string, path: string): Promise<void> {
-  const f = await getFinder()
-  if (!f) return
+export async function trackSelection(
+  query: string,
+  path: string,
+): Promise<void> {
+  const f = await getFinder();
+  if (!f) return;
   try {
-    f.trackQuery(query, path)
+    f.trackQuery(query, path);
   } catch {
     // ignore
   }
@@ -425,12 +524,12 @@ export async function trackSelection(query: string, path: string): Promise<void>
 export function closeSearch(): void {
   if (finder) {
     try {
-      finder.destroy()
+      finder.destroy();
     } catch {
       // ignore
     }
   }
-  finder = null
-  initPromise = null
-  initError = null
+  finder = null;
+  initPromise = null;
+  initError = null;
 }

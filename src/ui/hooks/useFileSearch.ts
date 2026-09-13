@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
-import { scrollToLine } from '../utils'
-import type { DiffLineEntry } from './useDiffSearch'
+import { useCallback, useMemo, useRef, useState } from "react";
+import { scrollToLine } from "../utils";
+import type { DiffLineEntry } from "./useDiffSearch";
 
 /**
  * File-scoped search ("find in file") over the searchable lines of a single
@@ -15,88 +15,110 @@ import type { DiffLineEntry } from './useDiffSearch'
  */
 export interface FileSearchSession {
   /** The file currently being searched, or null when the bar is closed. */
-  filePath: string | null
-  query: string
-  hits: DiffLineEntry[]
+  filePath: string | null;
+  query: string;
+  hits: DiffLineEntry[];
   /** Index into `hits` of the current match (0 when the query has no hits). */
-  index: number
+  index: number;
   /**
    * Bumped on every `open()` call, even when re-opening the same file. The
    * find bar watches it to re-focus (and select) its input — e.g. after the
    * user blurred the field and presses ⌘F again.
    */
-  focusNonce: number
-  open: (filePath: string) => void
-  close: () => void
-  setQuery: (query: string) => void
-  next: () => void
-  prev: () => void
+  focusNonce: number;
+  open: (filePath: string) => void;
+  close: () => void;
+  setQuery: (query: string) => void;
+  next: () => void;
+  prev: () => void;
+  /** A mounted full-context renderer can replace the patch-only corpus. */
+  setExpandedEntries?: (path: string, entries: DiffLineEntry[] | null) => void;
 }
 
 export function useFileSearch(diffEntries: DiffLineEntry[]) {
-  const [filePath, setFilePath] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
-  const [index, setIndex] = useState(0)
-  const [focusNonce, setFocusNonce] = useState(0)
-  const filePathRef = useRef<string | null>(null)
-  filePathRef.current = filePath
+  const [filePath, setFilePath] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [index, setIndex] = useState(0);
+  const [focusNonce, setFocusNonce] = useState(0);
+  const [expanded, setExpanded] = useState<{
+    path: string;
+    entries: DiffLineEntry[];
+  } | null>(null);
+  const setExpandedEntries = useCallback(
+    (path: string, entries: DiffLineEntry[] | null) => {
+      setExpanded((current) => {
+        if (!entries) return current?.path === path ? null : current;
+        if (current?.path === path && current.entries === entries)
+          return current;
+        return { path, entries };
+      });
+    },
+    [],
+  );
+  const filePathRef = useRef<string | null>(null);
+  filePathRef.current = filePath;
 
   const hits = useMemo(() => {
-    if (!filePath) return []
-    const q = query.trim().toLowerCase()
-    if (!q) return []
-    return diffEntries.filter(
-      (entry) => entry.filePath === filePath && entry.content.toLowerCase().includes(q),
-    )
-  }, [diffEntries, filePath, query])
+    if (!filePath) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const entries =
+      expanded?.path === filePath ? expanded.entries : diffEntries;
+    return entries.filter(
+      (entry) =>
+        entry.filePath === filePath && entry.content.toLowerCase().includes(q),
+    );
+  }, [diffEntries, expanded, filePath, query]);
 
   // Keep the cursor valid as the query narrows (hits shrink mid-cycle).
-  const clampedIndex = hits.length === 0 ? 0 : Math.min(index, hits.length - 1)
+  const clampedIndex = hits.length === 0 ? 0 : Math.min(index, hits.length - 1);
 
   const jumpTo = useCallback(
     (i: number) => {
-      const hit = hits[i]
-      if (!hit) return
-      scrollToLine(hit.filePath, hit.lineNumber, hit.side, query.trim())
+      const hit = hits[i];
+      if (!hit) return;
+      scrollToLine(hit.filePath, hit.lineNumber, hit.side, query.trim());
     },
     [hits, query],
-  )
+  );
 
   const cycle = useCallback(
     (delta: number) => {
-      if (hits.length === 0) return
-      const next = (clampedIndex + delta + hits.length) % hits.length
-      setIndex(next)
-      jumpTo(next)
+      if (hits.length === 0) return;
+      const next = (clampedIndex + delta + hits.length) % hits.length;
+      setIndex(next);
+      jumpTo(next);
     },
     [hits.length, clampedIndex, jumpTo],
-  )
+  );
 
-  const next = useCallback(() => cycle(1), [cycle])
-  const prev = useCallback(() => cycle(-1), [cycle])
+  const next = useCallback(() => cycle(1), [cycle]);
+  const prev = useCallback(() => cycle(-1), [cycle]);
 
   const open = useCallback((path: string) => {
     // Always bump the nonce so an already-open bar re-focuses its input
     // (⌘F after blur). Re-opening the SAME file keeps the query so the user
     // can edit it; switching files starts a fresh session.
-    setFocusNonce((n) => n + 1)
+    setFocusNonce((n) => n + 1);
     if (filePathRef.current !== path) {
-      setFilePath(path)
-      setQuery('')
-      setIndex(0)
+      setFilePath(path);
+      setExpanded(null);
+      setQuery("");
+      setIndex(0);
     }
-  }, [])
+  }, []);
 
   const close = useCallback(() => {
-    setFilePath(null)
-    setQuery('')
-    setIndex(0)
-  }, [])
+    setFilePath(null);
+    setExpanded(null);
+    setQuery("");
+    setIndex(0);
+  }, []);
 
   const changeQuery = useCallback((q: string) => {
-    setQuery(q)
-    setIndex(0)
-  }, [])
+    setQuery(q);
+    setIndex(0);
+  }, []);
 
   // Stable identity so memoized diff surfaces don't re-render on every
   // parent render (every member above is already state or a stable callback).
@@ -112,7 +134,20 @@ export function useFileSearch(diffEntries: DiffLineEntry[]) {
       setQuery: changeQuery,
       next,
       prev,
+      setExpandedEntries,
     }),
-    [filePath, query, hits, clampedIndex, focusNonce, open, close, changeQuery, next, prev],
-  )
+    [
+      filePath,
+      query,
+      hits,
+      clampedIndex,
+      focusNonce,
+      open,
+      close,
+      changeQuery,
+      next,
+      prev,
+      setExpandedEntries,
+    ],
+  );
 }

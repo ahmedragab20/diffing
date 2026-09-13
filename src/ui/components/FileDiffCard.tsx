@@ -67,6 +67,7 @@ import {
   Search,
 } from "lucide-react";
 import type { FileSearchSession } from "../hooks/useFileSearch";
+import { buildExpandedFileSearchEntries } from "../hooks/useDiffSearch";
 import { FileSearchBar } from "./FileSearchBar";
 import { Modal } from "../primitives/Modal";
 import { Tooltip } from "../primitives/Tooltip";
@@ -545,7 +546,8 @@ export const FileDiffCard = memo(function FileDiffCard({
   const rendererTheme = useMemo(
     () => ({
       dark: shikiConfig.type === "dark" ? shikiConfig.themeName : "rose-pine",
-      light: shikiConfig.type === "light" ? shikiConfig.themeName : "github-light",
+      light:
+        shikiConfig.type === "light" ? shikiConfig.themeName : "github-light",
     }),
     [shikiConfig],
   );
@@ -579,6 +581,24 @@ export const FileDiffCard = memo(function FileDiffCard({
   // (style/theme changes, context expansion) inside the shadow DOM, so a
   // one-shot pass would miss rows that appear after the search opens.
   const searchSessionActive = fileSearch?.filePath === filePath;
+  const expandedSearchEntries = useMemo(
+    () =>
+      searchSessionActive && contentsReady
+        ? buildExpandedFileSearchEntries(filePath, oldContent!, newContent!)
+        : null,
+    [searchSessionActive, contentsReady, filePath, oldContent, newContent],
+  );
+  const setExpandedSearchEntries = fileSearch?.setExpandedEntries;
+  useEffect(() => {
+    if (!searchSessionActive || !setExpandedSearchEntries) return;
+    setExpandedSearchEntries(filePath, expandedSearchEntries);
+    return () => setExpandedSearchEntries(filePath, null);
+  }, [
+    searchSessionActive,
+    setExpandedSearchEntries,
+    filePath,
+    expandedSearchEntries,
+  ]);
   const searchQuery = searchSessionActive ? fileSearch.query : "";
   const searchHits = searchSessionActive ? fileSearch.hits : [];
   const searchIndex = searchSessionActive ? fileSearch.index : 0;
@@ -810,10 +830,9 @@ export const FileDiffCard = memo(function FileDiffCard({
    * The card's own handle on the editor, so it can read the caret for a rename
    * without routing every keystroke back through the app.
    */
-  const editorRef = useRef<Editor<
-    "file-diff",
-    CardAnnotationMetadata
-  > | null>(null);
+  const editorRef = useRef<Editor<"file-diff", CardAnnotationMetadata> | null>(
+    null,
+  );
   const [renamePrompt, setRenamePrompt] = useState<{
     line: number;
     character: number;
@@ -1290,6 +1309,8 @@ export const FileDiffCard = memo(function FileDiffCard({
     ],
   );
 
+  const expandSearchContext =
+    searchSessionActive && searchQuery.trim().length > 0;
   const fullContextRendererOptions = useMemo<
     FileDiffOptions<CardAnnotationMetadata, undefined>
   >(
@@ -1306,7 +1327,8 @@ export const FileDiffCard = memo(function FileDiffCard({
       disableLineNumbers: !showLineNumbers,
       hunkSeparators,
       lineHoverHighlight,
-      expandUnchanged: false,
+      // Full-file search must reveal matches outside the original patch hunks.
+      expandUnchanged: expandSearchContext,
       collapsedContextThreshold,
       expansionLineCount,
       onLineSelectionStart: handleSelectionStart,
@@ -1328,6 +1350,7 @@ export const FileDiffCard = memo(function FileDiffCard({
       showLineNumbers,
       hunkSeparators,
       lineHoverHighlight,
+      expandSearchContext,
       collapsedContextThreshold,
       expansionLineCount,
       handleSelectionStart,

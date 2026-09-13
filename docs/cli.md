@@ -1736,6 +1736,8 @@ Used by connected review tools to query the engine.
   - `regex` (optional boolean): Enables raw regular expression grep parsing during `text` queries.
   - Frecency is updated live by sending user selections to `POST /api/search/track` featuring `query` and `path` parameters, boosting scoring weight for future queries.
 
+Search reads working-tree content. `changedPaths` filters those paths, not revision contents. Responses can include `hasMore: true`, meaning the total is a lower bound and the query should be refined. Filtered searches continue across native result pages; capped scans are reported as incomplete rather than definitive no matches. The UI refreshes results and previews on repository or PR updates, disables stale rows, keeps the query across controls, and uses working-tree previews for staged or custom line hits.
+
 ---
 
 ## 9. Comment XML Serialization & Schema Specification
@@ -2333,7 +2335,7 @@ Returns `{ content, missing, hash }`, where the SHA-256 hash covers the exact re
 
 - **Query Parameters**:
   - `path` (string, required)
-  - `version` (string, required): `"old" | "new"`
+  - `version` (string, required): `"old" | "new" | "working"`. `old` and `new` retain their existing revision semantics; `working` reads the current local disk independently of staged, revision, or PR selection.
 
 #### `GET /api/settings` / `PUT /api/settings`
 

@@ -1002,11 +1002,15 @@ export function createApp(
 		return c.json(result);
 	});
 
-	const resolveFileVersion = async (path: string, version: "old" | "new") => {
-		if (version !== "old" && version !== "new")
+	const resolveFileVersion = async (
+		path: string,
+		version: "old" | "new" | "working",
+	) => {
+		if (version !== "old" && version !== "new" && version !== "working")
 			throw new NativeFsError("invalid-request");
 		const safePath = toSafeLiteralRelativePath(path, repoRoot);
 		if (!safePath) throw new NativeFsError("invalid-path");
+		if (version === "working") return getFileContent(safePath, "new");
 		if (!prMode)
 			return getFileContent(safePath, version, {
 				staged: diffOpts.staged,
@@ -1122,7 +1126,7 @@ export function createApp(
 	// can detect external changes at save time (conflict check).
 	app.get("/api/file-text", async (c) => {
 		const path = c.req.query("path");
-		const version = c.req.query("version") as "old" | "new";
+		const version = c.req.query("version") as "old" | "new" | "working";
 		if (!path || !version) {
 			return c.json({ error: "Missing path or version" }, 400);
 		}
