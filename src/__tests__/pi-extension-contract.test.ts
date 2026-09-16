@@ -105,9 +105,11 @@ describe("healSkillLink", () => {
 		});
 		mkdirSync(homeSkills);
 		selfHealSkillLinks(canonical, homeSkills);
-		expect(healSkillLink(
-			join(homeSkills, "diffing-mockup-author"),
-			join(canonical, ".agents", "skills", "diffing-mockup-author"),
-		)).toBe("ok");
+		expect(
+			healSkillLink(
+				join(homeSkills, "diffing-mockup-author"),
+				join(canonical, ".agents", "skills", "diffing-mockup-author"),
+			),
+		).toBe("ok");
 	});
 });
