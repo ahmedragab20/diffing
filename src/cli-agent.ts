@@ -1400,6 +1400,7 @@ async function inspect(args: string[]): Promise<number> {
 		parsed = parseArgs({
 			args,
 			options: {
+				continuation: { type: "string" },
 				cursor: { type: "string" },
 				limit: { type: "string" },
 				file: { type: "string" },
@@ -1427,7 +1428,8 @@ async function inspect(args: string[]): Promise<number> {
 
 Read bounded data from a running session (web, TUI, or gh-pr) without transferring the full patch.
   summary [--exclude lockfiles]
-  files   [--path GLOB] [--cursor N] [--limit N]
+  files   [--path GLOB] [--cursor N --generation N] [--limit N]
+  files   --continuation TOKEN  (web/PR: pass nextContinuation alone)
   hunks   (--file N | --path GLOB) [--cursor N] [--limit N] [--generation N]
   slice   (--file N | --path GLOB) [--start N] [--max-lines N] [--max-bytes N] [--generation N]
   search  <text>|--query <text> [--path GLOB] [--file N] [--row N] [--limit N] [--max-bytes N] [--generation N]
@@ -1450,6 +1452,18 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`);
 	}
 
 	const params = new URLSearchParams();
+	const continuation = parsed.values.continuation;
+	if (typeof continuation === "string") {
+		if (resource !== "files") {
+			console.error("--continuation is supported only for files");
+			return EXIT_USAGE;
+		}
+		if (["cursor", "limit", "path", "generation", "file", "row", "start", "exclude", "query", "max-lines", "max-bytes"].some((key) => parsed.values[key] !== undefined)) {
+			console.error("Pass --continuation alone; its filter, position and page size are already bound.");
+			return EXIT_USAGE;
+		}
+		params.set("continuation", continuation);
+	}
 	const numberOptions: Array<[keyof typeof parsed.values, string]> = [
 		["cursor", "cursor"],
 		["limit", "limit"],
@@ -1498,6 +1512,10 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`);
 	}
 
 	const base = baseUrl();
+	if (typeof continuation === "string" && activeMode === "tui") {
+		console.error("File continuations are unsupported in TUI sessions; use cursor and generation.");
+		return EXIT_USAGE;
+	}
 	const queryString = params.toString();
 	let response: Response;
 	try {

@@ -449,11 +449,22 @@ describe('diffing MCP', () => {
         name: 'diff_slice',
         arguments: { path: 'src/lib/agent-diff-index.ts' },
       })
+      await session.client.callTool({
+        name: 'diff_files',
+        arguments: { continuation: 'captured-page.signature' },
+      })
+      await session.client.callTool({
+        name: 'diff_files',
+        arguments: { cursor: 20, generation: 7 },
+      })
       expect(fetchCalls[0]).toContain('/api/diff/files?')
       expect(fetchCalls[0]).toContain('path=src%2F**')
       expect(fetchCalls[1]).toContain('/api/diff/slice?')
       expect(fetchCalls[1]).toContain('path=src%2Flib%2Fagent-diff-index.ts')
       expect(fetchCalls[1]).not.toContain('file=')
+      expect(new URL(fetchCalls[2]).search).toBe('?continuation=captured-page.signature')
+      expect(new URL(fetchCalls[3]).searchParams.get('generation')).toBe('7')
+      expect(new URL(fetchCalls[3]).searchParams.get('cursor')).toBe('20')
     } finally {
       await session.close()
     }

@@ -1053,8 +1053,11 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			description:
 				"Return a bounded page of changed-file metadata. Optional path is a git pathspec-ish glob " +
 				"(src/lib/**, **/foo.ts). cursor/nextCursor index the filtered list; each row still has the global file index. " +
-				"Works for web, TUI, and GitHub PR sessions.",
+				"Web/PR pages return nextContinuation: pass it alone to retain the same snapshot/filter. " +
+				"Numeric cursor > 0 requires generation; TUI supports only numeric paging. Restart files on expiration.",
 			inputSchema: {
+				continuation: z.string().min(1).max(16384).optional(),
+				generation: z.number().int().nonnegative().optional(),
 				cursor: z.number().int().nonnegative().optional(),
 				limit: z.number().int().positive().max(1000).optional(),
 				path: z.string().min(1).optional(),
@@ -1062,12 +1065,16 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			outputSchema: { result: z.unknown() },
 			annotations: READ_ONLY,
 		},
-		async ({ cursor = 0, limit = 100, path }) => {
+		async ({ cursor, limit, path, continuation, generation }) => {
 			const session = requireInspectSession();
-			const query = new URLSearchParams({
-				cursor: String(cursor),
-				limit: String(limit),
-			});
+			if (continuation !== undefined && session.lock.mode === "tui") {
+				throw new Error("File continuations are unsupported in TUI sessions; use cursor and generation.");
+			}
+			const query = new URLSearchParams();
+			if (cursor !== undefined) query.set("cursor", String(cursor));
+			if (limit !== undefined) query.set("limit", String(limit));
+			if (continuation !== undefined) query.set("continuation", continuation);
+			if (generation !== undefined) query.set("generation", String(generation));
 			if (path) query.set("path", path);
 			const result = await requestSessionJson<Record<string, unknown>>(
 				session,

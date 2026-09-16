@@ -138,10 +138,10 @@ import type {
 	PrExistingReply,
 } from "./lib/pr-session.js";
 import { buildPrOverview } from "./lib/diff-overview.js";
+import { FileInspectSnapshots, fileInspectError } from "./lib/file-inspect-snapshots.js";
 import {
 	AgentDiffIndexCache,
 	indexSummary,
-	indexFiles,
 	indexHunks,
 	indexSlice,
 	indexSearch,
@@ -467,6 +467,7 @@ export function createApp(
 		dryRun: boolean;
 	}> | null = null;
 	const agentDiffCache = new AgentDiffIndexCache();
+	const fileInspectSnapshots = new FileInspectSnapshots();
 	const uiStateStore = new FileUiStateStore();
 	const viewedStore = new FileViewedStore();
 	const viewedFiles = new Set<string>();
@@ -920,11 +921,40 @@ export function createApp(
 	});
 
 	app.get("/api/diff/files", async (c) => {
-		const index = await getAgentIndex();
+		const fail = (result: ReturnType<typeof fileInspectError>) => {
+			const { status, ...body } = result;
+			return c.json(body, status);
+		};
+		const continuation = c.req.query("continuation");
+		if (continuation !== undefined) {
+			if (Object.keys(c.req.query()).some((key) => key !== "continuation")) {
+				return fail(fileInspectError(400, "invalid_continuation", "Pass continuation alone; its filter, position and page size are already bound."));
+			}
+			const result = fileInspectSnapshots.continue(continuation);
+			return "status" in result ? fail(result) : c.json(result);
+		}
+		for (const key of ["cursor", "limit", "generation"]) {
+			const value = c.req.query(key);
+			if (value !== undefined && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) {
+				return fail(fileInspectError(400, "invalid_continuation", `${key} must be a non-negative safe integer.`));
+			}
+		}
 		const cursor = parseUInt(c.req.query("cursor"), 0);
+		const generation = optionalUInt(c.req.query("generation"));
+		if (cursor > 0 && generation === undefined) {
+			return fail(fileInspectError(400, "continuation_required", "Numeric file cursors require generation; prefer nextContinuation from the first page."));
+		}
+		const path = c.req.query("path");
+		if (path && Buffer.byteLength(JSON.stringify(path)) > 4096) {
+			return fail(fileInspectError(400, "invalid_continuation", "File filter exceeds 4096 serialized bytes."));
+		}
+		const index = await getAgentIndex();
+		if (generation !== undefined && generation !== index.generation) {
+			return fail(fileInspectError(409, "stale_generation", `stale generation ${generation}; current generation is ${index.generation}`));
+		}
 		const limit = parseUInt(c.req.query("limit"), 100);
-		const result = indexFiles(index, cursor, limit, c.req.query("path"));
-		if ("status" in result) return inspectError(c, result);
+		const result = fileInspectSnapshots.start(index, cursor, limit, path);
+		if ("status" in result) return "code" in result ? fail(result) : inspectError(c, result);
 		return c.json(result);
 	});
 

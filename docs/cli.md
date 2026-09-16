@@ -458,7 +458,8 @@ Read **bounded** diff data from any running web, native TUI, or GitHub PR sessio
 
 ```bash
 diffing inspect summary [--exclude lockfiles]
-diffing inspect files [--path GLOB] [--cursor N] [--limit N]
+diffing inspect files [--path GLOB] [--cursor N --generation N] [--limit N]
+diffing inspect files --continuation TOKEN # web/PR: pass nextContinuation alone
 diffing inspect hunks (--file N | --path GLOB) [--cursor N] [--limit N] [--generation N]
 diffing inspect slice (--file N | --path GLOB) [--start N] [--max-lines N] [--max-bytes N] [--generation N]
 diffing inspect search <text>|--query <text> [--path GLOB] [--file N] [--row N] [--limit N] [--max-bytes N] [--generation N]
@@ -466,7 +467,10 @@ diffing inspect search <text>|--query <text> [--path GLOB] [--file N] [--row N] 
 ```
 
 - Web and PR sessions build an in-process index from their current patch; TUI sessions use the sparse disk-backed index.
-- Carry `generation` from `summary` into hunk, slice, and search requests. A `409` means the patch changed and traversal must restart.
+- Web/PR file pages return `snapshotId` and `nextContinuation`. Pass the token alone to continue the same captured inventory, even after external edits; this performs no new Git collection. `freshness: "not-checked"` means the capture is historical unless separately refreshed. `complete` and optional `omittedPaths` report source coverage.
+- File captures expire after five minutes, on server restart, or earlier when the eight-capture / 64 MiB serialized-index retention capacity is reached. HTTP `410` / `snapshot_expired` means restart without the token. HTTP `400` / `invalid_continuation` rejects malformed/tampered tokens or attempts to change their parameters. Captures larger than capacity return `413` / `snapshot_too_large`; narrow the review scope.
+- Numeric file cursors greater than zero now require `generation`; omission returns `400` / `continuation_required`. This legacy path remains process-local and does not bind filters. Native TUI supports this path and explicitly rejects retained tokens (`422` / `unsupported_continuation`).
+- Carry `generation` from the file page (or `summary`) into hunk, slice, and search requests. These operations still read the live index; they do not yet accept retained snapshot IDs. A `409` means the patch changed and traversal must restart.
 - `--path` is a git pathspec-ish glob (`src/lib/**`, `**/agent-diff-index.ts`). `files` pages the **filtered** list (`nextCursor` is not a global file index); each row still includes the stable global `index`. `hunks`/`slice` take `--path` **or** `--file` (exactly one file must match). Invalid globs return HTTP 400.
 - `--exclude lockfiles` on `summary` drops lock/generated basenames from **counts only**.
 - Prefer MCP `diff_summary` / `diff_files` / `diff_hunks` / `diff_slice` / `diff_search` when available — they target the same bounded data model.
@@ -476,7 +480,8 @@ The loopback HTTP contract is shared across modes:
 | Route | Purpose |
 | ------- | --------- |
 | `GET /api/diff/summary?exclude` | Generation, `complete`, optional `omittedPaths`, totals, kind counts, top-level directories, and PR identity when applicable |
-| `GET /api/diff/files?path&cursor&limit` | Paged file metadata; `path` filters first, then pages |
+| `GET /api/diff/files?path&cursor&limit&generation` | Paged file metadata; nonzero cursor requires generation |
+| `GET /api/diff/files?continuation` | Web/PR retained file inventory; pass returned `nextContinuation` alone |
 | `GET /api/diff/hunks?file\|path&cursor&limit&generation` | Paged hunk metadata with stale-generation protection |
 | `GET /api/diff/slice?file\|path&start&maxLines&maxBytes&generation` | Strictly bounded logical rows; continue with `nextRow` |
 | `GET /api/diff/search?q&path&file&row&limit&maxBytes&generation` | Literal case-insensitive path/content search; continue with `nextFile` + `nextRow` |

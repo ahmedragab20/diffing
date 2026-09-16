@@ -713,6 +713,62 @@ describe("server", () => {
     });
 
     describe("bounded diff inspect", () => {
+      it("keeps file continuation pages on the captured inventory after external changes", async () => {
+        const patch = (name: string) => `diff --git a/${name} b/${name}\n@@ -1 +1 @@\n-old\n+new\n`;
+        mockGetGitDiffAsync.mockResolvedValue(patch("a.ts") + patch("b.ts"));
+        const first = await (await app.fetch(new Request("http://localhost/api/diff/files?limit=1"))).json();
+        expect(first.files.map((file: any) => file.path)).toEqual(["a.ts"]);
+        expect(first.nextContinuation).toEqual(expect.any(String));
+        const calls = mockGetGitDiffAsync.mock.calls.length;
+        mockGetGitDiffAsync.mockResolvedValue(patch("0.ts") + patch("a.ts") + patch("b.ts"));
+        const next = await app.fetch(new Request(`http://localhost/api/diff/files?continuation=${encodeURIComponent(first.nextContinuation)}`));
+        expect(next.status).toBe(200);
+        expect(await next.json()).toMatchObject({
+          snapshotId: first.snapshotId,
+          generation: first.generation,
+          files: [expect.objectContaining({ path: "b.ts" })],
+          nextContinuation: null,
+          freshness: "not-checked",
+        });
+        expect(mockGetGitDiffAsync).toHaveBeenCalledTimes(calls);
+      });
+
+      it("requires a generation for legacy numeric file continuation and rejects stale pages", async () => {
+        mockGetGitDiffAsync.mockResolvedValue("diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+b\n");
+        const first = await (await app.fetch(new Request("http://localhost/api/diff/files"))).json();
+        const missing = await app.fetch(new Request("http://localhost/api/diff/files?cursor=1"));
+        expect(missing.status).toBe(400);
+        expect(await missing.json()).toMatchObject({ code: "continuation_required" });
+        mockGetGitDiffAsync.mockResolvedValue("diff --git a/b b/b\n@@ -1 +1 @@\n-a\n+c\n");
+        const stale = await app.fetch(new Request(`http://localhost/api/diff/files?cursor=1&generation=${first.generation}`));
+        expect(stale.status).toBe(409);
+        expect(await stale.json()).toMatchObject({ code: "stale_generation" });
+      });
+
+      it("rejects conflicting, malformed and cross-session file continuations before collecting Git", async () => {
+        mockGetGitDiffAsync.mockResolvedValue("diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/b b/b\n@@ -1 +1 @@\n-a\n+b\n");
+        const first = await (await app.fetch(new Request("http://localhost/api/diff/files?limit=1"))).json();
+        const calls = mockGetGitDiffAsync.mock.calls.length;
+        for (const query of [
+          `continuation=${first.nextContinuation}&path=other`,
+          "continuation=malformed",
+          "cursor=-1",
+          "generation=bad",
+          "limit=1.5",
+          "cursor=9007199254740992",
+        ]) {
+          const response = await app.fetch(new Request(`http://localhost/api/diff/files?${query}`));
+          expect(response.status).toBe(400);
+          expect(await response.json()).toMatchObject({ code: "invalid_continuation", recovery: "restart_files" });
+        }
+        const { createApp } = await import("../server.js");
+        const restarted = createApp(clientDir, DEFAULTS, mockStore);
+        const expired = await restarted.fetch(new Request(`http://localhost/api/diff/files?continuation=${first.nextContinuation}`));
+        expect(expired.status).toBe(410);
+        expect(await expired.json()).toMatchObject({ code: "snapshot_expired", recovery: "restart_files" });
+        expect(mockGetGitDiffAsync).toHaveBeenCalledTimes(calls);
+      });
+
       it("indexes and pages the current web-session patch", async () => {
         mockGetGitDiffAsync.mockResolvedValue(`diff --git a/src/index.ts b/src/index.ts
 --- a/src/index.ts

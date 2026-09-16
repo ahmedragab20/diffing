@@ -233,13 +233,67 @@ fn route(
         return Ok((200, body));
     }
     if method == "GET" && path == "/api/diff/files" {
+        if params.contains_key("continuation") {
+            return Ok((
+                422,
+                json!({
+                    "error": "Retained file continuations are unsupported in TUI sessions; use cursor and generation.",
+                    "code": "unsupported_continuation",
+                    "recovery": "restart_files"
+                }),
+            ));
+        }
+        for key in ["cursor", "limit", "generation"] {
+            if let Some(value) = params.get(key) {
+                if value.is_empty()
+                    || !value.bytes().all(|byte| byte.is_ascii_digit())
+                    || value
+                        .parse::<u64>()
+                        .map_or(true, |number| number > 9_007_199_254_740_991)
+                {
+                    return Ok((
+                        400,
+                        json!({
+                            "error": format!("{key} must be a non-negative safe integer."),
+                            "code": "invalid_continuation",
+                            "recovery": "restart_files"
+                        }),
+                    ));
+                }
+            }
+        }
+        let cursor = usize_param(params, "cursor", 0);
+        if cursor > 0 && !params.contains_key("generation") {
+            return Ok((
+                400,
+                json!({
+                    "error": "Numeric file cursors require generation; restart files and carry the returned generation.",
+                    "code": "continuation_required",
+                    "recovery": "restart_files"
+                }),
+            ));
+        }
         let index = current_index(state);
+        if let Some(generation) = params
+            .get("generation")
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            if generation != index.generation {
+                return Ok((
+                    409,
+                    json!({
+                        "error": format!("stale generation {generation}; current generation is {}", index.generation),
+                        "code": "stale_generation",
+                        "recovery": "restart_files"
+                    }),
+                ));
+            }
+        }
         let matched_indexes = match matching_indexes(&index, params.get("path").map(String::as_str))
         {
             Ok(value) => value,
             Err(response) => return Ok(response),
         };
-        let cursor = usize_param(params, "cursor", 0);
         let limit = usize_param(params, "limit", 100).clamp(1, MAX_PAGE_LINES);
         let start = cursor.min(matched_indexes.len());
         let end = start.saturating_add(limit).min(matched_indexes.len());
@@ -548,6 +602,7 @@ fn write_json(stream: &mut TcpStream, status: u16, body: Value) -> Result<()> {
         401 => "Unauthorized",
         404 => "Not Found",
         409 => "Conflict",
+        422 => "Unprocessable Entity",
         _ => "Internal Server Error",
     };
     write!(
@@ -818,6 +873,57 @@ mod tests {
         assert_eq!(body.get("matched").and_then(Value::as_u64), Some(0));
         assert_eq!(body.get("total").and_then(Value::as_u64), Some(0));
         assert_eq!(body.get("path").and_then(Value::as_str), Some("src/**"));
+    }
+
+    #[test]
+    fn file_pages_require_generation_and_reject_unsupported_continuations() {
+        let state = ApiState {
+            repo_root: "/tmp/repo".to_string(),
+            index: Arc::new(RwLock::new(Arc::new(DiffIndex::empty(
+                7,
+                PathBuf::from("/tmp/repo"),
+                true,
+            )))),
+            capability: "cap".to_string(),
+            review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
+        };
+        for (query, expected_status, expected_code) in [
+            (vec![("cursor", "1")], 400, "continuation_required"),
+            (
+                vec![("cursor", "1"), ("generation", "6")],
+                409,
+                "stale_generation",
+            ),
+            (vec![("generation", "bad")], 400, "invalid_continuation"),
+            (vec![("cursor", "1.5")], 400, "invalid_continuation"),
+            (
+                vec![("limit", "9007199254740992")],
+                400,
+                "invalid_continuation",
+            ),
+            (
+                vec![("continuation", "opaque")],
+                422,
+                "unsupported_continuation",
+            ),
+        ] {
+            let params = query
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect();
+            let (status, body) = route("GET", "/api/diff/files", &params, b"", &state).unwrap();
+            assert_eq!(status, expected_status);
+            assert_eq!(body["code"], expected_code);
+            assert_eq!(body["recovery"], "restart_files");
+        }
+        let params = HashMap::from([
+            ("cursor".to_string(), "1".to_string()),
+            ("generation".to_string(), "7".to_string()),
+        ]);
+        let (status, body) = route("GET", "/api/diff/files", &params, b"", &state).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body["generation"], 7);
+        assert_eq!(body["nextCursor"], Value::Null);
     }
 
     #[test]
