@@ -8,6 +8,8 @@ on:
       - "scripts/stage-tui-binary.mjs"
       - "scripts/verify-tui-bundle.mjs"
       - "src/lib/find-tui-binary.ts"
+      - "src/lib/review-*.ts"
+      - "scripts/review-sqlite-qualification.test.ts"
       - "src/__tests__/native-bundle.test.ts"
       - "src/__tests__/find-tui-binary.test.ts"
       - "package.json"
@@ -18,6 +20,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  qualify-review-store:
+    name: SQLite qualification (${{ matrix.os }}, Node 20)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v6
+      - run: pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked -p diffing-tui review_store::tests
+      - run: cargo test --locked -p diffing-tui --test review_store_rpc
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+      - run: node --import tsx --test scripts/review-sqlite-qualification.test.ts
+
   build-native:
     name: Build ${{ matrix.target_name }}
     strategy:

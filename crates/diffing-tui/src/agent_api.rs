@@ -188,6 +188,16 @@ fn route(
     body: &[u8],
     state: &ApiState,
 ) -> Result<(u16, Value)> {
+    if method == "GET"
+        && matches!(path, "/api/diff/files" | "/api/diff/hunks" | "/api/diff/slice" | "/api/diff/search")
+        && (params.contains_key("continuation") || params.contains_key("snapshotId"))
+    {
+        return Ok((422, json!({
+            "error": "Retained snapshots are unsupported in TUI sessions; use generation and numeric coordinates.",
+            "code": "unsupported_continuation",
+            "recovery": "restart_files"
+        })));
+    }
     if method == "GET" && path == "/api/diff/summary" {
         let index = current_index(state);
         let exclude = match parse_exclude(params.get("exclude").map(String::as_str)) {
@@ -233,16 +243,6 @@ fn route(
         return Ok((200, body));
     }
     if method == "GET" && path == "/api/diff/files" {
-        if params.contains_key("continuation") {
-            return Ok((
-                422,
-                json!({
-                    "error": "Retained file continuations are unsupported in TUI sessions; use cursor and generation.",
-                    "code": "unsupported_continuation",
-                    "recovery": "restart_files"
-                }),
-            ));
-        }
         for key in ["cursor", "limit", "generation"] {
             if let Some(value) = params.get(key) {
                 if value.is_empty()
@@ -887,6 +887,14 @@ mod tests {
             capability: "cap".to_string(),
             review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
         };
+        for operation in ["files", "hunks", "slice", "search"] {
+            for parameter in ["continuation", "snapshotId"] {
+                let params = HashMap::from([(parameter.to_string(), "retained".to_string())]);
+                let (status, body) = route("GET", &format!("/api/diff/{operation}"), &params, b"", &state).unwrap();
+                assert_eq!(status, 422);
+                assert_eq!(body["code"], "unsupported_continuation");
+            }
+        }
         for (query, expected_status, expected_code) in [
             (vec![("cursor", "1")], 400, "continuation_required"),
             (

@@ -49,6 +49,17 @@ vi.mock("editorconfig", () => ({
 }));
 
 describe("git", () => {
+  it.each(["rev-list", "log"])("propagates show %s failure instead of presenting an empty review", async (stage) => {
+    mockExecFile.mockImplementation((_cmd: string, args: string[], _opts: unknown, cb: any) => {
+      if (args[0] === stage) cb(new Error("source read failed"));
+      else cb(null, { stdout: "1111111111111111111111111111111111111111\n", stderr: "" });
+    });
+    const { getShowDiff } = await import("../lib/git.js");
+    try {
+      await expect(getShowDiff(["HEAD"])).rejects.toThrow("source read failed");
+    } finally { mockExecFile.mockReset(); }
+  });
+
   beforeEach(async () => {
     vi.clearAllMocks();
     mockNativeRead.mockReset();
@@ -362,8 +373,27 @@ describe("git", () => {
       const { getGitDiffAsync } = await import("../lib/git.js");
       const result = await getGitDiffAsync({ untracked: true });
       expect(result.omittedUntracked).toEqual([]);
-      expect(result.patch).toContain("foo\nbar.ts");
+      const { buildAgentDiffIndex } = await import("../lib/agent-diff-index.js");
+      const index = buildAgentDiffIndex(result.patch);
+      expect(index.files.map((file) => file.newPath)).toEqual(["foo\nbar.ts"]);
+      expect(index.files[0].additions).toBe(1);
       expect(mockNativeRead).toHaveBeenCalledWith("foo\nbar.ts");
+    });
+
+    it.each([
+      ["", 0, false], ["one\n", 1, false], ["one", 1, true], ["one\r\ntwo\r\n", 2, false],
+    ])("preserves untracked line counts and final-newline state for %j", async (content, lines, noNewline) => {
+      mockExecFileSync.mockReturnValue("/repo\n");
+      mockIsSafePath.mockReturnValue(true);
+      installGitExec({ lsFilesZ: "new.ts\0" });
+      mockNativeRead.mockResolvedValue({ bytes: Buffer.from(content), sha256: "a".repeat(64) });
+      const { getGitDiffAsync } = await import("../lib/git.js");
+      const { buildAgentDiffIndex } = await import("../lib/agent-diff-index.js");
+      const result = await getGitDiffAsync({ untracked: true });
+      const index = buildAgentDiffIndex(result.patch);
+      expect(index.files[0].additions).toBe(lines);
+      expect(index.files[0].rows.some((row) => row.type === "noNewline")).toBe(noNewline);
+      if (content.includes("\r\n")) expect(result.patch).toContain("+one\r\n+two\r\n");
     });
 
     it("reads a literal percent path without URL-decoding", async () => {
@@ -381,6 +411,27 @@ describe("git", () => {
       const result = await getGitDiffAsync({ untracked: true });
       expect(result.omittedUntracked).toEqual([]);
       expect(mockNativeRead).toHaveBeenCalledWith("weird%2fname.ts");
+    });
+
+    it("distinguishes untracked binary bytes without inventing a Git blob identity", async () => {
+      mockExecFileSync.mockReturnValue("/repo\n");
+      mockIsSafePath.mockReturnValue(true);
+      installGitExec({ diff: "", lsFilesZ: "raw.bin\0" });
+      const { getGitDiffAsync } = await import("../lib/git.js");
+      const { buildAgentDiffIndex } = await import("../lib/agent-diff-index.js");
+      const files = [];
+      for (const bytes of [Buffer.from([0, 1]), Buffer.from([0, 2]), Buffer.from([0xff, 0xfe])]) {
+        mockNativeRead.mockResolvedValue({ bytes, sha256: "a".repeat(64) });
+        const { patch } = await getGitDiffAsync({ untracked: true });
+        files.push(buildAgentDiffIndex(patch).files[0]);
+      }
+      expect(new Set(files.map((file) => file.metadata.sourceBytesSha256)).size).toBe(3);
+      expect(new Set(files.map((file) => file.metadata.patchDigest)).size).toBe(3);
+      for (const file of files) {
+        expect(file.isBinary).toBe(true);
+        expect(file.metadata).toMatchObject({ synthetic: true, oldBlob: null, newBlob: null, oldMode: null, newMode: null });
+        expect(file.metadata.sourceBytesSha256).toMatch(/^[a-f0-9]{64}$/);
+      }
     });
 
     it("propagates tracked git-diff failures instead of an empty patch", async () => {
@@ -549,13 +600,9 @@ describe("git", () => {
     });
   });
 
-  describe("getFilePatch — CRLF handling", () => {
-    // The untracked-file synthesizer reads the file from disk and emits one
-    // `+line` per source line. Before the fix it split on a literal `'\n'`,
-    // which on Windows left a trailing `\r` on every line and inflated the
-    // hunk header's line count when the file ended in CRLF.
+  describe("getFilePatch — source-byte line handling", () => {
 
-    it("strips trailing CR from CRLF-terminated untracked file", async () => {
+    it("preserves CRLF bytes in the added payload", async () => {
       mockIsSafePath.mockReturnValue(true);
       mockExecFileSync
         .mockReturnValueOnce("") // `git diff` -> no output (untracked)
@@ -567,14 +614,9 @@ describe("git", () => {
       const { getFilePatch } = await import("../lib/git.js");
       const patch = await getFilePatch("new-windows-file.ts");
 
-      for (const line of patch.split("\n").filter((l) => l.startsWith("+"))) {
-        expect(line.endsWith("\r")).toBe(false);
-      }
-
-      expect(patch).toContain("@@ -0,0 +1,4 @@");
-      expect(patch).toContain("+line one");
-      expect(patch).toContain("+line two");
-      expect(patch).toContain("+line three");
+      expect(patch).toContain("@@ -0,0 +1,3 @@");
+      expect(patch).toContain("+line one\r\n+line two\r\n+line three\r\n");
+      expect(patch).not.toContain("+\n");
     });
 
     it("handles plain LF file unchanged", async () => {
@@ -587,8 +629,9 @@ describe("git", () => {
       const { getFilePatch } = await import("../lib/git.js");
       const patch = await getFilePatch("posix-file.ts");
 
-      expect(patch).toContain("@@ -0,0 +1,4 @@");
-      expect(patch).toContain("+a\n+b\n+c\n+");
+      expect(patch).toContain("@@ -0,0 +1,3 @@");
+      expect(patch).toContain("+a\n+b\n+c\n");
+      expect(patch).not.toContain("+\n");
     });
 
     it("handles legacy CR-only line endings", async () => {
@@ -601,11 +644,9 @@ describe("git", () => {
       const { getFilePatch } = await import("../lib/git.js");
       const patch = await getFilePatch("classic-mac.txt");
 
-      expect(patch).toContain("@@ -0,0 +1,3 @@");
-      expect(patch).toContain("+foo");
-      expect(patch).toContain("+bar");
-      expect(patch).toContain("+baz");
-      expect(patch.includes("\r")).toBe(false);
+      expect(patch).toContain("@@ -0,0 +1,1 @@");
+      expect(patch).toContain("+foo\rbar\rbaz\n");
+      expect(patch).toContain("\\ No newline at end of file");
     });
 
     it("handles mixed CRLF/LF in one file", async () => {
@@ -618,10 +659,9 @@ describe("git", () => {
       const { getFilePatch } = await import("../lib/git.js");
       const patch = await getFilePatch("mixed.txt");
 
-      expect(patch).toContain("+win");
-      expect(patch).toContain("+posix");
-      expect(patch).toContain("+mac");
-      expect(patch.includes("\r")).toBe(false);
+      expect(patch).toContain("@@ -0,0 +1,3 @@");
+      expect(patch).toContain("+win\r\n+posix\n+mac\r\n");
+      expect(patch).not.toContain("+\n");
     });
   });
 

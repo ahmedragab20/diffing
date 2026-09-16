@@ -8,6 +8,8 @@
  */
 
 import { createHash } from "node:crypto";
+import type { InspectionManifest } from "./inspect-capture.js";
+import { decodeGitPath, parseGitDiffHeaderPaths } from "./git-path.js";
 import {
   capPathMatches,
   compilePathspecGlob,
@@ -72,6 +74,18 @@ export type ViewRow =
     };
 
 export interface IndexedFile {
+  metadata: {
+    oldMode: string | null;
+    newMode: string | null;
+    oldBlob: string | null;
+    newBlob: string | null;
+    submodule: boolean;
+    /** Byte digest for synthesized untracked patches; not a Git blob ID. */
+    sourceBytesSha256?: string;
+    synthetic?: boolean;
+    patchDigest: string;
+  };
+  source?: { layerId: string; occurrence: number; contentDigest: string };
   oldPath: string | null;
   newPath: string | null;
   kind: IndexedChangeKind;
@@ -86,6 +100,7 @@ export interface IndexedFile {
 }
 
 export interface AgentDiffIndex {
+  manifest?: InspectionManifest;
   generation: number;
   complete: boolean;
   files: IndexedFile[];
@@ -158,6 +173,8 @@ export interface FilesPage {
   path?: string;
   nextCursor: number | null;
   files: Array<{
+    metadata: IndexedFile["metadata"];
+    source?: IndexedFile["source"];
     index: number;
     path: string;
     oldPath: string | null;
@@ -225,13 +242,14 @@ export function buildAgentDiffIndex(
     };
   }
 
-  const lines = patch.split(/\r?\n/);
+  const lines = patch.split("\n");
   const files: IndexedFile[] = [];
   let i = 0;
+  let patchOffset = 0;
 
   while (i < lines.length) {
     const line = lines[i];
-    const gitHeader = parseGitFileHeader(line);
+    const gitHeader = parseGitDiffHeaderPaths(line);
     if (!gitHeader) {
       i++;
       continue;
@@ -242,7 +260,18 @@ export function buildAgentDiffIndex(
     let newPath: string | null = newPathRaw === "/dev/null" ? null : newPathRaw;
     let isBinary = false;
     let kind: IndexedChangeKind = "modified";
-    const fileStart = i;
+    const metadata: IndexedFile["metadata"] = {
+      oldMode: null, newMode: null, oldBlob: null, newBlob: null,
+      submodule: false, patchDigest: "",
+    };
+    // Hash the original contiguous section instead of allocating another array
+    // and joining every source line after it has already been parsed.
+    const marker = line + (i < lines.length - 1 ? "\n" : "");
+    const fileOffset = i === 0 ? 0 : patch.indexOf(`\n${marker}`, Math.max(0, patchOffset - 1)) + 1;
+    const nextSection = patch.indexOf("\ndiff --git ", fileOffset + line.length);
+    let digestEnd = nextSection < 0 ? patch.length : nextSection;
+    patchOffset = digestEnd + 1;
+    while (digestEnd > fileOffset && patch.charCodeAt(digestEnd - 1) === 10) digestEnd--;
     i++;
 
     // Scan headers until first hunk or next file.
@@ -253,8 +282,24 @@ export function buildAgentDiffIndex(
       if (h.startsWith("Binary files ") || h.startsWith("GIT binary patch")) {
         isBinary = true;
       }
-      if (h.startsWith("new file mode")) kind = "added";
-      else if (h.startsWith("deleted file mode")) kind = "deleted";
+      const mode = /^(old mode|new mode|new file mode|deleted file mode) (\d{6})$/.exec(h);
+      if (mode) {
+        if (mode[1] === "old mode" || mode[1] === "deleted file mode") metadata.oldMode = mode[2];
+        else metadata.newMode = mode[2];
+      }
+      const blobs = /^index ([a-f0-9]+)\.\.([a-f0-9]+)(?: (\d{6}))?$/.exec(h);
+      if (blobs) {
+        metadata.oldBlob = blobs[1];
+        metadata.newBlob = blobs[2];
+        if (blobs[3]) metadata.oldMode = metadata.newMode = blobs[3];
+      }
+      const sourceBytes = /^diffing-content-sha256 ([a-f0-9]{64})$/.exec(h);
+      if (sourceBytes) {
+        metadata.sourceBytesSha256 = sourceBytes[1];
+        metadata.synthetic = true;
+      }
+      if (h.startsWith("new file mode")) { kind = "added"; oldPath = null; }
+      else if (h.startsWith("deleted file mode")) { kind = "deleted"; newPath = null; }
       else if (h.startsWith("rename from ")) {
         kind = "renamed";
         oldPath = decodeGitPath(h.slice("rename from ".length));
@@ -262,10 +307,10 @@ export function buildAgentDiffIndex(
         kind = "renamed";
         newPath = decodeGitPath(h.slice("rename to ".length));
       } else if (h.startsWith("--- ")) {
-        const p = decodeGitPath(h.slice(4));
+        const p = decodeGitPath(h.slice(4).replace(/\t$/, ""));
         oldPath = p === "/dev/null" ? null : stripSidePrefix(p, "a/");
       } else if (h.startsWith("+++ ")) {
-        const p = decodeGitPath(h.slice(4));
+        const p = decodeGitPath(h.slice(4).replace(/\t$/, ""));
         newPath = p === "/dev/null" ? null : stripSidePrefix(p, "b/");
       }
       i++;
@@ -326,13 +371,17 @@ export function buildAgentDiffIndex(
 
         while (i < lines.length) {
           const body = lines[i];
-          if (body.startsWith("diff --git ") || body.startsWith("@@ ")) break;
-          if (body.startsWith("\\ No newline at end of file")) {
+          const prefix = body[0];
+          if (prefix === "\\" && body.startsWith("\\ No newline at end of file")) {
             rows.push({ type: "noNewline", hunkIndex });
             bodyCount++;
             i++;
             continue;
           }
+          // Layer separators and a patch's trailing newline are not source
+          // context. Once both declared sides are consumed, only the optional
+          // missing-newline marker belongs to this hunk.
+          if (oldLineno - oldStart >= oldLines && newLineno - newStart >= newLines) break;
 
           // Empty line at EOF of patch may be a trailing split artifact.
           if (body === "" && i === lines.length - 1) {
@@ -340,7 +389,6 @@ export function buildAgentDiffIndex(
             break;
           }
 
-          const prefix = body[0];
           if (prefix === "+") {
             rows.push({
               type: "line",
@@ -388,7 +436,7 @@ export function buildAgentDiffIndex(
             i++;
             continue;
           }
-          // Unknown line — stop hunk body to avoid mis-parse.
+          // File/hunk headers and unknown lines all terminate the hunk body.
           break;
         }
 
@@ -407,10 +455,12 @@ export function buildAgentDiffIndex(
       while (i < lines.length && !lines[i].startsWith("diff --git ")) i++;
     }
 
-    // Avoid unused variable warning for fileStart in optimized builds.
-    void fileStart;
+    if (metadata.synthetic) metadata.oldMode = metadata.newMode = null;
+    metadata.submodule = metadata.oldMode === "160000" || metadata.newMode === "160000";
+    metadata.patchDigest = createHash("sha256").update(patch.slice(fileOffset, digestEnd)).digest("hex");
 
     files.push({
+      metadata,
       oldPath,
       newPath,
       kind,
@@ -607,6 +657,8 @@ export function indexFiles(
   const start = Math.max(0, cursor);
   const end = Math.min(scoped.entries.length, start + safeLimit);
   const files = scoped.entries.slice(start, end).map(({ index, file }) => ({
+    metadata: { ...file.metadata },
+    ...(file.source ? { source: { ...file.source } } : {}),
     index,
     path: displayPath(file.oldPath, file.newPath),
     oldPath: file.oldPath,
@@ -863,107 +915,8 @@ function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.trunc(n)));
 }
 
-/** Parse Git's file header, including core.quotePath-style C-quoted paths. */
-function parseGitFileHeader(line: string): [string, string] | null {
-  if (!line.startsWith("diff --git ")) return null;
-  const rest = line.slice("diff --git ".length);
-  if (rest.startsWith('"')) {
-    const first = consumeGitToken(rest, 0);
-    if (!first) return null;
-    let cursor = first.next;
-    while (cursor < rest.length && /\s/.test(rest[cursor])) cursor++;
-    const second = consumeGitToken(rest, cursor);
-    if (!second) return null;
-    return [
-      stripSidePrefix(decodeGitPath(first.token), "a/"),
-      stripSidePrefix(decodeGitPath(second.token), "b/"),
-    ];
-  }
-
-  // Match the TUI parser's heuristic for legal, unquoted spaces in paths.
-  const separator = rest.lastIndexOf(" b/");
-  if (separator < 0) return null;
-  return [
-    stripSidePrefix(rest.slice(0, separator), "a/"),
-    stripSidePrefix(rest.slice(separator + 1), "b/"),
-  ];
-}
-
-function consumeGitToken(
-  input: string,
-  start: number,
-): { token: string; next: number } | null {
-  if (input[start] !== '"') {
-    const end = input.indexOf(" ", start);
-    return {
-      token: input.slice(start, end < 0 ? input.length : end),
-      next: end < 0 ? input.length : end,
-    };
-  }
-  let escaped = false;
-  for (let i = start + 1; i < input.length; i++) {
-    const char = input[i];
-    if (!escaped && char === '"') {
-      return { token: input.slice(start, i + 1), next: i + 1 };
-    }
-    if (!escaped && char === "\\") escaped = true;
-    else escaped = false;
-  }
-  return null;
-}
-
 function stripSidePrefix(path: string, prefix: "a/" | "b/"): string {
   return path.startsWith(prefix) ? path.slice(prefix.length) : path;
-}
-
-/** Decode the byte escapes emitted by Git for quoted pathnames. */
-function decodeGitPath(raw: string): string {
-  const input = raw.trim();
-  if (!(input.startsWith('"') && input.endsWith('"'))) return input;
-  const bytes: number[] = [];
-  const pushText = (value: string) => bytes.push(...Buffer.from(value, "utf8"));
-
-  for (let i = 1; i < input.length - 1; i++) {
-    const char = input[i];
-    if (char !== "\\") {
-      const codePoint = input.codePointAt(i)!;
-      pushText(String.fromCodePoint(codePoint));
-      if (codePoint > 0xffff) i++;
-      continue;
-    }
-
-    const escaped = input[++i];
-    if (escaped == null) break;
-    const simple: Record<string, number> = {
-      a: 0x07,
-      b: 0x08,
-      t: 0x09,
-      n: 0x0a,
-      v: 0x0b,
-      f: 0x0c,
-      r: 0x0d,
-      '"': 0x22,
-      "\\": 0x5c,
-    };
-    if (escaped in simple) {
-      bytes.push(simple[escaped]);
-      continue;
-    }
-    if (/[0-7]/.test(escaped)) {
-      let octal = escaped;
-      while (
-        octal.length < 3 &&
-        i + 1 < input.length - 1 &&
-        /[0-7]/.test(input[i + 1])
-      ) {
-        octal += input[++i];
-      }
-      bytes.push(Number.parseInt(octal, 8));
-      continue;
-    }
-    pushText(escaped);
-  }
-  return Buffer.from(bytes).toString("utf8");
 }
 
 /** Cache helper: rebuild only when patch fingerprint changes. */
@@ -975,11 +928,13 @@ export class AgentDiffIndexCache {
     patch: string,
     complete = true,
     omittedPaths?: string[],
+    manifest?: InspectionManifest,
   ): AgentDiffIndex {
     const fp = createHash("sha256")
       .update(complete ? "1" : "0")
       .update("\0")
       .update((omittedPaths ?? []).join("\0"))
+      .update(JSON.stringify(manifest ? { ...manifest, capturedAt: 0, snapshotId: null } : null))
       .update("\0")
       .update(patch)
       .digest("base64url");
@@ -988,6 +943,16 @@ export class AgentDiffIndexCache {
       complete,
       omittedPaths,
     });
+    if (manifest) {
+      this.index.manifest = structuredClone(manifest);
+      for (const layer of manifest.layers) {
+        for (let occurrence = 0; occurrence < layer.fileCount; occurrence++) {
+          const file = this.index.files[layer.firstFile + occurrence];
+          if (!file) throw new Error("Captured layer inventory does not match the parsed patch.");
+          file.source = { layerId: layer.id, occurrence, contentDigest: file.metadata.patchDigest };
+        }
+      }
+    }
     this.fingerprint = fp;
     return this.index;
   }

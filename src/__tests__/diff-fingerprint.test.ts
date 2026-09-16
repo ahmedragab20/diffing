@@ -44,6 +44,20 @@ describe('splitUnifiedDiffByFile', () => {
   it('returns empty for blank patch', () => {
     expect(splitUnifiedDiffByFile('').size).toBe(0)
   })
+
+  it('decodes quoted paths and retains each occurrence of a repeated path', () => {
+    const quoted = PATCH.replaceAll('src/a.ts', 'src/a\\t.ts').replace('a/src/a\\t.ts b/src/a\\t.ts', '"a/src/a\\t.ts" "b/src/a\\t.ts"')
+    expect([...splitUnifiedDiffByFile(quoted).keys()]).toContain('src/a\t.ts')
+    const repeated = PATCH + PATCH.replace('+new', '+later')
+    const map = splitUnifiedDiffByFile(repeated)
+    expect(map.get('src/a.ts')).toContain('+new')
+    expect(map.get('src/a.ts')).toContain('+later')
+    expect(fingerprintDiffFiles(repeated)['src/a.ts']).not.toBe(fingerprintDiffFiles(repeated.replace('+new', '+earlier'))['src/a.ts'])
+  })
+
+  it('distinguishes source CRLF bytes from LF bytes', () => {
+    expect(fingerprintDiffFiles(PATCH)['src/a.ts']).not.toBe(fingerprintDiffFiles(PATCH.replace('+new\n', '+new\r\n'))['src/a.ts'])
+  })
 })
 
 describe('fingerprintDiffFiles', () => {
@@ -58,6 +72,12 @@ describe('fingerprintDiffFiles', () => {
     const b = fingerprintDiffFiles(PATCH.replace('+new', '+newer'))
     expect(a['src/a.ts']).not.toBe(b['src/a.ts'])
     expect(a['src/b.ts']).toBe(b['src/b.ts'])
+  })
+
+  it('retains special object-key filenames as ordinary paths', () => {
+    const fingerprint = fingerprintDiffFiles(PATCH.replaceAll('src/a.ts', '__proto__'))
+    expect(Object.keys(fingerprint)).toContain('__proto__')
+    expect(fingerprint.__proto__).toMatch(/^[0-9a-f]{8}$/)
   })
 })
 

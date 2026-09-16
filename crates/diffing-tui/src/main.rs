@@ -16,7 +16,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use diffing_tui::{app, diff_context, fs_rpc, search, server_lock, tui};
+use diffing_tui::{app, diff_context, fs_rpc, review_store, search, server_lock, tui};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -29,8 +29,12 @@ use tracing_subscriber::EnvFilter;
 struct Args {
     /// Path to the git repository whose diff is being reviewed. Must match
     /// the value the Node CLI computed via `git rev-parse --show-toplevel`.
-    #[arg(long, env = "DIFFING_REPO")]
-    repo: String,
+    #[arg(long, env = "DIFFING_REPO", required_unless_present = "review_store_rpc")]
+    repo: Option<String>,
+
+    /// Serve the private review-store protocol in one fixed directory.
+    #[arg(long, conflicts_with_all = ["repo", "view_only", "fs_rpc"])]
+    review_store_rpc: Option<PathBuf>,
 
     /// Open the focused read-only diff browser instead of the review surface.
     #[arg(long)]
@@ -59,15 +63,20 @@ fn main() -> ExitCode {
 
 fn real_main() -> Result<()> {
     let args = Args::parse();
+    if let Some(directory) = args.review_store_rpc {
+        anyhow::ensure!(args.git_diff_args.is_empty(), "review store RPC does not accept diff arguments");
+        return review_store::run(&directory);
+    }
+    let repo = args.repo.context("--repo is required")?;
     if args.fs_rpc {
         anyhow::ensure!(
             args.git_diff_args.is_empty(),
             "filesystem RPC does not accept diff arguments"
         );
-        return fs_rpc::run(std::path::Path::new(&args.repo));
+        return fs_rpc::run(std::path::Path::new(&repo));
     }
-    let repo_root = std::fs::canonicalize(&args.repo)
-        .with_context(|| format!("resolving --repo {}", args.repo))?;
+    let repo_root = std::fs::canonicalize(&repo)
+        .with_context(|| format!("resolving --repo {}", repo))?;
     let repo_root_str = repo_root
         .to_str()
         .context("--repo path is not valid UTF-8")?

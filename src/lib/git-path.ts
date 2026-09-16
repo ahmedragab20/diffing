@@ -1,6 +1,16 @@
+/** Encode literal paths using Git's byte-oriented C quoting. */
+export function quoteGitPath(path: string): string {
+  if (!/[\s"\\\x00-\x1f\x7f-\uffff]/.test(path)) return path
+  return '"' + [...Buffer.from(path, 'utf8')].map((byte) => {
+    if (byte === 34) return '\\"'
+    if (byte === 92) return '\\\\'
+    return byte >= 32 && byte < 127 ? String.fromCharCode(byte) : `\\${byte.toString(8).padStart(3, '0')}`
+  }).join('') + '"'
+}
+
 /** Decode Git `core.quotePath` C-quoted pathnames from diff headers. */
 export function decodeGitPath(raw: string): string {
-  const input = raw.trim()
+  const input = raw
   if (!(input.startsWith('"') && input.endsWith('"'))) return input
   const bytes: number[] = []
   const pushText = (value: string) => bytes.push(...Buffer.from(value, 'utf8'))
@@ -80,7 +90,7 @@ export function parseGitDiffHeaderPaths(line: string): [string, string] | null {
     if (!first) return null
     let cursor = first.next
     while (cursor < rest.length && /\s/.test(rest[cursor])) cursor++
-    const second = consumeGitToken(rest, cursor)
+    const second = rest[cursor] === '"' ? consumeGitToken(rest, cursor) : { token: rest.slice(cursor), next: rest.length }
     if (!second) return null
     return [
       stripSidePrefix(decodeGitPath(first.token), 'a/'),
@@ -88,6 +98,18 @@ export function parseGitDiffHeaderPaths(line: string): [string, string] | null {
     ]
   }
 
+  // A rename can quote just the destination. Spaces alone are legal unquoted
+  // bytes, including a literal " b/" within a filename.
+  const quotedSeparator = rest.lastIndexOf(' "b/')
+  if (quotedSeparator >= 0) {
+    const second = consumeGitToken(rest, quotedSeparator + 1)
+    if (!second || second.next !== rest.length) return null
+    return [stripSidePrefix(rest.slice(0, quotedSeparator), 'a/'), stripSidePrefix(decodeGitPath(second.token), 'b/')]
+  }
+  const midpoint = (rest.length - 1) / 2
+  if (Number.isInteger(midpoint) && rest[midpoint] === ' ' && rest.slice(2, midpoint) === rest.slice(midpoint + 3)) {
+    return [rest.slice(2, midpoint), rest.slice(midpoint + 3)]
+  }
   const separator = rest.lastIndexOf(' b/')
   if (separator < 0) return null
   return [

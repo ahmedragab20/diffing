@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { promisify } from "node:util";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
+import { isUtf8 } from "node:buffer";
+import { quoteGitPath } from "./git-path.js";
 import {
   isSafePath,
   toSafeLiteralRelativePath,
@@ -17,15 +19,6 @@ import {
 import { parseFromFilesSync } from "editorconfig";
 
 const execFileAsync = promisify(execFile);
-
-// Files on disk may use LF, CRLF (typical on Windows) or even bare CR endings
-// (very rare, but legal). When we synthesise a unified diff for an untracked
-// file we want one diff line per source line *without* a trailing `\r` —
-// otherwise the diff viewer renders a stray carriage return on every added
-// line. Mirrors the `/\r?\n/` already used by the git-log parser below.
-function splitLines(content: string): string[] {
-  return content.split(/\r\n|\n|\r/);
-}
 
 const IMAGE_EXTENSIONS = new Set([
   ".png",
@@ -58,24 +51,32 @@ function isBinaryBytes(bytes: Buffer): boolean {
 }
 
 function synthesizeUntrackedPatch(file: string, bytes: Buffer): string {
-  if (isBinaryBytes(bytes)) {
+  const oldPath = quoteGitPath(`a/${file}`);
+  const newPath = quoteGitPath(`b/${file}`);
+  const byteFingerprint = `diffing-content-sha256 ${createHash("sha256").update(bytes).digest("hex")}`;
+  if (isBinaryBytes(bytes) || !isUtf8(bytes)) {
     return [
-      `diff --git a/${file} b/${file}`,
+      `diff --git ${oldPath} ${newPath}`,
       "new file mode 100644",
-      "index 0000000..0000001",
-      `Binary files /dev/null and b/${file} differ`,
+      byteFingerprint,
+      `Binary files /dev/null and ${newPath} differ`,
     ].join("\n");
   }
-  const lines = splitLines(bytes.toString("utf-8"));
+  const content = bytes.toString("utf-8");
+  const lines = content ? content.split("\n") : [];
+  if (content.endsWith("\n")) lines.pop();
   return [
-    `diff --git a/${file} b/${file}`,
+    `diff --git ${oldPath} ${newPath}`,
     "new file mode 100644",
-    "index 0000000..0000001",
-    "--- /dev/null",
-    `+++ b/${file}`,
-    `@@ -0,0 +1,${lines.length} @@`,
-    ...lines.map((line) => `+${line}`),
-  ].join("\n");
+    byteFingerprint,
+    ...(lines.length ? [
+      "--- /dev/null",
+      `+++ ${newPath}`,
+      `@@ -0,0 +1,${lines.length} @@`,
+      ...lines.map((line) => `+${line}`),
+      ...(!content.endsWith("\n") ? ["\\ No newline at end of file"] : []),
+    ] : []),
+  ].join("\n") + "\n";
 }
 
 export type FileContentScope = {
@@ -95,7 +96,15 @@ export type GitDiffResult = {
   patch: string;
   omittedUntracked: string[];
   untrackedListingFailed?: boolean;
+  layers?: DiffLayer[];
 };
+
+export interface DiffLayer {
+  kind: "working" | "staged" | "untracked" | "revision" | "commit" | "pr" | "mixed";
+  patch: string;
+  revision?: string;
+  parents?: string[];
+}
 
 function isNativeTransportFailure(error: unknown): boolean {
   return (
@@ -547,6 +556,11 @@ export async function getGitDiffAsync(
   return {
     patch: parts.join("\n"),
     omittedUntracked: untracked.omitted,
+    layers: [
+      { kind: "working", patch: unstaged },
+      ...(options.staged ? [{ kind: "staged" as const, patch: staged }] : []),
+      ...(options.untracked ? [{ kind: "untracked" as const, patch: untracked.patch }] : []),
+    ],
     ...(untracked.listingFailed ? { untrackedListingFailed: true } : {}),
   };
 }
@@ -1117,7 +1131,7 @@ export async function getShowDiff(
   // `--reverse` gives oldest-first which matches reading order for a series
   // review.
   let shaList: string[];
-  try {
+  {
     const { stdout } = await execFileAsync(
       "git",
       [
@@ -1130,8 +1144,6 @@ export async function getShowDiff(
       { encoding: "utf-8", maxBuffer: 50 * 1024 * 1024 },
     );
     shaList = stdout.split("\n").filter(Boolean);
-  } catch {
-    return { commits: [], patch: "", truncated: 0 };
   }
 
   if (shaList.length === 0) return { commits: [], patch: "", truncated: 0 };
@@ -1146,7 +1158,7 @@ export async function getShowDiff(
   // these exact commits are shown (no ancestor traversal); `--reverse` keeps
   // the same oldest-first ordering as step 1.
   let raw: string;
-  try {
+  {
     const { stdout } = await execFileAsync(
       "git",
       [
@@ -1162,8 +1174,6 @@ export async function getShowDiff(
       { encoding: "utf-8", maxBuffer: 200 * 1024 * 1024 },
     );
     raw = stdout;
-  } catch {
-    return { commits: [], patch: "", truncated: 0 };
   }
 
   const commits = parseGitShowRaw(raw);

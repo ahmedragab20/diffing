@@ -1401,6 +1401,7 @@ async function inspect(args: string[]): Promise<number> {
 			args,
 			options: {
 				continuation: { type: "string" },
+				"snapshot-id": { type: "string" },
 				cursor: { type: "string" },
 				limit: { type: "string" },
 				file: { type: "string" },
@@ -1429,7 +1430,8 @@ async function inspect(args: string[]): Promise<number> {
 Read bounded data from a running session (web, TUI, or gh-pr) without transferring the full patch.
   summary [--exclude lockfiles]
   files   [--path GLOB] [--cursor N --generation N] [--limit N]
-  files   --continuation TOKEN  (web/PR: pass nextContinuation alone)
+  files|hunks|slice|search --continuation TOKEN  (web/PR: pass nextContinuation alone)
+  files|hunks|slice|search --snapshot-id ID [options]  (read retained source from summary or files)
   hunks   (--file N | --path GLOB) [--cursor N] [--limit N] [--generation N]
   slice   (--file N | --path GLOB) [--start N] [--max-lines N] [--max-bytes N] [--generation N]
   search  <text>|--query <text> [--path GLOB] [--file N] [--row N] [--limit N] [--max-bytes N] [--generation N]
@@ -1454,15 +1456,23 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`);
 	const params = new URLSearchParams();
 	const continuation = parsed.values.continuation;
 	if (typeof continuation === "string") {
-		if (resource !== "files") {
-			console.error("--continuation is supported only for files");
+		if (resource === "summary") {
+			console.error("--continuation is not supported for summary");
 			return EXIT_USAGE;
 		}
-		if (["cursor", "limit", "path", "generation", "file", "row", "start", "exclude", "query", "max-lines", "max-bytes"].some((key) => parsed.values[key] !== undefined)) {
+		if (["snapshot-id", "cursor", "limit", "path", "generation", "file", "row", "start", "exclude", "query", "max-lines", "max-bytes"].some((key) => parsed.values[key] !== undefined)) {
 			console.error("Pass --continuation alone; its filter, position and page size are already bound.");
 			return EXIT_USAGE;
 		}
 		params.set("continuation", continuation);
+	}
+	const snapshotId = parsed.values["snapshot-id"];
+	if (typeof snapshotId === "string") {
+		if (!["files", "hunks", "slice", "search"].includes(resource)) {
+			console.error("--snapshot-id is supported for files, hunks, slice and search");
+			return EXIT_USAGE;
+		}
+		params.set("snapshotId", snapshotId);
 	}
 	const numberOptions: Array<[keyof typeof parsed.values, string]> = [
 		["cursor", "cursor"],
@@ -1477,7 +1487,7 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`);
 	for (const [option, parameter] of numberOptions) {
 		const value = parsed.values[option];
 		if (typeof value !== "string") continue;
-		if (!/^\d+$/.test(value)) {
+		if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
 			console.error(`--${option} must be a non-negative integer`);
 			return EXIT_USAGE;
 		}
@@ -1487,7 +1497,7 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`);
 	if (typeof path === "string") params.set("path", path);
 	const exclude = parsed.values.exclude;
 	if (typeof exclude === "string") params.set("exclude", exclude);
-	const selectorError = validateInspectSelectors(
+	const selectorError = typeof continuation === "string" ? null : validateInspectSelectors(
 		resource,
 		typeof parsed.values.file === "string" ? parsed.values.file : undefined,
 		typeof path === "string" ? path : undefined,
@@ -1496,7 +1506,7 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`);
 		console.error(selectorError);
 		return EXIT_USAGE;
 	}
-	if (resource === "search") {
+	if (resource === "search" && typeof continuation !== "string") {
 		const queryOption = parsed.values.query;
 		const query = typeof queryOption === "string" ? queryOption : positionalQuery;
 		if (!query) {
@@ -1512,8 +1522,8 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`);
 	}
 
 	const base = baseUrl();
-	if (typeof continuation === "string" && activeMode === "tui") {
-		console.error("File continuations are unsupported in TUI sessions; use cursor and generation.");
+	if ((typeof continuation === "string" || typeof snapshotId === "string") && activeMode === "tui") {
+		console.error("Retained snapshots are unsupported in TUI sessions; use cursor and generation.");
 		return EXIT_USAGE;
 	}
 	const queryString = params.toString();

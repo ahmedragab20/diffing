@@ -1056,23 +1056,27 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 				"Web/PR pages return nextContinuation: pass it alone to retain the same snapshot/filter. " +
 				"Numeric cursor > 0 requires generation; TUI supports only numeric paging. Restart files on expiration.",
 			inputSchema: {
+				snapshotId: z.uuid().optional(),
 				continuation: z.string().min(1).max(16384).optional(),
 				generation: z.number().int().nonnegative().optional(),
 				cursor: z.number().int().nonnegative().optional(),
 				limit: z.number().int().positive().max(1000).optional(),
+				maxBytes: z.number().int().min(512).max(4 * 1024 * 1024).optional(),
 				path: z.string().min(1).optional(),
 			},
 			outputSchema: { result: z.unknown() },
 			annotations: READ_ONLY,
 		},
-		async ({ cursor, limit, path, continuation, generation }) => {
+		async ({ cursor, limit, path, continuation, generation, maxBytes, snapshotId }) => {
 			const session = requireInspectSession();
-			if (continuation !== undefined && session.lock.mode === "tui") {
+			if ((continuation !== undefined || snapshotId !== undefined || maxBytes !== undefined) && session.lock.mode === "tui") {
 				throw new Error("File continuations are unsupported in TUI sessions; use cursor and generation.");
 			}
 			const query = new URLSearchParams();
+			if (snapshotId !== undefined) query.set("snapshotId", snapshotId);
 			if (cursor !== undefined) query.set("cursor", String(cursor));
 			if (limit !== undefined) query.set("limit", String(limit));
+			if (maxBytes !== undefined) query.set("maxBytes", String(maxBytes));
 			if (continuation !== undefined) query.set("continuation", continuation);
 			if (generation !== undefined) query.set("generation", String(generation));
 			if (path) query.set("path", path);
@@ -1090,30 +1094,33 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			title: "Page hunk metadata (bounded)",
 			description:
 				"Return bounded hunk metadata for one file. Pass path (glob resolving to exactly one file) or file (global index), not both. " +
-				"Pass generation from diff_summary to reject stale navigation. Works for web, TUI, and GitHub PR sessions.",
+				"Pass generation from diff_summary to reject stale navigation. Web/PR: pass snapshotId from files, then nextContinuation alone. TUI supports live generation-based reads.",
 			inputSchema: {
+				snapshotId: z.uuid().optional(),
+				continuation: z.string().min(1).max(16384).optional(),
 				file: z.number().int().nonnegative().optional(),
 				path: z.string().min(1).optional(),
 				generation: z.number().int().nonnegative().optional(),
 				cursor: z.number().int().nonnegative().optional(),
 				limit: z.number().int().positive().max(1000).optional(),
+				maxBytes: z.number().int().min(512).max(4 * 1024 * 1024).optional(),
 			},
 			outputSchema: { result: z.unknown() },
 			annotations: READ_ONLY,
 		},
-		async ({ file, path, generation, cursor = 0, limit = 100 }) => {
+		async (input) => {
 			const session = requireInspectSession();
-			const query = new URLSearchParams({
-				cursor: String(cursor),
-				limit: String(limit),
-			});
-			if (file !== undefined) query.set("file", String(file));
-			if (path) query.set("path", path);
-			if (generation !== undefined) query.set("generation", String(generation));
-			const result = await requestSessionJson<Record<string, unknown>>(
-				session,
-				`/api/diff/hunks?${query}`,
-			);
+			if ((input.continuation !== undefined || input.snapshotId !== undefined) && session.lock.mode === "tui") {
+				throw new Error("Retained snapshots are unsupported in TUI sessions; use generation and numeric coordinates.");
+			}
+			if (input.continuation !== undefined && Object.entries(input).some(([key, value]) => key !== "continuation" && value !== undefined)) {
+				throw new Error("Pass continuation alone; its query and position are already bound.");
+			}
+			const params = new URLSearchParams();
+			for (const [key, value] of Object.entries(input)) {
+				if (value !== undefined) params.set(key === "query" ? "q" : key, String(value));
+			}
+			const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/hunks?${params}`);
 			return textResult(JSON.stringify(result), { result });
 		},
 	);
@@ -1125,8 +1132,10 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			description:
 				"Read exact logical rows for one file with strict line and byte budgets; use nextRow to continue. " +
 				"Pass path (glob resolving to exactly one file) or file (global index), not both. " +
-				"Works for web, TUI, and GitHub PR sessions. Prefer this over get_diff.",
+				"Web/PR: pass snapshotId from files, then nextContinuation alone. TUI supports live generation-based reads. Prefer this over get_diff.",
 			inputSchema: {
+				snapshotId: z.uuid().optional(),
+				continuation: z.string().min(1).max(16384).optional(),
 				file: z.number().int().nonnegative().optional(),
 				path: z.string().min(1).optional(),
 				start: z.number().int().nonnegative().optional(),
@@ -1142,27 +1151,19 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			outputSchema: { result: z.unknown() },
 			annotations: READ_ONLY,
 		},
-		async ({
-			file,
-			path,
-			start = 0,
-			generation,
-			maxLines = 120,
-			maxBytes = 256 * 1024,
-		}) => {
+		async (input) => {
 			const session = requireInspectSession();
-			const query = new URLSearchParams({
-				start: String(start),
-				maxLines: String(maxLines),
-				maxBytes: String(maxBytes),
-			});
-			if (file !== undefined) query.set("file", String(file));
-			if (path) query.set("path", path);
-			if (generation !== undefined) query.set("generation", String(generation));
-			const result = await requestSessionJson<Record<string, unknown>>(
-				session,
-				`/api/diff/slice?${query}`,
-			);
+			if ((input.continuation !== undefined || input.snapshotId !== undefined) && session.lock.mode === "tui") {
+				throw new Error("Retained snapshots are unsupported in TUI sessions; use generation and numeric coordinates.");
+			}
+			if (input.continuation !== undefined && Object.entries(input).some(([key, value]) => key !== "continuation" && value !== undefined)) {
+				throw new Error("Pass continuation alone; its query and position are already bound.");
+			}
+			const params = new URLSearchParams();
+			for (const [key, value] of Object.entries(input)) {
+				if (value !== undefined) params.set(key === "query" ? "q" : key, String(value));
+			}
+			const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/slice?${params}`);
 			return textResult(JSON.stringify(result), { result });
 		},
 	);
@@ -1174,9 +1175,11 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			description:
 				"Search changed paths and content with bounded hits/bytes and generation-safe continuation coordinates. " +
 				"Optional path glob limits hits to matching files (in addition to file+row continuation). " +
-				"Works for web, TUI, and GitHub PR sessions.",
+				"Web/PR: pass snapshotId from files, then nextContinuation alone. TUI supports live generation-based reads.",
 			inputSchema: {
-				query: z.string().min(1),
+				snapshotId: z.uuid().optional(),
+				continuation: z.string().min(1).max(16384).optional(),
+				query: z.string().min(1).max(4096).optional(),
 				path: z.string().min(1).optional(),
 				generation: z.number().int().nonnegative().optional(),
 				file: z.number().int().nonnegative().optional(),
@@ -1192,29 +1195,20 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			outputSchema: { result: z.unknown() },
 			annotations: READ_ONLY,
 		},
-		async ({
-			query,
-			path,
-			generation,
-			file = 0,
-			row = 0,
-			limit = 100,
-			maxBytes = 256 * 1024,
-		}) => {
+		async (input) => {
 			const session = requireInspectSession();
-			const params = new URLSearchParams({
-				q: query,
-				file: String(file),
-				row: String(row),
-				limit: String(limit),
-				maxBytes: String(maxBytes),
-			});
-			if (path) params.set("path", path);
-			if (generation !== undefined) params.set("generation", String(generation));
-			const result = await requestSessionJson<Record<string, unknown>>(
-				session,
-				`/api/diff/search?${params}`,
-			);
+			if ((input.continuation !== undefined || input.snapshotId !== undefined) && session.lock.mode === "tui") {
+				throw new Error("Retained snapshots are unsupported in TUI sessions; use generation and numeric coordinates.");
+			}
+			if (input.continuation !== undefined && Object.entries(input).some(([key, value]) => key !== "continuation" && value !== undefined)) {
+				throw new Error("Pass continuation alone; its query and position are already bound.");
+			}
+			if (input.continuation === undefined && !input.query) throw new Error("Search text is required.");
+			const params = new URLSearchParams();
+			for (const [key, value] of Object.entries(input)) {
+				if (value !== undefined) params.set(key === "query" ? "q" : key, String(value));
+			}
+			const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/search?${params}`);
 			return textResult(JSON.stringify(result), { result });
 		},
 	);
@@ -1653,6 +1647,8 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 				"side is additions for +/context in the new file and deletions for a removed line. " +
 				"Optional severity triages the finding for the human and is included in the agent handoff XML.",
 			inputSchema: {
+				snapshotId: z.uuid().optional().describe("Retained files snapshot; supply fileIndex with it to persist a source anchor."),
+				fileIndex: z.number().int().nonnegative().optional(),
 				filePath: z
 					.string()
 					.min(1)

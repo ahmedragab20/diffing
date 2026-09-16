@@ -7,7 +7,9 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildAgentDiffIndex } from "../agent-diff-index.js";
+import { buildAgentDiffIndex, AgentDiffIndexCache } from "../agent-diff-index.js";
+import { captureInspection } from "../inspect-capture.js";
+import { DEFAULTS } from "../diff-options.js";
 import { FileInspectSnapshots, type CapturedFilesPage, type FileInspectError } from "../file-inspect-snapshots.js";
 import type { InspectScopeError } from "../inspect-scope.js";
 
@@ -58,6 +60,72 @@ function requirePage(result: CapturedFilesPage | FileInspectError | InspectScope
 }
 
 describe("FileInspectSnapshots", () => {
+  it("never revives expired snapshot IDs when the source index is still cached", async () => {
+    let now = 100;
+    const patch = "diff --git a/a.ts b/a.ts\n@@ -1 +1 @@\n-old\n+new\n";
+    const capture = await captureInspection({ ...DEFAULTS }, async () => ({ patch, complete: true, layers: [{ kind: "working", patch }] }), async () => ({
+      repositoryId: "a".repeat(64), workspaceId: "b".repeat(64), head: "c".repeat(40), indexDigest: "d".repeat(64), resolvedRevisions: [],
+    }));
+    const index = new AgentDiffIndexCache().getOrBuild(patch, true, undefined, capture.manifest);
+    const snapshots = new FileInspectSnapshots({ now: () => now, ttlMs: 10 });
+    const first = requirePage(snapshots.start(index));
+    const slice = snapshots.read("slice", first.snapshotId, { file: 0, maxLines: 1 });
+    if (!("nextContinuation" in slice) || !slice.nextContinuation) throw new Error("Expected slice continuation");
+    now = 110;
+    const second = requirePage(snapshots.start(index));
+    expect(second.snapshotId).not.toBe(first.snapshotId);
+    expect(second.manifest?.snapshotId).toBe(second.snapshotId);
+    expect(snapshots.get(second.snapshotId)?.manifest?.snapshotId).toBe(second.snapshotId);
+    expect(snapshots.files(first.snapshotId)).toMatchObject({ code: "snapshot_expired" });
+    expect(snapshots.continueRead("slice", slice.nextContinuation)).toMatchObject({ code: "snapshot_expired" });
+    expect(index.manifest?.snapshotId).toBe(capture.manifest.snapshotId);
+  });
+
+  it("bounds file metadata and explicitly skips an oversized path", () => {
+    const snapshots = new FileInspectSnapshots();
+    const first = requirePage(snapshots.start(indexFor(`${"界".repeat(2000)}.ts`, "tail.ts"), 0, 100, undefined, 1024));
+    expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(1024);
+    expect(first).toMatchObject({ files: [], omitted: { reason: "row_too_large", fileIndex: 0 }, nextCursor: 1 });
+    const last = requirePage(snapshots.continue(first.nextContinuation!));
+    expect(last.files.map((file) => file.path)).toEqual(["tail.ts"]);
+    expect(last.nextContinuation).toBeNull();
+    expect(Buffer.byteLength(JSON.stringify(last))).toBeLessThanOrEqual(1024);
+  });
+
+  it("bounds serialized retained slices and advances past a single oversized row", () => {
+    const snapshots = new FileInspectSnapshots();
+    const index = buildAgentDiffIndex(`diff --git a/a.ts b/a.ts\n@@ -1 +1,2 @@\n-old\n+${"界".repeat(5000)}\n+tail\n`);
+    const files = requirePage(snapshots.start(index));
+    let result = snapshots.read("slice", files.snapshotId, { file: 0, start: 3, maxBytes: 1024 });
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(1024);
+    expect(result).toMatchObject({ rows: [], omitted: { reason: "row_too_large", count: 1 }, nextRow: 4 });
+    if (!("nextContinuation" in result) || !result.nextContinuation) throw new Error("Missing continuation after omitted row");
+    result = snapshots.continueRead("slice", result.nextContinuation);
+    expect(result).toMatchObject({ rows: [expect.objectContaining({ content: "tail" })], nextContinuation: null });
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(1024);
+  });
+
+  it("includes continuation and metadata in serialized hunk/search budgets", () => {
+    const snapshots = new FileInspectSnapshots();
+    const patch = Array.from({ length: 30 }, (_, i) => `@@ -${i + 1} +${i + 1} @@ ${"界".repeat(70)}\n-old\n+needle ${"界".repeat(100)}\n`).join("");
+    const files = requirePage(snapshots.start(buildAgentDiffIndex(`diff --git a/a b/a\n${patch}`)));
+    for (const operation of ["hunks", "search"] as const) {
+      let page = snapshots.read(operation, files.snapshotId, { file: 0, q: operation === "search" ? "needle" : undefined, maxBytes: 2048 });
+      let count = 0;
+      let pages = 0;
+      while (!("status" in page)) {
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(2048);
+        count += "hunks" in page ? page.hunks.length : "hits" in page ? page.hits.length : 0;
+        if (!page.nextContinuation) break;
+        expect(++pages).toBeLessThan(50);
+        page = snapshots.continueRead(operation, page.nextContinuation);
+      }
+      expect(page).not.toHaveProperty("status");
+      expect(count).toBe(30);
+      expect(pages).toBeGreaterThan(0);
+    }
+  });
+
   it("retains a continuation on the old Git snapshot while fresh traversal sees an intent-to-add file", () => {
     const repo = createRepo();
     const initialDiff = git(repo, "diff", "--no-ext-diff", "--no-color");

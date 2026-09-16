@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
+import { createHash } from 'node:crypto'
 import {
   buildAgentDiffIndex,
   indexSummary,
@@ -95,6 +96,139 @@ rename to new name.ts
 `
     const index = buildAgentDiffIndex(patch, 4)
     expect(index.files[0].newPath).toBe('a\tb.ts')
+  })
+
+  it('records mode-only changes with exact modes and no hunks', () => {
+    const patch = `diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755
+`
+    const file = buildAgentDiffIndex(patch).files[0]
+    expect(file).toMatchObject({
+      oldPath: 'script.sh',
+      newPath: 'script.sh',
+      kind: 'modified',
+      hunks: [],
+      rowCount: 1,
+      metadata: {
+        oldMode: '100644',
+        newMode: '100755',
+        oldBlob: null,
+        newBlob: null,
+        submodule: false,
+      },
+    })
+  })
+
+  it('records short submodule metadata and literal rows', () => {
+    const patch = `diff --git a/vendor/lib b/vendor/lib
+index abc..def 160000
+--- a/vendor/lib
++++ b/vendor/lib
+@@ -1 +1 @@
+-Subproject commit abc
++Subproject commit def
+`
+    const file = buildAgentDiffIndex(patch).files[0]
+    expect(file.metadata).toMatchObject({
+      oldMode: '160000',
+      newMode: '160000',
+      oldBlob: 'abc',
+      newBlob: 'def',
+      submodule: true,
+    })
+    expect(file.rows).toEqual([
+      expect.objectContaining({ type: 'fileHeader', path: 'vendor/lib' }),
+      expect.objectContaining({ type: 'hunkHeader', oldStart: 1, newStart: 1 }),
+      expect.objectContaining({ type: 'line', kind: 'del', content: 'Subproject commit abc' }),
+      expect.objectContaining({ type: 'line', kind: 'add', content: 'Subproject commit def' }),
+    ])
+  })
+
+  it('uses null paths for empty mode-only additions and deletions', () => {
+    const patch = `diff --git a/new.txt b/new.txt
+new file mode 100644
+diff --git a/old.txt b/old.txt
+deleted file mode 100644
+`
+    const files = buildAgentDiffIndex(patch).files
+    expect(files[0]).toMatchObject({ oldPath: null, newPath: 'new.txt', kind: 'added', hunks: [] })
+    expect(files[1]).toMatchObject({ oldPath: 'old.txt', newPath: null, kind: 'deleted', hunks: [] })
+  })
+
+  it('preserves CRLF bytes in added row content', () => {
+    const patch = `diff --git a/crlf.txt b/crlf.txt
+--- a/crlf.txt
++++ b/crlf.txt
+@@ -1,2 +1,2 @@
+-old\r
++new\r
+ context\r
+`
+    const file = buildAgentDiffIndex(patch).files[0]
+    expect(file.rows.filter((row) => row.type === 'line').map((row) => row.content)).toEqual([
+      'old\r',
+      'new\r',
+      'context\r',
+    ])
+  })
+
+  it('indexes a missing-newline marker as its own row', () => {
+    const patch = `diff --git a/file.txt b/file.txt
+--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-old
++new
+\\ No newline at end of file
+`
+    const file = buildAgentDiffIndex(patch).files[0]
+    expect(file.rows.at(-1)).toEqual({ type: 'noNewline', hunkIndex: 0 })
+  })
+
+  it('parses mixed quoted and unquoted rename paths', () => {
+    const patch = `diff --git a/old name.ts "b/new name.ts"
+similarity index 100%
+rename from old name.ts
+rename to new name.ts
+`
+    const file = buildAgentDiffIndex(patch).files[0]
+    expect(file).toMatchObject({ oldPath: 'old name.ts', newPath: 'new name.ts', kind: 'renamed' })
+  })
+
+  it('preserves a literal b slash segment in unquoted paths', () => {
+    const patch = `diff --git a/literal b/name a/literal b/name
+old mode 100644
+new mode 100755
+`
+    const file = buildAgentDiffIndex(patch).files[0]
+    expect(file).toMatchObject({ oldPath: 'literal b/name', newPath: 'literal b/name' })
+  })
+
+  it('changes patch digests for mode and CR changes but not file position', () => {
+    const first = `diff --git a/one.txt b/one.txt
+--- a/one.txt
++++ b/one.txt
+@@ -1 +1 @@
+-old
++new
+`
+    const second = `diff --git a/two.txt b/two.txt
+--- a/two.txt
++++ b/two.txt
+@@ -1 +1 @@
+-old
++new
+`
+    const reordered = buildAgentDiffIndex(second + first)
+    const ordered = buildAgentDiffIndex(first + second)
+    expect(ordered.files[0].metadata.patchDigest).toBe(reordered.files[1].metadata.patchDigest)
+    expect(ordered.files[1].metadata.patchDigest).toBe(reordered.files[0].metadata.patchDigest)
+
+    const modeChanged = buildAgentDiffIndex(`diff --git a/one.txt b/one.txt\nold mode 100644\nnew mode 100755\n${first}`).files[0]
+    const crChanged = buildAgentDiffIndex(first.replace('+new\n', '+new\r\n')).files[0]
+    expect(modeChanged.metadata.patchDigest).not.toBe(ordered.files[0].metadata.patchDigest)
+    expect(crChanged.metadata.patchDigest).not.toBe(ordered.files[0].metadata.patchDigest)
   })
 })
 
@@ -255,6 +389,16 @@ rename to new name.ts
 })
 
 describe('AgentDiffIndexCache', () => {
+  it('hashes exact file sections across preambles, repeated headers, Unicode and missing trailing newline', () => {
+    const first = 'diff --git a/café.ts b/café.ts\n@@ -1 +1 @@\n-old\n+diff --git a/inside b/inside\r'
+    const second = 'diff --git a/café.ts b/café.ts\n@@ -1 +1 @@\n-old\n+tail'
+    const index = buildAgentDiffIndex(`commit metadata\n${first}\n\n${second}`)
+    expect(index.files).toHaveLength(2)
+    expect(index.files.map((file) => file.metadata.patchDigest)).toEqual(
+      [first, second].map((section) => createHash('sha256').update(section).digest('hex')),
+    )
+  })
+
   it('reuses generation for identical patch', () => {
     const cache = new AgentDiffIndexCache()
     const a = cache.getOrBuild(SAMPLE)

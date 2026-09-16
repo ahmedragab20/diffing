@@ -1,4 +1,20 @@
 import { z } from "zod";
+import { sourceAnchorSchema } from "./source-anchor.js";
+
+/** Legacy JSON authority validation; preserve unknown fields during upgrades. */
+export const persistedReviewCommentSchema = z.object({
+  id: z.string().min(1), filePath: z.string(), side: z.enum(["deletions", "additions"]),
+  lineNumber: z.number().int().nonnegative(), startLineNumber: z.number().int().positive().optional(),
+  lineContent: z.string(), body: z.string(), status: z.enum(["open", "resolved"]),
+  createdAt: z.number().finite(), replies: z.array(z.object({
+    id: z.string().min(1), body: z.string(), createdAt: z.number().finite(),
+    role: z.enum(["user", "agent"]).optional(), model: z.string().optional(),
+    createdAtPlanVersion: z.number().int().positive().optional(),
+  }).passthrough()),
+  severity: z.enum(["blocking", "nit", "question", "praise", "none"]).optional(),
+  outdated: z.boolean().optional(), sourceAnchor: sourceAnchorSchema.optional(),
+}).passthrough();
+export const persistedReviewCommentsSchema = z.array(persistedReviewCommentSchema).refine((comments) => new Set(comments.map((comment) => comment.id)).size === comments.length, "Duplicate comment IDs");
 
 export const MAX_COMMENT_BODY_LENGTH = 64 * 1024;
 export const MAX_COMMENT_CONTEXT_LENGTH = 256 * 1024;
@@ -29,8 +45,13 @@ export const createReviewCommentSchema = z
     severity: z
       .enum(["blocking", "nit", "question", "praise", "none"])
       .optional(),
+    snapshotId: z.uuid().optional(),
+    fileIndex: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   })
   .superRefine((value, ctx) => {
+    if ((value.snapshotId === undefined) !== (value.fileIndex === undefined)) {
+      ctx.addIssue({ code: "custom", path: ["snapshotId"], message: "snapshotId and fileIndex must be supplied together" });
+    }
     if (
       value.startLineNumber !== undefined &&
       (value.lineNumber === 0 || value.startLineNumber > value.lineNumber)

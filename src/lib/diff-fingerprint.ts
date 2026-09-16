@@ -2,6 +2,7 @@
  * Per-file fingerprints of a unified diff, used to detect "what changed
  * since the last review handoff" without storing full patch text.
  */
+import { parseGitDiffHeaderPaths } from './git-path.js'
 
 /** Stable FNV-1a 32-bit hex hash of a string. */
 export function hashString(input: string): string {
@@ -22,25 +23,26 @@ export function splitUnifiedDiffByFile(patch: string): Map<string, string> {
   const map = new Map<string, string>()
   if (!patch.trim()) return map
 
-  const lines = patch.split(/\r?\n/)
+  const lines = patch.split('\n')
   let currentPath: string | null = null
   let buf: string[] = []
 
   const flush = () => {
     if (currentPath != null && buf.length > 0) {
-      map.set(currentPath, buf.join('\n'))
+      const previous = map.get(currentPath)
+      map.set(currentPath, previous === undefined ? buf.join('\n') : `${previous}\n${buf.join('\n')}`)
     }
     currentPath = null
     buf = []
   }
 
   for (const line of lines) {
-    const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(line)
+    const m = parseGitDiffHeaderPaths(line)
     if (m) {
       flush()
       // Prefer the destination path; for pure deletes both sides may matter
       // but b/ is what the working tree review uses for names.
-      currentPath = m[2] === '/dev/null' ? m[1] : m[2]
+      currentPath = m[1] === '/dev/null' ? m[0] : m[1]
       buf = [line]
       continue
     }
@@ -53,7 +55,7 @@ export function splitUnifiedDiffByFile(patch: string): Map<string, string> {
 /** path → content fingerprint for every file in the patch. */
 export function fingerprintDiffFiles(patch: string): Record<string, string> {
   const parts = splitUnifiedDiffByFile(patch)
-  const out: Record<string, string> = {}
+  const out: Record<string, string> = Object.create(null)
   for (const [path, text] of parts) {
     out[path] = hashString(text)
   }

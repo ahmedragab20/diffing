@@ -15,6 +15,7 @@ pub mod keys;
 pub mod lsp;
 pub mod path_safety;
 pub mod persistence;
+pub mod review_store;
 pub mod search;
 pub mod server_lock;
 pub mod themes;

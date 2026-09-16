@@ -35,6 +35,8 @@ export function isReviewCommentSide(value: unknown): value is ReviewComment['sid
 }
 
 export interface ReviewComment {
+  /** Missing on historical comments; absence never proves freshness. */
+  sourceAnchor?: import('./source-anchor.js').SourceAnchor
   id: string
   filePath: string
   side: 'deletions' | 'additions'

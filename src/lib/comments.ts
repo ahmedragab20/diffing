@@ -1,5 +1,7 @@
 import { join } from 'node:path'
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, open, rename, unlink } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { persistedReviewCommentsSchema } from './comment-schema.js'
 import { getRepoRoot, getProjectStorageDir } from './git.js'
 import type { ReviewComment, CommentReply } from './types.js'
 
@@ -118,25 +120,35 @@ export class FileCommentStore implements CommentStore {
   async getAll(): Promise<ReviewComment[]> {
     try {
       const data = await readFile(this.filePath, 'utf-8')
-      return JSON.parse(data)
-    } catch {
-      return []
+      const parsed = persistedReviewCommentsSchema.safeParse(JSON.parse(data))
+      if (!parsed.success) throw new Error('Invalid comment store; preserve the original file and recover it before writing.')
+      return parsed.data
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
     }
   }
 
   private async save(comments: ReviewComment[]): Promise<void> {
+    await mkdir(this.dirPath, { recursive: true })
+    const temporary = join(this.dirPath, `.comments-${randomUUID()}.json`)
+    // Replacement preserves the last valid JSON if writing/flushing fails.
+    // The journal driver owns the stronger directory-flush/recovery contract;
+    // this legacy store is not a cross-process transaction authority.
     try {
-      await mkdir(this.dirPath, { recursive: true })
+      const file = await open(temporary, 'wx', 0o600)
+      try {
+        await file.writeFile(JSON.stringify(persistedReviewCommentsSchema.parse(comments), null, 2), 'utf-8')
+        await file.sync()
+      } finally { await file.close() }
+      await rename(temporary, this.filePath)
       try {
         const repoRoot = getRepoRoot()
         await writeFile(join(this.dirPath, 'repo_path.txt'), repoRoot, 'utf-8')
       } catch {
         // Ignore if outside git repo or in mock sandboxes
       }
-      await writeFile(this.filePath, JSON.stringify(comments, null, 2), 'utf-8')
-    } catch (err) {
-      console.error('Failed to save comments to file:', err)
-    }
+    } finally { await unlink(temporary).catch(() => {}) }
   }
 
   /** Serialize each read-modify-write cycle so concurrent API calls cannot overwrite one another. */

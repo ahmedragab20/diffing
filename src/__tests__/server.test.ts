@@ -4,6 +4,11 @@ import type { Hono } from "hono";
 import type { CommentStore } from "../lib/comments.js";
 import type { PrSession } from "../lib/pr-session.js";
 
+vi.mock("../lib/inspect-capture.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/inspect-capture.js")>();
+  return { ...actual, readInspectionIdentity: async () => ({ repositoryId: "a".repeat(64), workspaceId: "b".repeat(64), head: "c".repeat(40), indexDigest: "d".repeat(64), resolvedRevisions: [] }) };
+});
+
 const mockGetGitDiff = vi.fn();
 const mockGetCustomGitDiff = vi.fn();
 const mockGetRepoName = vi.fn();
@@ -713,6 +718,56 @@ describe("server", () => {
     });
 
     describe("bounded diff inspect", () => {
+      it("navigates retained hunks, slices and searches without recollecting a changed workspace", async () => {
+        mockGetGitDiffAsync.mockResolvedValue("diff --git a/a.ts b/a.ts\n@@ -1 +1 @@ first\n-old\n+retained one\n@@ -10 +10 @@ second\n-before\n+retained two\n");
+        const read = async (operation: string, query: string) => {
+          const response = await app.fetch(new Request(`http://localhost/api/diff/${operation}?${query}`));
+          expect(response.status).toBe(200);
+          return response.json();
+        };
+        const files = await read("files", "limit=1");
+        const calls = mockGetGitDiffAsync.mock.calls.length;
+        mockGetGitDiffAsync.mockResolvedValue("diff --git a/changed.ts b/changed.ts\n@@ -1 +1 @@\n-old\n+replaced\n");
+        for (const [operation, query, field] of [
+          ["hunks", "file=0&limit=1", "hunks"],
+          ["slice", "file=0&maxLines=3", "rows"],
+          ["search", "q=retained&limit=1", "hits"],
+        ]) {
+          let page = await read(operation, `snapshotId=${files.snapshotId}&${query}`);
+          const entries = [...page[field]];
+          expect(page.nextContinuation).toEqual(expect.any(String));
+          let count = 0;
+          while (page.nextContinuation) {
+            expect(++count).toBeLessThan(10);
+            page = await read(operation, `continuation=${encodeURIComponent(page.nextContinuation)}`);
+            expect(page.snapshotId).toBe(files.snapshotId);
+            expect(page.freshness).toBe("not-checked");
+            entries.push(...page[field]);
+          }
+          if (operation === "hunks") expect(entries.map((entry: any) => entry.heading)).toEqual(["first", "second"]);
+          if (operation === "search") expect(entries.map((entry: any) => entry.preview)).toEqual(["retained one", "retained two"]);
+          if (operation === "slice") expect(entries.filter((entry: any) => entry.type === "line").map((entry: any) => entry.content)).toEqual(["old", "retained one", "before", "retained two"]);
+        }
+        expect(mockGetGitDiffAsync).toHaveBeenCalledTimes(calls);
+      });
+
+      it("rejects cross-operation, conflicting and expired retained reads without collecting Git", async () => {
+        mockGetGitDiffAsync.mockResolvedValue("diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/b b/b\n@@ -1 +1 @@\n-a\n+b\n");
+        const files = await (await app.fetch(new Request("http://localhost/api/diff/files?limit=1"))).json();
+        const calls = mockGetGitDiffAsync.mock.calls.length;
+        for (const operation of ["hunks", "slice", "search"]) {
+          for (const query of [`continuation=${files.nextContinuation}`, `continuation=${files.nextContinuation}&file=0`, `snapshotId=${files.snapshotId}&file=-1`]) {
+            const response = await app.fetch(new Request(`http://localhost/api/diff/${operation}?${query}`));
+            expect(response.status).toBe(400);
+            expect(await response.json()).toMatchObject({ code: "invalid_continuation" });
+          }
+          const expired = await app.fetch(new Request(`http://localhost/api/diff/${operation}?snapshotId=00000000-0000-4000-8000-000000000000&file=0`));
+          expect(expired.status).toBe(410);
+          expect(await expired.json()).toMatchObject({ code: "snapshot_expired" });
+        }
+        expect(mockGetGitDiffAsync).toHaveBeenCalledTimes(calls);
+      });
+
       it("keeps file continuation pages on the captured inventory after external changes", async () => {
         const patch = (name: string) => `diff --git a/${name} b/${name}\n@@ -1 +1 @@\n-old\n+new\n`;
         mockGetGitDiffAsync.mockResolvedValue(patch("a.ts") + patch("b.ts"));
@@ -803,6 +858,74 @@ describe("server", () => {
         const slice = await sliceRes.json();
         expect(slice.rows).toHaveLength(3);
         expect(slice.nextRow).toBe(3);
+      });
+
+      it("retains the summary snapshot when the live patch changes", async () => {
+        const original = "diff --git a/src/index.ts b/src/index.ts\n@@ -1 +1 @@\n-old\n+original\n";
+        mockGetGitDiffAsync.mockResolvedValue(original);
+        const summary = await (await app.fetch(new Request("http://localhost/api/diff/summary"))).json();
+        expect(summary.snapshotId).toBe(summary.manifest.snapshotId);
+        const calls = mockGetGitDiffAsync.mock.calls.length;
+
+        mockGetGitDiffAsync.mockResolvedValue("diff --git a/changed.ts b/changed.ts\n@@ -1 +1 @@\n-old\n+changed\n");
+        const files = await app.fetch(new Request(`http://localhost/api/diff/files?snapshotId=${summary.snapshotId}`));
+        expect(files.status).toBe(200);
+        expect((await files.json()).files).toEqual([expect.objectContaining({ path: "src/index.ts" })]);
+        expect(mockGetGitDiffAsync).toHaveBeenCalledTimes(calls);
+      });
+
+      it("persists a source anchor and reports its freshness after a live change", async () => {
+        const original = "diff --git a/src/index.ts b/src/index.ts\n@@ -1 +1 @@\n-old\n+original\n";
+        mockGetGitDiffAsync.mockResolvedValue(original);
+        const files = await (await app.fetch(new Request("http://localhost/api/diff/files"))).json();
+        const created = await app.fetch(new Request("http://localhost/api/comments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filePath: "src/index.ts", side: "additions", lineNumber: 1,
+            lineContent: "original", body: "review", snapshotId: files.snapshotId, fileIndex: 0,
+          }),
+        }));
+        expect(created.status).toBe(201);
+        const persisted = (await created.json()).sourceAnchor;
+        expect(mockStore.comments[0].sourceAnchor).toEqual(persisted);
+
+        const current = await (await app.fetch(new Request("http://localhost/api/comments"))).json();
+        expect(current[0]).toMatchObject({ sourceAnchor: persisted, sourceFreshness: { status: "current" }, outdated: false });
+
+        mockGetGitDiffAsync.mockResolvedValue("diff --git a/src/index.ts b/src/index.ts\n@@ -1 +1 @@\n-old\n+changed\n");
+        const changed = await (await app.fetch(new Request("http://localhost/api/comments"))).json();
+        expect(changed[0]).toMatchObject({ sourceAnchor: persisted, sourceFreshness: { status: "stale", reason: "source_changed" }, outdated: true });
+        expect(changed[0].sourceAnchor).toEqual(persisted);
+
+        mockGetGitDiffAsync.mockRejectedValue(new Error("Git unavailable"));
+        const unavailable = await app.fetch(new Request("http://localhost/api/comments"));
+        expect(unavailable.status).toBe(200);
+        expect((await unavailable.json())[0]).toMatchObject({
+          body: "review", sourceAnchor: persisted, outdated: true,
+          sourceFreshness: { status: "unverified", reason: "source_unavailable" },
+        });
+      });
+
+      it("rejects invalid source anchors without persisting comments", async () => {
+        mockGetGitDiffAsync.mockResolvedValue("diff --git a/src/index.ts b/src/index.ts\n@@ -1 +1 @@\n-old\n+new\n");
+        const files = await (await app.fetch(new Request("http://localhost/api/diff/files"))).json();
+        const post = (body: Record<string, unknown>) => app.fetch(new Request("http://localhost/api/comments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filePath: "src/index.ts", side: "additions", lineNumber: 1, lineContent: "new", body: "review", snapshotId: files.snapshotId, fileIndex: 0, ...body }),
+        }));
+        const missingPair = await post({ fileIndex: undefined });
+        expect(missingPair.status).toBe(400);
+        expect((await post({ lineNumber: 2 })).status).toBe(400);
+        expect((await post({ filePath: "other.ts" })).status).toBe(400);
+        const expired = await app.fetch(new Request("http://localhost/api/comments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filePath: "src/index.ts", side: "additions", lineNumber: 1, lineContent: "new", body: "review", snapshotId: "00000000-0000-4000-8000-000000000000", fileIndex: 0 }),
+        }));
+        expect(expired.status).toBe(410);
+        expect(mockStore.comments).toHaveLength(0);
       });
 
       it("rejects a stale generation after the web patch changes", async () => {

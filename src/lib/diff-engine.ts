@@ -14,6 +14,7 @@ import {
   getShowDiff,
   getCommitSeriesSummary,
   type CommitInfo,
+  type DiffLayer,
 } from "./git.js";
 import {
   buildWorkingTreeOverview,
@@ -33,6 +34,7 @@ export interface DiffResult {
   complete: boolean;
   /** Repo-relative paths listed by git but omitted from the patch. */
   omittedPaths?: string[];
+  layers?: DiffLayer[];
   /** Populated only when `opts.showMode` is true. */
   commits?: CommitInfo[];
   /** Number of commits dropped past the show-mode cap. */
@@ -157,19 +159,20 @@ export async function executeDiffAsync(opts: DiffOptions): Promise<{
   truncated?: number;
   omittedUntracked?: string[];
   untrackedListingFailed?: boolean;
+  layers?: DiffLayer[];
 }> {
   if (opts.showMode) {
     const { commits, patch, truncated } = await getShowDiff(
       opts.showRevspecs,
       opts.pathspecs,
     );
-    return { patch, args: [], commits, truncated };
+    return { patch, args: [], commits, truncated, layers: commits.map((commit) => ({ kind: "commit", patch: commit.patch, revision: commit.sha, parents: commit.parents })) };
   }
 
   if (isCustomMode(opts)) {
     const args = buildGitDiffArgs(opts);
     const patch = await getCustomGitDiffAsync(args);
-    return { patch, args };
+    return { patch, args, layers: [{ kind: opts.revisions.length ? "revision" : opts.staged ? "staged" : "working", patch }] };
   }
 
   const result = await getGitDiffAsync({
@@ -184,6 +187,7 @@ export async function executeDiffAsync(opts: DiffOptions): Promise<{
     patch: result.patch,
     args: [],
     omittedUntracked: result.omittedUntracked,
+    layers: result.layers,
     ...(result.untrackedListingFailed
       ? { untrackedListingFailed: true }
       : {}),
@@ -202,6 +206,7 @@ export async function executeDiffWithMeta(
     truncated,
     omittedUntracked,
     untrackedListingFailed,
+    layers,
   } = await executeDiffAsync(opts);
 
   const [{ repoName, branch }, untrackedFiles] = await Promise.all([
@@ -220,7 +225,7 @@ export async function executeDiffWithMeta(
   const binaryFiles = parseBinaryFiles(patch, untrackedSet);
   const filePaths = parseFilePaths(patch);
   const tabSizeMap = await getTabSizeForFilesAsync(filePaths);
-  const complete = omitted.length === 0 && !untrackedListingFailed;
+  const complete = omitted.length === 0 && !untrackedListingFailed && !truncated;
 
   // ── Diff overview banner ───────────────────────────────────────────
   // PR mode is short-circuited in server.ts, so we don't need a pr kind
@@ -284,6 +289,7 @@ export async function executeDiffWithMeta(
     tabSizeMap,
     untrackedFiles: visibleUntracked,
     complete,
+    ...(layers ? { layers } : {}),
     ...(omitted.length > 0 ? { omittedPaths: omitted } : {}),
     repoName,
     branch,

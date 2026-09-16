@@ -6,6 +6,11 @@ import type { CommentStore } from "../lib/comments.js";
 import { InMemoryPrSessionStore, type PrSession } from "../lib/pr-session.js";
 import type { PlanStore } from "../lib/plans.js";
 
+vi.mock("../lib/inspect-capture.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../lib/inspect-capture.js")>();
+    return { ...actual, readInspectionIdentity: async () => ({ repositoryId: "a".repeat(64), workspaceId: "b".repeat(64), head: "c".repeat(40), indexDigest: "d".repeat(64), resolvedRevisions: [] }) };
+});
+
 const githubMocks = vi.hoisted(() => ({
     submitReview: vi.fn(),
     fetchExistingComments: vi.fn(),
@@ -1014,6 +1019,20 @@ index 111..222 100644
         expect(
             slice.rows.some((r: any) => r.type === "line" && r.kind === "add"),
         ).toBe(true);
+    });
+
+    it("keeps summary PR metadata bound to the captured source during refresh", async () => {
+        const read = vi.spyOn(prStore, "get")
+            .mockResolvedValueOnce(baseSession)
+            .mockResolvedValueOnce(baseSession)
+            .mockResolvedValue({ ...baseSession, headSha: "refreshed-head", title: "Refreshed title" });
+        const response = await app.fetch(new Request("http://localhost/api/diff/summary"));
+        expect(response.status).toBe(200);
+        const summary = await response.json();
+        expect(summary.headSha).toBe(baseSession.headSha);
+        expect(summary.title).toBe(baseSession.title);
+        expect(summary.headSha).toBe(summary.manifest.provenance.headSha);
+        expect(read).toHaveBeenCalledTimes(2);
     });
 
     it("GET /api/diff/summary is incomplete when PR patches were omitted", async () => {

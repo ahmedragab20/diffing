@@ -465,6 +465,21 @@ describe('diffing MCP', () => {
       expect(new URL(fetchCalls[2]).search).toBe('?continuation=captured-page.signature')
       expect(new URL(fetchCalls[3]).searchParams.get('generation')).toBe('7')
       expect(new URL(fetchCalls[3]).searchParams.get('cursor')).toBe('20')
+      for (const operation of ['hunks', 'slice', 'search']) {
+        const before = fetchCalls.length
+        const result = await session.client.callTool({
+          name: `diff_${operation}`,
+          arguments: { continuation: 'retained.signature' },
+        })
+        expect(result.isError).not.toBe(true)
+        expect(new URL(fetchCalls[before]).search).toBe('?continuation=retained.signature')
+        const conflicting = await session.client.callTool({
+          name: `diff_${operation}`,
+          arguments: { continuation: 'retained.signature', file: 0 },
+        })
+        expect(conflicting.isError).toBe(true)
+        expect(fetchCalls).toHaveLength(before + 1)
+      }
     } finally {
       await session.close()
     }

@@ -138,14 +138,12 @@ import type {
 	PrExistingReply,
 } from "./lib/pr-session.js";
 import { buildPrOverview } from "./lib/diff-overview.js";
-import { FileInspectSnapshots, fileInspectError } from "./lib/file-inspect-snapshots.js";
+import { FileInspectSnapshots, fileInspectError, type SnapshotReadOperation, type SnapshotReadQuery } from "./lib/file-inspect-snapshots.js";
+import { captureInspection, readInspectionIdentity, InspectCaptureError, type InspectionPatch } from "./lib/inspect-capture.js";
+import { assessSourceAnchor, SourceAnchorError } from "./lib/source-anchor.js";
 import {
 	AgentDiffIndexCache,
 	indexSummary,
-	indexHunks,
-	indexSlice,
-	indexSearch,
-	resolveInspectFile,
 } from "./lib/agent-diff-index.js";
 import {
 	formatPrReviewThreads,
@@ -405,6 +403,10 @@ export function createApp(
 ) {
 	const app = new Hono();
 	app.onError((error, c) => {
+		if (error instanceof SourceAnchorError) return c.json({ code: error.code, error: error.message, recovery: "restart_files" }, 400);
+		if (error instanceof InspectCaptureError) {
+			return c.json({ error: error.message, code: error.code, recovery: "restart_capture" }, error.code === "inconsistent_capture" ? 409 : error.code === "unsupported_capture" ? 422 : 503);
+		}
 		if (error instanceof NativeFsError) {
 			return c.json(
 				{
@@ -845,17 +847,16 @@ export function createApp(
 	});
 
 	// ── Bounded agent inspect (web + gh-pr; same contract as TUI Agent API) ──
-	async function resolveAgentPatch(): Promise<{
-		patch: string;
-		complete: boolean;
-		omittedPaths?: string[];
-	}> {
+	async function resolveAgentPatch(): Promise<InspectionPatch> {
 		if (prMode) {
 			const prSession = await prStore.get();
+			if (!prSession) throw new InspectCaptureError("source_unavailable");
 			const omitted = prSession?.diffCompleteness?.omittedPatches ?? 0;
 			return {
 				patch: prSession?.diff ?? "",
 				complete: omitted === 0,
+				layers: [{ kind: "pr", patch: prSession.diff, revision: prSession.headSha, parents: [prSession.mergeBaseSha || prSession.baseSha] }],
+				provenance: { owner: prSession.owner, repo: prSession.repo, pullNumber: prSession.pullNumber, baseSha: prSession.baseSha, headSha: prSession.headSha, title: prSession.title, url: prSession.url },
 			};
 		}
 		const optsForDiff = customMode
@@ -869,13 +870,14 @@ export function createApp(
 		return {
 			patch: result.patch ?? "",
 			complete: result.complete,
+			layers: result.layers,
 			...(result.omittedPaths ? { omittedPaths: result.omittedPaths } : {}),
 		};
 	}
 
 	async function getAgentIndex() {
-		const { patch, complete, omittedPaths } = await resolveAgentPatch();
-		return agentDiffCache.getOrBuild(patch, complete, omittedPaths);
+		const { patch, complete, omittedPaths, manifest } = await captureInspection(diffOpts, resolveAgentPatch, () => readInspectionIdentity(repoRoot, diffOpts));
+		return agentDiffCache.getOrBuild(patch, complete, omittedPaths, manifest);
 	}
 
 	function parseUInt(value: string | undefined, fallback: number): number {
@@ -904,19 +906,21 @@ export function createApp(
 		const index = await getAgentIndex();
 		const summary = indexSummary(index, c.req.query("exclude"));
 		if ("status" in summary) return inspectError(c, summary);
-		if (!prMode) return c.json(summary);
-		const session = await prStore.get();
-		if (!session) return c.json(summary);
+		const capture = fileInspectSnapshots.start(index, 0, 1);
+		if ("status" in capture) return c.json(capture, capture.status as 400 | 409 | 410 | 413);
+		const capturedSummary = { ...summary, snapshotId: capture.snapshotId, expiresAt: capture.expiresAt, freshness: capture.freshness, manifest: capture.manifest };
+		if (!prMode) return c.json(capturedSummary);
+		const provenance = capture.manifest?.provenance;
 		return c.json({
-			...summary,
+			...capturedSummary,
 			prMode: true,
-			owner: session.owner,
-			repo: session.repo,
-			pullNumber: session.pullNumber,
-			title: session.title,
-			url: session.url,
-			baseSha: session.baseSha,
-			headSha: session.headSha,
+			owner: provenance?.owner,
+			repo: provenance?.repo,
+			pullNumber: provenance?.pullNumber,
+			title: provenance?.title,
+			url: provenance?.url,
+			baseSha: provenance?.baseSha,
+			headSha: provenance?.headSha,
 		});
 	});
 
@@ -933,7 +937,8 @@ export function createApp(
 			const result = fileInspectSnapshots.continue(continuation);
 			return "status" in result ? fail(result) : c.json(result);
 		}
-		for (const key of ["cursor", "limit", "generation"]) {
+		if (Object.keys(c.req.query()).some((key) => !["snapshotId", "cursor", "limit", "generation", "maxBytes", "path"].includes(key))) return fail(fileInspectError(400, "invalid_continuation", "Unknown file inspect parameter."));
+		for (const key of ["cursor", "limit", "generation", "maxBytes"]) {
 			const value = c.req.query(key);
 			if (value !== undefined && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) {
 				return fail(fileInspectError(400, "invalid_continuation", `${key} must be a non-negative safe integer.`));
@@ -941,96 +946,70 @@ export function createApp(
 		}
 		const cursor = parseUInt(c.req.query("cursor"), 0);
 		const generation = optionalUInt(c.req.query("generation"));
-		if (cursor > 0 && generation === undefined) {
+		const snapshotId = c.req.query("snapshotId");
+		if (cursor > 0 && generation === undefined && snapshotId === undefined) {
 			return fail(fileInspectError(400, "continuation_required", "Numeric file cursors require generation; prefer nextContinuation from the first page."));
 		}
 		const path = c.req.query("path");
 		if (path && Buffer.byteLength(JSON.stringify(path)) > 4096) {
 			return fail(fileInspectError(400, "invalid_continuation", "File filter exceeds 4096 serialized bytes."));
 		}
+		const limit = parseUInt(c.req.query("limit"), 100);
+		if (snapshotId !== undefined) {
+			const result = fileInspectSnapshots.files(snapshotId, cursor, limit, path, optionalUInt(c.req.query("maxBytes")), generation);
+			return "status" in result ? ("code" in result ? fail(result) : inspectError(c, result)) : c.json(result);
+		}
 		const index = await getAgentIndex();
 		if (generation !== undefined && generation !== index.generation) {
 			return fail(fileInspectError(409, "stale_generation", `stale generation ${generation}; current generation is ${index.generation}`));
 		}
-		const limit = parseUInt(c.req.query("limit"), 100);
-		const result = fileInspectSnapshots.start(index, cursor, limit, path);
+		const result = fileInspectSnapshots.start(index, cursor, limit, path, optionalUInt(c.req.query("maxBytes")));
 		if ("status" in result) return "code" in result ? fail(result) : inspectError(c, result);
 		return c.json(result);
 	});
 
-	app.get("/api/diff/hunks", async (c) => {
-		const index = await getAgentIndex();
-		const resolved = resolveInspectFile(
-			index,
-			optionalUInt(c.req.query("file")),
-			c.req.query("path"),
-		);
-		if ("status" in resolved) return inspectError(c, resolved);
-		const cursor = parseUInt(c.req.query("cursor"), 0);
-		const limit = parseUInt(c.req.query("limit"), 100);
-		const generationRaw = c.req.query("generation");
-		const result = indexHunks(
-			index,
-			resolved.fileIndex,
-			cursor,
-			limit,
-			generationRaw != null && generationRaw !== ""
-				? parseUInt(generationRaw, 0)
-				: undefined,
-		);
-		if ("status" in result) return inspectError(c, result);
-		return c.json(result);
-	});
-
-	app.get("/api/diff/slice", async (c) => {
-		const index = await getAgentIndex();
-		const resolved = resolveInspectFile(
-			index,
-			optionalUInt(c.req.query("file")),
-			c.req.query("path"),
-		);
-		if ("status" in resolved) return inspectError(c, resolved);
-		const start = parseUInt(c.req.query("start"), 0);
-		const maxLines = parseUInt(c.req.query("maxLines"), 120);
-		const maxBytes = parseUInt(c.req.query("maxBytes"), 256 * 1024);
-		const generationRaw = c.req.query("generation");
-		const result = indexSlice(
-			index,
-			resolved.fileIndex,
-			start,
-			maxLines,
-			maxBytes,
-			generationRaw != null && generationRaw !== ""
-				? parseUInt(generationRaw, 0)
-				: undefined,
-		);
-		if ("status" in result) return inspectError(c, result);
-		return c.json(result);
-	});
-
-	app.get("/api/diff/search", async (c) => {
-		const index = await getAgentIndex();
-		const q = c.req.query("q") ?? "";
-		const file = parseUInt(c.req.query("file"), 0);
-		const row = parseUInt(c.req.query("row"), 0);
-		const limit = parseUInt(c.req.query("limit"), 100);
-		const maxBytes = parseUInt(c.req.query("maxBytes"), 256 * 1024);
-		const generationRaw = c.req.query("generation");
-		const result = indexSearch(
-			index,
-			q,
-			file,
-			row,
-			limit,
-			maxBytes,
-			generationRaw != null && generationRaw !== ""
-				? parseUInt(generationRaw, 0)
-				: undefined,
-			c.req.query("path"),
-		);
-		if ("status" in result) return inspectError(c, result);
-		return c.json(result);
-	});
+	const retainedInspect = (operation: SnapshotReadOperation) => async (c: Context) => {
+		const fail = (result: { status: number; error: string }) => {
+			const { status, ...body } = result;
+			return c.json(body, status as 400 | 404 | 409 | 410 | 413);
+		};
+		const raw = c.req.query();
+		if (raw.continuation !== undefined) {
+			if (Object.keys(raw).length !== 1) return fail(fileInspectError(400, "invalid_continuation", "Pass continuation alone; its operation, query and position are already bound."));
+			const result = fileInspectSnapshots.continueRead(operation, raw.continuation);
+			return "status" in result ? fail(result) : c.json(result);
+		}
+		const allowed: Record<SnapshotReadOperation, string[]> = {
+			hunks: ["snapshotId", "file", "path", "cursor", "limit", "generation", "maxBytes"],
+			slice: ["snapshotId", "file", "path", "start", "maxLines", "maxBytes", "generation"],
+			search: ["snapshotId", "q", "file", "path", "row", "limit", "maxBytes", "generation"],
+		};
+		const query: SnapshotReadQuery = {};
+		for (const [key, value] of Object.entries(raw)) {
+			if (!allowed[operation].includes(key)) return fail(fileInspectError(400, "invalid_continuation", "Unknown inspect parameter."));
+			if (key === "snapshotId") continue;
+			if (key === "path" || key === "q") {
+				if (Buffer.byteLength(JSON.stringify(value)) > 4096) return fail(fileInspectError(400, "invalid_continuation", "Inspect filter exceeds 4096 serialized bytes."));
+				query[key] = value;
+			} else {
+				if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) return fail(fileInspectError(400, "invalid_continuation", "Inspect coordinates must be non-negative safe integers."));
+				Object.assign(query, { [key]: Number(value) });
+			}
+		}
+		let snapshotId = raw.snapshotId;
+		if (snapshotId === undefined) {
+			const continued = operation === "hunks" ? (query.cursor ?? 0) > 0 : operation === "slice" ? (query.start ?? 0) > 0 : (query.file ?? 0) > 0 || (query.row ?? 0) > 0;
+			if (continued && query.generation === undefined) return fail(fileInspectError(400, "continuation_required", "Numeric continuation requires generation; prefer nextContinuation or snapshotId."));
+			const capture = fileInspectSnapshots.start(await getAgentIndex());
+			if ("status" in capture) return fail(capture);
+			snapshotId = capture.snapshotId;
+		}
+		const result = fileInspectSnapshots.read(operation, snapshotId, query);
+		return "status" in result ? fail(result) : c.json(result);
+	};
+	app.get("/api/diff/hunks", retainedInspect("hunks"));
+	app.get("/api/diff/slice", retainedInspect("slice"));
+	app.get("/api/diff/search", retainedInspect("search"));
 
 	const resolveFileVersion = async (
 		path: string,
@@ -2490,6 +2469,25 @@ export function createApp(
 
 	app.get("/api/comments", async (c) => {
 		const comments = await store.getAll();
+		if (comments.some((comment) => comment.sourceAnchor)) {
+			let current: Awaited<ReturnType<typeof getAgentIndex>>;
+			try {
+				current = await getAgentIndex();
+			} catch (error) {
+				if (!(error instanceof InspectCaptureError)) throw error;
+				// A source-read failure must not hide already persisted feedback.
+				return c.json(comments.map((comment) => ({
+					...comment,
+					sourceFreshness: { status: "unverified", reason: "source_unavailable" },
+					...(comment.sourceAnchor ? { outdated: true } : {}),
+				})));
+			}
+			return c.json(comments.map((comment) => ({
+				...comment,
+				sourceFreshness: assessSourceAnchor(comment.sourceAnchor, current),
+				...(comment.sourceAnchor ? { outdated: assessSourceAnchor(comment.sourceAnchor, current).status !== "current" } : {}),
+			})));
+		}
 		return c.json(comments);
 	});
 
@@ -2502,6 +2500,13 @@ export function createApp(
 		const parsed = createReviewCommentSchema.safeParse(await readCommentJson(c));
 		if (!parsed.success) return c.json(commentValidationError(parsed.error), 400);
 		const body = parsed.data;
+		const sourceAnchor = body.snapshotId !== undefined && body.fileIndex !== undefined
+			? fileInspectSnapshots.anchor(body.snapshotId, body.fileIndex, { side: body.side, start: body.startLineNumber ?? body.lineNumber, end: body.lineNumber })
+			: undefined;
+		if (sourceAnchor && "status" in sourceAnchor) return c.json(sourceAnchor, sourceAnchor.status);
+		if (sourceAnchor && sourceAnchor.file.oldPath !== body.filePath && sourceAnchor.file.newPath !== body.filePath) {
+			return c.json({ code: "invalid_anchor", error: "filePath does not match the retained file.", recovery: "restart_files" }, 400);
+		}
 		const severity = body.severity === "none" ? undefined : body.severity;
 		const comment = {
 			id: crypto.randomUUID(),
@@ -2514,6 +2519,7 @@ export function createApp(
 			status: "open" as const,
 			createdAt: Date.now(),
 			replies: [],
+			...(sourceAnchor ? { sourceAnchor } : {}),
 			...(severity ? { severity } : {}),
 		};
 		const created = await store.add(comment);

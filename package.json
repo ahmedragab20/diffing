@@ -62,6 +62,7 @@
     "test": "vitest run && pnpm run test:tui",
     "test:ts": "vitest run",
     "test:tui": "cargo test --manifest-path crates/diffing-tui/Cargo.toml",
+    "test:review-store": "cargo build --locked -p diffing-tui && node --import tsx --test scripts/review-sqlite-qualification.test.ts",
     "test:watch": "vitest",
     "bench:ai": "tsx scripts/ai-baseline.ts bench",
     "eval:ai": "tsx scripts/ai-baseline.ts eval",

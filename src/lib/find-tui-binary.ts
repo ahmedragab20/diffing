@@ -124,7 +124,7 @@ async function probeTuiBinary(
       timeout: BINARY_PROBE_TIMEOUT_MS,
       maxBuffer: 64 * 1024,
       windowsHide: true,
-      ...(capability === "--fs-rpc" ? { env: nativeFileEnvironment() } : {}),
+      ...(capability !== "--view-only" ? { env: nativeFileEnvironment() } : {}),
     });
     return stdout.includes(capability) ? candidate : null;
   } catch {
@@ -176,6 +176,15 @@ function fileAccessPackageRoot(callerUrl: string): string | null {
 export async function findFileAccessTuiBinary(
   callerUrl: string,
 ): Promise<string | null> {
+  return findInstalledHelper(callerUrl, "--fs-rpc");
+}
+
+/** Storage uses the same installation containment rule, with its own protocol. */
+export async function findReviewStoreTuiBinary(callerUrl: string): Promise<string | null> {
+  return findInstalledHelper(callerUrl, "--review-store-rpc");
+}
+
+async function findInstalledHelper(callerUrl: string, capability: string): Promise<string | null> {
   const root = fileAccessPackageRoot(callerUrl);
   if (!root) return null;
   const candidates: string[] = [];
@@ -190,7 +199,7 @@ export async function findFileAccessTuiBinary(
     }
   }
   const matches = await Promise.all(
-    candidates.map((candidate) => probeTuiBinary(candidate, "--fs-rpc")),
+    candidates.map((candidate) => probeTuiBinary(candidate, capability)),
   );
   return (
     matches.find((candidate): candidate is string => candidate !== null) ?? null

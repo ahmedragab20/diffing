@@ -34,6 +34,19 @@ describe('inspect CLI selectors', () => {
     expect(fetch.mock.calls[0][0]).toBe('http://127.0.0.1:43123/api/diff/files?continuation=payload.signature')
   })
 
+  it('forwards retained hunk, slice and search reads without requiring new selectors', async () => {
+    const fetch = vi.fn(async (_input: string | URL | Request) => new Response('{}'))
+    vi.stubGlobal('fetch', fetch)
+    vi.spyOn(process.stdout, 'write').mockReturnValue(true)
+    const snapshot = '00000000-0000-4000-8000-000000000001'
+    for (const operation of ['hunks', 'slice', 'search']) {
+      expect(await runSubcommand('inspect', [operation, '--continuation', 'payload.signature'])).toBe(0)
+      expect(fetch.mock.calls.at(-1)![0]).toBe(`http://127.0.0.1:43123/api/diff/${operation}?continuation=payload.signature`)
+    }
+    expect(await runSubcommand('inspect', ['slice', '--snapshot-id', snapshot, '--file', '0'])).toBe(0)
+    expect(new URL(String(fetch.mock.calls.at(-1)![0])).searchParams.get('snapshotId')).toBe(snapshot)
+  })
+
   it('rejects conflicting continuation flags, other operations and native sessions before fetching', async () => {
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
@@ -42,6 +55,7 @@ describe('inspect CLI selectors', () => {
       ['files', '--continuation', 'token', '--path', 'src/**'],
       ['files', '--continuation', 'token', '--cursor', '0'],
       ['summary', '--continuation', 'token'],
+      ['search', 'changed query', '--continuation', 'token'],
     ]) expect(await runSubcommand('inspect', args)).not.toBe(0)
     lock.mode = 'tui'
     expect(await runSubcommand('inspect', ['files', '--continuation', 'token'])).not.toBe(0)
