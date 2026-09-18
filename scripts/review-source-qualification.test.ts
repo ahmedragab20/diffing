@@ -123,6 +123,8 @@ test("actual show and commit-series captures retain repeated paths and immutable
 });
 
 test("external edit, stage, commit and rebase remain possible while the durable review is closed", async (t) => {
+  let core: ReviewCore;
+  t.after(() => core?.close());
   const f = await fixture(t);
   await writeFile(join(f.repo, "tracked.txt"), "reviewed\n");
   const initial = await f.capture();
@@ -131,8 +133,7 @@ test("external edit, stage, commit and rebase remain possible while the durable 
   const token = authority.issue(identity, { id: "reviewer", kind: "human" }, ["read", "capture", "comment", "decide"]);
   const retained = new Map<string, typeof initial.index>();
   const sources = { capture: async () => { const captured = await f.capture(); retained.set(captured.manifest.snapshotId, captured.index); return captured.index; }, get: (id: string) => retained.get(id) };
-  let core = await ReviewCore.open(join(f.directory, "review"), identity, authority, sources);
-  t.after(() => core.close());
+  core = await ReviewCore.open(join(f.directory, "review"), identity, authority, sources);
   const execute = (command: ReviewCommand) => core.execute(token, prepareReviewRequest(core.state(token), command));
   await execute({ op: "capture" });
   await execute({ op: "comment.add", fileIndex: 0, side: "additions", lineNumber: 1, body: "original concern" });
