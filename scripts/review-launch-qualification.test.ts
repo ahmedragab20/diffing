@@ -12,7 +12,7 @@ import { ReviewClient, prepareReviewRequest } from "../src/lib/review-client.js"
 import { SESSION_TOKEN_HEADER } from "../src/lib/session-token.js";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-const tsx = fileURLToPath(new URL("../node_modules/tsx/dist/loader.mjs", import.meta.url));
+const tsx = new URL("../node_modules/tsx/dist/loader.mjs", import.meta.url).href;
 const roots: string[] = [];
 type Child = ChildProcessByStdio<null, Readable, Readable>;
 const children: Array<{ child: Child; exited: Promise<number | null> }> = [];
