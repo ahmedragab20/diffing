@@ -27,6 +27,9 @@ const noCapture = { capture: async (): Promise<never> => { throw new Error("Migr
 const migrationWorkspace = { repositoryId: "a".repeat(64), workspaceId: "b".repeat(64) };
 
 test("explicit workspace migration fences classic stores and resumes from the committed archive", async (t) => {
+  const cores: ReviewCore[] = [];
+  // Close native owners before fixture cleanup; Windows cannot unlink an open database.
+  t.after(async () => { for (const core of cores) await core.close(); });
   const f = await fixture(t);
   const comments = new FileCommentStore(f.directory);
   const original = { id: "kept", filePath: "a.ts", side: "additions" as const, lineNumber: 1, lineContent: "old", body: "preserved", status: "open" as const, createdAt: 1, replies: [] };
@@ -36,7 +39,7 @@ test("explicit workspace migration fences classic stores and resumes from the co
   let credential = "";
   const connect = (identity: Parameters<ReviewAuthority["issue"]>[0]) => credential = authority.issue(identity, { id: "human", kind: "human" }, ["read", "decide"]);
   const core = await openMigratedWorkspaceReview(f.directory, migrationWorkspace, authority, noCapture, connect, { store: { binary } });
-  t.after(() => core.close());
+  cores.push(core);
   const identity = core.identity;
   const archive = core.exportLegacy(credential);
   assert.equal(core.state(credential).legacy?.comments, 1);
@@ -50,13 +53,15 @@ test("explicit workspace migration fences classic stores and resumes from the co
   // The original recovery files are no longer the live authority after commit.
   await writeFile(join(f.directory, "comments.json"), "outside edit");
   const reopened = await openMigratedWorkspaceReview(f.directory, migrationWorkspace, authority, noCapture, connect, { store: { binary } });
-  t.after(() => reopened.close());
+  cores.push(reopened);
   assert.deepEqual(reopened.identity, identity);
   assert.deepEqual(reopened.exportLegacy(credential), archive);
   assert.equal(reopened.state(credential).comments.length, 1);
 });
 
 test("interrupted workspace migration stays fenced until an exact archive retry completes", async (t) => {
+  const cores: ReviewCore[] = [];
+  t.after(async () => { for (const core of cores) await core.close(); });
   const f = await fixture(t);
   await writeFile(join(f.directory, "comments.json"), "[]\n");
   const authority = new ReviewAuthority();
@@ -68,7 +73,7 @@ test("interrupted workspace migration stays fenced until an exact archive retry 
   }), { code: "outcome_unknown" });
   await assert.rejects(new FileCommentStore(f.directory).getAll(), { code: "review_core_required" });
   const reopened = await openMigratedWorkspaceReview(f.directory, migrationWorkspace, authority, noCapture, connect, { store: { binary } });
-  t.after(() => reopened.close());
+  cores.push(reopened);
   assert.equal(reopened.state(credential).migrationPending, false);
   assert.equal(reopened.state(credential).legacy?.comments, 0);
   assert.equal(reopened.state(credential).version, 3);

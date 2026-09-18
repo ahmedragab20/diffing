@@ -37,6 +37,7 @@ on:
 jobs:
   qualify-review-store:
     name: Review storage qualification (${{ matrix.os }}, Node 20)
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
