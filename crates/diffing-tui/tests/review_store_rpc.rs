@@ -44,7 +44,7 @@ impl RpcChild {
             .arg(directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .expect("spawn diffing-tui review-store RPC");
         let stdout = child.stdout.take().expect("child stdout");
@@ -68,7 +68,7 @@ impl RpcChild {
 
     fn start(directory: &std::path::Path, expected_version: u64) -> Self {
         let rpc = Self::spawn(directory);
-        let startup = rpc.read_line();
+        let startup = rpc.read_line("startup");
         assert_eq!(startup["protocol"], 1);
         assert_eq!(startup["ok"], true, "startup failed: {startup}");
         assert_eq!(startup["version"], expected_version);
@@ -78,7 +78,7 @@ impl RpcChild {
 
     fn start_expect_error(directory: &std::path::Path, code: &str) {
         let mut rpc = Self::spawn(directory);
-        let startup = rpc.read_line();
+        let startup = rpc.read_line("startup error");
         assert_eq!(startup["protocol"], 1);
         assert_eq!(startup["ok"], false);
         assert_eq!(startup["error"]["code"], code);
@@ -89,21 +89,25 @@ impl RpcChild {
         );
     }
 
-    fn read_line(&self) -> Value {
+    #[track_caller]
+    fn read_line(&self, operation: &str) -> Value {
+        // Match the production client's response deadline, including process
+        // startup and durable filesystem flushes on the supported platforms.
         let line = self
             .lines
-            .recv_timeout(Duration::from_secs(3))
-            .expect("bounded RPC stdout timeout")
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|error| panic!("RPC {operation} response deadline: {error}"))
             .expect("RPC child closed stdout");
         serde_json::from_str(&line).expect("RPC JSON line")
     }
 
     fn send(&mut self, id: u64, op: Value) -> Value {
+        let operation = format!("request {id}: {op}");
         self.stdin
             .write_all(request(id, op).as_bytes())
             .expect("write RPC request");
         self.stdin.flush().expect("flush RPC request");
-        self.read_line()
+        self.read_line(&operation)
     }
 }
 
