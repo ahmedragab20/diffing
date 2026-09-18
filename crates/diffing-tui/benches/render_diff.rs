@@ -533,6 +533,7 @@ fn dense_comments() -> Vec<ReviewComment> {
             created_at: line as u64,
             replies: Vec::new(),
             severity: Some(CommentSeverity::Blocking),
+            extra: Default::default(),
         })
         .collect()
 }

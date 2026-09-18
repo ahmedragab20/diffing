@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { persistedReviewCommentsSchema } from './comment-schema.js'
 import { getRepoRoot, getProjectStorageDir } from './git.js'
 import type { ReviewComment, CommentReply } from './types.js'
+import { assertClassicAuthority, withClassicWrite } from './legacy-write-lease.js'
 
 export interface CommentUpdateFields {
   body?: string
@@ -118,6 +119,7 @@ export class FileCommentStore implements CommentStore {
   }
 
   async getAll(): Promise<ReviewComment[]> {
+    await assertClassicAuthority(this.dirPath)
     try {
       const data = await readFile(this.filePath, 'utf-8')
       const parsed = persistedReviewCommentsSchema.safeParse(JSON.parse(data))
@@ -153,7 +155,8 @@ export class FileCommentStore implements CommentStore {
 
   /** Serialize each read-modify-write cycle so concurrent API calls cannot overwrite one another. */
   private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.mutationQueue.then(operation, operation)
+    const run = () => withClassicWrite(this.dirPath, operation)
+    const result = this.mutationQueue.then(run, run)
     this.mutationQueue = result.then(
       () => undefined,
       () => undefined,

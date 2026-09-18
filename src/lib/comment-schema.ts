@@ -1,16 +1,31 @@
 import { z } from "zod";
 import { sourceAnchorSchema } from "./source-anchor.js";
 
+const persistedCommentReplySchema = z.preprocess((value, ctx) => {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || !("created_at" in value)) {
+    return value;
+  }
+  const { created_at, ...reply } = value as Record<string, unknown>;
+  if (reply.createdAt !== undefined && reply.createdAt !== created_at) {
+    ctx.addIssue({ code: "custom", message: "Ambiguous reply timestamp" });
+    return z.NEVER;
+  }
+  return { ...reply, createdAt: reply.createdAt ?? created_at };
+}, z.object({
+  id: z.string().min(1), body: z.string(), createdAt: z.number().finite(),
+  role: z.enum(["user", "agent"]).optional(), model: z.string().optional(),
+  createdAtPlanVersion: z.number().int().positive().optional(),
+}).passthrough());
+
 /** Legacy JSON authority validation; preserve unknown fields during upgrades. */
 export const persistedReviewCommentSchema = z.object({
   id: z.string().min(1), filePath: z.string(), side: z.enum(["deletions", "additions"]),
   lineNumber: z.number().int().nonnegative(), startLineNumber: z.number().int().positive().optional(),
   lineContent: z.string(), body: z.string(), status: z.enum(["open", "resolved"]),
-  createdAt: z.number().finite(), replies: z.array(z.object({
-    id: z.string().min(1), body: z.string(), createdAt: z.number().finite(),
-    role: z.enum(["user", "agent"]).optional(), model: z.string().optional(),
-    createdAtPlanVersion: z.number().int().positive().optional(),
-  }).passthrough()),
+  createdAt: z.number().finite(), replies: z.array(persistedCommentReplySchema).refine(
+    (replies) => new Set(replies.map((reply) => reply.id)).size === replies.length,
+    "Duplicate reply IDs",
+  ),
   severity: z.enum(["blocking", "nit", "question", "praise", "none"]).optional(),
   outdated: z.boolean().optional(), sourceAnchor: sourceAnchorSchema.optional(),
 }).passthrough();

@@ -443,6 +443,7 @@ mod tests {
             created_at: 1,
             replies: vec![],
             severity: None,
+            extra: Default::default(),
         }]
     }
 

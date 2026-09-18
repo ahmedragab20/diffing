@@ -11,6 +11,7 @@ pub mod editorconfig;
 pub mod fs_rpc;
 pub mod handoff;
 pub mod inspect_scope;
+mod inspect_snapshots;
 pub mod keys;
 pub mod lsp;
 pub mod path_safety;

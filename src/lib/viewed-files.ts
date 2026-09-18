@@ -8,6 +8,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getProjectStorageDir } from "./git.js";
 import { writeJsonAtomically } from "./json-atomic.js";
+import { persistedViewedSchema } from "./viewed-schema.js";
+import { assertClassicAuthority, withClassicWrite } from "./legacy-write-lease.js";
 import {
   diffSinceLast,
   filesToReviewSinceLast,
@@ -86,31 +88,31 @@ export function fingerprintsForPatch(patch: string): Record<string, string> {
 }
 
 export class FileViewedStore implements ViewedFileStore {
+  private dirPath: string;
   private filePath: string;
   private cache: Record<string, ViewedBucket> | null = null;
 
   constructor(storageDir?: string) {
-    this.filePath = join(storageDir ?? getProjectStorageDir(), "viewed.json");
+    this.dirPath = storageDir ?? getProjectStorageDir();
+    this.filePath = join(this.dirPath, "viewed.json");
   }
 
   private load(): Record<string, ViewedBucket> {
     if (this.cache) return this.cache;
     try {
-      const parsed = JSON.parse(readFileSync(this.filePath, "utf-8")) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        this.cache = parsed as Record<string, ViewedBucket>;
-        return this.cache;
-      }
-    } catch {
-      // missing or unreadable — start empty
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(this.filePath));
+      this.cache = persistedViewedSchema.parse(JSON.parse(text));
+      return this.cache;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     this.cache = {};
     return this.cache;
   }
 
   private save(data: Record<string, ViewedBucket>): void {
-    this.cache = data;
     writeJsonAtomically(this.filePath, data);
+    this.cache = data;
   }
 
   private bucket(key: string): ViewedBucket {
@@ -126,6 +128,8 @@ export class FileViewedStore implements ViewedFileStore {
     key: string,
     fingerprints?: Record<string, string> | null,
   ): Promise<string[]> {
+    await assertClassicAuthority(this.dirPath);
+    this.cache = null;
     return visibleViewedPaths(this.bucket(key).files, fingerprints);
   }
 
@@ -137,21 +141,25 @@ export class FileViewedStore implements ViewedFileStore {
     headSha?: string,
     fingerprints?: Record<string, string> | null,
   ): Promise<string[]> {
-    const data = this.load();
-    const bucket = this.bucket(key);
-    const files = { ...bucket.files };
-    if (viewed) {
-      files[filePath] = fingerprint ?? files[filePath] ?? "*";
-    } else {
-      delete files[filePath];
-    }
-    const next: ViewedBucket = {
-      ...bucket,
-      files,
-      ...(headSha ? { headSha } : {}),
-    };
-    this.save({ ...data, [key]: next });
-    return visibleViewedPaths(files, fingerprints ?? bucket.fingerprints);
+    return withClassicWrite(this.dirPath, async () => {
+      // Another process may have saved progress since this instance last read it.
+      this.cache = null;
+      const data = this.load();
+      const bucket = this.bucket(key);
+      const files = { ...bucket.files };
+      if (viewed) {
+        files[filePath] = fingerprint ?? files[filePath] ?? "*";
+      } else {
+        delete files[filePath];
+      }
+      const next: ViewedBucket = {
+        ...bucket,
+        files,
+        ...(headSha ? { headSha } : {}),
+      };
+      this.save({ ...data, [key]: next });
+      return visibleViewedPaths(files, fingerprints ?? bucket.fingerprints);
+    });
   }
 
   async reconcile(
@@ -159,19 +167,22 @@ export class FileViewedStore implements ViewedFileStore {
     headSha: string,
     fingerprints: Record<string, string>,
   ): Promise<string[]> {
-    const data = this.load();
-    const bucket = this.bucket(key);
-    const files =
-      bucket.headSha && bucket.headSha !== headSha
-        ? unviewChangedFiles(bucket.files, bucket.fingerprints, fingerprints)
-        : Object.fromEntries(
-            Object.entries(bucket.files).filter(([path, fp]) => {
-              const current = fingerprints[path];
-              return current != null && (fp === "*" || fp === current);
-            }),
-          );
-    const next: ViewedBucket = { headSha, fingerprints, files };
-    this.save({ ...data, [key]: next });
-    return visibleViewedPaths(files, fingerprints);
+    return withClassicWrite(this.dirPath, async () => {
+      this.cache = null;
+      const data = this.load();
+      const bucket = this.bucket(key);
+      const files =
+        bucket.headSha && bucket.headSha !== headSha
+          ? unviewChangedFiles(bucket.files, bucket.fingerprints, fingerprints)
+          : Object.fromEntries(
+              Object.entries(bucket.files).filter(([path, fp]) => {
+                const current = fingerprints[path];
+                return current != null && (fp === "*" || fp === current);
+              }),
+            );
+      const next: ViewedBucket = { headSha, fingerprints, files };
+      this.save({ ...data, [key]: next });
+      return visibleViewedPaths(files, fingerprints);
+    });
   }
 }

@@ -176,6 +176,28 @@ fn append_read_restart_and_idempotent_retry_preserve_original() {
 }
 
 #[test]
+fn missing_or_truncated_initialized_database_is_never_recreated() {
+    for truncate in [false, true] {
+        let directory = TempDir::new().unwrap();
+        let mut rpc = RpcChild::start(directory.path(), 0);
+        assert_ok(&rpc.send(1, append_op(record("kept", CHECKSUM))), 1);
+        drop(rpc);
+        let path = directory.path().join("review.sqlite");
+        if truncate {
+            std::fs::write(&path, []).unwrap();
+        } else {
+            std::fs::remove_file(&path).unwrap();
+        }
+        RpcChild::start_expect_error(directory.path(), "missing_store");
+        if truncate {
+            assert_eq!(std::fs::metadata(path).unwrap().len(), 0);
+        } else {
+            assert!(!path.exists());
+        }
+    }
+}
+
+#[test]
 fn ownership_is_exclusive_and_acknowledged_records_survive_kill() {
     let directory = TempDir::new().expect("review store directory");
     let mut first = RpcChild::start(directory.path(), 0);

@@ -238,8 +238,10 @@ mod tests {
                 created_at: 2000,
                 role: Some("agent".to_string()),
                 model: Some("gpt-4o".to_string()),
+                extra: Default::default(),
             }],
             severity: None,
+            extra: Default::default(),
         }
     }
 

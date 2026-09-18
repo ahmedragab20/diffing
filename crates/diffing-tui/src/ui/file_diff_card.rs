@@ -2289,6 +2289,7 @@ mod tests {
             created_at: 1,
             replies: Vec::new(),
             severity: Some(CommentSeverity::Blocking),
+            extra: Default::default(),
         };
         let comments = [comment];
         let decorations = DecorationIndex::new("src/main.rs", &comments, &[]);

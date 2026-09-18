@@ -242,18 +242,22 @@ export function buildAgentDiffIndex(
     };
   }
 
-  const lines = patch.split("\n");
   const files: IndexedFile[] = [];
-  let i = 0;
-  let patchOffset = 0;
+  let sectionOffset = patch.startsWith("diff --git ") ? 0 : patch.indexOf("\ndiff --git ") + 1;
+  if (sectionOffset === 0 && !patch.startsWith("diff --git ")) sectionOffset = -1;
 
-  while (i < lines.length) {
-    const line = lines[i];
+  while (sectionOffset >= 0) {
+    const fileOffset = sectionOffset;
+    const nextSection = patch.indexOf("\ndiff --git ", fileOffset);
+    const sectionEnd = nextSection < 0 ? patch.length : nextSection;
+    sectionOffset = nextSection < 0 ? -1 : nextSection + 1;
+    // Bound temporary line arrays to one file instead of retaining an extra
+    // whole-patch array while allocating every indexed row.
+    const lines = patch.slice(fileOffset, sectionEnd).split("\n");
+    const line = lines[0];
     const gitHeader = parseGitDiffHeaderPaths(line);
-    if (!gitHeader) {
-      i++;
-      continue;
-    }
+    if (!gitHeader) continue;
+    let i = 1;
 
     const [oldPathRaw, newPathRaw] = gitHeader;
     let oldPath: string | null = oldPathRaw === "/dev/null" ? null : oldPathRaw;
@@ -266,13 +270,8 @@ export function buildAgentDiffIndex(
     };
     // Hash the original contiguous section instead of allocating another array
     // and joining every source line after it has already been parsed.
-    const marker = line + (i < lines.length - 1 ? "\n" : "");
-    const fileOffset = i === 0 ? 0 : patch.indexOf(`\n${marker}`, Math.max(0, patchOffset - 1)) + 1;
-    const nextSection = patch.indexOf("\ndiff --git ", fileOffset + line.length);
-    let digestEnd = nextSection < 0 ? patch.length : nextSection;
-    patchOffset = digestEnd + 1;
+    let digestEnd = sectionEnd;
     while (digestEnd > fileOffset && patch.charCodeAt(digestEnd - 1) === 10) digestEnd--;
-    i++;
 
     // Scan headers until first hunk or next file.
     while (i < lines.length) {

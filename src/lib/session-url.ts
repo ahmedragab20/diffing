@@ -1,6 +1,14 @@
 import type { ServerLock } from './server-lock.js'
 import { isLoopbackHost, SESSION_TOKEN_QUERY } from './server-auth.js'
 
+/** API origin for local clients, including the native capability-scoped API. */
+export function reviewSessionApiOrigin(lock: ServerLock): string | null {
+  const address = lock.host === '0.0.0.0' || lock.host === '::' ? '127.0.0.1' : lock.host
+  if (!Number.isInteger(lock.port) || lock.port < 1 || lock.port > 65535 || !isLoopbackHost(address)) return null
+  const host = address.includes(':') && !address.startsWith('[') ? `[${address}]` : address
+  return `http://${host}:${lock.port}`
+}
+
 /** Loopback-safe review URL for web / gh-pr locks; null for TUI or invalid ports. */
 export function reviewSessionBaseUrl(lock: ServerLock): string | null {
   if ((lock.mode ?? 'web') === 'tui' || !(lock.port > 0)) return null

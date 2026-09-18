@@ -50,6 +50,22 @@ describe('diffing MCP', () => {
 
   const testLease = () => ({ ownerId: 'test-lease', release: vi.fn() })
 
+  it.each([[400, 'invalid_continuation'], [410, 'snapshot_expired']] as const)('preserves inspect recovery for HTTP %s', async (status, code) => {
+    const body = { error: 'Restart this inspection.', code, recovery: 'restart_files' }
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(body, { status })))
+    const session = await connect({
+      repoRoot,
+      readLock: () => ({ port: 43126, host: '127.0.0.1', pid: process.pid, repoRoot, startedAt: Date.now(), version: MCP_VERSION, mode: 'web' }),
+      lockIsAlive: () => true,
+    })
+    try {
+      const result = await session.client.callTool({ name: 'diff_files', arguments: { continuation: 'payload.signature' } })
+      expect(result.isError).toBe(true)
+      expect(result.structuredContent).toEqual({ result: body })
+      expect(result.content).toEqual([{ type: 'text', text: JSON.stringify(body) }])
+    } finally { await session.close() }
+  })
+
   it('advertises the package version, guidance, tools, prompts, and resource', async () => {
     const session = await connect({
       repoRoot,
@@ -414,13 +430,14 @@ describe('diffing MCP', () => {
     }
   })
 
-  it('passes path-scoped inspect queries to the session API', async () => {
+  it.each(['web', 'tui'] as const)('passes retained and path-scoped inspect queries to the %s session API', async (mode) => {
     const fetchCalls: string[] = []
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: string | URL | Request) => {
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
         const url = input instanceof Request ? input.url : String(input)
         fetchCalls.push(url)
+        if (mode === 'tui') expect(new Headers(init?.headers).get('X-Diffing-Capability')).toBe('test-capability')
         return new Response(JSON.stringify({ generation: 1, files: [] }), {
           headers: { 'Content-Type': 'application/json' },
         })
@@ -433,7 +450,8 @@ describe('diffing MCP', () => {
       repoRoot,
       startedAt: Date.now(),
       version: MCP_VERSION,
-      mode: 'web',
+      mode,
+      ...(mode === 'tui' ? { capability: 'test-capability' } : {}),
     }
     const session = await connect({
       repoRoot,

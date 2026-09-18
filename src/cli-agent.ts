@@ -1430,7 +1430,7 @@ async function inspect(args: string[]): Promise<number> {
 Read bounded data from a running session (web, TUI, or gh-pr) without transferring the full patch.
   summary [--exclude lockfiles]
   files   [--path GLOB] [--cursor N --generation N] [--limit N]
-  files|hunks|slice|search --continuation TOKEN  (web/PR: pass nextContinuation alone)
+  files|hunks|slice|search --continuation TOKEN  (pass nextContinuation alone)
   files|hunks|slice|search --snapshot-id ID [options]  (read retained source from summary or files)
   hunks   (--file N | --path GLOB) [--cursor N] [--limit N] [--generation N]
   slice   (--file N | --path GLOB) [--start N] [--max-lines N] [--max-bytes N] [--generation N]
@@ -1522,10 +1522,6 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`);
 	}
 
 	const base = baseUrl();
-	if ((typeof continuation === "string" || typeof snapshotId === "string") && activeMode === "tui") {
-		console.error("Retained snapshots are unsupported in TUI sessions; use cursor and generation.");
-		return EXIT_USAGE;
-	}
 	const queryString = params.toString();
 	let response: Response;
 	try {
@@ -1542,7 +1538,8 @@ Add --pretty for indented JSON. Compact JSON is the token-efficient default.`);
 		.json()
 		.catch(() => ({ error: response.statusText }));
 	if (!response.ok) {
-		console.error((body as any).error ?? response.statusText);
+		// Keep typed failure and recovery fields available to headless callers.
+		console.error(JSON.stringify(body, null, parsed.values.pretty ? 2 : undefined));
 		return response.status === 404 ? EXIT_NOT_FOUND : 1;
 	}
 	process.stdout.write(

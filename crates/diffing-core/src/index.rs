@@ -23,6 +23,13 @@ use crate::project_storage_dir;
 pub const CHECKPOINT_INTERVAL: u64 = 128;
 pub const DEFAULT_VIEWPORT_MAX_BYTES: usize = 256 * 1024;
 const SNAPSHOT_ROW_INTERVAL: u64 = 8_192;
+pub(crate) const NATIVE_PATCH_FLAGS: &[&str] = &[
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+];
 #[cfg(windows)]
 const NULL_DEVICE: &str = "NUL";
 #[cfg(not(windows))]
@@ -41,6 +48,10 @@ pub struct DiffIndex {
     pub deletions: u64,
     pub patch_bytes: u64,
     pub complete: bool,
+    #[serde(skip)]
+    pub source_scope: Option<crate::inspect_capture::GitScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<crate::inspect_capture::CaptureManifest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +69,8 @@ pub struct IndexedFile {
     pub old_oid: Option<String>,
     #[serde(skip)]
     pub new_oid: Option<String>,
+    pub old_mode: Option<String>,
+    pub new_mode: Option<String>,
     pub kind: IndexedChangeKind,
     pub is_binary: bool,
     pub hunks: Vec<IndexedHunk>,
@@ -238,6 +251,8 @@ impl DiffIndex {
             deletions: 0,
             patch_bytes: 0,
             complete,
+            source_scope: None,
+            manifest: None,
         }
     }
 
@@ -746,15 +761,16 @@ where
     // The index consumes a machine-stable unified patch. Never allow a user
     // color configuration to inject ANSI bytes into structural headers, or
     // repository-configured diff drivers / textconv filters to run.
-    cmd.arg("diff")
-        .arg("--no-color")
-        .arg("--no-ext-diff")
-        .arg("--no-textconv");
-    for arg in args {
-        if arg != "--no-color" && arg != "--no-ext-diff" && arg != "--no-textconv" {
-            cmd.arg(arg);
-        }
-    }
+    // Repeated safety flags are harmless. Filtering their spelling from argv
+    // would also remove literal filenames after `--` and broaden the scope.
+    cmd.arg("diff").args(NATIVE_PATCH_FLAGS).args(args);
+    // Failure to enumerate untracked paths is unavailable source, not an empty
+    // inventory. Do this before starting a child that would need cleanup.
+    let untracked = if args.is_empty() {
+        list_untracked_files(repo_root)?
+    } else {
+        Vec::new()
+    };
     let mut child = cmd
         .current_dir(repo_root)
         .stdout(Stdio::piped())
@@ -770,11 +786,6 @@ where
         bytes
     });
 
-    let untracked = if args.is_empty() {
-        list_untracked_files(repo_root).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
     let untracked_paths: HashSet<PathBuf> = untracked.iter().cloned().collect();
     let source = GitAndUntrackedReader::new(stdout, repo_root.to_string(), untracked);
     let build_result = build_index_from_reader(
@@ -801,6 +812,10 @@ where
     fs::rename(&temp_path, &final_path)?;
     index.spool_path = final_path;
     index.complete = true;
+    index.source_scope = Some(crate::inspect_capture::GitScope {
+        root: repo_root.into(),
+        args: args.to_vec(),
+    });
     on_snapshot(index.clone());
     Ok(index)
 }
@@ -811,13 +826,16 @@ fn list_untracked_files(repo_root: &str) -> Result<Vec<PathBuf>, IndexError> {
         .current_dir(repo_root)
         .output()?;
     if !output.status.success() {
-        return Ok(Vec::new());
+        return Err(IndexError::Git {
+            code: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
     }
     Ok(output
         .stdout
         .split(|byte| *byte == 0)
         .filter(|path| !path.is_empty())
-        .map(bytes_path)
+        .map(literal_path)
         .collect())
 }
 
@@ -853,14 +871,9 @@ impl<R> GitAndUntrackedReader<R> {
         };
         self.next_untracked += 1;
         let mut child = Command::new("git")
-            .args([
-                "diff",
-                "--no-index",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--",
-                NULL_DEVICE,
-            ])
+            .args(["diff", "--no-index"])
+            .args(NATIVE_PATCH_FLAGS)
+            .args(["--", NULL_DEVICE])
             .arg(path)
             .current_dir(&self.repo_root)
             .stdout(Stdio::piped())
@@ -946,7 +959,7 @@ where
         offset += read as u64;
         spool.write_all(&raw)?;
         let mut line = raw.as_slice();
-        while matches!(line.last(), Some(b'\n' | b'\r')) {
+        if line.last() == Some(&b'\n') {
             line = &line[..line.len() - 1];
         }
 
@@ -971,59 +984,99 @@ where
             continue;
         }
 
-        if line.starts_with(b"new file mode") {
-            file.kind = IndexedChangeKind::Added;
-            continue;
+        // Only a hunk's declared source rows (and missing-newline markers)
+        // belong to its body. Layer separators must not become phantom context.
+        if current_hunk.as_ref().is_some_and(|hunk| {
+            old_lineno.saturating_sub(hunk.old_start) >= hunk.old_lines
+                && new_lineno.saturating_sub(hunk.new_start) >= hunk.new_lines
+                && line != b"\\ No newline at end of file"
+        }) {
+            finish_hunk_in_file(file, &mut current_hunk, line_offset);
         }
-        if line.starts_with(b"deleted file mode") {
-            file.kind = IndexedChangeKind::Deleted;
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix(b"rename from ") {
-            file.kind = IndexedChangeKind::Renamed;
-            file.old_path = Some(bytes_path(rest));
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix(b"rename to ") {
-            file.kind = IndexedChangeKind::Renamed;
-            file.new_path = Some(bytes_path(rest));
-            continue;
-        }
-        if line.starts_with(b"Binary files ") && line.ends_with(b" differ") {
-            // Keep Added/Deleted so binary previews know which side exists.
-            // Modified binary files retain the dedicated Binary marker.
-            if file.kind == IndexedChangeKind::Modified {
-                file.kind = IndexedChangeKind::Binary;
+        // A source line such as `+++ name` is an addition while inside a hunk,
+        // never a file header that can remap the file or disappear from rows.
+        if current_hunk.is_none() {
+            for (prefix, old) in [
+                (b"old mode ".as_slice(), true),
+                (b"new mode ".as_slice(), false),
+                (b"new file mode ".as_slice(), false),
+                (b"deleted file mode ".as_slice(), true),
+            ] {
+                if let Some(mode) = line.strip_prefix(prefix) {
+                    if mode.len() == 6 && mode.iter().all(|byte| (b'0'..=b'7').contains(byte)) {
+                        let mode = Some(String::from_utf8_lossy(mode).into_owned());
+                        if old {
+                            file.old_mode = mode;
+                        } else {
+                            file.new_mode = mode;
+                        }
+                    }
+                }
             }
-            file.is_binary = true;
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix(b"index ") {
-            if let Some((old_oid, new_oid)) = parse_index_oids(rest) {
-                file.old_oid = old_oid;
-                file.new_oid = new_oid;
-            }
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix(b"--- ") {
-            let rest = trim_ascii(rest);
-            if rest == b"/dev/null" {
+            if line.starts_with(b"new file mode") {
                 file.kind = IndexedChangeKind::Added;
                 file.old_path = None;
-            } else {
-                file.old_path = Some(diff_marker_path(rest, b"a/"));
+                continue;
             }
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix(b"+++ ") {
-            let rest = trim_ascii(rest);
-            if rest == b"/dev/null" {
+            if line.starts_with(b"deleted file mode") {
                 file.kind = IndexedChangeKind::Deleted;
                 file.new_path = None;
-            } else {
-                file.new_path = Some(diff_marker_path(rest, b"b/"));
+                continue;
             }
-            continue;
+            if let Some(rest) = line.strip_prefix(b"rename from ") {
+                file.kind = IndexedChangeKind::Renamed;
+                file.old_path = Some(bytes_path(rest));
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix(b"rename to ") {
+                file.kind = IndexedChangeKind::Renamed;
+                file.new_path = Some(bytes_path(rest));
+                continue;
+            }
+            if (line.starts_with(b"Binary files ") && line.ends_with(b" differ"))
+                || line == b"GIT binary patch"
+            {
+                // Keep Added/Deleted so binary previews know which side exists.
+                // Modified binary files retain the dedicated Binary marker.
+                if file.kind == IndexedChangeKind::Modified {
+                    file.kind = IndexedChangeKind::Binary;
+                }
+                file.is_binary = true;
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix(b"index ") {
+                if let Some((old_oid, new_oid)) = parse_index_oids(rest) {
+                    file.old_oid = old_oid;
+                    file.new_oid = new_oid;
+                }
+                if let Some(mode) = rest.split(|byte| *byte == b' ').nth(1) {
+                    if mode.len() == 6 && mode.iter().all(|byte| (b'0'..=b'7').contains(byte)) {
+                        file.old_mode = Some(String::from_utf8_lossy(mode).into_owned());
+                        file.new_mode = file.old_mode.clone();
+                    }
+                }
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix(b"--- ") {
+                let rest = rest.strip_suffix(b"\t").unwrap_or(rest);
+                if rest == b"/dev/null" {
+                    file.kind = IndexedChangeKind::Added;
+                    file.old_path = None;
+                } else {
+                    file.old_path = Some(diff_marker_path(rest, b"a/"));
+                }
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix(b"+++ ") {
+                let rest = rest.strip_suffix(b"\t").unwrap_or(rest);
+                if rest == b"/dev/null" {
+                    file.kind = IndexedChangeKind::Deleted;
+                    file.new_path = None;
+                } else {
+                    file.new_path = Some(diff_marker_path(rest, b"b/"));
+                }
+                continue;
+            }
         }
 
         let Some(hunk) = current_hunk.as_mut() else {
@@ -1128,6 +1181,8 @@ fn summarize_index(
         files,
         spool_path,
         complete,
+        source_scope: None,
+        manifest: None,
     }
 }
 
@@ -1153,8 +1208,26 @@ fn finish_file(files: &mut Vec<IndexedFile>, file: &mut Option<IndexedFile>) {
 fn parse_file_header_bytes(rest: &[u8]) -> IndexedFile {
     let (old, new) = if rest.starts_with(b"\"") {
         parse_git_header_tokens(rest).unwrap_or_else(|| (rest.to_vec(), Vec::new()))
+    } else if let Some(separator) = rest.windows(4).rposition(|window| window == b" \"b/") {
+        match parse_git_token(&rest[separator + 1..]) {
+            Some((new, consumed)) if separator + 1 + consumed == rest.len() => {
+                (rest[..separator].to_vec(), new)
+            }
+            _ => (rest.to_vec(), Vec::new()),
+        }
     } else {
-        let split = rest.windows(3).rposition(|window| window == b" b/");
+        // Equal paths can themselves contain ` b/`; prefer their exact
+        // midpoint before looking for the separator in a rename header.
+        let midpoint = rest.len().saturating_sub(1) / 2;
+        let split = if rest.len() % 2 == 1
+            && rest.starts_with(b"a/")
+            && rest.get(midpoint..midpoint + 3) == Some(b" b/")
+            && rest.get(2..midpoint) == rest.get(midpoint + 3..)
+        {
+            Some(midpoint)
+        } else {
+            rest.windows(3).rposition(|window| window == b" b/")
+        };
         match split {
             Some(index) => (rest[..index].to_vec(), rest[index + 1..].to_vec()),
             None => (rest.to_vec(), Vec::new()),
@@ -1162,8 +1235,8 @@ fn parse_file_header_bytes(rest: &[u8]) -> IndexedFile {
     };
     let old = old.strip_prefix(b"a/").unwrap_or(&old);
     let new = new.strip_prefix(b"b/").unwrap_or(&new);
-    let old_path = (!old.is_empty() && old != b"/dev/null").then(|| bytes_path(old));
-    let new_path = (!new.is_empty() && new != b"/dev/null").then(|| bytes_path(new));
+    let old_path = (!old.is_empty() && old != b"/dev/null").then(|| literal_path(old));
+    let new_path = (!new.is_empty() && new != b"/dev/null").then(|| literal_path(new));
     let kind = match (old_path.is_some(), new_path.is_some()) {
         (false, true) => IndexedChangeKind::Added,
         (true, false) => IndexedChangeKind::Deleted,
@@ -1174,6 +1247,8 @@ fn parse_file_header_bytes(rest: &[u8]) -> IndexedFile {
         new_path,
         old_oid: None,
         new_oid: None,
+        old_mode: None,
+        new_mode: None,
         kind,
         is_binary: false,
         hunks: Vec::new(),
@@ -1201,7 +1276,16 @@ fn parse_git_header_tokens(input: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     let (old, consumed) = parse_git_token(input)?;
     let remainder = input.get(consumed..)?;
     let spaces = remainder.iter().take_while(|byte| **byte == b' ').count();
-    let (new, _) = parse_git_token(remainder.get(spaces..)?)?;
+    let remainder = remainder.get(spaces..)?;
+    let new = if remainder.starts_with(b"\"") {
+        let (new, consumed) = parse_git_token(remainder)?;
+        if consumed != remainder.len() {
+            return None;
+        }
+        new
+    } else {
+        remainder.to_vec()
+    };
     Some((old, new))
 }
 
@@ -1292,43 +1376,52 @@ fn parse_range(range: &str, header: &str) -> Result<(u32, u32), IndexError> {
 }
 
 fn bytes_path(bytes: &[u8]) -> PathBuf {
-    let bytes = trim_ascii(bytes);
     let decoded = parse_git_token(bytes)
         .filter(|(_, consumed)| *consumed == bytes.len())
         .map(|(decoded, _)| decoded);
-    PathBuf::from(String::from_utf8_lossy(decoded.as_deref().unwrap_or(bytes)).into_owned())
+    literal_path(decoded.as_deref().unwrap_or(bytes))
+}
+
+fn literal_path(bytes: &[u8]) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        PathBuf::from(std::ffi::OsString::from_vec(bytes.to_vec()))
+    }
+    #[cfg(not(unix))]
+    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
 fn diff_marker_path(bytes: &[u8], prefix: &[u8]) -> PathBuf {
-    let bytes = trim_ascii(bytes);
     let decoded = parse_git_token(bytes)
         .filter(|(_, consumed)| *consumed == bytes.len())
         .map(|(decoded, _)| decoded);
     let decoded = decoded.as_deref().unwrap_or(bytes);
-    bytes_path(decoded.strip_prefix(prefix).unwrap_or(decoded))
-}
-
-fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
-    while matches!(bytes.first(), Some(b' ' | b'\t')) {
-        bytes = &bytes[1..];
-    }
-    while matches!(bytes.last(), Some(b' ' | b'\t')) {
-        bytes = &bytes[..bytes.len() - 1];
-    }
-    bytes
+    literal_path(decoded.strip_prefix(prefix).unwrap_or(decoded))
 }
 
 fn trim_line_ending(bytes: &mut Vec<u8>) {
-    while matches!(bytes.last(), Some(b'\n' | b'\r')) {
+    // Git's patch delimiter is LF. A preceding CR belongs to source content.
+    if bytes.last() == Some(&b'\n') {
         bytes.pop();
     }
 }
 
 fn next_generation() -> u64 {
-    SystemTime::now()
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    // JSON clients must be able to round-trip the generation exactly. Epoch
+    // nanoseconds exceed JavaScript's safe-integer range; microseconds do not.
+    let clock = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
-        .unwrap_or(0)
+        .map(|duration| duration.as_micros() as u64)
+        .unwrap_or(0);
+    let previous = LAST
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |previous| {
+            Some(clock.max(previous + 1))
+        })
+        .unwrap();
+    clock.max(previous + 1)
 }
 
 fn cleanup_stale_spools(cache_dir: &Path, keep_generation: u64) {
@@ -1361,6 +1454,18 @@ fn cleanup_stale_spools(cache_dir: &Path, keep_generation: u64) {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn generations_are_monotonic_json_safe_integers() {
+        let mut previous = next_generation();
+        for _ in 0..1000 {
+            let next = next_generation();
+            assert!(next > previous);
+            assert!(next <= 9_007_199_254_740_991);
+            assert_eq!((next as f64) as u64, next);
+            previous = next;
+        }
+    }
 
     fn indexed(patch: &[u8]) -> (tempfile::TempDir, DiffIndex) {
         let dir = tempfile::tempdir().unwrap();
@@ -1396,6 +1501,99 @@ mod tests {
         assert!(serialized.get("oldLineno").is_some());
         assert!(serialized.get("old_lineno").is_none());
         assert_eq!(page.next_row, Some(3));
+    }
+
+    #[test]
+    fn hunk_content_preserves_crlf_and_header_like_lines() {
+        let patch = b"diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,2 +1,2 @@\n--- old\r\n+++ new\r\n same\r\n\\ No newline at end of file\n\ndiff --git a/b b/b\nold mode 100644\nnew mode 100755\n";
+        let (_dir, index) = indexed(patch);
+        assert_eq!(index.files.len(), 2);
+        assert_eq!(index.files[0].display_path(), Path::new("a"));
+        assert_eq!((index.additions, index.deletions), (1, 1));
+        assert_eq!(index.files[0].row_count, 6);
+        let page = index.viewport(0, 2, 10, 4096).unwrap();
+        let content: Vec<_> = page
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                ViewRow::Line { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(content, ["-- old\r", "++ new\r", "same\r"]);
+        assert!(matches!(page.rows.last(), Some(ViewRow::NoNewline { .. })));
+        assert_eq!(page.next_row, None);
+        assert_eq!(index.files[1].row_count, 1);
+        assert_eq!(index.files[1].old_mode.as_deref(), Some("100644"));
+        assert_eq!(index.files[1].new_mode.as_deref(), Some("100755"));
+    }
+
+    #[test]
+    fn metadata_only_binary_and_submodule_changes_keep_modes_and_sides() {
+        let patch = b"diff --git a/image b/image\nnew file mode 100644\nindex 0000000..abcdef1\nGIT binary patch\nliteral 3\nKc$`a2N(KM|O#vqW\n\ndiff --git a/module b/module\nindex abc1234..def5678 160000\n--- a/module\n+++ b/module\n@@ -1 +1 @@\n-Subproject commit abc1234\n+Subproject commit def5678\n";
+        let (_dir, index) = indexed(patch);
+        assert_eq!(index.files.len(), 2);
+        let binary = &index.files[0];
+        assert!(binary.is_binary);
+        assert_eq!(binary.old_path, None);
+        assert_eq!(binary.old_mode, None);
+        assert_eq!(binary.new_mode.as_deref(), Some("100644"));
+        assert_eq!(binary.row_count, 1);
+        let module = &index.files[1];
+        assert_eq!(module.old_mode.as_deref(), Some("160000"));
+        assert_eq!(module.new_mode.as_deref(), Some("160000"));
+        assert_eq!(module.old_oid.as_deref(), Some("abc1234"));
+        assert_eq!(module.new_oid.as_deref(), Some("def5678"));
+    }
+
+    #[test]
+    fn untracked_discovery_failure_is_not_an_empty_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            list_untracked_files(dir.path().to_str().unwrap()),
+            Err(IndexError::Git { .. })
+        ));
+    }
+
+    #[test]
+    fn literal_path_whitespace_and_embedded_side_prefixes_survive_headers() {
+        let patch = b"diff --git a/ name b/inside  b/ name b/inside \n--- a/ name b/inside \t\n+++ b/ name b/inside \t\n@@ -1 +1 @@\n-old\n+new\n";
+        let (_dir, index) = indexed(patch);
+        assert_eq!(
+            index.files[0].old_path.as_deref(),
+            Some(Path::new(" name b/inside "))
+        );
+        assert_eq!(
+            index.files[0].new_path.as_deref(),
+            Some(Path::new(" name b/inside "))
+        );
+        let binary =
+            b"diff --git a/ name b/inside  b/ name b/inside \nold mode 100644\nnew mode 100755\n";
+        let (_dir, index) = indexed(binary);
+        assert_eq!(
+            index.files[0].old_path.as_deref(),
+            Some(Path::new(" name b/inside "))
+        );
+        assert_eq!(
+            index.files[0].new_path.as_deref(),
+            Some(Path::new(" name b/inside "))
+        );
+        for (header, old, new) in [
+            (
+                "diff --git a/old name \"b/new\\tname\"\n",
+                "old name",
+                "new\tname",
+            ),
+            (
+                "diff --git \"a/old\\tname\" b/new name \n",
+                "old\tname",
+                "new name ",
+            ),
+        ] {
+            let (_dir, index) = indexed(header.as_bytes());
+            assert_eq!(index.files[0].old_path.as_deref(), Some(Path::new(old)));
+            assert_eq!(index.files[0].new_path.as_deref(), Some(Path::new(new)));
+        }
     }
 
     #[test]
@@ -1504,6 +1702,20 @@ mod tests {
         let patch = b"diff --git \"a/a\\tb.txt\" \"b/a\\tb.txt\"\n--- \"a/a\\tb.txt\"\n+++ \"b/a\\tb.txt\"\n@@ -1 +1 @@\n-old\n+new\n";
         let (_dir, index) = indexed(patch);
         assert_eq!(index.files[0].display_path(), Path::new("a\tb.txt"));
+    }
+
+    #[test]
+    fn quoted_path_bytes_are_decoded_exactly_once() {
+        let patch = b"diff --git \"a/\\\"quoted\\\"\" \"b/\\\"quoted\\\"\"\n--- \"a/\\\"quoted\\\"\"\n+++ \"b/\\\"quoted\\\"\"\n@@ -1 +1 @@\n-old\n+new\n";
+        let (_dir, index) = indexed(patch);
+        assert_eq!(
+            index.files[0].old_path.as_deref(),
+            Some(Path::new("\"quoted\""))
+        );
+        assert_eq!(
+            index.files[0].new_path.as_deref(),
+            Some(Path::new("\"quoted\""))
+        );
     }
 
     #[test]

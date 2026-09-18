@@ -295,6 +295,7 @@ mod tests {
             created_at: 1000,
             replies: Vec::new(),
             severity: None,
+            extra: Default::default(),
         }
     }
 
@@ -432,6 +433,7 @@ mod tests {
             created_at: 2000,
             role: Some("agent".to_string()),
             model: Some("gpt-4o".to_string()),
+            extra: Default::default(),
         });
         let out = format_comments(&[c], None, None);
         assert!(out.contains("<replies>"));
@@ -484,6 +486,7 @@ mod tests {
             created_at: 2000,
             role: Some("reviewer\"".to_string()),
             model: Some("gpt\"4".to_string()),
+            extra: Default::default(),
         });
         let out = format_comments(&[c], None, None);
         assert!(out.contains("<file path=\"src/&quot;evil&quot;.ts\">"));

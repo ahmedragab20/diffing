@@ -9,7 +9,22 @@ on:
       - "scripts/verify-tui-bundle.mjs"
       - "src/lib/find-tui-binary.ts"
       - "src/lib/review-*.ts"
+      - "src/lib/legacy-write-lease.ts"
+      - "src/lib/comments.ts"
+      - "src/lib/plans.ts"
+      - "src/lib/viewed-files.ts"
       - "scripts/review-sqlite-qualification.test.ts"
+      - "scripts/legacy-lease-qualification.test.ts"
+      - "scripts/review-launch-qualification.test.ts"
+      - "scripts/review-source-qualification.test.ts"
+      - "scripts/postinstall.test.mjs"
+      - "scripts/postinstall.mjs"
+      - "src/lib/git.ts"
+      - "src/lib/inspect-capture.ts"
+      - "src/lib/diff-engine.ts"
+      - "src/cli-review-core.ts"
+      - "src/cli.ts"
+      - "src/server.ts"
       - "src/__tests__/native-bundle.test.ts"
       - "src/__tests__/find-tui-binary.test.ts"
       - "package.json"
@@ -21,7 +36,7 @@ on:
 
 jobs:
   qualify-review-store:
-    name: SQLite qualification (${{ matrix.os }}, Node 20)
+    name: Review storage qualification (${{ matrix.os }}, Node 20)
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +56,10 @@ jobs:
         with:
           node-version: 20
       - run: node --import tsx --test scripts/review-sqlite-qualification.test.ts
+      - run: node --import tsx --test scripts/legacy-lease-qualification.test.ts
+      - run: node --import tsx --test scripts/review-launch-qualification.test.ts
+      - run: node --import tsx --test scripts/review-source-qualification.test.ts
+      - run: node --test scripts/postinstall.test.mjs
 
   build-native:
     name: Build ${{ matrix.target_name }}

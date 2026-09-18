@@ -7,7 +7,7 @@ import { canonicalReviewJson, ReviewStoreError, REVIEW_STORE_LIMITS, reviewEvent
 
 const FRAME_BYTES = 512 * 1024;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-const errorSchema = z.object({ code: z.enum(["invalid_request", "version_conflict", "idempotency_conflict", "corrupt_store", "unsupported_version", "store_limit", "outcome_unknown", "owner_busy", "io_error", "migration_required"]) }).strict();
+const errorSchema = z.object({ code: z.enum(["invalid_request", "version_conflict", "idempotency_conflict", "corrupt_store", "unsupported_version", "store_limit", "outcome_unknown", "owner_busy", "io_error", "migration_required", "missing_store"]) }).strict();
 const pageSchema = z.object({ records: z.array(reviewTransactionSchema).max(1000), latest: z.number().int().nonnegative().max(REVIEW_STORE_LIMITS.records), next: z.number().int().positive().nullable() }).strict();
 const readySchema = z.object({ protocol: z.literal(1), ok: z.literal(true), version: z.number().int().nonnegative().max(REVIEW_STORE_LIMITS.records), sqliteVersion: z.string().min(1).max(100) }).strict();
 const failedSchema = z.object({ protocol: z.literal(1), ok: z.literal(false), error: errorSchema }).strict();
@@ -21,6 +21,7 @@ class StoreRpc {
   private buffer = Buffer.alloc(0);
   private nextId = 0;
   private failed = false;
+  private spawned = false;
   private pending?: { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly closed: Promise<void>;
@@ -49,7 +50,10 @@ class StoreRpc {
     this.child.stderr.resume();
     this.child.stdin.on("error", () => this.fail());
     this.child.stdout.on("error", () => this.fail());
-    this.child.on("error", () => this.fail());
+    this.child.once("spawn", () => { this.spawned = true; });
+    // A process that never started cannot have committed a mutation. Preserve
+    // unknown outcomes for failures after launch, where writes may have run.
+    this.child.on("error", () => this.fail(this.spawned ? "outcome_unknown" : "native_unavailable"));
     this.closed = new Promise((resolve) => this.child.once("close", () => { this.fail(); resolve(); }));
   }
 
@@ -72,11 +76,11 @@ class StoreRpc {
     return parsed.data.result;
   }
 
-  private fail() {
+  private fail(code: "outcome_unknown" | "native_unavailable" = "outcome_unknown") {
     this.failed = true;
     if (this.pending) {
       clearTimeout(this.pending.timer);
-      this.pending.reject(new ReviewStoreError("outcome_unknown"));
+      this.pending.reject(new ReviewStoreError(code));
       this.pending = undefined;
     }
     this.child.kill();

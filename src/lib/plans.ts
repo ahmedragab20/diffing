@@ -1,6 +1,9 @@
 import { join } from "node:path";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, open, rename, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { getRepoRoot, getProjectStorageDir } from "./git.js";
+import { persistedPlansSchema } from "./plan-schema.js";
+import { withClassicWrite } from "./legacy-write-lease.js";
 import type {
   Plan,
   PlanComment,
@@ -429,6 +432,7 @@ export class InMemoryPlanStore implements PlanStore {
 export class FilePlanStore implements PlanStore {
   private dirPath: string;
   private filePath: string;
+  private mutationQueue: Promise<void> = Promise.resolve();
 
   /**
    * @param storageDir Absolute directory to persist `plans.json` in. Defaults
@@ -443,9 +447,21 @@ export class FilePlanStore implements PlanStore {
   }
 
   async getAll(): Promise<Plan[]> {
+    // Reads can persist historical backfills, so they share the mutation queue.
+    return this.enqueueMutation(() => this.readAll());
+  }
+
+  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = () => withClassicWrite(this.dirPath, operation);
+    const result = this.mutationQueue.then(run, run);
+    this.mutationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private async readAll(): Promise<Plan[]> {
     try {
-      const data = await readFile(this.filePath, "utf-8");
-      const plans: Plan[] = JSON.parse(data);
+      const data = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(this.filePath));
+      const plans = persistedPlansSchema.parse(JSON.parse(data)) as Plan[];
       let anyBackfilled = false;
       for (const p of plans) {
         const before = Array.isArray(p.versions) ? p.versions.length : 0;
@@ -477,8 +493,9 @@ export class FilePlanStore implements PlanStore {
         }
       }
       return plans;
-    } catch {
-      return [];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
     }
   }
 
@@ -493,26 +510,29 @@ export class FilePlanStore implements PlanStore {
   }
 
   private async save(plans: Plan[]): Promise<void> {
+    // Backfill markers are local hints, not part of the stored authority.
+    const clean = plans.map((plan) => {
+      const copy = { ...plan };
+      delete (copy as Plan & { __backfilledVersions?: boolean }).__backfilledVersions;
+      return copy;
+    });
+    const body = JSON.stringify(persistedPlansSchema.parse(clean), null, 2);
+    await mkdir(this.dirPath, { recursive: true });
+    const temporary = join(this.dirPath, `.plans-${randomUUID()}.json`);
     try {
-      await mkdir(this.dirPath, { recursive: true });
+      const file = await open(temporary, "wx", 0o600);
+      try {
+        await file.writeFile(body, "utf-8");
+        await file.sync();
+      } finally { await file.close(); }
+      await rename(temporary, this.filePath);
       try {
         const repoRoot = getRepoRoot();
         await writeFile(join(this.dirPath, "repo_path.txt"), repoRoot, "utf-8");
       } catch {
         // Ignore if outside git repo or in mock sandboxes
       }
-      // Strip the in-memory backfill marker before serializing; it's only a
-      // runtime hint for the load-time save-back path, never user-visible.
-      const clean = plans.map((p) => {
-        const copy = { ...p };
-        delete (copy as Plan & { __backfilledVersions?: boolean })
-          .__backfilledVersions;
-        return copy;
-      });
-      await writeFile(this.filePath, JSON.stringify(clean, null, 2), "utf-8");
-    } catch (err) {
-      console.error("Failed to save plans to file:", err);
-    }
+    } finally { await unlink(temporary).catch(() => {}); }
   }
 
   /**
@@ -539,40 +559,46 @@ export class FilePlanStore implements PlanStore {
     source?: string;
     model?: string;
   }): Promise<Plan> {
-    const plans = await this.getAll();
-    const plan = applyUpsert(plans, input, Date.now());
-    backfillPlan(plan);
-    await this.writeSourceMirror(plan);
-    await this.save(plans);
-    return plan;
+    return this.enqueueMutation(async () => {
+      const plans = await this.readAll();
+      const plan = applyUpsert(plans, input, Date.now());
+      backfillPlan(plan);
+      await this.writeSourceMirror(plan);
+      await this.save(plans);
+      return plan;
+    });
   }
 
   async update(
     id: string,
     fields: { title?: string; body?: string; source?: string; model?: string },
   ): Promise<Plan | null> {
-    const plans = await this.getAll();
-    const plan = plans.find((p) => p.id === id);
-    if (!plan) return null;
-    if (fields.title !== undefined) plan.title = fields.title;
-    if (fields.body !== undefined) plan.body = fields.body;
-    if (fields.source !== undefined) plan.source = fields.source;
-    if (fields.model !== undefined) plan.model = fields.model;
-    plan.updatedAt = Date.now();
-    syncCurrentVersion(plan);
-    backfillPlan(plan);
-    if (fields.body !== undefined) await this.writeSourceMirror(plan);
-    await this.save(plans);
-    return plan;
+    return this.enqueueMutation(async () => {
+      const plans = await this.readAll();
+      const plan = plans.find((p) => p.id === id);
+      if (!plan) return null;
+      if (fields.title !== undefined) plan.title = fields.title;
+      if (fields.body !== undefined) plan.body = fields.body;
+      if (fields.source !== undefined) plan.source = fields.source;
+      if (fields.model !== undefined) plan.model = fields.model;
+      plan.updatedAt = Date.now();
+      syncCurrentVersion(plan);
+      backfillPlan(plan);
+      if (fields.body !== undefined) await this.writeSourceMirror(plan);
+      await this.save(plans);
+      return plan;
+    });
   }
 
   async remove(id: string): Promise<boolean> {
-    const plans = await this.getAll();
-    const idx = plans.findIndex((p) => p.id === id);
-    if (idx === -1) return false;
-    plans.splice(idx, 1);
-    await this.save(plans);
-    return true;
+    return this.enqueueMutation(async () => {
+      const plans = await this.readAll();
+      const idx = plans.findIndex((p) => p.id === id);
+      if (idx === -1) return false;
+      plans.splice(idx, 1);
+      await this.save(plans);
+      return true;
+    });
   }
 
   async setDecision(
@@ -580,30 +606,34 @@ export class FilePlanStore implements PlanStore {
     decision: PlanDecision,
     decisionComment?: string,
   ): Promise<Plan | null> {
-    const plans = await this.getAll();
-    const plan = plans.find((p) => p.id === id);
-    if (!plan) return null;
-    plan.decision = decision;
-    plan.decisionComment = decisionComment?.trim() || undefined;
-    plan.decidedAt = Date.now();
-    plan.updatedAt = plan.decidedAt;
-    await this.save(plans);
-    return plan;
+    return this.enqueueMutation(async () => {
+      const plans = await this.readAll();
+      const plan = plans.find((p) => p.id === id);
+      if (!plan) return null;
+      plan.decision = decision;
+      plan.decisionComment = decisionComment?.trim() || undefined;
+      plan.decidedAt = Date.now();
+      plan.updatedAt = plan.decidedAt;
+      await this.save(plans);
+      return plan;
+    });
   }
 
   private async mutate(
     planId: string,
     fn: (plan: Plan) => boolean,
   ): Promise<Plan | null> {
-    const plans = await this.getAll();
-    const plan = plans.find((p) => p.id === planId);
-    if (!plan) return null;
-    if (!plan.comments) plan.comments = [];
-    const ok = fn(plan);
-    if (!ok) return null;
-    backfillPlan(plan);
-    await this.save(plans);
-    return plan;
+    return this.enqueueMutation(async () => {
+      const plans = await this.readAll();
+      const plan = plans.find((p) => p.id === planId);
+      if (!plan) return null;
+      if (!plan.comments) plan.comments = [];
+      const ok = fn(plan);
+      if (!ok) return null;
+      backfillPlan(plan);
+      await this.save(plans);
+      return plan;
+    });
   }
 
   async addComment(planId: string, comment: PlanComment): Promise<Plan | null> {

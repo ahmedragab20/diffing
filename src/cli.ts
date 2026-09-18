@@ -55,6 +55,17 @@ import type { TuiSearchBridge } from "./lib/tui-search-bridge.js";
 
 const args = process.argv.slice(2);
 
+if (args[0] === "review-core") {
+	try {
+		const { runReviewCoreCommand } = await import("./cli-review-core.js");
+		await runReviewCoreCommand(args.slice(1));
+		process.exit(0);
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : "Durable review launch failed.");
+		process.exit(1);
+	}
+}
+
 // ── GitHub PR mode (quoted `gh pr <ref>` or `--gh-pr <ref>`) ──────────────
 // `diffing "gh pr 1234"` opens the same web UI pointed at a GitHub PR. The
 // quoted form is checked *before* parseDiffOptions so it never collides with
@@ -599,10 +610,10 @@ export function findTuiBinary(requireViewer = false): string | null {
  * Re-parses `args` so the terminal output exactly matches `diffing` (no flag)
  * in a non-TTY context.
  */
-function runTerminalFallback(args: string[]): number {
-	const terminalOpts = parseDiffOptions(
-		args.filter((a) => a !== "--tui" && a !== "--view"),
-	);
+function runTerminalFallback(opts: DiffOptions): number {
+	// Keep the already resolved command and scope, including `show` revisions.
+	// Reparsing the argv after stripping the subcommand changes show into diff.
+	const terminalOpts = { ...opts };
 	// Force `outputMode: 'terminal'` so any auto-detection logic doesn't
 	// second-guess the fallback path.
 	terminalOpts.outputMode = "terminal";
@@ -619,10 +630,16 @@ function runTerminalFallback(args: string[]): number {
 async function launchTui(args: string[], opts: DiffOptions): Promise<number> {
 	const viewOnly = args.includes("--view");
 	const requestedMode = viewOnly ? "diffing view" : "diffing --tui";
+	// The native source pipeline currently executes git diff. Passing show
+	// revisions there would review the working tree instead of the commits.
+	if (opts.showMode) {
+		console.error(`${requestedMode}: native show capture is not supported; falling back to git show`);
+		return runTerminalFallback(opts);
+	}
 	// Gate 1 — TTY. The TUI needs a real terminal for raw mode + alternate screen.
 	if (!process.stdout.isTTY || !process.stdin.isTTY) {
 		console.error(`${requestedMode} requires a TTY; falling back to git diff`);
-		return runTerminalFallback(args);
+		return runTerminalFallback(opts);
 	}
 	// Gate 2 — binary present and executable.
 	const bin = viewOnly
@@ -632,7 +649,7 @@ async function launchTui(args: string[], opts: DiffOptions): Promise<number> {
 		console.error(
 			`${viewOnly ? "compatible " : ""}diffing-tui binary not found; reinstall with \`npm i -g diffing@latest\` or build it with \`pnpm build:tui\`; falling back to git diff`,
 		);
-		return runTerminalFallback(args);
+		return runTerminalFallback(opts);
 	}
 	// Strip --tui before forwarding so the TUI binary doesn't see it twice
 	// (and so the rest of the args mirror the web/terminal flows). The TUI
@@ -724,7 +741,7 @@ async function launchTui(args: string[], opts: DiffOptions): Promise<number> {
 				`diffing-tui failed to start: ${err.message}; falling back to git diff`,
 			);
 			void finishTuiChild(searchBridge, () =>
-				resolveP(runTerminalFallback(args)),
+				resolveP(runTerminalFallback(opts)),
 			);
 		});
 	});

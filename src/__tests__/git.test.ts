@@ -757,8 +757,7 @@ describe("git", () => {
       // re-invoke the user's diff.external / textconv drivers.
       expect(mockExecFile.mock.calls[1][1]).toEqual([
         "log",
-        "--no-walk",
-        "--reverse",
+        "--no-walk=unsorted",
         "--pretty=%s%x00%an%x00%aI",
         "--no-ext-diff",
         "--no-textconv",

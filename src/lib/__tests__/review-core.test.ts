@@ -9,6 +9,7 @@ import { captureInspection, type InspectionIdentity } from "../inspect-capture.j
 import { ReviewAuthority, ReviewAuthorityError, type ReviewActor, type ReviewIdentity } from "../review-authority.js";
 import { ReviewCore } from "../review-core.js";
 import type { ReviewCommand } from "../review-core-contract.js";
+import { ReviewStore } from "../review-store.js";
 
 const identity: ReviewIdentity = { reviewId: "00000000-0000-4000-8000-000000000001", repositoryId: "a".repeat(64), workspaceId: "b".repeat(64) };
 const human: ReviewActor = { id: "human-1", kind: "human" };
@@ -23,6 +24,14 @@ const patches = {
 };
 
 const identityCallback = (): (() => Promise<InspectionIdentity>) => async () => ({ repositoryId: identity.repositoryId, workspaceId: identity.workspaceId, head: "c".repeat(40), indexDigest: "d".repeat(64), resolvedRevisions: [] });
+
+async function openJournalCore(...args: Parameters<typeof ReviewCore.open>) {
+  const [directory, identity, authority, sources, options = {}] = args;
+  return ReviewCore.open(directory, identity, authority, sources, {
+    ...options,
+    openStore: options.openStore ?? ((path) => ReviewStore.open(path, options.store)),
+  });
+}
 
 async function captureIndex(snapshotId: string, patch: string, complete = true) {
   const result = await captureInspection(
@@ -49,7 +58,7 @@ async function harness() {
       sourceMap.set(next.id, index);
       return index;
   });
-  const core = await ReviewCore.open(directory, identity, authority, {
+  const core = await openJournalCore(directory, identity, authority, {
     capture,
     get: (id) => sourceMap.get(id),
   }, { now: () => 100 });
@@ -70,6 +79,137 @@ afterEach(async () => {
 });
 
 describe("ReviewCore", () => {
+  it("retains the sent handoff payload after comment edits, deletion, compaction and restart", async () => {
+    const h = await harness();
+    const snapshot = (await request(h.core, h.humanToken, { op: "capture" }, null, "capture")).result.snapshotId;
+    const commentId = (await request(h.core, h.humanToken, { op: "comment.add", fileIndex: 0, side: "additions", lineNumber: 1, body: "original concern" }, snapshot, "add")).result.id!;
+    await request(h.core, h.humanToken, { op: "comment.reply", commentId, body: "context at send" }, snapshot, "reply");
+    const sent = await request(h.core, h.humanToken, { op: "handoff.create", recipient: agent.id, instructions: "address this concern", commentIds: [commentId] }, snapshot, "send");
+    const id = sent.result.id!;
+    const payload = h.core.handoff(h.agentToken, id);
+    expect(payload.sent.sequence).toBe(sent.sequence);
+    expect(payload.sent.comments).toMatchObject([{ id: commentId, body: "original concern", replies: [{ body: "context at send" }] }]);
+    expect(payload.sent.snapshot.manifest.snapshotId).toBe(snapshot);
+    expect(Object.values(payload.sent.snapshot.fingerprints)).toHaveLength(1);
+    await request(h.core, h.humanToken, { op: "comment.edit", commentId, body: "later concern" }, snapshot, "edit");
+    await request(h.core, h.humanToken, { op: "comment.delete", commentId }, snapshot, "delete");
+    await request(h.core, h.agentToken, { op: "handoff.claim", handoffId: id }, snapshot, "claim");
+    const claimed = h.core.handoff(h.agentToken, id);
+    expect(claimed.sent).toEqual(payload.sent);
+    expect(claimed.handoff.status).toBe("acknowledged");
+    expect(h.core.state(h.humanToken).comments).toEqual([]);
+    await h.core.compact();
+    await h.core.close();
+    const capture = vi.fn(async () => { throw new Error("Historical reads must not recapture"); });
+    const reopened = await openJournalCore(h.directory, identity, h.authority, { capture, get: () => undefined });
+    activeCores.push(reopened);
+    expect(reopened.handoff(h.agentToken, id)).toEqual(claimed);
+    expect(capture).not.toHaveBeenCalled();
+    expect(() => reopened.handoff(h.agentToken, "missing")).toThrow("not_found");
+    h.authority.revoke(h.agentToken);
+    expect(() => reopened.handoff(h.agentToken, id)).toThrow("unauthenticated");
+  });
+
+  it("fences a handoff claim from a different principal kind with the same actor ID", async () => {
+    const h = await harness();
+    const snapshot = (await request(h.core, h.humanToken, { op: "capture" }, null, "capture")).result.snapshotId;
+    const handoffId = (await request(h.core, h.humanToken, { op: "handoff.create", recipient: agent.id, instructions: "work", commentIds: [] }, snapshot, "send")).result.id!;
+    await request(h.core, h.agentToken, { op: "handoff.claim", handoffId }, snapshot, "claim");
+    const before = h.core.state(h.humanToken);
+    const { claim, epoch } = before.handoffs[0];
+    for (const kind of ["human", "system"] as const) {
+      const token = h.authority.issue(identity, { id: agent.id, kind }, ["read", "work"]);
+      for (const command of [
+        { op: "handoff.start", handoffId, claimId: claim!.id, epoch },
+        { op: "handoff.result", handoffId, claimId: claim!.id, epoch, resultSnapshotId: snapshot, body: "forged result" },
+        { op: "handoff.fail", handoffId, claimId: claim!.id, epoch, outcome: "failed", reason: "forged failure" },
+      ] as const) await expect(request(h.core, token, command, snapshot, `${kind}-${command.op}`)).rejects.toMatchObject({ code: "claim_conflict" });
+    }
+    expect(h.core.state(h.humanToken)).toEqual(before);
+    await request(h.core, h.agentToken, { op: "handoff.start", handoffId, claimId: claim!.id, epoch }, snapshot, "start");
+    expect(h.core.state(h.agentToken).handoffs[0].status).toBe("working");
+  });
+
+  it("replaces and clears a viewed mark across equivalent captures without losing other actors", async () => {
+    const h = await harness();
+    const first = (await request(h.core, h.humanToken, { op: "capture" }, null, "capture-1")).result.snapshotId;
+    await request(h.core, h.humanToken, { op: "view.mark", fileIndex: 0, viewed: true }, first, "human-view-1");
+    await request(h.core, h.agentToken, { op: "view.mark", fileIndex: 0, viewed: true }, first, "agent-view-1");
+    h.setNext({ id: "00000000-0000-4000-8000-000000000011", patch: patches.one });
+    const second = (await request(h.core, h.humanToken, { op: "capture" }, null, "capture-2")).result.snapshotId;
+    await request(h.core, h.humanToken, { op: "view.mark", fileIndex: 0, viewed: true }, second, "human-view-2");
+    expect(h.core.state(h.humanToken).viewed).toHaveLength(2);
+    expect(h.core.state(h.humanToken).viewed.find((entry) => entry.actor.id === human.id)?.anchor.snapshotId).toBe(second);
+    await request(h.core, h.agentToken, { op: "view.mark", fileIndex: 0, viewed: false }, second, "agent-unview");
+    expect(h.core.state(h.humanToken).viewed.map((entry) => entry.actor.id)).toEqual([human.id]);
+    await h.core.close();
+    const reopened = await openJournalCore(h.directory, identity, h.authority, { capture: h.capture, get: (id) => h.sourceMap.get(id) });
+    activeCores.push(reopened);
+    expect(reopened.state(h.humanToken).viewed.map((entry) => entry.actor.id)).toEqual([human.id]);
+    expect(JSON.stringify(reopened.events(h.humanToken, { ...identity, after: 0 }))).toContain(first);
+  });
+
+  it("reports expired decision evidence as unverified and preserves the historical decision", async () => {
+    const h = await harness();
+    const snapshot = (await request(h.core, h.humanToken, { op: "capture" }, null, "capture")).result.snapshotId;
+    const decision = (await request(h.core, h.humanToken, { op: "decision.record", decision: "approved", rationale: "checked" }, snapshot, "approve")).result.id;
+    expect(h.core.state(h.humanToken).decisionFreshness).toEqual([{ id: decision, status: "current" }]);
+    h.sourceMap.clear();
+    expect(h.core.state(h.humanToken).decisionFreshness).toEqual([{ id: decision, status: "unverified" }]);
+    expect(h.core.state(h.humanToken).decisions[0]).toMatchObject({ id: decision, decision: "approved", snapshotId: snapshot });
+  });
+
+  it("persists comment edits and reopens without letting agents alter human concerns", async () => {
+    const h = await harness();
+    const snapshot = (await request(h.core, h.humanToken, { op: "capture" }, null, "capture")).result.snapshotId;
+    const commentId = (await request(h.core, h.humanToken, { op: "comment.add", fileIndex: 0, side: "additions", lineNumber: 1, body: "original" }, snapshot, "add")).result.id!;
+    const before = h.core.state(h.humanToken);
+    for (const command of [
+      { op: "comment.edit", commentId, body: "forged" },
+      { op: "comment.delete", commentId },
+      { op: "comment.reopen", commentId, reason: "forged" },
+    ] as const) {
+      await expect(request(h.core, h.agentToken, command, snapshot, command.op)).rejects.toMatchObject({ code: "forbidden" });
+    }
+    expect(h.core.state(h.humanToken)).toEqual(before);
+    await request(h.core, h.humanToken, { op: "comment.edit", commentId, body: "revised" }, snapshot, "edit");
+    await request(h.core, h.humanToken, { op: "comment.resolve", commentId, reason: "fixed" }, snapshot, "resolve");
+    await request(h.core, h.humanToken, { op: "comment.reopen", commentId, reason: "needs verification" }, snapshot, "reopen");
+    const comment = h.core.state(h.humanToken).comments[0];
+    expect(comment).toMatchObject({ id: commentId, body: "revised", status: "open", sourceAnchor: before.comments[0].sourceAnchor, actor: human, reopened: { actor: human, reason: "needs verification" } });
+    expect(comment).not.toHaveProperty("resolution");
+    const deletion = await request(h.core, h.humanToken, { op: "comment.delete", commentId }, snapshot, "delete");
+    await h.core.close();
+    const reopened = await openJournalCore(h.directory, identity, h.authority, { capture: async () => { throw new Error("unexpected capture"); }, get: () => undefined });
+    activeCores.push(reopened);
+    expect(reopened.state(h.humanToken).comments).toEqual([]);
+    expect(await request(reopened, h.humanToken, { op: "comment.delete", commentId }, snapshot, "delete", deletion.sequence - 1)).toEqual(deletion);
+    const history = reopened.events(h.humanToken, { ...identity, after: 0 });
+    expect(JSON.stringify(history)).toContain("original");
+    expect(JSON.stringify(history)).toContain("needs verification");
+  });
+
+  it("allows an agent to edit its own reply but preserves other authors' replies", async () => {
+    const h = await harness();
+    const snapshot = (await request(h.core, h.humanToken, { op: "capture" }, null, "capture")).result.snapshotId;
+    const commentId = (await request(h.core, h.agentToken, { op: "comment.add", fileIndex: 0, side: "additions", lineNumber: 1, body: "agent thread" }, snapshot, "add")).result.id!;
+    await request(h.core, h.agentToken, { op: "comment.reply", commentId, body: "agent reply" }, snapshot, "agent-reply");
+    await request(h.core, h.humanToken, { op: "comment.reply", commentId, body: "human concern" }, snapshot, "human-reply");
+    const [own, other] = h.core.state(h.humanToken).comments[0].replies;
+    await request(h.core, h.agentToken, { op: "reply.edit", commentId, replyId: own.id, body: "corrected reply" }, snapshot, "edit-reply");
+    const before = h.core.state(h.humanToken);
+    for (const command of [
+      { op: "reply.edit", commentId, replyId: other.id, body: "forged" },
+      { op: "reply.delete", commentId, replyId: other.id },
+      { op: "comment.delete", commentId },
+    ] as const) await expect(request(h.core, h.agentToken, command, snapshot, command.op)).rejects.toMatchObject({ code: "forbidden" });
+    expect(h.core.state(h.humanToken)).toEqual(before);
+    await request(h.core, h.agentToken, { op: "reply.delete", commentId, replyId: own.id }, snapshot, "delete-own-reply");
+    expect(h.core.state(h.humanToken).comments[0].replies).toEqual([other]);
+    const limitedHuman = h.authority.issue(identity, { id: "observer", kind: "human" }, ["read", "comment"]);
+    await expect(request(h.core, limitedHuman, { op: "comment.delete", commentId }, snapshot, "limited-delete")).rejects.toMatchObject({ code: "forbidden" });
+  });
+
   it("preserves captured comments, anchors, text, actor, and views across reopen", async () => {
     const h = await harness();
     const captured = await request(h.core, h.humanToken, { op: "capture" }, null, "capture-1");
@@ -78,7 +218,7 @@ describe("ReviewCore", () => {
     await request(h.core, h.humanToken, { op: "view.mark", fileIndex: 0, viewed: true }, snapshot, "view-1");
     const before = h.core.state(h.humanToken);
     await h.core.close();
-    const reopened = await ReviewCore.open(h.directory, identity, h.authority, { capture: async () => { throw new Error("unused"); }, get: (id) => h.sourceMap.get(id) }, { now: () => 100 });
+    const reopened = await openJournalCore(h.directory, identity, h.authority, { capture: async () => { throw new Error("unused"); }, get: (id) => h.sourceMap.get(id) }, { now: () => 100 });
     activeCores.push(reopened);
     expect(reopened.state(h.humanToken)).toEqual(before);
     expect(reopened.state(h.humanToken).comments[0]).toMatchObject({ id: coreResult(comment).id, body: "keep", actor: human });
@@ -117,7 +257,7 @@ describe("ReviewCore", () => {
     }
     expect(sequences).toEqual(Array.from({ length: state.version }, (_, index) => index + 1));
     await h.core.close();
-    const reopened = await ReviewCore.open(h.directory, identity, h.authority, { capture: async () => { throw new Error("unexpected capture"); }, get: (id) => h.sourceMap.get(id) });
+    const reopened = await openJournalCore(h.directory, identity, h.authority, { capture: async () => { throw new Error("unexpected capture"); }, get: (id) => h.sourceMap.get(id) });
     activeCores.push(reopened);
     expect(reopened.state(h.humanToken).handoffs[0]).toEqual(state.handoffs[0]);
     expect(reopened.state(h.humanToken).decisions[0]).toEqual(state.decisions[0]);
@@ -132,7 +272,7 @@ describe("ReviewCore", () => {
     await expect(request(h.core, h.humanToken, { op: "comment.add", fileIndex: 0, side: "additions", lineNumber: 1, body: "changed" }, coreResult(first).snapshotId, "same", 1)).rejects.toMatchObject({ code: "idempotency_conflict" });
     await expect(request(h.core, h.humanToken, { op: "capture" }, null, "stale", 1)).rejects.toMatchObject({ code: "version_conflict" });
     await h.core.close();
-    const reopened = await ReviewCore.open(h.directory, identity, h.authority, { capture: async () => { throw new Error("unexpected capture"); }, get: () => undefined });
+    const reopened = await openJournalCore(h.directory, identity, h.authority, { capture: async () => { throw new Error("unexpected capture"); }, get: () => undefined });
     activeCores.push(reopened);
     await expect(request(reopened, h.humanToken, { op: "capture" }, null, "same", 1)).resolves.toEqual(first);
   });
@@ -149,7 +289,7 @@ describe("ReviewCore", () => {
     const handoff = await request(h.core, h.humanToken, send, snapshot, "handoff");
     await h.core.close();
     const bytes = await readFile(join(h.directory, "review.jsonl"));
-    const reopened = await ReviewCore.open(h.directory, identity, h.authority, { capture: async () => { throw new Error("Duplicate reran capture"); }, get: () => undefined });
+    const reopened = await openJournalCore(h.directory, identity, h.authority, { capture: async () => { throw new Error("Duplicate reran capture"); }, get: () => undefined });
     activeCores.push(reopened);
     for (const [command, id, original] of [[add, "comment", comment], [reply, "reply", replied], [send, "handoff", handoff]] as const) {
       expect(await request(reopened, h.humanToken, command, snapshot, id, original.sequence - 1)).toEqual(original);
@@ -251,17 +391,17 @@ describe("ReviewCore", () => {
     const { readFile, writeFile } = await import("node:fs/promises");
     const bytes = await readFile(storePath, "utf8");
     await writeFile(storePath, bytes.replace("review.core", "tampered"));
-    await expect(ReviewCore.open(directory, identity, h.authority, { capture: async () => { throw new Error("unused"); }, get: (id) => h.sourceMap.get(id) })).rejects.toMatchObject({ code: "corrupt_store" });
+    await expect(openJournalCore(directory, identity, h.authority, { capture: async () => { throw new Error("unused"); }, get: (id) => h.sourceMap.get(id) })).rejects.toMatchObject({ code: "corrupt_store" });
     await writeFile(storePath, bytes);
     await writeFile(storePath, bytes.replace('{"version":1,', '{"version":999,'));
-    await expect(ReviewCore.open(directory, identity, h.authority, { capture: async () => { throw new Error("unused"); }, get: (id) => h.sourceMap.get(id) })).rejects.toMatchObject({ code: "unsupported_version" });
+    await expect(openJournalCore(directory, identity, h.authority, { capture: async () => { throw new Error("unused"); }, get: (id) => h.sourceMap.get(id) })).rejects.toMatchObject({ code: "unsupported_version" });
     expect(await (await import("node:fs/promises")).readFile(storePath, "utf8")).toBe(bytes.replace('{"version":1,', '{"version":999,'));
     await writeFile(storePath, bytes);
-    const reopened = await ReviewCore.open(directory, identity, h.authority, { capture: async () => { throw new Error("unused"); }, get: (id) => h.sourceMap.get(id) }, { store: { io: { afterFlush: async () => { throw new Error("lost"); } } } });
+    const reopened = await openJournalCore(directory, identity, h.authority, { capture: async () => { throw new Error("unused"); }, get: (id) => h.sourceMap.get(id) }, { store: { io: { afterFlush: async () => { throw new Error("lost"); } } } });
     activeCores.push(reopened);
     await expect(request(reopened, h.humanToken, { op: "comment.add", fileIndex: 0, side: "additions", lineNumber: 1, body: "x" }, "00000000-0000-4000-8000-000000000010", "uncertain")).rejects.toMatchObject({ code: "outcome_unknown" });
     await reopened.close();
-    const recovered = await ReviewCore.open(directory, identity, h.authority, { capture: async () => { throw new Error("unused"); }, get: (id) => h.sourceMap.get(id) });
+    const recovered = await openJournalCore(directory, identity, h.authority, { capture: async () => { throw new Error("unused"); }, get: (id) => h.sourceMap.get(id) });
     activeCores.push(recovered);
     await expect(request(recovered, h.humanToken, { op: "comment.add", fileIndex: 0, side: "additions", lineNumber: 1, body: "x" }, "00000000-0000-4000-8000-000000000010", "uncertain", 2)).resolves.toBeDefined();
     expect(recovered.state(h.humanToken).comments).toHaveLength(1);

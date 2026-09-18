@@ -1154,17 +1154,15 @@ export async function getShowDiff(
   const trimmed =
     truncated === 0 ? shaList : shaList.slice(0, MAX_SHOW_COMMITS);
 
-  // 3. Fetch metadata + per-commit diff in one shot. `--no-walk` ensures only
-  // these exact commits are shown (no ancestor traversal); `--reverse` keeps
-  // the same oldest-first ordering as step 1.
+  // 3. Fetch exactly the resolved order. Sorting again by commit timestamp and
+  // reversing can invert ties, so it must not reorder the list from step 1.
   let raw: string;
   {
     const { stdout } = await execFileAsync(
       "git",
       [
         "log",
-        "--no-walk",
-        "--reverse",
+        "--no-walk=unsorted",
         "-p",
         "--pretty=raw",
         ...DIFF_FLAGS,
@@ -1262,8 +1260,7 @@ export async function getCommitSeriesSummary(
       "git",
       [
         "log",
-        "--no-walk",
-        "--reverse",
+        "--no-walk=unsorted",
         "--pretty=%s%x00%an%x00%aI",
         ...DIFF_FLAGS,
         ...trimmed,

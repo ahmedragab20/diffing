@@ -16,6 +16,7 @@ use crate::inspect_scope::{
     directories, display_path, is_lockfile_noise, matching_indexes, parse_exclude, resolve_file,
     FileResolve,
 };
+use crate::inspect_snapshots::{Capture, InspectError, InspectSnapshots};
 use anyhow::{Context, Result};
 use diffing_core::comments::{
     CommentSeverity, CommentSide, CommentStatus, FileCommentStore, NewComment,
@@ -60,6 +61,8 @@ struct ApiState {
     repo_root: String,
     index: Arc<RwLock<Arc<DiffIndex>>>,
     review: Arc<(Mutex<ReviewState>, Condvar)>,
+    snapshots: Mutex<InspectSnapshots>,
+    capture_work: Mutex<()>,
 }
 
 impl AgentApi {
@@ -74,6 +77,10 @@ impl AgentApi {
             repo_root,
             index,
             review: review.clone(),
+            snapshots: Mutex::new(
+                InspectSnapshots::new().map_err(|error| anyhow::anyhow!(error.1))?,
+            ),
+            capture_work: Mutex::new(()),
         });
         let connection_slots = Arc::new(Mutex::new(0usize));
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
@@ -170,6 +177,12 @@ fn handle_connection(mut stream: TcpStream, state: &ApiState) -> Result<()> {
     match response {
         Ok((status, body)) => write_json(&mut stream, status, body),
         Err(error) => {
+            if let Some(lease_error) =
+                error.downcast_ref::<diffing_core::legacy_write_lease::LegacyWriteError>()
+            {
+                let code = lease_error.to_string();
+                return write_json(&mut stream, 409, json!({ "error": code, "code": code }));
+            }
             let message = error.to_string();
             let status = if message.starts_with("stale generation ") {
                 409
@@ -189,17 +202,30 @@ fn route(
     state: &ApiState,
 ) -> Result<(u16, Value)> {
     if method == "GET"
-        && matches!(path, "/api/diff/files" | "/api/diff/hunks" | "/api/diff/slice" | "/api/diff/search")
-        && (params.contains_key("continuation") || params.contains_key("snapshotId"))
+        && matches!(
+            path,
+            "/api/diff/summary"
+                | "/api/diff/files"
+                | "/api/diff/hunks"
+                | "/api/diff/slice"
+                | "/api/diff/search"
+        )
     {
-        return Ok((422, json!({
-            "error": "Retained snapshots are unsupported in TUI sessions; use generation and numeric coordinates.",
-            "code": "unsupported_continuation",
-            "recovery": "restart_files"
-        })));
+        return retained_inspect(path, params, state);
     }
+    route_inner(method, path, params, body, state, None)
+}
+
+fn route_inner(
+    method: &str,
+    path: &str,
+    params: &HashMap<String, String>,
+    body: &[u8],
+    state: &ApiState,
+    retained: Option<&Arc<DiffIndex>>,
+) -> Result<(u16, Value)> {
     if method == "GET" && path == "/api/diff/summary" {
-        let index = current_index(state);
+        let index = retained.cloned().unwrap_or_else(|| current_index(state));
         let exclude = match parse_exclude(params.get("exclude").map(String::as_str)) {
             Ok(value) => value,
             Err(error) => return Ok((400, json!({ "error": error }))),
@@ -273,7 +299,7 @@ fn route(
                 }),
             ));
         }
-        let index = current_index(state);
+        let index = retained.cloned().unwrap_or_else(|| current_index(state));
         if let Some(generation) = params
             .get("generation")
             .and_then(|value| value.parse::<u64>().ok())
@@ -312,6 +338,13 @@ fn route(
                     "rows": file.row_count,
                     "additions": file.additions,
                     "deletions": file.deletions,
+                    "metadata": {
+                        "oldMode": file.old_mode,
+                        "newMode": file.new_mode,
+                        "oldBlob": file.old_oid,
+                        "newBlob": file.new_oid,
+                        "submodule": file.old_mode.as_deref() == Some("160000") || file.new_mode.as_deref() == Some("160000"),
+                    },
                 })
             })
             .collect();
@@ -331,7 +364,7 @@ fn route(
         return Ok((200, body));
     }
     if method == "GET" && path == "/api/diff/hunks" {
-        let index = current_index(state);
+        let index = retained.cloned().unwrap_or_else(|| current_index(state));
         generation_guard(params, &index)?;
         let file_index = match resolve_file(
             &index,
@@ -361,7 +394,7 @@ fn route(
         ));
     }
     if method == "GET" && path == "/api/diff/slice" {
-        let index = current_index(state);
+        let index = retained.cloned().unwrap_or_else(|| current_index(state));
         generation_guard(params, &index)?;
         let file = match resolve_file(
             &index,
@@ -378,7 +411,7 @@ fn route(
         return Ok((200, serde_json::to_value(viewport)?));
     }
     if method == "GET" && path == "/api/diff/search" {
-        let index = current_index(state);
+        let index = retained.cloned().unwrap_or_else(|| current_index(state));
         generation_guard(params, &index)?;
         let query = params.get("q").map(String::as_str).unwrap_or("");
         let file = usize_param(params, "file", 0);
@@ -428,6 +461,42 @@ fn route(
             Some("praise") => Some(CommentSeverity::Praise),
             _ => None,
         };
+        let source_anchor = match (value.get("snapshotId"), value.get("fileIndex")) {
+            (None, None) => None,
+            (Some(snapshot), Some(file)) => {
+                let (Some(snapshot), Some(file)) = (
+                    snapshot.as_str(),
+                    file.as_u64().and_then(|file| usize::try_from(file).ok()),
+                ) else {
+                    return Ok(inspect_error(InspectError(400, "invalid_anchor")));
+                };
+                let capture = match state
+                    .snapshots
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("snapshot state poisoned"))?
+                    .get(snapshot, now_ms())
+                {
+                    Ok(capture) => capture,
+                    Err(error) => return Ok(inspect_error(error)),
+                };
+                let anchor = match capture.anchor(
+                    file,
+                    value.get("side").and_then(Value::as_str).unwrap_or(""),
+                    start_line_number.unwrap_or(line_number),
+                    line_number,
+                ) {
+                    Ok(anchor) => anchor,
+                    Err(error) => return Ok(inspect_error(error)),
+                };
+                if anchor["file"]["oldPath"].as_str() != Some(file_path)
+                    && anchor["file"]["newPath"].as_str() != Some(file_path)
+                {
+                    return Ok(inspect_error(InspectError(400, "invalid_anchor")));
+                }
+                Some(anchor)
+            }
+            _ => return Ok(inspect_error(InspectError(400, "invalid_anchor"))),
+        };
         let new_comment = if line_number == 0 {
             NewComment::FileLevel {
                 file_path,
@@ -448,7 +517,7 @@ fn route(
                 severity,
             }
         };
-        let comment = store.add(new_comment, now_ms())?;
+        let comment = store.add_with_source_anchor(new_comment, now_ms(), source_anchor)?;
         return Ok((200, serde_json::to_value(comment)?));
     }
     if let Some(id) = path.strip_prefix("/api/comments/") {
@@ -529,6 +598,271 @@ fn route(
 
 fn current_index(state: &ApiState) -> Arc<DiffIndex> {
     state.index.read().expect("index state poisoned").clone()
+}
+
+fn inspect_error(error: InspectError) -> (u16, Value) {
+    (
+        error.0,
+        json!({ "code": error.1, "error": error.1, "recovery": "restart_files" }),
+    )
+}
+
+fn retained_inspect(
+    path: &str,
+    params: &HashMap<String, String>,
+    state: &ApiState,
+) -> Result<(u16, Value)> {
+    let invalid = || inspect_error(InspectError(400, "invalid_continuation"));
+    let operation = path.rsplit('/').next().unwrap_or("");
+    for key in [
+        "cursor",
+        "limit",
+        "generation",
+        "file",
+        "row",
+        "start",
+        "maxLines",
+        "maxBytes",
+    ] {
+        if let Some(value) = params.get(key) {
+            if value.is_empty()
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+                || value
+                    .parse::<u64>()
+                    .map_or(true, |number| number > 9_007_199_254_740_991)
+            {
+                return Ok(invalid());
+            }
+        }
+    }
+    if params.contains_key("continuation") && params.len() != 1 {
+        return Ok(invalid());
+    }
+    // Keep every generated token usable by the CLI/MCP's 16 KiB contract,
+    // including JSON escaping, UTF-8, envelope fields and base64 expansion.
+    if !params.contains_key("continuation") && serde_json::to_vec(params)?.len() > 8 * 1024 {
+        return Ok(invalid());
+    }
+    if !params.contains_key("continuation")
+        && !params.contains_key("snapshotId")
+        && !params.contains_key("generation")
+        && ["cursor", "start", "row"]
+            .iter()
+            .any(|key| u64_param(params, key, 0) > 0)
+    {
+        return Ok(inspect_error(InspectError(400, "continuation_required")));
+    }
+    let now = now_ms();
+    let fresh = !params.contains_key("snapshotId") && !params.contains_key("continuation");
+    let _capture_permit = if fresh {
+        match state.capture_work.try_lock() {
+            Ok(permit) => Some(permit),
+            Err(_) => return Ok(inspect_error(InspectError(503, "capture_busy"))),
+        }
+    } else {
+        None
+    };
+    let prepared = if fresh {
+        let budget = usize_param(params, "maxBytes", 256 * 1024);
+        if !(512..=MAX_BODY_BYTES).contains(&budget) {
+            return Ok(invalid());
+        }
+        // A slow source capture must not block historical pages or multiply
+        // large Git buffers across the connection pool. New captures retry
+        // explicitly; retained reads do not need this permit.
+        let current = current_index(state);
+        if params
+            .get("generation")
+            .is_some_and(|value| value.parse::<u64>().ok() != Some(current.generation))
+        {
+            return Ok(inspect_error(InspectError(409, "stale_generation")));
+        }
+        match InspectSnapshots::prepare(&current, now) {
+            Ok(capture) => Some(capture),
+            Err(error) => return Ok(inspect_error(error)),
+        }
+    } else {
+        None
+    };
+    let mut snapshots = state
+        .snapshots
+        .lock()
+        .map_err(|_| anyhow::anyhow!("snapshot state poisoned"))?;
+    let (capture, mut query) = if let Some(token) = params.get("continuation") {
+        match snapshots.resume(token, operation, now) {
+            Ok((capture, query)) => (capture, query.into_iter().collect::<HashMap<_, _>>()),
+            Err(error) => return Ok(inspect_error(error)),
+        }
+    } else {
+        let mut query = params.clone();
+        let capture = if let Some(id) = query.remove("snapshotId") {
+            snapshots.get(&id, now)
+        } else {
+            Ok(snapshots.retain(prepared.expect("fresh capture was prepared"), now))
+        };
+        match capture {
+            Ok(capture) => (capture, query),
+            Err(error) => return Ok(inspect_error(error)),
+        }
+    };
+    if query
+        .get("generation")
+        .is_some_and(|value| value.parse::<u64>().ok() != Some(capture.index.generation))
+    {
+        return Ok(inspect_error(InspectError(409, "stale_generation")));
+    }
+    let budget = usize_param(&query, "maxBytes", 256 * 1024);
+    if !(512..=MAX_BODY_BYTES).contains(&budget) {
+        return Ok(invalid());
+    }
+    query.insert("generation".into(), capture.index.generation.to_string());
+    let (status, raw) = match route_inner("GET", path, &query, b"", state, Some(&capture.index)) {
+        Ok(response) => response,
+        Err(_) => return Ok(inspect_error(InspectError(503, "source_unavailable"))),
+    };
+    if status != 200 {
+        return Ok((status, raw));
+    }
+    let array = match operation {
+        "files" => "files",
+        "hunks" => "hunks",
+        "slice" => "rows",
+        "search" => "hits",
+        _ => "",
+    };
+    let length = raw.get(array).and_then(Value::as_array).map_or(0, Vec::len);
+    let assemble = |count, omit| {
+        bounded_inspect_page(&snapshots, &capture, operation, &query, &raw, count, omit)
+    };
+    let full = assemble(length, false);
+    if serde_json::to_vec(&full)?.len() <= budget {
+        return Ok((200, full));
+    }
+    let mut best = None;
+    let mut low = 1;
+    let mut high = length.saturating_sub(1);
+    while low <= high {
+        let count = low + (high - low) / 2;
+        let candidate = assemble(count, false);
+        if serde_json::to_vec(&candidate)?.len() <= budget {
+            best = Some(candidate);
+            low = count + 1;
+        } else {
+            high = count - 1;
+        }
+    }
+    if let Some(page) = best {
+        return Ok((200, page));
+    }
+    let omission = assemble(0, length > 0);
+    if serde_json::to_vec(&omission)?.len() <= budget {
+        return Ok((200, omission));
+    }
+    Ok(inspect_error(InspectError(413, "response_too_large")))
+}
+
+fn bounded_inspect_page(
+    cache: &InspectSnapshots,
+    capture: &Capture,
+    operation: &str,
+    query: &HashMap<String, String>,
+    raw: &Value,
+    count: usize,
+    omit: bool,
+) -> Value {
+    let mut page = raw.clone();
+    let consumed = if omit { 1 } else { count } as u64;
+    let mut next = query.clone();
+    let more = match operation {
+        "files" | "hunks" => {
+            let array = if operation == "files" {
+                "files"
+            } else {
+                "hunks"
+            };
+            page[array] = json!(&raw[array].as_array().unwrap()[..count]);
+            if operation == "files" {
+                for file in page[array].as_array_mut().unwrap() {
+                    if let Some(anchor) = file["index"]
+                        .as_u64()
+                        .and_then(|index| capture.anchors.get(index as usize))
+                    {
+                        file["metadata"]["patchDigest"] = anchor["file"]["contentDigest"].clone();
+                        file["sourceAnchor"] = anchor.clone();
+                    }
+                }
+            }
+            page["returned"] = json!(count);
+            let total = raw[if operation == "files" {
+                "matched"
+            } else {
+                "total"
+            }]
+            .as_u64()
+            .unwrap_or(0);
+            let cursor = u64_param(query, "cursor", 0).min(total) + consumed;
+            page["nextCursor"] = json!((cursor < total).then_some(cursor));
+            next.insert("cursor".into(), cursor.to_string());
+            cursor < total
+        }
+        "slice" => {
+            page["rows"] = json!(&raw["rows"].as_array().unwrap()[..count]);
+            let cursor = raw["startRow"].as_u64().unwrap_or(0) + consumed;
+            let more = cursor < raw["totalRows"].as_u64().unwrap_or(0);
+            page["nextRow"] = json!(more.then_some(cursor));
+            page["truncated"] = json!(more || omit);
+            next.insert("start".into(), cursor.to_string());
+            more
+        }
+        "search" => {
+            let hits = raw["hits"].as_array().unwrap();
+            page["hits"] = json!(&hits[..count]);
+            let excluded = hits.get(consumed as usize);
+            let file = excluded
+                .and_then(|hit| hit["fileIndex"].as_u64())
+                .or(raw["nextFile"].as_u64());
+            let row = excluded
+                .and_then(|hit| hit["row"].as_u64())
+                .or(raw["nextRow"].as_u64());
+            page["nextFile"] = json!(file);
+            page["nextRow"] = json!(row);
+            page["truncated"] = json!(file.is_some() || omit);
+            if let Some(file) = file {
+                next.insert("file".into(), file.to_string());
+                next.insert("row".into(), row.unwrap_or(0).to_string());
+            }
+            file.is_some()
+        }
+        _ => false,
+    };
+    page["snapshotId"] = json!(capture.id);
+    page["expiresAt"] = json!(capture.expires_at);
+    page["freshness"] = json!("not-checked");
+    page["complete"] = json!(capture.index.complete);
+    if let Some(manifest) = &capture.index.manifest {
+        page["manifest"] = json!(manifest);
+    }
+    page["nextContinuation"] = if more {
+        json!(cache.encode(capture, operation, next.into_iter().collect()))
+    } else {
+        Value::Null
+    };
+    if omit {
+        page["omitted"] = json!({ "reason": "row_too_large", "count": 1 });
+    }
+    if page.get("estimatedBytes").is_some() {
+        page["estimatedBytes"] = json!(0);
+        loop {
+            let bytes = serde_json::to_vec(&page)
+                .expect("serializing inspect page")
+                .len();
+            if page["estimatedBytes"].as_u64() == Some(bytes as u64) {
+                break;
+            }
+            page["estimatedBytes"] = json!(bytes);
+        }
+    }
+    page
 }
 
 fn generation_guard(params: &HashMap<String, String>, index: &DiffIndex) -> Result<()> {
@@ -774,6 +1108,161 @@ mod tests {
     }
 
     #[test]
+    fn native_manifest_is_retained_and_pages_do_not_reopen_git() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path().to_str().unwrap().to_owned();
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(repo.path().join("a.txt"), "first\n").unwrap();
+        std::fs::write(repo.path().join("b.txt"), "second\n").unwrap();
+        let index = diffing_core::index::build_git_diff_index(&root, &[], |_| {}).unwrap();
+        let spool = index.spool_path.clone();
+        let state = ApiState {
+            repo_root: root.clone(),
+            index: Arc::new(RwLock::new(Arc::new(index))),
+            capability: "cap".into(),
+            review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
+            snapshots: Mutex::new(InspectSnapshots::new().unwrap()),
+            capture_work: Mutex::new(()),
+        };
+        let first_query = HashMap::from([("limit".into(), "1".into())]);
+        let (status, first) = route("GET", "/api/diff/files", &first_query, b"", &state).unwrap();
+        assert_eq!(status, 200, "{first}");
+        assert_eq!(first["manifest"]["snapshotId"], first["snapshotId"]);
+        assert_eq!(first["manifest"]["consistency"], "optimistic-validated");
+        assert_eq!(first["manifest"]["layers"][0]["fileCount"], 2);
+        assert_eq!(first["files"][0]["path"], "a.txt");
+        assert_eq!(
+            first["files"][0]["sourceAnchor"]["snapshotId"],
+            first["snapshotId"]
+        );
+        assert_eq!(
+            first["files"][0]["metadata"]["patchDigest"],
+            first["files"][0]["sourceAnchor"]["file"]["contentDigest"]
+        );
+        let manifest = first["manifest"].clone();
+        {
+            let _capture_in_progress = state.capture_work.lock().unwrap();
+            let (status, body) =
+                route("GET", "/api/diff/files", &first_query, b"", &state).unwrap();
+            assert_eq!(status, 503);
+            assert_eq!(body["code"], "capture_busy");
+            let existing = HashMap::from([(
+                "snapshotId".into(),
+                first["snapshotId"].as_str().unwrap().into(),
+            )]);
+            let (status, body) = route("GET", "/api/diff/files", &existing, b"", &state).unwrap();
+            assert_eq!(status, 200);
+            assert_eq!(body["manifest"], manifest);
+        }
+        std::fs::write(repo.path().join("a.txt"), "changed\n").unwrap();
+        let (status, error) = route("GET", "/api/diff/files", &first_query, b"", &state).unwrap();
+        assert_eq!(status, 409);
+        assert_eq!(error["code"], "inconsistent_capture");
+        // A continuation must not run Git or touch the original spool. Removing
+        // both makes any accidental fresh collection fail deterministically.
+        std::fs::remove_dir_all(repo.path().join(".git")).unwrap();
+        std::fs::remove_file(spool).unwrap();
+        let continuation = HashMap::from([(
+            "continuation".into(),
+            first["nextContinuation"].as_str().unwrap().into(),
+        )]);
+        let (status, second) = route("GET", "/api/diff/files", &continuation, b"", &state).unwrap();
+        assert_eq!(status, 200, "{second}");
+        assert_eq!(second["manifest"], manifest);
+        assert_eq!(second["files"][0]["path"], "b.txt");
+        assert!(second["nextContinuation"].is_null());
+        // Creating feedback against a retained capture must keep its historical
+        // identity even after the live source and original spool disappear.
+        let comment_request = json!({
+            "snapshotId": first["snapshotId"], "fileIndex": 0,
+            "filePath": "a.txt", "side": "additions", "lineNumber": 1,
+            "lineContent": "first", "body": "historical feedback",
+        });
+        let (status, comment) = route(
+            "POST",
+            "/api/comments",
+            &HashMap::new(),
+            &serde_json::to_vec(&comment_request).unwrap(),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(status, 200, "{comment}");
+        assert_eq!(comment["sourceAnchor"]["snapshotId"], first["snapshotId"]);
+        assert_eq!(comment["sourceAnchor"]["file"]["newPath"], "a.txt");
+        assert_eq!(
+            comment["sourceAnchor"]["range"],
+            json!({"side": "additions", "start": 1, "end": 1})
+        );
+        assert_eq!(
+            FileCommentStore::new(&root).load().unwrap()[0].extra["sourceAnchor"],
+            comment["sourceAnchor"]
+        );
+        for invalid in [
+            json!({"snapshotId": "missing"}),
+            json!({"fileIndex": 10}),
+            json!({"filePath": "b.txt"}),
+            json!({"lineNumber": 2}),
+            json!({"side": "deletions"}),
+            json!({"fileIndex": null}),
+            json!({"snapshotId": null}),
+        ] {
+            let mut request = comment_request.clone();
+            request
+                .as_object_mut()
+                .unwrap()
+                .extend(invalid.as_object().unwrap().clone());
+            let (status, _) = route(
+                "POST",
+                "/api/comments",
+                &HashMap::new(),
+                &serde_json::to_vec(&request).unwrap(),
+                &state,
+            )
+            .unwrap();
+            assert!(status == 400 || status == 410, "{request}: {status}");
+        }
+        for key in ["snapshotId", "fileIndex"] {
+            let mut request = comment_request.clone();
+            request.as_object_mut().unwrap().remove(key);
+            let (status, _) = route(
+                "POST",
+                "/api/comments",
+                &HashMap::new(),
+                &serde_json::to_vec(&request).unwrap(),
+                &state,
+            )
+            .unwrap();
+            assert_eq!(status, 400);
+        }
+        assert_eq!(FileCommentStore::new(&root).load().unwrap().len(), 1);
+        let query = HashMap::from([
+            (
+                "snapshotId".into(),
+                first["snapshotId"].as_str().unwrap().into(),
+            ),
+            ("file".into(), "0".into()),
+        ]);
+        let (status, slice) = route("GET", "/api/diff/slice", &query, b"", &state).unwrap();
+        assert_eq!(status, 200);
+        assert!(slice["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["content"] == "first"));
+        let mut small = query.clone();
+        small.insert("maxBytes".into(), "512".into());
+        let (status, body) = route("GET", "/api/diff/slice", &small, b"", &state).unwrap();
+        assert_eq!(status, 413); // Manifest metadata counts against the budget.
+        assert_eq!(body["code"], "response_too_large");
+        let _ = std::fs::remove_dir_all(diffing_core::project_storage_dir(&root));
+    }
+
+    #[test]
     fn malformed_comment_json_returns_400() {
         let index = Arc::new(DiffIndex::empty(1, PathBuf::from("/tmp/repo"), true));
         let shared = Arc::new(RwLock::new(index));
@@ -782,6 +1271,8 @@ mod tests {
             index: shared,
             capability: "cap".to_string(),
             review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
+            snapshots: Mutex::new(InspectSnapshots::new().unwrap()),
+            capture_work: Mutex::new(()),
         };
         let (status, body) = route(
             "POST",
@@ -804,6 +1295,8 @@ mod tests {
             index: shared,
             capability: "cap".to_string(),
             review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
+            snapshots: Mutex::new(InspectSnapshots::new().unwrap()),
+            capture_work: Mutex::new(()),
         };
         let payload = json!({
             "filePath": "a.rs",
@@ -846,6 +1339,8 @@ mod tests {
             index: shared,
             capability: "cap".to_string(),
             review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
+            snapshots: Mutex::new(InspectSnapshots::new().unwrap()),
+            capture_work: Mutex::new(()),
         };
         let mut both = HashMap::new();
         both.insert("file".to_string(), "0".to_string());
@@ -876,7 +1371,7 @@ mod tests {
     }
 
     #[test]
-    fn file_pages_require_generation_and_reject_unsupported_continuations() {
+    fn file_pages_require_generation_and_reject_invalid_continuations() {
         let state = ApiState {
             repo_root: "/tmp/repo".to_string(),
             index: Arc::new(RwLock::new(Arc::new(DiffIndex::empty(
@@ -886,13 +1381,29 @@ mod tests {
             )))),
             capability: "cap".to_string(),
             review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
+            snapshots: Mutex::new(InspectSnapshots::new().unwrap()),
+            capture_work: Mutex::new(()),
         };
         for operation in ["files", "hunks", "slice", "search"] {
             for parameter in ["continuation", "snapshotId"] {
                 let params = HashMap::from([(parameter.to_string(), "retained".to_string())]);
-                let (status, body) = route("GET", &format!("/api/diff/{operation}"), &params, b"", &state).unwrap();
-                assert_eq!(status, 422);
-                assert_eq!(body["code"], "unsupported_continuation");
+                let (status, body) = route(
+                    "GET",
+                    &format!("/api/diff/{operation}"),
+                    &params,
+                    b"",
+                    &state,
+                )
+                .unwrap();
+                assert_eq!(status, if parameter == "snapshotId" { 410 } else { 400 });
+                assert_eq!(
+                    body["code"],
+                    if parameter == "snapshotId" {
+                        "snapshot_expired"
+                    } else {
+                        "invalid_continuation"
+                    }
+                );
             }
         }
         for (query, expected_status, expected_code) in [
@@ -911,8 +1422,8 @@ mod tests {
             ),
             (
                 vec![("continuation", "opaque")],
-                422,
-                "unsupported_continuation",
+                400,
+                "invalid_continuation",
             ),
         ] {
             let params = query
@@ -946,6 +1457,156 @@ mod tests {
 
         let denied = raw_get(api.port, "/api/diff/summary", None);
         assert!(denied.starts_with("HTTP/1.1 401"), "{denied}");
+    }
+
+    fn snapshot_fixture(patch: &str) -> (tempfile::TempDir, ApiState) {
+        let directory = tempfile::tempdir().unwrap();
+        let index = diffing_core::index::build_index_from_reader(
+            std::io::Cursor::new(patch),
+            &directory.path().join("live.patch"),
+            7,
+            |_| {},
+        )
+        .unwrap();
+        let state = ApiState {
+            repo_root: directory.path().to_string_lossy().into_owned(),
+            index: Arc::new(RwLock::new(Arc::new(index))),
+            capability: "cap".into(),
+            review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
+            snapshots: Mutex::new(InspectSnapshots::new().unwrap()),
+            capture_work: Mutex::new(()),
+        };
+        (directory, state)
+    }
+
+    #[test]
+    fn all_native_pages_retain_one_capture_after_live_refresh_and_spool_removal() {
+        let patch = ["a", "b", "c"].iter().map(|name| format!("diff --git a/{name}.ts b/{name}.ts\n--- a/{name}.ts\n+++ b/{name}.ts\n@@ -1 +1 @@\n-old\n+new {name}\n")).collect::<String>();
+        let (directory, state) = snapshot_fixture(&patch);
+        let (status, summary) =
+            route("GET", "/api/diff/summary", &HashMap::new(), b"", &state).unwrap();
+        assert_eq!(status, 200);
+        let snapshot = summary["snapshotId"].as_str().unwrap();
+        let files = HashMap::from([
+            ("snapshotId".into(), snapshot.to_owned()),
+            ("limit".into(), "1".into()),
+        ]);
+        let (status, first) = route("GET", "/api/diff/files", &files, b"", &state).unwrap();
+        assert_eq!(status, 200);
+        let slice = HashMap::from([
+            ("snapshotId".into(), snapshot.to_owned()),
+            ("file".into(), "0".into()),
+            ("maxLines".into(), "2".into()),
+        ]);
+        let (status, first_slice) = route("GET", "/api/diff/slice", &slice, b"", &state).unwrap();
+        assert_eq!(status, 200);
+        let search = HashMap::from([
+            ("snapshotId".into(), snapshot.to_owned()),
+            ("q".into(), "new".into()),
+            ("limit".into(), "1".into()),
+        ]);
+        let (status, first_search) =
+            route("GET", "/api/diff/search", &search, b"", &state).unwrap();
+        assert_eq!(status, 200);
+        *state.index.write().unwrap() = Arc::new(DiffIndex::empty(8, "removed".into(), true));
+        std::fs::remove_file(directory.path().join("live.patch")).unwrap();
+
+        let mut page = first;
+        let mut names = vec![page["files"][0]["path"].as_str().unwrap().to_owned()];
+        while let Some(token) = page["nextContinuation"].as_str() {
+            let params = HashMap::from([("continuation".into(), token.to_owned())]);
+            let (status, next) = route("GET", "/api/diff/files", &params, b"", &state).unwrap();
+            assert_eq!(status, 200);
+            assert_eq!(next["snapshotId"], snapshot);
+            assert_eq!(next["generation"], 7);
+            names.push(next["files"][0]["path"].as_str().unwrap().to_owned());
+            page = next;
+        }
+        assert_eq!(names, ["a.ts", "b.ts", "c.ts"]);
+        let next_slice = HashMap::from([(
+            "continuation".into(),
+            first_slice["nextContinuation"].as_str().unwrap().to_owned(),
+        )]);
+        let (status, continued) =
+            route("GET", "/api/diff/slice", &next_slice, b"", &state).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(continued["rows"][1]["content"], "new a");
+        assert_eq!(continued["snapshotId"], snapshot);
+        assert_eq!(
+            route("GET", "/api/diff/search", &next_slice, b"", &state)
+                .unwrap()
+                .1["code"],
+            "invalid_continuation"
+        );
+        let mut conflicting = next_slice.clone();
+        conflicting.insert("file".into(), "1".into());
+        assert_eq!(
+            route("GET", "/api/diff/slice", &conflicting, b"", &state)
+                .unwrap()
+                .0,
+            400
+        );
+
+        let mut hits = vec![first_search["hits"][0]["path"].as_str().unwrap().to_owned()];
+        let mut page = first_search;
+        while let Some(token) = page["nextContinuation"].as_str() {
+            let params = HashMap::from([("continuation".into(), token.to_owned())]);
+            let (status, next) = route("GET", "/api/diff/search", &params, b"", &state).unwrap();
+            assert_eq!(status, 200);
+            hits.extend(
+                next["hits"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|hit| hit["path"].as_str().unwrap().to_owned()),
+            );
+            page = next;
+        }
+        assert_eq!(hits, ["a.ts", "b.ts", "c.ts"]);
+        let (status, hunks) = route(
+            "GET",
+            "/api/diff/hunks",
+            &HashMap::from([
+                ("snapshotId".into(), snapshot.to_owned()),
+                ("file".into(), "0".into()),
+            ]),
+            b"",
+            &state,
+        )
+        .unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(hunks["hunks"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn retained_native_pages_bound_serialized_bytes_and_omit_an_oversized_row() {
+        let patch = format!(
+            "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+{}\n",
+            "☕".repeat(10_000)
+        );
+        let (_directory, state) = snapshot_fixture(&patch);
+        let (_, summary) = route("GET", "/api/diff/summary", &HashMap::new(), b"", &state).unwrap();
+        let params = HashMap::from([
+            (
+                "snapshotId".into(),
+                summary["snapshotId"].as_str().unwrap().to_owned(),
+            ),
+            ("file".into(), "0".into()),
+            ("start".into(), "3".into()),
+            ("maxBytes".into(), "2048".into()),
+        ]);
+        let (status, page) = route("GET", "/api/diff/slice", &params, b"", &state).unwrap();
+        assert_eq!(status, 200);
+        assert!(serde_json::to_vec(&page).unwrap().len() <= 2048);
+        assert_eq!(
+            page["estimatedBytes"],
+            serde_json::to_vec(&page).unwrap().len()
+        );
+        assert_eq!(page["omitted"]["reason"], "row_too_large");
+        assert_eq!(page["omitted"]["count"], 1);
+        assert!(page["rows"].as_array().unwrap().is_empty());
+        assert!(page["nextContinuation"].is_null());
+        assert_eq!(page["complete"], summary["complete"]);
     }
 
     fn raw_get(port: u16, path: &str, capability: Option<&str>) -> String {

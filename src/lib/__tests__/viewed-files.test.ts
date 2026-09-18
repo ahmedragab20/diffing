@@ -1,7 +1,9 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+// @vitest-environment node
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import * as atomicJson from '../json-atomic.js'
 import {
   FileViewedStore,
   unviewChangedFiles,
@@ -11,6 +13,55 @@ import {
 import { fingerprintDiffFiles } from '../diff-fingerprint.js'
 
 describe('viewed-files', () => {
+  it('keeps the last saved view after a replacement fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'diffing-viewed-failure-'))
+    try {
+      const store = new FileViewedStore(dir)
+      const path = join(dir, 'viewed.json')
+      await store.toggle('local', 'saved.ts', true, 'saved')
+      const before = await readFile(path)
+      const save = vi.spyOn(atomicJson, 'writeJsonAtomically').mockImplementationOnce(() => { throw new Error('replacement failed') })
+      try {
+        await expect(store.toggle('local', 'unsaved.ts', true, 'unsaved')).rejects.toThrow('replacement failed')
+      } finally { save.mockRestore() }
+      expect(await store.list('local')).toEqual(['saved.ts'])
+      expect(await readFile(path)).toEqual(before)
+      expect(await new FileViewedStore(dir).list('local')).toEqual(['saved.ts'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['{', '[]', '{"local":{"files":"invalid"}}'])('preserves malformed existing state: %s', async (contents) => {
+    const dir = await mkdtemp(join(tmpdir(), 'diffing-viewed-corrupt-'))
+    try {
+      const path = join(dir, 'viewed.json')
+      await writeFile(path, contents)
+      const store = new FileViewedStore(dir)
+      await expect(store.list('local')).rejects.toThrow()
+      await expect(store.toggle('local', 'new.ts', true)).rejects.toThrow()
+      expect(await readFile(path, 'utf8')).toBe(contents)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects invalid UTF-8 and an unreadable store without treating either as empty', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'diffing-viewed-unreadable-'))
+    try {
+      const path = join(dir, 'viewed.json')
+      const bytes = Buffer.concat([Buffer.from('{"local":{"files":{"'), Buffer.from([0xff]), Buffer.from('":"value"}}}')])
+      await writeFile(path, bytes)
+      await expect(new FileViewedStore(dir).toggle('local', 'new.ts', true)).rejects.toThrow()
+      expect(await readFile(path)).toEqual(bytes)
+      await rm(path)
+      await mkdir(path)
+      await expect(new FileViewedStore(dir).list('local')).rejects.toThrow()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('keys PR identity separately from local', () => {
     expect(
       viewedScopeKey({ owner: 'acme', repo: 'widget', pullNumber: 7 }, true),

@@ -4,30 +4,16 @@ import { constants } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { ReviewOwner, syncDirectory } from "./review-owner.js";
+import { REVIEW_STORE_LIMITS, reviewEventSchema as eventSchema, reviewTransactionSchema, type ReviewEvent, type ReviewTransaction } from "./review-store-contract.js";
+export { REVIEW_STORE_LIMITS, reviewEventSchema, reviewTransactionSchema, type ReviewEvent, type ReviewTransaction } from "./review-store-contract.js";
 
-export const REVIEW_STORE_LIMITS = Object.freeze({ recordBytes: 256 * 1024, replayBytes: 512 * 1024, journalBytes: 64 * 1024 * 1024, records: 50_000 });
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-const digest = z.string().regex(/^[a-f0-9]{64}$/);
-export const reviewEventSchema = z.object({ type: z.string().min(1).max(100), data: z.json() }).strict();
-const eventSchema = reviewEventSchema;
-export const reviewTransactionSchema = z.object({
-  version: z.literal(1),
-  sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  previous: digest.nullable(),
-  key: z.string().min(1).max(200),
-  requestHash: digest,
-  events: z.array(eventSchema).max(100),
-  result: z.json(),
-  checksum: digest,
-}).strict();
 const transactionSchema = reviewTransactionSchema;
-export type ReviewEvent = z.infer<typeof eventSchema>;
-export type ReviewTransaction = z.infer<typeof transactionSchema>;
 type Json = z.infer<ReturnType<typeof z.json>>;
 
 export class ReviewStoreError extends Error {
   constructor(
-    readonly code: "invalid_request" | "version_conflict" | "idempotency_conflict" | "corrupt_store" | "unsupported_version" | "recovery_required" | "store_limit" | "outcome_unknown" | "store_closed" | "owner_busy" | "io_error" | "native_unavailable" | "migration_required",
+    readonly code: "invalid_request" | "version_conflict" | "idempotency_conflict" | "corrupt_store" | "unsupported_version" | "recovery_required" | "store_limit" | "outcome_unknown" | "store_closed" | "owner_busy" | "io_error" | "native_unavailable" | "migration_required" | "missing_store",
     readonly sequence?: number,
   ) { super(code); }
 }

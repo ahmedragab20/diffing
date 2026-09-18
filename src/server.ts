@@ -37,6 +37,7 @@ import {
 } from "./lib/search.js";
 import { loadSettings, saveSettings } from "./lib/settings.js";
 import { FileCommentStore } from "./lib/comments.js";
+import { hasReviewAuthority, LegacyWriteError, withLegacyWriteLease } from "./lib/legacy-write-lease.js";
 import type { CommentStore } from "./lib/comments.js";
 import {
 	createReviewCommentSchema,
@@ -106,6 +107,9 @@ import {
 	type EditorChoice,
 } from "./lib/editor-launcher.js";
 import { ReviewSession } from "./lib/review-session.js";
+import type { ReviewCore, ReviewCoreFactory } from "./lib/review-core.js";
+import { ReviewStoreError } from "./lib/review-store.js";
+import { createReviewCoreApi } from "./lib/review-core-api.js";
 import { PlanReviewSession } from "./lib/plan-review-session.js";
 import { formatComments } from "./lib/comment-format.js";
 import { scanReviewForSecrets } from "./lib/secrets-scan.js";
@@ -400,9 +404,14 @@ export function createApp(
 	 * entry point supplies the real one.
 	 */
 	aiStorage?: AiStorage,
+	/** Opt-in review or factory; the factory receives this app's retained sources. */
+	reviewCore?: ReviewCore | ReviewCoreFactory,
+	/** Foundation-only launch: expose durable operations and bounded source reads. */
+	headlessReview = false,
 ) {
 	const app = new Hono();
 	app.onError((error, c) => {
+		if (error instanceof LegacyWriteError) return c.json({ code: error.code, error: error.message }, 409);
 		if (error instanceof SourceAnchorError) return c.json({ code: error.code, error: error.message, recovery: "restart_files" }, 400);
 		if (error instanceof InspectCaptureError) {
 			return c.json({ error: error.message, code: error.code, recovery: "restart_capture" }, error.code === "inconsistent_capture" ? 409 : error.code === "unsupported_capture" ? 422 : 503);
@@ -424,6 +433,30 @@ export function createApp(
 		return c.text("Internal Server Error", 500);
 	});
 	app.use("*", createServerAuthMiddleware(security));
+	if (headlessReview) {
+		if (!reviewCore) throw new Error("Headless review requires an owned core.");
+		app.use("*", async (c, next) => {
+			if (c.req.path.startsWith("/api/review-core/") ||
+				(c.req.method === "GET" && /^\/api\/diff\/(summary|files|hunks|slice|search)$/.test(c.req.path))) return next();
+			return c.json({ code: "headless_review", recovery: "use_review_core_operations" }, 409);
+		});
+	}
+	if (reviewCore) {
+		// Classic clients lack durable request/version/actor envelopes. Do not
+		// acknowledge writes to a parallel JSON store or expose a different
+		// handoff history while this server is presenting an owned core.
+		app.use("*", async (c, next) => {
+			const path = c.req.path;
+			if (path === "/api/comments" || path.startsWith("/api/comments/") ||
+				path === "/api/plans" || path.startsWith("/api/plans/") || path.startsWith("/api/plan-review/") ||
+				path === "/api/viewed" || path.startsWith("/api/review/") ||
+				path === "/api/agent/register" || path.startsWith("/api/agent/register/") ||
+				/^\/api\/ai\/evidence\/[^/]+\/discussion$/.test(path)) {
+				return c.json({ code: "review_core_required", recovery: "use_review_core_operations" }, 409);
+			}
+			return next();
+		});
+	}
 	const limitCommentBody = bodyLimit({
 		maxSize: MAX_COMMENT_REQUEST_BYTES,
 		onError: (c) => c.json({ error: "Comment request is too large" }, 413),
@@ -879,6 +912,26 @@ export function createApp(
 		const { patch, complete, omittedPaths, manifest } = await captureInspection(diffOpts, resolveAgentPatch, () => readInspectionIdentity(repoRoot, diffOpts));
 		return agentDiffCache.getOrBuild(patch, complete, omittedPaths, manifest);
 	}
+
+	const reviewCoreReady = reviewCore
+		? typeof reviewCore === "function"
+			? Promise.resolve().then(() => reviewCore({
+				capture: async () => {
+					const retained = fileInspectSnapshots.start(await getAgentIndex(), 0, 1);
+					if ("status" in retained) throw new ReviewStoreError("store_limit");
+					const index = fileInspectSnapshots.get(retained.snapshotId);
+					if (!index) throw new InspectCaptureError("source_unavailable");
+					return index;
+				},
+				get: (id) => fileInspectSnapshots.get(id),
+			}))
+			: Promise.resolve(reviewCore)
+		: undefined;
+	// Embedded callers may await readiness later. Keep the same rejected promise
+	// available to startup/API callers without an unhandled-rejection side effect.
+	void reviewCoreReady?.catch(() => {});
+	if (reviewCoreReady) app.route("/api/review-core", createReviewCoreApi(reviewCoreReady));
+	app.all("/api/review-core/*", (c) => c.json({ code: reviewCore ? "unknown_operation" : "review_core_disabled" }, 404));
 
 	function parseUInt(value: string | undefined, fallback: number): number {
 		if (value == null || value === "") return fallback;
@@ -1426,6 +1479,9 @@ export function createApp(
 		if (!parsed.success)
 			return c.json({ error: "Invalid edit-save request" }, 400);
 		const body = parsed.data;
+		if (reviewCore && body.anchorUpdates?.length) {
+			return c.json({ code: "review_core_required", recovery: "use_review_core_operations" }, 409);
+		}
 		// In-place editing mutates the working tree; PR sessions and revision
 		// comparisons have no writable working-tree diff backing their view.
 		if (prMode || customMode) {
@@ -5432,7 +5488,7 @@ export function createApp(
 		}
 	});
 
-	return app;
+	return Object.assign(app, { reviewCoreReady });
 }
 
 /**
@@ -5494,32 +5550,36 @@ export async function cleanupStaleProjects(): Promise<void> {
 				const projectDir = join(baseDir, entry.name);
 				const repoPathFile = join(projectDir, "repo_path.txt");
 
-				let shouldDelete = false;
-
-				// Dead project: the repository it mirrored no longer exists on disk.
-				if (existsSync(repoPathFile)) {
-					try {
-						const repoPath = (await readFile(repoPathFile, "utf-8")).trim();
-						if (!repoPath || !existsSync(repoPath)) {
-							shouldDelete = true;
-						}
-					} catch {
-						// ignore
+				// Durable reviews have an explicit retention/recovery policy. The
+				// old JSON timestamps cannot authorize deleting their database.
+				if (await hasReviewAuthority(projectDir)) continue;
+				const eligible = async () => {
+					if (existsSync(repoPathFile)) {
+						try {
+							const repoPath = (await readFile(repoPathFile, "utf-8")).trim();
+							if (!repoPath || !existsSync(repoPath)) return true;
+						} catch { return false; }
 					}
-				}
-
-				// Stale project: nothing — comments, plans, or media — has been
-				// touched within STALE_TIME. Plans live for the same span as comments
-				// and attachments, so the freshest of the three keeps the dir alive.
-				if (!shouldDelete) {
 					const newest = await newestActivityMs(projectDir);
-					if (newest !== null && now - newest > STALE_TIME) {
-						shouldDelete = true;
-					}
-				}
-
-				if (shouldDelete) {
-					await rm(projectDir, { recursive: true, force: true });
+					return newest !== null && now - newest > STALE_TIME;
+				};
+				if (!await eligible()) continue;
+				try {
+					await withLegacyWriteLease(projectDir, async () => {
+						// Recheck after exclusion: a writer or migration could
+						// have committed while eligibility was being inspected.
+						if (await hasReviewAuthority(projectDir) || !await eligible()) return;
+						// Never remove the immutable lease record or its parent:
+						// a waiting writer must acquire the same kernel owner.
+						// Unknown files and backups require explicit recovery.
+						for (const name of ["comments.json", "plans.json", "viewed.json", "attachments", "plan-sources", "repo_path.txt"]) {
+							const path = join(projectDir, name);
+							if (existsSync(path)) await rm(path, { recursive: true, force: true });
+						}
+					}, 0);
+				} catch (error) {
+					if (!(error instanceof LegacyWriteError) || error.code !== "legacy_store_busy") throw error;
+					// Background cleanup never waits on a live writer.
 				}
 			}
 		}
@@ -5541,6 +5601,9 @@ export async function startServer(options: {
 	clientDir: string;
 	diffOpts?: DiffOptions;
 	security: ServerAuthConfig;
+	/** Explicit opt-in. The server owns factory-created cores; supplied instances remain caller-owned. No grant issuance. */
+	reviewCore?: ReviewCore | ReviewCoreFactory;
+	headlessReview?: boolean;
 	/**
 	 * If set, the server builds a `pr-session.json` from this ref on startup so
 	 * the web UI opens in PR mode. The session is persisted in the per-repo
@@ -5550,7 +5613,7 @@ export async function startServer(options: {
 	prRef?: string;
 }): Promise<StartedServer> {
 	try {
-		await readFile(join(options.clientDir, "index.html"));
+		if (!options.headlessReview) await readFile(join(options.clientDir, "index.html"));
 	} catch {
 		throw new Error(
 			`Review UI bundle not found at ${join(options.clientDir, "index.html")}. ` +
@@ -5606,9 +5669,13 @@ export async function startServer(options: {
 		undefined,
 		undefined,
 		new AiStorage(getProjectStorageDir(getRepoRoot())),
+		options.reviewCore,
+		options.headlessReview,
 	);
+	const readyCore = await app.reviewCoreReady;
+	const ownedReviewCore = typeof options.reviewCore === "function" ? readyCore : undefined;
 
-	return new Promise((resolve, reject) => {
+	return new Promise<StartedServer>((resolve, reject) => {
 		const nodeServer = serve(
 			{
 				fetch: app.fetch,
@@ -5630,11 +5697,15 @@ export async function startServer(options: {
 								nodeServer as { closeAllConnections?: () => void }
 							).closeAllConnections;
 							closeAllConnections?.call(nodeServer);
-						}),
+						}).finally(() => ownedReviewCore?.close()),
 				});
 			},
 		);
 		const onStartupError = (error: Error) => reject(error);
 		nodeServer.once("error", onStartupError);
+	}).catch(async (error) => {
+		try { await ownedReviewCore?.close(); }
+		catch (cleanupError) { throw new AggregateError([error, cleanupError], "Server startup and review cleanup failed"); }
+		throw error;
 	});
 }

@@ -459,9 +459,9 @@ Read **bounded** diff data from any running web, native TUI, or GitHub PR sessio
 ```bash
 diffing inspect summary [--exclude lockfiles]
 diffing inspect files [--path GLOB] [--cursor N --generation N] [--limit N]
-diffing inspect files --continuation TOKEN # web/PR: pass nextContinuation alone
-diffing inspect files --snapshot-id ID # web/PR: ID from summary
-diffing inspect slice --snapshot-id ID --file N # web/PR: ID from summary or files
+diffing inspect files --continuation TOKEN # pass nextContinuation alone
+diffing inspect files --snapshot-id ID # ID from summary
+diffing inspect slice --snapshot-id ID --file N # ID from summary or files
 diffing inspect hunks --continuation TOKEN # same syntax for slice and search
 diffing inspect hunks (--file N | --path GLOB) [--cursor N] [--limit N] [--generation N]
 diffing inspect slice (--file N | --path GLOB) [--start N] [--max-lines N] [--max-bytes N] [--generation N]
@@ -470,11 +470,13 @@ diffing inspect search <text>|--query <text> [--path GLOB] [--file N] [--row N] 
 ```
 
 - Web and PR sessions build an in-process index from their current patch; TUI sessions use the sparse disk-backed index.
-- Web/PR file pages return `snapshotId` and `nextContinuation`. Pass the token alone to continue the same captured inventory, even after external edits; this performs no new Git collection. `freshness: "not-checked"` means the capture is historical unless separately refreshed. `complete` and optional `omittedPaths` report source coverage.
-- File captures expire after five minutes, on server restart, or earlier when the eight-capture / 64 MiB serialized-index retention capacity is reached. HTTP `410` / `snapshot_expired` means restart without the token. HTTP `400` / `invalid_continuation` rejects malformed/tampered tokens or attempts to change their parameters. Captures larger than capacity return `413` / `snapshot_too_large`; narrow the review scope.
-- Web/PR files, hunks, slices and searches accept `--snapshot-id` from a summary or file page and return `nextContinuation`. Pass that continuation alone to keep the operation, source, filter, position and budgets fixed. No Git collection occurs during retained reads. Starting without a snapshot ID captures the live index.
-- Nonzero numeric continuation coordinates require `generation` in web/PR; omission returns `400` / `continuation_required`. This legacy path remains process-local and does not bind filters. A `409` means the patch changed and traversal must restart. Native TUI explicitly rejects retained tokens and snapshot IDs (`422` / `unsupported_continuation`).
-- Web/PR responses enforce a serialized UTF-8 byte budget including metadata and tokens: default 256 KiB, supported range 512 bytes–4 MiB (`--max-bytes`). A row too large to fit returns `omitted.reason: "row_too_large"` and advances the continuation past that row. Source `complete` remains separate from this output omission. If metadata alone cannot fit, `413` / `response_too_large` requires a larger budget or narrower filter. Native byte accounting remains a separate implementation.
+- Successful inspect commands write JSON to stdout. Server failures write the JSON error body to stderr and exit nonzero, preserving `code` and `recovery`. MCP inspect tools return the same typed failure in `structuredContent.result` with `isError: true`.
+- File pages return `snapshotId` and `nextContinuation`. Pass the token alone to continue the same captured inventory, even after external edits; this performs no new Git collection. `freshness: "not-checked"` means the capture is historical unless separately refreshed. `complete` and optional `omittedPaths` report source coverage.
+- File captures expire after five minutes, on server restart, or earlier when the eight-capture / 64 MiB retention capacity (serialized index bytes in web/PR; index, anchors and source bytes in native TUI) is reached. HTTP `410` / `snapshot_expired` means restart without the token. HTTP `400` / `invalid_continuation` rejects malformed/tampered tokens or attempts to change their parameters. Captures larger than capacity return `413` / `snapshot_too_large`; narrow the review scope.
+- Files, hunks, slices and searches accept `--snapshot-id` from a summary or file page and return `nextContinuation`. Pass that continuation alone to keep the operation, source, filter, position and budgets fixed. No Git collection occurs during retained reads. Starting without a snapshot ID captures the live index.
+- Validated native file pages include a file-level `sourceAnchor` and `metadata.patchDigest`. Native `POST /api/comments` accepts `snapshotId` and `fileIndex` together, validates the path and side-specific line range, and stores the historical anchor. Partial/unvalidated indexes cannot anchor comments. The server constructs the anchor; client-supplied anchor objects are not trusted.
+- Nonzero numeric continuation coordinates require `generation`; omission returns `400` / `continuation_required`. This legacy path remains process-local and does not bind filters. A `409` means the patch changed and traversal must restart. Native TUI also supports retained snapshot IDs and operation-bound continuations for files/hunks/slice/search. Completed native captures validate repeated Git reads and include a manifest of the actual native scope; partial indexes remain incomplete without a validated manifest. Captures preserve source bytes independently of live refresh and expire after five minutes or cache eviction. `inconsistent_capture` requires refreshing the native index; `unsupported_capture` requires a supported unified-patch scope; `capture_busy` means retry the new capture or continue an existing snapshot.
+- Inspect responses enforce a serialized UTF-8 byte budget including metadata and tokens: default 256 KiB, supported range 512 bytes–4 MiB (`--max-bytes`). A row too large to fit returns `omitted.reason: "row_too_large"` and advances the continuation past that row. Source `complete` remains separate from this output omission. If metadata alone cannot fit, `413` / `response_too_large` requires a larger budget or narrower filter.
 - `--path` is a git pathspec-ish glob (`src/lib/**`, `**/agent-diff-index.ts`). `files` pages the **filtered** list (`nextCursor` is not a global file index); each row still includes the stable global `index`. `hunks`/`slice` take `--path` **or** `--file` (exactly one file must match). Invalid globs return HTTP 400.
 - `--exclude lockfiles` on `summary` drops lock/generated basenames from **counts only**.
 - Prefer MCP `diff_summary` / `diff_files` / `diff_hunks` / `diff_slice` / `diff_search` when available — they target the same bounded data model.
@@ -485,12 +487,12 @@ The loopback HTTP contract is shared across modes:
 | ------- | --------- |
 | `GET /api/diff/summary?exclude` | Generation, `complete`, optional `omittedPaths`, totals, kind counts, top-level directories, and PR identity when applicable |
 | `GET /api/diff/files?path&cursor&limit&generation` | Paged file metadata; nonzero cursor requires generation |
-| `GET /api/diff/files?continuation` | Web/PR retained file inventory; pass returned `nextContinuation` alone |
+| `GET /api/diff/files?continuation` | Retained file inventory; pass returned `nextContinuation` alone |
 | `GET /api/diff/hunks?file\|path&cursor&limit&generation` | Paged hunk metadata with stale-generation protection |
 | `GET /api/diff/slice?file\|path&start&maxLines&maxBytes&generation` | Strictly bounded logical rows; continue with `nextRow` |
 | `GET /api/diff/search?q&path&file&row&limit&maxBytes&generation` | Literal case-insensitive path/content search; continue with `nextFile` + `nextRow` |
-| `GET /api/diff/files\|hunks\|slice\|search?snapshotId&...` | Web/PR: inspect retained source with the usual operation parameters |
-| `GET /api/diff/hunks\|slice\|search?continuation` | Web/PR: resume the same operation with the returned token alone |
+| `GET /api/diff/files\|hunks\|slice\|search?snapshotId&...` | Inspect retained source with the usual operation parameters |
+| `GET /api/diff/hunks\|slice\|search?continuation` | Resume the same operation with the returned token alone |
 
 ---
 
@@ -1295,6 +1297,9 @@ diffing --tui -- -- src/           # Limit to a directory
 
 - TUI review mode is opt-in through `--tui` or the persistent
   `diffing mode tui` preference. Web remains the initial default.
+- Native commit-series capture is not supported yet. `diffing show ... --tui`
+  reports that limit and runs `git show`, preserving all revisions and pathspecs.
+  Use `--web` for an interactive commit-series review.
 - If the env cannot support a TUI (piped stdin, CI, no raw mode) the CLI
   prints one line to stderr (`diffing --tui requires a TTY` or
   `diffing view requires a TTY`, followed by `falling back to git diff`) and
@@ -2710,3 +2715,31 @@ flag plus PR metadata fields:
 
 In local mode, the response is byte-identical to the original (no `prMode`
 field), so the existing local review client is unaffected.
+
+## Experimental durable review launch
+
+`diffing review-core serve --adopt [--port <number>]` explicitly migrates this
+worktree's classic comments/plans/viewed state into the durable review core and
+starts a loopback API. Stop existing diffing sessions and older binaries first.
+Original files are archived byte-for-byte and preserved, but classic writers
+remain fenced after adoption, including after shutdown. This is an experimental
+headless foundation command, with no browser UI or classic CLI/MCP aliases.
+
+Reopen with `diffing review-core serve`; first adoption requires `--adopt`.
+Omitting `--port` selects an available port. The command outputs JSON containing
+`origin`, `identity`, `humanConnectionFile` and `agentConnectionFile`. These are
+private connection files outside the repository. Give integrations only the agent
+file; its credential cannot approve or resolve human concerns. The human file
+contains decision authority. Each file includes the headers and credential needed
+by `ReviewClient`, independently of ordinary session authentication.
+
+Credentials expire after at most 24 hours. Restart preserves the review and issues
+new credentials. Ctrl-C stops the server and removes its connection files; a crash
+may leave files containing credentials that cannot authorize a later process.
+This does not restrict an agent's independent access to the user's shell.
+
+The API includes `/api/review-core/state`, `/events`, `/handoffs/:id`, POST
+`/operations`, and bounded read-only `/legacy/sources/:name` recovery. Only bounded
+diff summary/files/hunks/slice/search reads are exposed alongside it. Other routes
+return `headless_review`. See [review core contracts](dev/review-core-contracts.md)
+for request envelopes, archive recovery, ownership and failure behavior.

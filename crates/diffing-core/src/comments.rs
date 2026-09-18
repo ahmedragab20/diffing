@@ -5,15 +5,16 @@
 //! the reviewed consumer repo. Both sides read and write the same files,
 //! so the TUI can edit a comment while the web UI is open, or vice versa.
 
+use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::legacy_write_lease::{assert_classic_authority, LegacyWriteLease};
 use crate::storage::ensure_dir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,11 +57,16 @@ impl CommentSeverity {
 pub struct CommentReply {
     pub id: String,
     pub body: String,
+    #[serde(rename = "createdAt", alias = "created_at")]
     pub created_at: u64,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub model: Option<String>,
+    /// Preserve fields owned by other clients without treating them as proof
+    /// of authority in this legacy store.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,6 +92,9 @@ pub struct ReviewComment {
     pub replies: Vec<CommentReply>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub severity: Option<CommentSeverity>,
+    /// Anchors, provenance and newer client metadata survive native edits.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +140,7 @@ impl FileCommentStore {
     }
 
     fn load_unlocked(&self) -> Result<Vec<ReviewComment>> {
+        assert_classic_authority(self.path.parent().context("comment store has no parent")?)?;
         match std::fs::read_to_string(&self.path) {
             Ok(s) => Ok(serde_json::from_str(&s).context("parsing comments.json")?),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -170,6 +180,17 @@ impl FileCommentStore {
     }
 
     pub fn add(&self, comment: NewComment<'_>, now_ms: u64) -> Result<ReviewComment> {
+        self.add_with_source_anchor(comment, now_ms, None)
+    }
+
+    /// The caller constructs this anchor from a retained, validated capture;
+    /// never pass through a client-supplied sourceAnchor object.
+    pub fn add_with_source_anchor(
+        &self,
+        comment: NewComment<'_>,
+        now_ms: u64,
+        source_anchor: Option<serde_json::Value>,
+    ) -> Result<ReviewComment> {
         self.with_lock(|| {
             let mut comments = self.load_unlocked()?;
             let id = new_uuid();
@@ -225,6 +246,9 @@ impl FileCommentStore {
                 created_at: now_ms,
                 replies: Vec::new(),
                 severity,
+                extra: source_anchor
+                    .map(|anchor| BTreeMap::from([("sourceAnchor".into(), anchor)]))
+                    .unwrap_or_default(),
             };
             comments.push(new.clone());
             self.save_unlocked(&comments)?;
@@ -304,6 +328,7 @@ impl FileCommentStore {
                 created_at: now_ms,
                 role: role.map(String::from),
                 model: model.map(String::from),
+                extra: BTreeMap::new(),
             });
             let updated = c.clone();
             self.save_unlocked(&comments)?;
@@ -314,29 +339,10 @@ impl FileCommentStore {
     fn with_lock<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
         ensure_dir(&self.path)
             .with_context(|| format!("preparing parent of {}", self.path.display()))?;
-        let lock_path = self.path.with_extension("json.lock");
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            match OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&lock_path)
-            {
-                Ok(mut file) => {
-                    let _ = writeln!(file, "{}", std::process::id());
-                    let _guard = CommentLock { path: lock_path };
-                    return operation();
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    remove_stale_lock(&lock_path);
-                    if Instant::now() >= deadline {
-                        anyhow::bail!("timed out acquiring {}", lock_path.display());
-                    }
-                    thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => return Err(error).context("acquiring comment store lock"),
-            }
-        }
+        let directory = self.path.parent().context("comment store has no parent")?;
+        let _lease = LegacyWriteLease::acquire(directory, Duration::from_secs(5))?;
+        assert_classic_authority(directory)?;
+        operation()
     }
 }
 
@@ -344,27 +350,6 @@ fn normalize_comment_range(start: Option<u32>, end: u32) -> (Option<u32>, u32) {
     match start.filter(|line| *line > 0) {
         Some(start) if start != end => (Some(start.min(end)), start.max(end)),
         _ => (None, end),
-    }
-}
-
-struct CommentLock {
-    path: PathBuf,
-}
-
-impl Drop for CommentLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-fn remove_stale_lock(path: &Path) {
-    let stale = std::fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .is_some_and(|age| age > Duration::from_secs(30));
-    if stale {
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -423,6 +408,75 @@ fn fill_random(buf: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authority_marker_preserves_classic_comments_and_refuses_access() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = FileCommentStore {
+            repo_root: directory.path().to_str().unwrap().into(),
+            path: directory.path().join("comments.json"),
+        };
+        std::fs::write(&store.path, "[ ]\n").unwrap();
+        std::fs::write(
+            directory.path().join("review-authority.json"),
+            "future version",
+        )
+        .unwrap();
+        assert!(store.load().is_err());
+        assert!(store.save(&[]).is_err());
+        assert_eq!(std::fs::read(&store.path).unwrap(), b"[ ]\n");
+    }
+
+    #[test]
+    fn native_edits_preserve_web_source_anchors_and_future_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = FileCommentStore {
+            repo_root: directory.path().to_str().unwrap().into(),
+            path: directory.path().join("comments.json"),
+        };
+        let anchor = serde_json::json!({
+            "version": 1, "snapshotId": "00000000-0000-4000-8000-000000000001",
+            "repositoryId": "a".repeat(64), "workspaceId": "b".repeat(64), "scopeDigest": "c".repeat(64),
+            "head": null, "resolvedRevisions": [],
+            "layer": { "id": "d".repeat(64), "kind": "working", "ordinal": 0 },
+            "file": { "oldPath": "a.ts", "newPath": "a.ts", "occurrence": 0, "contentDigest": "e".repeat(64) },
+            "range": { "side": "additions", "start": 1, "end": 1 }
+        });
+        let original = serde_json::json!({
+            "id": "web-comment", "filePath": "a.ts", "side": "additions", "lineNumber": 1,
+            "lineContent": "code", "body": "before", "status": "open", "createdAt": 1, "replies": [],
+            "sourceAnchor": anchor, "actor": { "id": "human", "kind": "human" },
+            "futureMetadata": { "nested": [1, "preserve"] }
+        });
+        std::fs::write(
+            &store.path,
+            serde_json::to_vec(&vec![original.clone()]).unwrap(),
+        )
+        .unwrap();
+        store
+            .update("web-comment", Some("after"), None)
+            .unwrap()
+            .unwrap();
+        let persisted: Vec<serde_json::Value> =
+            serde_json::from_slice(&std::fs::read(&store.path).unwrap()).unwrap();
+        let mut expected = original;
+        expected["body"] = serde_json::json!("after");
+        assert_eq!(persisted, vec![expected]);
+    }
+
+    #[test]
+    fn replies_accept_web_and_old_native_timestamps_and_preserve_provenance() {
+        for timestamp in ["createdAt", "created_at"] {
+            let mut original = serde_json::json!({ "id": "reply", "body": "text", "role": "user",
+                "actor": { "id": "human", "kind": "human" }, "provenance": "recorded" });
+            original[timestamp] = serde_json::json!(42);
+            let parsed: CommentReply = serde_json::from_value(original.clone()).unwrap();
+            let serialized = serde_json::to_value(parsed).unwrap();
+            original.as_object_mut().unwrap().remove("created_at");
+            original["createdAt"] = serde_json::json!(42);
+            assert_eq!(serialized, original);
+        }
+    }
 
     fn sample_inline<'a>(body: &'a str) -> NewComment<'a> {
         NewComment::Inline {

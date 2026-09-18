@@ -32,6 +32,7 @@ fn comment(id: &str, file_path: &str, body: &str) -> ReviewComment {
         created_at: 1000,
         replies: Vec::new(),
         severity: None,
+        extra: Default::default(),
     }
 }
 
@@ -42,6 +43,7 @@ fn reply(id: &str, body: &str, model: &str) -> CommentReply {
         created_at: 2000,
         role: Some("agent".to_string()),
         model: Some(model.to_string()),
+        extra: Default::default(),
     }
 }
 

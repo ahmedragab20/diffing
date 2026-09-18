@@ -16,6 +16,7 @@ const FRAME_BYTES: usize = 512 * 1024;
 const STORE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RECORDS: u64 = 50_000;
 const APPLICATION_ID: i64 = 0x44465256;
+const INITIALIZED: &[u8] = b"diffing-review-sqlite-v1\n";
 type StoreResult<T> = Result<T, &'static str>;
 
 #[derive(Deserialize)]
@@ -118,22 +119,40 @@ impl Store {
         }
         for name in [
             "review.sqlite",
+            "review.initialized",
             "review.sqlite-journal",
             "review.sqlite-wal",
             "review.sqlite-shm",
         ] {
             match std::fs::symlink_metadata(directory.join(name)) {
                 Ok(meta) if !meta.file_type().is_file() => return Err("invalid_request"),
+                Ok(meta)
+                    if name == "review.initialized" && meta.len() != INITIALIZED.len() as u64 =>
+                {
+                    return Err("corrupt_store")
+                }
                 Ok(meta) if meta.len() > 128 * 1024 * 1024 => return Err("store_limit"),
                 Ok(_) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(_) => return Err("io_error"),
             }
         }
+        let marker = directory.join("review.initialized");
+        let initialized = match std::fs::read(&marker) {
+            Ok(bytes) if bytes == INITIALIZED => true,
+            Ok(_) => return Err("corrupt_store"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(_) => return Err("io_error"),
+        };
         let path = directory.join("review.sqlite");
-        let empty = std::fs::metadata(&path)
-            .map(|m| m.len() == 0)
-            .unwrap_or(true);
+        let empty = match std::fs::metadata(&path) {
+            Ok(meta) => meta.len() == 0,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(_) => return Err("io_error"),
+        };
+        if initialized && empty {
+            return Err("missing_store");
+        }
         let connection = Connection::open_with_flags(
             &path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -230,6 +249,32 @@ impl Store {
             .connection
             .execute_batch("COMMIT; PRAGMA max_page_count=32768;")
             .map_err(sql_error)?;
+        // Publish only after validating/initializing the database, while still
+        // holding SQLite's exclusive ownership. Never repair a torn marker by
+        // guessing: preserve it and the database for explicit recovery.
+        if !initialized {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(&marker) {
+                Ok(mut file) => {
+                    file.write_all(INITIALIZED).map_err(|_| "outcome_unknown")?;
+                    file.sync_all().map_err(|_| "outcome_unknown")?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Another opener can publish and close between our initial
+                    // probe and acquiring SQLite ownership. Recheck under lock.
+                    if std::fs::read(marker).map_err(|_| "io_error")? != INITIALIZED {
+                        return Err("corrupt_store");
+                    }
+                }
+                Err(_) => return Err("io_error"),
+            }
+        }
         Ok(store)
     }
 

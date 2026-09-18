@@ -9,6 +9,13 @@ vi.mock("../lib/inspect-capture.js", async (importOriginal) => {
   return { ...actual, readInspectionIdentity: async () => ({ repositoryId: "a".repeat(64), workspaceId: "b".repeat(64), head: "c".repeat(40), indexDigest: "d".repeat(64), resolvedRevisions: [] }) };
 });
 
+// Cleanup unit fixtures model the filesystem; actual lease contention and
+// preservation are covered by review-core-server.test.ts with real files.
+vi.mock("../lib/legacy-write-lease.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../lib/legacy-write-lease.js")>(),
+  withLegacyWriteLease: async (_directory: string, operation: () => Promise<unknown>) => operation(),
+}));
+
 const mockGetGitDiff = vi.fn();
 const mockGetCustomGitDiff = vi.fn();
 const mockGetRepoName = vi.fn();
@@ -785,6 +792,32 @@ describe("server", () => {
           nextContinuation: null,
           freshness: "not-checked",
         });
+        expect(mockGetGitDiffAsync).toHaveBeenCalledTimes(calls);
+      });
+
+      it("expires every retained operation across server incarnations without recollecting Git", async () => {
+        const patch = (name: string) => `diff --git a/${name} b/${name}\n@@ -1 +1 @@ first\n-old\n+retained one\n@@ -10 +10 @@ second\n-before\n+retained two\n`;
+        mockGetGitDiffAsync.mockResolvedValue(patch("a.ts") + patch("b.ts"));
+        const files = await (await app.request("/api/diff/files?limit=1")).json();
+        const continuations: Array<[string, string]> = [["files", files.nextContinuation]];
+        for (const [operation, query] of [["hunks", "file=0&limit=1"], ["slice", "file=0&maxLines=3"], ["search", "q=retained&limit=1"]]) {
+          const response = await app.request(`/api/diff/${operation}?snapshotId=${files.snapshotId}&${query}`);
+          expect(response.status).toBe(200);
+          const page = await response.json();
+          expect(page.nextContinuation).toEqual(expect.any(String));
+          continuations.push([operation, page.nextContinuation]);
+        }
+        const calls = mockGetGitDiffAsync.mock.calls.length;
+        const { createApp } = await import("../server.js");
+        const other = createApp(clientDir, DEFAULTS, mockStore);
+        for (const [operation, token] of continuations) {
+          const response = await other.request(`/api/diff/${operation}?continuation=${encodeURIComponent(token)}`);
+          expect(response.status).toBe(410);
+          expect(await response.json()).toMatchObject({ code: "snapshot_expired", recovery: "restart_files" });
+          const original = await app.request(`/api/diff/${operation}?continuation=${encodeURIComponent(token)}`);
+          expect(original.status).toBe(200);
+          expect((await original.json()).snapshotId).toBe(files.snapshotId);
+        }
         expect(mockGetGitDiffAsync).toHaveBeenCalledTimes(calls);
       });
 

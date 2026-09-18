@@ -61,6 +61,15 @@ function runGitShow(args: string[]): string {
 }
 
 describe('diffing show subcommand (CLI plumbing)', () => {
+  it('keeps commit-series and path scopes when native show falls back to the terminal', () => {
+    for (const revs of [['HEAD'], ['HEAD~1', 'HEAD'], ['HEAD~2..HEAD']]) {
+      const ours = runCli(['show', ...revs, '--tui', '--', 'src/a.txt'])
+      expect(ours.status).toBe(0)
+      expect(ours.stdout).toBe(runGitShow([...revs, '--', 'src/a.txt']))
+      expect(ours.stderr).toContain('native show capture is not supported')
+    }
+  })
+
   it('prints the same diff as `git show` in terminal mode', () => {
     const ours = runCli(['show', 'HEAD', '--terminal'])
     const theirs = runGitShow(['HEAD'])

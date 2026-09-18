@@ -4,6 +4,15 @@ import { build } from "vite";
 import { browserOnlyPlugin } from "../../vite.config";
 
 describe("browser bundle boundary", () => {
+  it("bundles review operation contracts and client without server modules or shims", async () => {
+    await expect(build({
+      configFile: false,
+      logLevel: "silent",
+      plugins: [browserOnlyPlugin()],
+      build: { write: false, rolldownOptions: { input: "src/lib/review-client.ts" } },
+    })).resolves.toBeDefined();
+  });
+
   it.each(["node:util", "child_process"])(
     "rejects %s before it becomes an empty browser shim",
     async (module) => {

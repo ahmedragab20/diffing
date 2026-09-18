@@ -48,8 +48,19 @@ export class ReviewOwner {
   }
 
   static async acquire(directory: string): Promise<ReviewOwner> {
+    return this.acquireRecord(directory, true);
+  }
+
+  /** A process-lifetime exclusion lock, not a durable data acknowledgement.
+   * If power loss removes its record, no pre-crash process can retain the port.
+   * This avoids directory-fsync requirements for classic-store coordination. */
+  static async acquireEphemeral(directory: string): Promise<ReviewOwner> {
+    return this.acquireRecord(directory, false);
+  }
+
+  private static async acquireRecord(directory: string, durable: boolean): Promise<ReviewOwner> {
     const created = await mkdir(directory, { recursive: true });
-    if (created) {
+    if (created && durable) {
       // Persist each new directory entry, including the review namespace itself.
       let parent = directory;
       for (;;) {
@@ -86,9 +97,9 @@ export class ReviewOwner {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         await new Promise<void>((resolve) => server.close(() => resolve()));
-        return await ReviewOwner.acquire(directory);
+        return await ReviewOwner.acquireRecord(directory, durable);
       }
-      await syncDirectory(directory);
+      if (durable) await syncDirectory(directory);
       return new ReviewOwner(server);
     } catch (error) {
       if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -39,7 +39,7 @@ import {
 import {
 	appendSessionToken,
 	joinSessionApiUrl,
-	reviewSessionBaseUrl,
+	reviewSessionApiOrigin,
 	reviewSessionUrl,
 } from "./lib/session-url.js";
 import type { Plan } from "./lib/plan-types.js";
@@ -203,6 +203,12 @@ function lockUrl(lock: ServerLock): string | null {
 	return reviewSessionUrl(lock);
 }
 
+class ServerResponseError extends Error {
+	constructor(message: string, readonly body: Record<string, unknown> | null) {
+		super(message);
+	}
+}
+
 async function requestJson<T>(
 	base: string,
 	path: string,
@@ -230,16 +236,21 @@ async function requestJson<T>(
 	const raw = await response.text();
 	if (!response.ok) {
 		let detail = raw.trim();
+		let body: Record<string, unknown> | null = null;
 		try {
-			const parsed = JSON.parse(raw) as { error?: unknown };
-			if (typeof parsed.error === "string") detail = parsed.error;
+			const parsed: unknown = JSON.parse(raw);
+			if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+				body = parsed as Record<string, unknown>;
+				if (typeof body.error === "string") detail = body.error;
+			}
 		} catch {
 			// Preserve the response body when it is not JSON.
 		}
-		throw new Error(
+		throw new ServerResponseError(
 			`diffing server rejected ${init?.method ?? "GET"} ${path} with HTTP ${response.status}` +
 				(detail ? `: ${detail}` : "") +
 				".",
+			body,
 		);
 	}
 
@@ -603,7 +614,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			);
 		}
 		ensureReusableLock(lock);
-		const apiOrigin = reviewSessionBaseUrl(lock);
+		const apiOrigin = reviewSessionApiOrigin(lock);
 		if (!apiOrigin) {
 			throw new Error(
 				"The active diffing session does not expose a reachable loopback API.",
@@ -661,6 +672,18 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 
 	function requestBaseJson<T>(path: string, init?: RequestInit): Promise<T> {
 		return requestSessionJson<T>(requireWebSession(), path, init);
+	}
+
+	async function requestInspectResult(session: LiveSession, path: string) {
+		try {
+			const result = await requestSessionJson<Record<string, unknown>>(session, path);
+			return textResult(JSON.stringify(result), { result });
+		} catch (error) {
+			if (error instanceof ServerResponseError && typeof error.body?.code === "string") {
+				return { ...textResult(JSON.stringify(error.body), { result: error.body }), isError: true };
+			}
+			throw error;
+		}
 	}
 
 	function requestCommentJson<T>(id?: string, init?: RequestInit, suffix?: "replies"): Promise<T> {
@@ -1038,11 +1061,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			const query = new URLSearchParams();
 			if (exclude?.length) query.set("exclude", exclude.join(","));
 			const suffix = query.size ? `?${query}` : "";
-			const result = await requestSessionJson<Record<string, unknown>>(
-				session,
-				`/api/diff/summary${suffix}`,
-			);
-			return textResult(JSON.stringify(result), { result });
+			return requestInspectResult(session, `/api/diff/summary${suffix}`);
 		},
 	);
 
@@ -1053,8 +1072,8 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			description:
 				"Return a bounded page of changed-file metadata. Optional path is a git pathspec-ish glob " +
 				"(src/lib/**, **/foo.ts). cursor/nextCursor index the filtered list; each row still has the global file index. " +
-				"Web/PR pages return nextContinuation: pass it alone to retain the same snapshot/filter. " +
-				"Numeric cursor > 0 requires generation; TUI supports only numeric paging. Restart files on expiration.",
+				"Pages return nextContinuation: pass it alone to retain the same snapshot/filter. " +
+				"Numeric cursor > 0 requires generation. Restart files on expiration.",
 			inputSchema: {
 				snapshotId: z.uuid().optional(),
 				continuation: z.string().min(1).max(16384).optional(),
@@ -1069,8 +1088,8 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 		},
 		async ({ cursor, limit, path, continuation, generation, maxBytes, snapshotId }) => {
 			const session = requireInspectSession();
-			if ((continuation !== undefined || snapshotId !== undefined || maxBytes !== undefined) && session.lock.mode === "tui") {
-				throw new Error("File continuations are unsupported in TUI sessions; use cursor and generation.");
+			if (continuation !== undefined && [cursor, limit, path, generation, maxBytes, snapshotId].some((value) => value !== undefined)) {
+				throw new Error("Pass continuation alone; its query and position are already bound.");
 			}
 			const query = new URLSearchParams();
 			if (snapshotId !== undefined) query.set("snapshotId", snapshotId);
@@ -1080,11 +1099,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			if (continuation !== undefined) query.set("continuation", continuation);
 			if (generation !== undefined) query.set("generation", String(generation));
 			if (path) query.set("path", path);
-			const result = await requestSessionJson<Record<string, unknown>>(
-				session,
-				`/api/diff/files?${query}`,
-			);
-			return textResult(JSON.stringify(result), { result });
+			return requestInspectResult(session, `/api/diff/files?${query}`);
 		},
 	);
 
@@ -1094,7 +1109,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			title: "Page hunk metadata (bounded)",
 			description:
 				"Return bounded hunk metadata for one file. Pass path (glob resolving to exactly one file) or file (global index), not both. " +
-				"Pass generation from diff_summary to reject stale navigation. Web/PR: pass snapshotId from files, then nextContinuation alone. TUI supports live generation-based reads.",
+				"Pass generation from diff_summary to reject stale navigation, or pass snapshotId from files, then nextContinuation alone to retain that capture.",
 			inputSchema: {
 				snapshotId: z.uuid().optional(),
 				continuation: z.string().min(1).max(16384).optional(),
@@ -1110,9 +1125,6 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 		},
 		async (input) => {
 			const session = requireInspectSession();
-			if ((input.continuation !== undefined || input.snapshotId !== undefined) && session.lock.mode === "tui") {
-				throw new Error("Retained snapshots are unsupported in TUI sessions; use generation and numeric coordinates.");
-			}
 			if (input.continuation !== undefined && Object.entries(input).some(([key, value]) => key !== "continuation" && value !== undefined)) {
 				throw new Error("Pass continuation alone; its query and position are already bound.");
 			}
@@ -1120,8 +1132,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			for (const [key, value] of Object.entries(input)) {
 				if (value !== undefined) params.set(key === "query" ? "q" : key, String(value));
 			}
-			const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/hunks?${params}`);
-			return textResult(JSON.stringify(result), { result });
+			return requestInspectResult(session, `/api/diff/hunks?${params}`);
 		},
 	);
 
@@ -1132,7 +1143,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			description:
 				"Read exact logical rows for one file with strict line and byte budgets; use nextRow to continue. " +
 				"Pass path (glob resolving to exactly one file) or file (global index), not both. " +
-				"Web/PR: pass snapshotId from files, then nextContinuation alone. TUI supports live generation-based reads. Prefer this over get_diff.",
+				"Pass snapshotId from files, then nextContinuation alone. Prefer this over get_diff.",
 			inputSchema: {
 				snapshotId: z.uuid().optional(),
 				continuation: z.string().min(1).max(16384).optional(),
@@ -1153,9 +1164,6 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 		},
 		async (input) => {
 			const session = requireInspectSession();
-			if ((input.continuation !== undefined || input.snapshotId !== undefined) && session.lock.mode === "tui") {
-				throw new Error("Retained snapshots are unsupported in TUI sessions; use generation and numeric coordinates.");
-			}
 			if (input.continuation !== undefined && Object.entries(input).some(([key, value]) => key !== "continuation" && value !== undefined)) {
 				throw new Error("Pass continuation alone; its query and position are already bound.");
 			}
@@ -1163,8 +1171,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			for (const [key, value] of Object.entries(input)) {
 				if (value !== undefined) params.set(key === "query" ? "q" : key, String(value));
 			}
-			const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/slice?${params}`);
-			return textResult(JSON.stringify(result), { result });
+			return requestInspectResult(session, `/api/diff/slice?${params}`);
 		},
 	);
 
@@ -1175,7 +1182,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			description:
 				"Search changed paths and content with bounded hits/bytes and generation-safe continuation coordinates. " +
 				"Optional path glob limits hits to matching files (in addition to file+row continuation). " +
-				"Web/PR: pass snapshotId from files, then nextContinuation alone. TUI supports live generation-based reads.",
+				"Pass snapshotId from files, then nextContinuation alone.",
 			inputSchema: {
 				snapshotId: z.uuid().optional(),
 				continuation: z.string().min(1).max(16384).optional(),
@@ -1197,9 +1204,6 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 		},
 		async (input) => {
 			const session = requireInspectSession();
-			if ((input.continuation !== undefined || input.snapshotId !== undefined) && session.lock.mode === "tui") {
-				throw new Error("Retained snapshots are unsupported in TUI sessions; use generation and numeric coordinates.");
-			}
 			if (input.continuation !== undefined && Object.entries(input).some(([key, value]) => key !== "continuation" && value !== undefined)) {
 				throw new Error("Pass continuation alone; its query and position are already bound.");
 			}
@@ -1208,8 +1212,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			for (const [key, value] of Object.entries(input)) {
 				if (value !== undefined) params.set(key === "query" ? "q" : key, String(value));
 			}
-			const result = await requestSessionJson<Record<string, unknown>>(session, `/api/diff/search?${params}`);
-			return textResult(JSON.stringify(result), { result });
+			return requestInspectResult(session, `/api/diff/search?${params}`);
 		},
 	);
 
