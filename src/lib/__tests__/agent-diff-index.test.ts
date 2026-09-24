@@ -137,7 +137,7 @@ index abc..def 160000
       newBlob: 'def',
       submodule: true,
     })
-    expect(file.rows).toEqual([
+    expect(Array.from(file.rows)).toEqual([
       expect.objectContaining({ type: 'fileHeader', path: 'vendor/lib' }),
       expect.objectContaining({ type: 'hunkHeader', oldStart: 1, newStart: 1 }),
       expect.objectContaining({ type: 'line', kind: 'del', content: 'Subproject commit abc' }),
@@ -166,7 +166,7 @@ deleted file mode 100644
  context\r
 `
     const file = buildAgentDiffIndex(patch).files[0]
-    expect(file.rows.filter((row) => row.type === 'line').map((row) => row.content)).toEqual([
+    expect(Array.from(file.rows).filter((row) => row.type === 'line').map((row) => row.content)).toEqual([
       'old\r',
       'new\r',
       'context\r',
@@ -184,6 +184,51 @@ deleted file mode 100644
 `
     const file = buildAgentDiffIndex(patch).files[0]
     expect(file.rows.at(-1)).toEqual({ type: 'noNewline', hunkIndex: 0 })
+  })
+
+  it('preserves mixed source rows across small pages and hunk boundaries', () => {
+    const patch = `diff --git a/mixed.txt b/mixed.txt
+--- a/mixed.txt
++++ b/mixed.txt
+@@ -1,3 +1,3 @@
+-old
+\\ No newline at end of file
++new\r
+
+ context
+@@ -10 +20 @@ later
+-before
++after
+\\ No newline at end of file
+`
+    const index = buildAgentDiffIndex(patch)
+    const rows = []
+    let offset = 0
+    do {
+      const page = indexSlice(index, 0, offset, 2)
+      if ('error' in page) throw new Error(page.error)
+      rows.push(...page.rows)
+      if (page.nextRow === null) break
+      expect(page.nextRow).toBeGreaterThan(offset)
+      offset = page.nextRow
+    } while (offset < index.files[0].rowCount)
+    expect(rows).toEqual([
+      expect.objectContaining({ type: 'fileHeader', path: 'mixed.txt' }),
+      expect.objectContaining({ type: 'hunkHeader', hunkIndex: 0 }),
+      { type: 'line', hunkIndex: 0, kind: 'del', oldLineno: 1, newLineno: null, content: 'old' },
+      { type: 'noNewline', hunkIndex: 0 },
+      { type: 'line', hunkIndex: 0, kind: 'add', oldLineno: null, newLineno: 1, content: 'new\r' },
+      { type: 'line', hunkIndex: 0, kind: 'context', oldLineno: 2, newLineno: 2, content: '' },
+      { type: 'line', hunkIndex: 0, kind: 'context', oldLineno: 3, newLineno: 3, content: 'context' },
+      expect.objectContaining({ type: 'hunkHeader', hunkIndex: 1 }),
+      { type: 'line', hunkIndex: 1, kind: 'del', oldLineno: 10, newLineno: null, content: 'before' },
+      { type: 'line', hunkIndex: 1, kind: 'add', oldLineno: null, newLineno: 20, content: 'after' },
+      { type: 'noNewline', hunkIndex: 1 },
+    ])
+    expect(index.files[0]).toMatchObject({ additions: 2, deletions: 2, rowCount: rows.length })
+    expect(indexSearch(index, 'after')).toMatchObject({
+      hits: [expect.objectContaining({ fileIndex: 0, row: 9, oldLineno: null, newLineno: 20, preview: 'after' })],
+    })
   })
 
   it('parses mixed quoted and unquoted rename paths', () => {

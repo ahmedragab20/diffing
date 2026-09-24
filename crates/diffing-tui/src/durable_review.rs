@@ -219,6 +219,22 @@ impl Client {
                         })),
             "invalid_response"
         );
+        if file.is_none() {
+            ensure!(
+                entries.iter().all(|entry| {
+                    entry["omitted"] == "row_too_large"
+                        || (entry["file"]["index"] == entry["index"]
+                            && entry["file"].get("anchor").map_or(true, |anchor| {
+                                anchor["snapshotId"] == snapshot
+                                    && anchor["repositoryId"]
+                                        == self.connection.identity.repository_id
+                                    && anchor["workspaceId"]
+                                        == self.connection.identity.workspace_id
+                            }))
+                }),
+                "invalid_response"
+            );
+        }
         Ok(page)
     }
 }
@@ -370,6 +386,37 @@ fn summary(state: &Value) -> String {
     }
     lines.join("\n")
 }
+fn file_label(entry: &Value) -> String {
+    if entry["omitted"] == "row_too_large" {
+        "File omitted (too large)".into()
+    } else {
+        text(&entry["file"]["path"])
+    }
+}
+
+fn navigate_source_page(
+    current: &Value,
+    previous: &mut Vec<u64>,
+    forward: bool,
+    fetch: impl FnOnce(u64) -> Result<Value>,
+) -> Result<Option<Value>> {
+    let offset = if forward {
+        current["next"].as_u64()
+    } else {
+        previous.last().copied()
+    };
+    let Some(offset) = offset else {
+        return Ok(None);
+    };
+    let page = fetch(offset)?;
+    if forward {
+        previous.push(current["offset"].as_u64().context("invalid_response")?);
+    } else {
+        previous.pop();
+    }
+    Ok(Some(page))
+}
+
 struct Screen;
 impl Drop for Screen {
     fn drop(&mut self) {
@@ -402,6 +449,7 @@ pub fn run(path: &Path, read: Option<&str>) -> Result<()> {
     let mut body = summary(&state);
     let mut page: Option<Value> = None;
     let mut file: Option<u64> = None;
+    let mut previous_pages = Vec::new();
     let mut cursor = 0usize;
     let mut scroll = 0u16;
     terminal::enable_raw_mode()?;
@@ -432,6 +480,7 @@ pub fn run(path: &Path, read: Option<&str>) -> Result<()> {
                     body = summary(&state);
                     page = None;
                     file = None;
+                    previous_pages.clear();
                     scroll = 0;
                 }
                 KeyCode::Char('r') => {
@@ -439,11 +488,10 @@ pub fn run(path: &Path, read: Option<&str>) -> Result<()> {
                     body = summary(&state);
                     page = None;
                     file = None;
+                    previous_pages.clear();
                     scroll = 0;
                 }
                 KeyCode::Char('2') => {
-                    file = None;
-                    cursor = 0;
                     page = Some(
                         client.source(
                             state["currentSnapshotId"]
@@ -453,24 +501,28 @@ pub fn run(path: &Path, read: Option<&str>) -> Result<()> {
                             0,
                         )?,
                     );
+                    file = None;
+                    previous_pages.clear();
+                    cursor = 0;
+                    scroll = 0;
                 }
                 KeyCode::Char('n') | KeyCode::Char('p') => {
                     if let Some(current) = &page {
-                        let offset = if key.code == KeyCode::Char('n') {
-                            current["next"].as_u64()
-                        } else {
-                            current["offset"].as_u64().map(|n| n.saturating_sub(100))
-                        };
-                        if let Some(offset) = offset {
-                            page = Some(
+                        if let Some(next) = navigate_source_page(
+                            current,
+                            &mut previous_pages,
+                            key.code == KeyCode::Char('n'),
+                            |offset| {
                                 client.source(
                                     state["currentSnapshotId"]
                                         .as_str()
                                         .context("invalid_response")?,
                                     file,
                                     offset,
-                                )?,
-                            );
+                                )
+                            },
+                        )? {
+                            page = Some(next);
                             cursor = 0;
                             scroll = 0;
                         }
@@ -492,6 +544,7 @@ pub fn run(path: &Path, read: Option<&str>) -> Result<()> {
                                 )?,
                             );
                             file = Some(index);
+                            previous_pages.clear();
                             scroll = 0;
                         }
                     }
@@ -522,11 +575,7 @@ pub fn run(path: &Path, read: Option<&str>) -> Result<()> {
                     .enumerate()
                     .map(|(i, e)| {
                         if file.is_none() {
-                            format!(
-                                "{} {}",
-                                if i == cursor { ">" } else { " " },
-                                text(&e["file"]["path"])
-                            )
+                            format!("{} {}", if i == cursor { ">" } else { " " }, file_label(e))
                         } else {
                             let row = &e["row"];
                             match row["type"].as_str() {
@@ -597,6 +646,159 @@ mod tests {
         assert_eq!(decode_http(b"HTTP/1.1 403 Forbidden\r\nX-Diffing-Review-Protocol: 1\r\n\r\n{\"code\":\"forbidden\",\"recovery\":\"request_permission\"}").unwrap_err().to_string(), "forbidden: request_permission");
         assert!(decode_chunks(b"ffffffffff\r\n").is_err());
     }
+    fn read_file_page(entry: Value) -> Result<Value> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let address = listener.local_addr()?;
+        let snapshot = "00000000-0000-4000-8000-000000000001";
+        let identity = serde_json::json!({
+            "reviewId": "00000000-0000-4000-8000-000000000002",
+            "repositoryId": "a".repeat(64), "workspaceId": "b".repeat(64)
+        });
+        let body = serde_json::json!({
+            "identity": identity, "snapshotId": snapshot, "fileIndex": null,
+            "offset": 0, "total": 1, "next": null, "complete": true, "entries": [entry]
+        })
+        .to_string();
+        let responder = std::thread::spawn(move || -> Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        ensure!(Instant::now() < deadline, "test connection timeout");
+                        std::thread::yield_now();
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            };
+            stream.set_nonblocking(false)?;
+            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+            stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte)?;
+                request.push(byte[0]);
+                ensure!(request.len() <= 16384, "test request too large");
+            }
+            let request = String::from_utf8(request)?;
+            ensure!(request.starts_with(&format!("GET /api/review-core/source?snapshotId={snapshot}&offset=0&limit=100 HTTP/1.1\r\n")), "unexpected source request");
+            write!(stream, "HTTP/1.1 200 OK\r\nX-Diffing-Review-Protocol: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body)?;
+            Ok(())
+        });
+        let connection: Connection = serde_json::from_value(serde_json::json!({
+            "version": 1, "origin": format!("http://{address}/"), "identity": identity,
+            "actor": {"id": "agent", "kind": "agent"}, "credential": "x".repeat(43),
+            "headers": {"x-diffing-token": "d".repeat(64)}, "expiresAt": u64::MAX
+        }))?;
+        let result = Client::new(connection)?.source(snapshot, None, 0);
+        responder.join().expect("source responder panicked")?;
+        result
+    }
+
+    #[test]
+    fn source_files_bind_inner_index_and_anchor_to_the_requested_capture() {
+        let valid = serde_json::json!({"index": 0, "file": {
+            "index": 0, "path": "a", "anchor": {
+                "snapshotId": "00000000-0000-4000-8000-000000000001",
+                "repositoryId": "a".repeat(64), "workspaceId": "b".repeat(64)
+            }
+        }});
+        read_file_page(valid.clone()).expect("valid source page");
+        for field in ["index", "snapshotId", "repositoryId", "workspaceId"] {
+            let mut invalid = valid.clone();
+            if field == "index" {
+                invalid["file"]["index"] = serde_json::json!(1);
+            } else {
+                invalid["file"]["anchor"][field] = serde_json::json!(if field == "snapshotId" {
+                    "00000000-0000-4000-8000-000000000003".to_string()
+                } else {
+                    "c".repeat(64)
+                });
+            }
+            assert_eq!(
+                read_file_page(invalid).unwrap_err().to_string(),
+                "invalid_response",
+                "{field}"
+            );
+        }
+        assert!(
+            read_file_page(serde_json::json!({"index": 0, "file": {"index": 0, "path": "a"}}))
+                .is_ok()
+        );
+        assert!(
+            read_file_page(serde_json::json!({"index": 0, "omitted": "row_too_large"})).is_ok()
+        );
+    }
+
+    #[test]
+    fn omitted_files_are_visible_in_the_file_list() {
+        assert_eq!(
+            file_label(&serde_json::json!({"index": 4, "omitted": "row_too_large"})),
+            "File omitted (too large)"
+        );
+        assert_eq!(
+            file_label(&serde_json::json!({"index": 5, "file": {"path": "normal.ts"}})),
+            "normal.ts"
+        );
+    }
+
+    #[test]
+    fn previous_source_page_returns_to_the_actual_short_page_boundary() {
+        let first = serde_json::json!({"offset": 0, "next": 7});
+        let second = serde_json::json!({"offset": 7, "next": 13});
+        let third = serde_json::json!({"offset": 13, "next": null});
+        let mut previous = Vec::new();
+        assert!(
+            navigate_source_page(&first, &mut previous, true, |_| bail!("unavailable")).is_err()
+        );
+        assert!(previous.is_empty(), "failed navigation preserves history");
+        let second_page = navigate_source_page(&first, &mut previous, true, |offset| {
+            assert_eq!(offset, 7);
+            Ok(second.clone())
+        })
+        .unwrap()
+        .unwrap();
+        let third_page = navigate_source_page(&second_page, &mut previous, true, |offset| {
+            assert_eq!(offset, 13);
+            Ok(third)
+        })
+        .unwrap()
+        .unwrap();
+        let back = navigate_source_page(&third_page, &mut previous, false, |offset| {
+            assert_eq!(offset, 7);
+            Ok(second.clone())
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(back, second);
+        assert_eq!(previous, vec![0]);
+        assert!(
+            navigate_source_page(&back, &mut previous, false, |_| bail!("unavailable")).is_err()
+        );
+        assert_eq!(previous, vec![0], "failed navigation preserves history");
+        navigate_source_page(&back, &mut previous, false, |offset| {
+            assert_eq!(offset, 0);
+            Ok(first.clone())
+        })
+        .unwrap();
+        assert!(previous.is_empty());
+        assert!(
+            navigate_source_page(&first, &mut previous, false, |_| panic!(
+                "already first page"
+            ))
+            .unwrap()
+            .is_none()
+        );
+        let last = serde_json::json!({"offset": 13, "next": null});
+        assert!(
+            navigate_source_page(&last, &mut previous, true, |_| panic!("already last page"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
     #[test]
     fn never_renders_terminal_escape_sequences_from_review_text() {
         assert_eq!(text(&Value::String("x\u{1b}[31m\u{7}".into())), "x�[31m�");

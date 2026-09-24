@@ -8,6 +8,8 @@
  */
 
 import { createHash } from "node:crypto";
+import * as crypto from "node:crypto";
+import { IndexedRows } from "./indexed-rows.js";
 import type { InspectionManifest } from "./inspect-capture.js";
 import { decodeGitPath, parseGitDiffHeaderPaths } from "./git-path.js";
 import {
@@ -95,8 +97,8 @@ export interface IndexedFile {
   rowCount: number;
   additions: number;
   deletions: number;
-  /** Precomputed logical rows for slice/search (includes headers). */
-  rows: ViewRow[];
+  /** Parsed logical rows stored compactly; objects are created for requested reads. */
+  rows: IndexedRows;
 }
 
 export interface AgentDiffIndex {
@@ -223,6 +225,72 @@ export function createEmptyIndex(
   };
 }
 
+// Older supported Node 20 releases do not expose the one-shot hash API.
+const hashSection = typeof crypto.hash === "function"
+  ? (text: string) => crypto.hash("sha256", text, "hex")
+  : (text: string) => createHash("sha256").update(text).digest("hex");
+
+function appendHunkRows(
+  lines: string[], i: number, oldStart: number, oldLines: number,
+  newStart: number, newLines: number, hunkIndex: number, rows: IndexedRows,
+) {
+  let additions = 0;
+  let deletions = 0;
+  let oldLineno = oldStart;
+  let newLineno = newStart;
+  let bodyCount = 0;
+
+  // Stop at the declared source bounds; layer separators are not context rows.
+  while (i < lines.length && !(oldLineno - oldStart >= oldLines && newLineno - newStart >= newLines)) {
+    const body = lines[i];
+    const prefix = body[0];
+    if (prefix === "+") {
+      rows.pushLine(hunkIndex, "add", null, newLineno, body);
+      newLineno++;
+      additions++;
+      bodyCount++;
+      i++;
+      continue;
+    }
+    if (prefix === "-") {
+      rows.pushLine(hunkIndex, "del", oldLineno, null, body);
+      oldLineno++;
+      deletions++;
+      bodyCount++;
+      i++;
+      continue;
+    }
+    if (prefix === " " || body === "") {
+      if (body === "" && i === lines.length - 1) {
+        i++;
+        break;
+      }
+      // Context lines start with space; some tools emit bare empty lines as context.
+      rows.pushLine(hunkIndex, "context", oldLineno, newLineno, body);
+      oldLineno++;
+      newLineno++;
+      bodyCount++;
+      i++;
+      continue;
+    }
+    if (prefix === "\\" && body.startsWith("\\ No newline at end of file")) {
+      rows.push({ type: "noNewline", hunkIndex });
+      bodyCount++;
+      i++;
+      continue;
+    }
+    // File/hunk headers and unknown lines all terminate the hunk body.
+    break;
+  }
+
+  while (i < lines.length && lines[i].startsWith("\\ No newline at end of file")) {
+    rows.push({ type: "noNewline", hunkIndex });
+    bodyCount++;
+    i++;
+  }
+  return { next: i, additions, deletions, bodyCount };
+}
+
 /**
  * Parse a unified multi-file patch into an agent-facing index.
  * Generation is assigned automatically unless provided (for cache control).
@@ -320,7 +388,7 @@ export function buildAgentDiffIndex(
     else if (oldPath && !newPath) kind = "deleted";
 
     const displayPath = newPath ?? oldPath ?? "";
-    const rows: ViewRow[] = [];
+    const rows = new IndexedRows(lines.length);
     const hunks: IndexedHunk[] = [];
     let additions = 0;
     let deletions = 0;
@@ -364,80 +432,11 @@ export function buildAgentDiffIndex(
         });
 
         i++;
-        let oldLineno = oldStart;
-        let newLineno = newStart;
-        let bodyCount = 0;
-
-        while (i < lines.length) {
-          const body = lines[i];
-          const prefix = body[0];
-          if (prefix === "\\" && body.startsWith("\\ No newline at end of file")) {
-            rows.push({ type: "noNewline", hunkIndex });
-            bodyCount++;
-            i++;
-            continue;
-          }
-          // Layer separators and a patch's trailing newline are not source
-          // context. Once both declared sides are consumed, only the optional
-          // missing-newline marker belongs to this hunk.
-          if (oldLineno - oldStart >= oldLines && newLineno - newStart >= newLines) break;
-
-          // Empty line at EOF of patch may be a trailing split artifact.
-          if (body === "" && i === lines.length - 1) {
-            i++;
-            break;
-          }
-
-          if (prefix === "+") {
-            rows.push({
-              type: "line",
-              hunkIndex,
-              kind: "add",
-              oldLineno: null,
-              newLineno,
-              content: body.slice(1),
-            });
-            newLineno++;
-            additions++;
-            bodyCount++;
-            i++;
-            continue;
-          }
-          if (prefix === "-") {
-            rows.push({
-              type: "line",
-              hunkIndex,
-              kind: "del",
-              oldLineno,
-              newLineno: null,
-              content: body.slice(1),
-            });
-            oldLineno++;
-            deletions++;
-            bodyCount++;
-            i++;
-            continue;
-          }
-          if (prefix === " " || body === "") {
-            // Context lines start with space; some tools emit bare empty lines as context.
-            const content = prefix === " " ? body.slice(1) : body;
-            rows.push({
-              type: "line",
-              hunkIndex,
-              kind: "context",
-              oldLineno,
-              newLineno,
-              content,
-            });
-            oldLineno++;
-            newLineno++;
-            bodyCount++;
-            i++;
-            continue;
-          }
-          // File/hunk headers and unknown lines all terminate the hunk body.
-          break;
-        }
+        const body = appendHunkRows(lines, i, oldStart, oldLines, newStart, newLines, hunkIndex, rows);
+        i = body.next;
+        additions += body.additions;
+        deletions += body.deletions;
+        const bodyCount = body.bodyCount;
 
         hunks.push({
           oldStart,
@@ -456,8 +455,9 @@ export function buildAgentDiffIndex(
 
     if (metadata.synthetic) metadata.oldMode = metadata.newMode = null;
     metadata.submodule = metadata.oldMode === "160000" || metadata.newMode === "160000";
-    metadata.patchDigest = createHash("sha256").update(patch.slice(fileOffset, digestEnd)).digest("hex");
+    metadata.patchDigest = hashSection(patch.slice(fileOffset, digestEnd));
 
+    rows.finish();
     files.push({
       metadata,
       oldPath,
@@ -747,7 +747,7 @@ export function indexSlice(
   let cursor = start;
 
   while (cursor < file.rowCount && rows.length < lineBudget) {
-    const row = file.rows[cursor];
+    const row = file.rows.at(cursor)!;
     const cost = viewRowCost(row);
     if (estimatedBytes + cost > byteBudget && rows.length > 0) {
       truncated = true;
@@ -826,7 +826,7 @@ export function indexSearch(
     const rowBegin = fi === fileStart ? Math.max(0, rowStart) : 0;
 
     for (let ri = rowBegin; ri < file.rows.length; ri++) {
-      const row = file.rows[ri];
+      const row = file.rows.at(ri)!;
       let preview = "";
       let oldLineno: number | null = null;
       let newLineno: number | null = null;

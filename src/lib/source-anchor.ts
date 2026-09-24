@@ -49,7 +49,11 @@ export function createSourceAnchor(index: AgentDiffIndex, snapshotId: string, fi
   const layer = manifest.layers[ordinal];
   if (!layer) throw new SourceAnchorError("The file is outside the captured layers.");
   if (range && range.end !== 0) {
-    const lines = new Set(file.rows.flatMap((row) => row.type === "line" ? [range.side === "additions" ? row.newLineno : row.oldLineno] : []));
+    const lines = new Set<number>();
+    for (let row = 0; row < file.rows.length; row++) {
+      const line = file.rows.lineNumber(row, range.side);
+      if (line !== null) lines.add(line);
+    }
     if (range.end - range.start > 1000 || range.start < 1) throw new SourceAnchorError("The source range must be bounded within captured lines.");
     for (let line = range.start; line <= range.end; line++) {
       if (!lines.has(line)) throw new SourceAnchorError("The range includes a line absent from this capture.");

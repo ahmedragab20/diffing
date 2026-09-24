@@ -210,6 +210,19 @@ describe("ReviewCore", () => {
     await expect(request(h.core, limitedHuman, { op: "comment.delete", commentId }, snapshot, "limited-delete")).rejects.toMatchObject({ code: "forbidden" });
   });
 
+  it.each(["resolved", "reopened"] as const)("preserves a human %s action when an agent deletes its own thread", async (action) => {
+    const h = await harness();
+    const snapshot = (await request(h.core, h.humanToken, { op: "capture" }, null, "capture")).result.snapshotId;
+    const commentId = (await request(h.core, h.agentToken, { op: "comment.add", fileIndex: 0, side: "additions", lineNumber: 1, body: "agent thread" }, snapshot, "add")).result.id!;
+    await request(h.core, h.humanToken, { op: "comment.resolve", commentId, reason: "human checked" }, snapshot, "resolve");
+    if (action === "reopened") await request(h.core, h.humanToken, { op: "comment.reopen", commentId, reason: "human needs more verification" }, snapshot, "reopen");
+    const before = h.core.state(h.humanToken);
+    await expect(request(h.core, h.agentToken, { op: "comment.delete", commentId }, snapshot, "agent-delete")).rejects.toMatchObject({ code: "forbidden" });
+    expect(h.core.state(h.humanToken)).toEqual(before);
+    await request(h.core, h.humanToken, { op: "comment.delete", commentId }, snapshot, "human-delete");
+    expect(h.core.state(h.humanToken).comments).toEqual([]);
+  });
+
   it("preserves captured comments, anchors, text, actor, and views across reopen", async () => {
     const h = await harness();
     const captured = await request(h.core, h.humanToken, { op: "capture" }, null, "capture-1");

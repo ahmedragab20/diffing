@@ -392,7 +392,7 @@ describe("git", () => {
       const result = await getGitDiffAsync({ untracked: true });
       const index = buildAgentDiffIndex(result.patch);
       expect(index.files[0].additions).toBe(lines);
-      expect(index.files[0].rows.some((row) => row.type === "noNewline")).toBe(noNewline);
+      expect(Array.from(index.files[0].rows).some((row) => row.type === "noNewline")).toBe(noNewline);
       if (content.includes("\r\n")) expect(result.patch).toContain("+one\r\n+two\r\n");
     });
 

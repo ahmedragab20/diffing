@@ -210,7 +210,7 @@ export class ReviewCore {
     for (; position < Math.min(total, query.offset + query.limit); position++) {
       const sourceFile = index.files[position];
       let entry: z.infer<typeof reviewSourcePageSchema>["entries"][number] = file
-        ? { index: position, row: file.rows[position] }
+        ? { index: position, row: file.rows.at(position)! }
         : { index: position, file: { index: position, path: sourceFile.newPath ?? sourceFile.oldPath ?? "", oldPath: sourceFile.oldPath, newPath: sourceFile.newPath, kind: sourceFile.kind, binary: sourceFile.isBinary, rows: sourceFile.rows.length, additions: sourceFile.additions, deletions: sourceFile.deletions } };
       let size = Buffer.byteLength(JSON.stringify(entry));
       if ("file" in entry && [entry.file.path, entry.file.oldPath, entry.file.newPath].some((path) => path && path.length > 4096)) {
@@ -395,11 +395,12 @@ export class ReviewCore {
         const index = source();
         const anchor = createSourceAnchor(index, current(), command.fileIndex, { side: command.side, start: command.startLineNumber ?? command.lineNumber, end: command.lineNumber });
         const file = index.files[command.fileIndex];
-        const lineContent = file.rows.flatMap((row) => {
-          if (row.type !== "line") return [];
-          const line = command.side === "additions" ? row.newLineno : row.oldLineno;
-          return line != null && line >= (command.startLineNumber ?? command.lineNumber) && line <= command.lineNumber ? [row.content] : [];
-        }).join("\n");
+        const selectedLines: string[] = [];
+        for (let row = 0; row < file.rows.length; row++) {
+          const line = file.rows.lineNumber(row, command.side);
+          if (line !== null && line >= (command.startLineNumber ?? command.lineNumber) && line <= command.lineNumber) selectedLines.push(file.rows.lineContent(row)!);
+        }
+        const lineContent = selectedLines.join("\n");
         resultId = randomUUID();
         effects.push({ type: "comment.recorded", comment: {
           id: resultId, filePath: file.newPath ?? file.oldPath ?? "", side: command.side,
@@ -435,10 +436,15 @@ export class ReviewCore {
         resultId = comment.id;
         if (command.op === "comment.edit" || command.op === "comment.delete") {
           canEdit(comment.actor);
-          // Deleting an agent-authored thread cannot discard somebody else's
-          // reply. A human can explicitly remove the whole discussion.
+          // Deleting an agent-authored thread cannot discard another actor's
+          // reply or review action. A human can explicitly remove the discussion.
           if (command.op === "comment.delete") {
             for (const reply of comment.replies) canEdit(reply.actor);
+            for (const action of [comment.resolution, comment.reopened]) {
+              if (action !== undefined) {
+                canEdit(action !== null && typeof action === "object" && "actor" in action ? action.actor : undefined);
+              }
+            }
             effects.push({ type: "comment.deleted", commentId: comment.id });
           } else {
             comment.body = command.body;
