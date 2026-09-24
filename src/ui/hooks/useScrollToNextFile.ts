@@ -71,6 +71,6 @@ export function useScrollToNextFile(_files: FileDiffMetadata[]) {
         behavior: reduce ? "auto" : "smooth",
       });
       return true;
-    }, 2);
+    });
   }, []);
 }

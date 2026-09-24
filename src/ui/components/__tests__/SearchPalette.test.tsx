@@ -273,6 +273,36 @@ describe("SearchPalette", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
+  it("leaves Enter to focused buttons and ignores IME confirmation", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify(searchResponse("files"))))));
+    const close = vi.fn();
+    renderPalette({ initialScope: "files", onClose: close });
+    await screen.findByRole("option");
+    const changed = screen.getByRole("button", { name: "Changed" });
+    changed.focus();
+    expect(fireEvent.keyDown(changed, { key: "Enter" })).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", isComposing: true, keyCode: 229 });
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("preserves Tab traversal and input selection, with Alt+1–4 and tablist arrows for scopes", () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify(searchResponse("text"))))));
+    renderPalette({ initialScope: "text" });
+    const input = screen.getByRole("combobox");
+    expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(true);
+    expect(screen.getByRole("tab", { name: "Text" })).toHaveAttribute("aria-selected", "true");
+    expect(fireEvent.keyDown(input, { key: "ArrowDown", shiftKey: true })).toBe(true);
+    fireEvent.keyDown(input, { key: "¡", code: "Digit1", altKey: true });
+    expect(screen.getByRole("tab", { name: "All" })).toHaveAttribute("aria-selected", "true");
+    const all = screen.getByRole("tab", { name: "All" });
+    all.focus();
+    fireEvent.keyDown(all, { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "Files" })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "All" })).toHaveAttribute("tabindex", "-1");
+  });
+
   it("preserves the query across close and reopen", () => {
     vi.stubGlobal(
       "fetch",

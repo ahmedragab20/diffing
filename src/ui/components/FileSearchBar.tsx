@@ -48,7 +48,8 @@ export function FileSearchBar({
   }, [focusNonce])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    if (e.key === 'Enter' && e.target === inputRef.current) {
       e.preventDefault()
       if (e.shiftKey) onPrev()
       else onNext()

@@ -101,6 +101,17 @@ describe('syncFindHighlights', () => {
     expect(rows[2].classList.contains(FIND_HIT_CURRENT_CLASS)).toBe(true)
   })
 
+  it('marks only the current side when both sides share a matching line number', () => {
+    const card = makeCard([
+      { line: 7, type: 'change-deletion', text: 'old needle' },
+      { line: 7, type: 'change-addition', text: 'new needle' },
+    ])
+    const hits = [hit(7, 'deletions', 'old needle'), hit(7, 'additions', 'new needle')]
+    syncFindHighlights(card, hits, 0, 'needle')
+    expect([...card.querySelectorAll(`.${FIND_HIT_CURRENT_CLASS}`)].map(row => row.textContent)).toEqual(['old needle'])
+    expect(card.querySelector('[data-line-type="change-addition"]')).toHaveClass(FIND_HIT_CLASS)
+  })
+
   it('falls back to line-number + content for context rows', () => {
     const card = makeCard([
       { line: 5, type: 'context', text: 'unchanged description here' },

@@ -4852,6 +4852,7 @@ file-tree,
 
 .searchpalette-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -4967,6 +4968,23 @@ file-tree,
 .searchpalette-list::-webkit-scrollbar-thumb {
   background: var(--border-color);
   border-radius: 3px;
+}
+
+.diff-navigation-status {
+  position: fixed;
+  z-index: 100;
+  bottom: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  pointer-events: none;
 }
 
 .searchpalette-state {
@@ -5190,12 +5208,16 @@ file-tree,
 
 .searchpalette-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
+  gap: 6px 14px;
   padding: 7px 12px;
   border-top: 1px solid var(--border-color);
   font-size: 11px;
   color: var(--text-muted);
+}
+.searchpalette-foot > span {
+  white-space: nowrap;
 }
 .searchpalette-foot kbd {
   font-family: var(--font-mono);

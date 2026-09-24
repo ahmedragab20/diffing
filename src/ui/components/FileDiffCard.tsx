@@ -15,6 +15,7 @@ import {
   scheduleDiffNavigation,
 } from "../lib/diffNavigation";
 import { effectiveDiffStyle } from "../lib/diffLayout";
+import { findDiffLine } from "../lib/diffRows";
 import { openDefinitionPeek } from "../lib/definitionPeek";
 import {
   useCodeIntel,
@@ -380,6 +381,7 @@ export const FileDiffCard = memo(function FileDiffCard({
     instance: VirtualizedFileDiff<CardAnnotationMetadata>;
   } | null>(null);
   const syncSearchRef = useRef<(() => void) | undefined>(undefined);
+  const navigationReadyRef = useRef(true);
   const onPostRender = useCallback<
     NonNullable<
       FileDiffOptions<CardAnnotationMetadata, undefined>["onPostRender"]
@@ -403,7 +405,11 @@ export const FileDiffCard = memo(function FileDiffCard({
           setCollapsed(false);
           setBodyMounted(true);
         },
+        isReady: () => navigationReadyRef.current,
         position: (line, side) => {
+          const row = cardRef.current && findDiffLine(cardRef.current, line, side);
+          if (row && row.getBoundingClientRect().height > 0)
+            return window.scrollY + row.getBoundingClientRect().top;
           const renderer = rendererRef.current;
           if (renderer?.node.isConnected) {
             const position = renderer.instance.getLinePosition(line, side);
@@ -414,19 +420,7 @@ export const FileDiffCard = memo(function FileDiffCard({
                 position.top
               );
           }
-          const root =
-            cardRef.current?.querySelector("diffs-container")?.shadowRoot;
-          const type = side === "additions" ? "addition" : "deletion";
-          const row =
-            root?.querySelector(
-              `[data-line="${line}"][data-line-type="${type}"]`,
-            ) ??
-            root?.querySelector(
-              `[data-line="${line}"][data-line-type="context"]`,
-            );
-          return row
-            ? window.scrollY + row.getBoundingClientRect().top
-            : undefined;
+          return undefined;
         },
       }),
     [filePath],
@@ -482,6 +476,9 @@ export const FileDiffCard = memo(function FileDiffCard({
   );
   const contentsReady =
     contextExpanded && oldContent !== null && newContent !== null;
+  navigationReadyRef.current =
+    !((contextExpanded && isChangedFile) || editing) ||
+    (contentsReady && !contentsLoading);
 
   // Refetch full contents when the underlying patch changes while context is
   // expanded or an edit session is active (save / revert-hunk / external

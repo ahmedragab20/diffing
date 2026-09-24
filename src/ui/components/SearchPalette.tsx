@@ -211,6 +211,7 @@ export function SearchPalette({
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const scopeRefs = useRef(new Map<Scope, HTMLButtonElement>());
   const wasOpenRef = useRef(false);
   const openingRef = useRef(false);
   const lastSnapshotRef = useRef<SearchSessionSnapshot>({
@@ -487,58 +488,46 @@ export function SearchPalette({
   );
 
   // ── Keyboard model ───────────────────────────────────────────────
-  const cycleScope = useCallback((delta: number) => {
-    setScope((cur) => {
-      const i = SCOPES.findIndex((s) => s.key === cur);
-      return SCOPES[(i + delta + SCOPES.length) % SCOPES.length].key;
-    });
-  }, []);
-
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (e.defaultPrevented || e.nativeEvent.isComposing || e.keyCode === 229) return;
+      const shortcut = e.code.match(/^Digit([1-4])$/)?.[1];
+      if (e.altKey && !e.ctrlKey && !e.metaKey && shortcut) {
+        e.preventDefault();
+        setScope(SCOPES[Number(shortcut) - 1].key);
+        inputRef.current?.focus();
+        return;
+      }
+      // Buttons and scope tabs keep native activation and focus navigation.
+      if (e.target !== inputRef.current) return;
+      if (e.shiftKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) return;
+
       // ── Scroll preview section from the keyboard ──────────────────
-      if (e.key === "PageDown") {
+      if (preview && e.key === "PageDown") {
         e.preventDefault();
         const el = document.querySelector(".searchpalette-preview-body");
         el?.scrollBy({ top: 150, behavior: "auto" });
         return;
       }
-      if (e.key === "PageUp") {
+      if (preview && e.key === "PageUp") {
         e.preventDefault();
         const el = document.querySelector(".searchpalette-preview-body");
         el?.scrollBy({ top: -150, behavior: "auto" });
         return;
       }
-      if (e.altKey && (e.key === "ArrowDown" || e.key === "j")) {
+      if (preview && e.altKey && (e.key === "ArrowDown" || e.key === "j")) {
         e.preventDefault();
         const el = document.querySelector(".searchpalette-preview-body");
         el?.scrollBy({ top: 80, behavior: "auto" });
         return;
       }
-      if (e.altKey && (e.key === "ArrowUp" || e.key === "k")) {
+      if (preview && e.altKey && (e.key === "ArrowUp" || e.key === "k")) {
         e.preventDefault();
         const el = document.querySelector(".searchpalette-preview-body");
         el?.scrollBy({ top: -80, behavior: "auto" });
         return;
       }
-      if (e.shiftKey && (e.key === "ArrowDown" || e.key === "j")) {
-        e.preventDefault();
-        const el = document.querySelector(".searchpalette-preview-body");
-        el?.scrollBy({ top: 80, behavior: "auto" });
-        return;
-      }
-      if (e.shiftKey && (e.key === "ArrowUp" || e.key === "k")) {
-        e.preventDefault();
-        const el = document.querySelector(".searchpalette-preview-body");
-        el?.scrollBy({ top: -80, behavior: "auto" });
-        return;
-      }
-
-      if (e.key === "Tab") {
-        e.preventDefault();
-        cycleScope(e.shiftKey ? -1 : 1);
-        return;
-      }
+      if (e.altKey) return;
 
       const move = (delta: number) => {
         if (rows.length === 0) return;
@@ -579,7 +568,7 @@ export function SearchPalette({
       // Escape is handled by Base UI -> onOpenChange -> handleDismiss (two-stage).
     },
     [
-      cycleScope,
+      preview,
       rows.length,
       activate,
       focusedIndex,
@@ -676,11 +665,25 @@ export function SearchPalette({
             role="tablist"
             aria-label="Search scope"
           >
-            {SCOPES.map((s) => (
+            {SCOPES.map((s, scopeIndex) => (
               <button
                 key={s.key}
+                ref={(node) => { if (node) scopeRefs.current.set(s.key, node); else scopeRefs.current.delete(s.key); }}
                 role="tab"
+                tabIndex={scope === s.key ? 0 : -1}
                 aria-selected={scope === s.key}
+                aria-keyshortcuts={`Alt+${scopeIndex + 1}`}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                  const index = e.key === "Home" ? 0 : e.key === "End" ? SCOPES.length - 1
+                    : e.key === "ArrowRight" ? (scopeIndex + 1) % SCOPES.length
+                    : e.key === "ArrowLeft" ? (scopeIndex + SCOPES.length - 1) % SCOPES.length : -1;
+                  if (index < 0) return;
+                  e.preventDefault();
+                  const next = SCOPES[index].key;
+                  setScope(next);
+                  scopeRefs.current.get(next)?.focus();
+                }}
                 className={`searchpalette-scope ${scope === s.key ? "is-active" : ""}`}
                 onClick={() => {
                   setScope(s.key);
@@ -783,7 +786,7 @@ export function SearchPalette({
 
       <div className="searchpalette-foot">
         <span>
-          <kbd>Tab</kbd> scope
+          <kbd>Alt</kbd>+<kbd>1–4</kbd> scope
         </span>
         <span>
           <kbd>Ctrl</kbd>+<kbd>G</kbd> changed
@@ -813,7 +816,7 @@ export function SearchPalette({
         </span>
         {preview && (
           <span>
-            <kbd>⌥↑↓</kbd> / <kbd>⇧↑↓</kbd> scroll preview
+            <kbd>⌥↑↓</kbd> scroll preview
           </span>
         )}
         <span>
@@ -922,8 +925,8 @@ function ResultList({
         {changedOnly
           ? "Searching only changed files — turn off Changed to search the whole repo"
           : scope === "text" && !regex
-            ? "Try Tab to switch scope, or enable .* for regex"
-            : "Try Tab to switch scope"}
+            ? "Try Alt+1–4 to switch scope, or enable .* for regex"
+            : "Try Alt+1–4 to switch scope"}
       </span>
     </div>
   );
@@ -1099,7 +1102,7 @@ function PreviewPane({
   // Scroll to + flash the target line once content is rendered.
   useEffect(() => {
     if (!data?.content || !preview.line || !containerRef.current) return;
-    highlightLineInElement(containerRef.current, preview.line, preview.match);
+    return highlightLineInElement(containerRef.current, preview.line, preview.match);
   }, [data?.content, preview.line, preview.match]);
 
   return (

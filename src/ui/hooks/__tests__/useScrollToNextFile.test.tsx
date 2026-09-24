@@ -172,19 +172,15 @@ describe('useScrollToNextFile (hook integration)', () => {
         }
         scrollIntoViewSpy = vi.spyOn(Element.prototype, 'scrollIntoView')
 
-        // Shim rAF to execute callbacks synchronously in tests.
-        // Nested rAF (double-frame layout settle) still runs to completion.
-        window.requestAnimationFrame = (cb: FrameRequestCallback) => {
-            cb(0)
-            return 0
-        }
+        // Real rAF is asynchronous; advance its fake clock explicitly below.
+        vi.useFakeTimers()
     })
 
     afterEach(() => {
         cleanup()
         document.body.innerHTML = ''
         if (scrollIntoViewSpy) scrollIntoViewSpy.mockRestore()
-        delete (window as { requestAnimationFrame?: typeof window.requestAnimationFrame }).requestAnimationFrame
+        vi.useRealTimers()
     })
 
     it('calls scrollIntoView on the next-file element with {block:"start", behavior:"smooth"}', () => {
@@ -198,6 +194,7 @@ describe('useScrollToNextFile (hook integration)', () => {
 
         act(() => {
             result.current('c.ts')
+            vi.advanceTimersByTime(32)
         })
 
         expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1)
@@ -224,6 +221,7 @@ describe('useScrollToNextFile (hook integration)', () => {
 
         act(() => {
             result.current('a.ts')
+            vi.advanceTimersByTime(32)
         })
 
         expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1)
@@ -234,42 +232,35 @@ describe('useScrollToNextFile (hook integration)', () => {
     })
 
     it('debounces the same target within 250ms but lets a different target through', () => {
-        vi.useFakeTimers()
-        // Fake timers override our rAF shim; re-shim it so the scroll fires.
-        window.requestAnimationFrame = (cb: FrameRequestCallback) => { cb(0); return 0 }
-        const t0 = new Date('2024-01-01T00:00:00Z').getTime()
-        vi.setSystemTime(t0)
-
         const files = [file('a.ts'), file('b.ts'), file('c.ts')]
         const { result } = renderHook(() => useScrollToNextFile(files))
 
         // (a) First call: a.ts → b.ts. Scrolls.
         act(() => {
             result.current('a.ts')
+            vi.advanceTimersByTime(32)
         })
         expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1)
 
-        // Same target, +100 ms (< 250 ms). Debounced.
-        vi.setSystemTime(t0 + 100)
+        // Same target, 100 ms after the completed scroll (< 250 ms). Debounced.
+        vi.advanceTimersByTime(100)
         act(() => {
             result.current('a.ts')
         })
         expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1)
 
-        // (b) Different target, still +100 ms (within the 250 ms window
-        //     of the *previous* call, but the new target is different).
-        //     Should fire: scrolls to c.ts.
-        vi.setSystemTime(t0 + 100)
+        // (b) A different target is not debounced, even at the same time.
         act(() => {
             result.current('b.ts')
+            vi.advanceTimersByTime(32)
         })
         expect(scrollIntoViewSpy).toHaveBeenCalledTimes(2)
 
-        // (c) Back to a.ts, +300 ms (past the 250 ms window of the most
-        //     recent call at +100 ms). Should fire again.
-        vi.setSystemTime(t0 + 300)
+        // (c) Past the 250 ms debounce window, the first target can fire again.
+        vi.advanceTimersByTime(300)
         act(() => {
             result.current('a.ts')
+            vi.advanceTimersByTime(32)
         })
         expect(scrollIntoViewSpy).toHaveBeenCalledTimes(3)
     })
@@ -299,6 +290,7 @@ describe('useScrollToNextFile (hook integration)', () => {
         // return `matches: true`, and that mock persists into this test.
         act(() => {
             result.current('a.ts', { reduce: false })
+            vi.advanceTimersByTime(32)
         })
 
         expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1)

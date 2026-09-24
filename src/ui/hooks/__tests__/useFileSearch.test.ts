@@ -65,7 +65,7 @@ describe("useFileSearch", () => {
       result.current.setQuery("foo");
     });
     act(() => {
-      result.current.next();
+      result.current.prev();
     });
     expect(result.current.index).toBe(1);
 
@@ -87,7 +87,7 @@ describe("useFileSearch", () => {
       result.current.setQuery("foo");
     });
     act(() => {
-      result.current.next();
+      result.current.prev();
     });
     expect(result.current.index).toBe(1);
     const nonceAfterOpen = result.current.focusNonce;
@@ -144,6 +144,26 @@ describe("useFileSearch", () => {
     expect(result.current.index).toBe(0);
   });
 
+  it("visits the first hit on first forward activation, without jumping while typing", () => {
+    const { result } = renderHook(() => useFileSearch(diffEntries));
+    act(() => { result.current.open("src/a.ts"); result.current.setQuery("foo"); });
+    expect(scrollToLine).not.toHaveBeenCalled();
+    act(() => result.current.next());
+    expect(scrollToLine).toHaveBeenLastCalledWith("src/a.ts", 1, "additions", "foo");
+    act(() => result.current.next());
+    expect(scrollToLine).toHaveBeenLastCalledWith("src/a.ts", 3, "deletions", "foo");
+    act(() => result.current.setQuery("bar"));
+    act(() => result.current.next());
+    expect(scrollToLine).toHaveBeenLastCalledWith("src/a.ts", 2, "additions", "bar");
+  });
+
+  it("visits the last hit on first backward activation", () => {
+    const { result } = renderHook(() => useFileSearch(diffEntries));
+    act(() => { result.current.open("src/a.ts"); result.current.setQuery("foo"); });
+    act(() => result.current.prev());
+    expect(scrollToLine).toHaveBeenLastCalledWith("src/a.ts", 3, "deletions", "foo");
+  });
+
   it("next/prev cycle through hits modulo length and scroll to the match", () => {
     const { result } = renderHook(() => useFileSearch(diffEntries));
 
@@ -153,7 +173,10 @@ describe("useFileSearch", () => {
     });
 
     expect(result.current.hits.map((h) => h.lineNumber)).toEqual([1, 3]);
+    expect(result.current.index).toBe(-1);
+    act(() => result.current.next());
     expect(result.current.index).toBe(0);
+    expect(scrollToLine).toHaveBeenLastCalledWith("src/a.ts", 1, "additions", "foo");
 
     act(() => {
       result.current.next();
@@ -199,7 +222,7 @@ describe("useFileSearch", () => {
       "foo",
     );
 
-    expect(scrollToLine).toHaveBeenCalledTimes(4);
+    expect(scrollToLine).toHaveBeenCalledTimes(5);
   });
 
   it("passes the trimmed query to scrollToLine", () => {
@@ -213,13 +236,12 @@ describe("useFileSearch", () => {
       result.current.next();
     });
 
-    // next() advances to the second hit (index 1 → line 3), and the query is
-    // trimmed before it reaches scrollToLine.
+    // The first activation visits hit 1, and the query is trimmed.
     expect(scrollToLine).toHaveBeenCalledTimes(1);
     expect(scrollToLine).toHaveBeenCalledWith(
       "src/a.ts",
-      3,
-      "deletions",
+      1,
+      "additions",
       "foo",
     );
   });
@@ -333,7 +355,7 @@ describe("useFileSearch", () => {
       result.current.setQuery("foo");
     });
     act(() => {
-      result.current.next();
+      result.current.prev();
     });
     expect(result.current.hits).toHaveLength(2);
     expect(result.current.index).toBe(1);

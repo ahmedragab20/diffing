@@ -1,4 +1,7 @@
 import { navigateToDiffLine } from "./lib/diffNavigation";
+import { findDiffLine, findElementInElOrShadow } from "./lib/diffRows";
+import { runNavigationJob, type NavigationOutcome } from "./lib/navigationJob";
+export { findElementInElOrShadow } from "./lib/diffRows";
 
 export function timeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -92,27 +95,6 @@ export const SHIKI_THEME_MAP: Record<
   dayfox: { themeName: "dayfox", type: "light" },
   dawnfox: { themeName: "dawnfox", type: "light" },
 };
-
-export function findElementInElOrShadow(
-  root: Element | ShadowRoot,
-  selector: string,
-): HTMLElement[] {
-  const elements: HTMLElement[] = [];
-
-  // Query all in the current root
-  const found = root.querySelectorAll(selector);
-  found.forEach((el) => elements.push(el as HTMLElement));
-
-  // Search recursively in shadow roots of all descendants
-  const allDescendants = root.querySelectorAll("*");
-  allDescendants.forEach((desc) => {
-    if (desc.shadowRoot) {
-      elements.push(...findElementInElOrShadow(desc.shadowRoot, selector));
-    }
-  });
-
-  return elements;
-}
 
 /**
  * True when the currently focused element is a text-entry target: an
@@ -231,29 +213,26 @@ function flashHighlight(found: HTMLElement, highlightText?: string) {
  * shadow DOM. Unlike {@link scrollToLine} this doesn't touch file-card "viewed"
  * state — the preview always renders the whole file.
  */
+const previewJobs = new WeakMap<HTMLElement, () => void>();
+
 export function highlightLineInElement(
   container: HTMLElement,
   lineNumber: number,
   highlightText?: string,
 ) {
-  const tryScroll = (attemptsRemaining: number) => {
-    const allLineEls = findElementInElOrShadow(container, "[data-line]");
-    let found: HTMLElement | null = null;
-    for (const el of allLineEls) {
-      const elLine = el.getAttribute("data-line");
-      if (elLine && parseInt(elLine, 10) === lineNumber) {
-        found = el;
-        break;
-      }
-    }
-    if (found) {
-      found.scrollIntoView({ block: "center", behavior: "auto" });
-      flashHighlight(found, highlightText);
-    } else if (attemptsRemaining > 0) {
-      setTimeout(() => tryScroll(attemptsRemaining - 1), 50);
-    }
-  };
-  tryScroll(20);
+  previewJobs.get(container)?.();
+  const cancel = runNavigationJob(() => {
+    if (!container.isConnected) return "unavailable";
+    const found = findElementInElOrShadow(container, `[data-line="${lineNumber}"]`)[0];
+    if (!found || found.getBoundingClientRect().height === 0) return false;
+    found.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
+    flashHighlight(found, highlightText);
+    return true;
+  }, () => {
+    if (previewJobs.get(container) === cancel) previewJobs.delete(container);
+  });
+  previewJobs.set(container, cancel);
+  return cancel;
 }
 
 export function scrollToLine(
@@ -261,22 +240,16 @@ export function scrollToLine(
   lineNumber: number,
   side: "additions" | "deletions" | "addition" | "deletion",
   highlightText?: string,
+  onFinish?: (outcome: NavigationOutcome) => void,
 ) {
   const normalized =
     side === "addition" || side === "additions" ? "additions" : "deletions";
   return navigateToDiffLine(filePath, lineNumber, normalized, () => {
     const card = document.getElementById(`file-${filePath}`);
     if (!card) return true;
-    const expectedType = normalized === "additions" ? "addition" : "deletion";
-    const found = findElementInElOrShadow(
-      card,
-      `[data-line="${lineNumber}"]`,
-    ).find((element) => {
-      const type = element.getAttribute("data-line-type");
-      return type === expectedType || type === "context";
-    });
+    const found = findDiffLine(card, lineNumber, normalized);
     if (!found) return false;
     flashHighlight(found, highlightText);
     return true;
-  });
+  }, onFinish);
 }

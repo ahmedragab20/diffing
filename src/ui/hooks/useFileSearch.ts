@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { scrollToLine } from "../utils";
 import type { DiffLineEntry } from "./useDiffSearch";
 
@@ -18,7 +18,7 @@ export interface FileSearchSession {
   filePath: string | null;
   query: string;
   hits: DiffLineEntry[];
-  /** Index into `hits` of the current match (0 when the query has no hits). */
+  /** Selected hit; -1 before activation, 0 when there are no hits. */
   index: number;
   /**
    * Bumped on every `open()` call, even when re-opening the same file. The
@@ -38,7 +38,9 @@ export interface FileSearchSession {
 export function useFileSearch(diffEntries: DiffLineEntry[]) {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(-1);
+  const cancelJump = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => cancelJump.current?.(), [diffEntries]);
   const [focusNonce, setFocusNonce] = useState(0);
   const [expanded, setExpanded] = useState<{
     path: string;
@@ -77,7 +79,7 @@ export function useFileSearch(diffEntries: DiffLineEntry[]) {
     (i: number) => {
       const hit = hits[i];
       if (!hit) return;
-      scrollToLine(hit.filePath, hit.lineNumber, hit.side, query.trim());
+      cancelJump.current = scrollToLine(hit.filePath, hit.lineNumber, hit.side, query.trim());
     },
     [hits, query],
   );
@@ -85,7 +87,9 @@ export function useFileSearch(diffEntries: DiffLineEntry[]) {
   const cycle = useCallback(
     (delta: number) => {
       if (hits.length === 0) return;
-      const next = (clampedIndex + delta + hits.length) % hits.length;
+      const next = clampedIndex < 0
+        ? (delta > 0 ? 0 : hits.length - 1)
+        : (clampedIndex + delta + hits.length) % hits.length;
       setIndex(next);
       jumpTo(next);
     },
@@ -101,23 +105,26 @@ export function useFileSearch(diffEntries: DiffLineEntry[]) {
     // can edit it; switching files starts a fresh session.
     setFocusNonce((n) => n + 1);
     if (filePathRef.current !== path) {
+      cancelJump.current?.();
       setFilePath(path);
       setExpanded(null);
       setQuery("");
-      setIndex(0);
+      setIndex(-1);
     }
   }, []);
 
   const close = useCallback(() => {
+    cancelJump.current?.();
     setFilePath(null);
     setExpanded(null);
     setQuery("");
-    setIndex(0);
+    setIndex(-1);
   }, []);
 
   const changeQuery = useCallback((q: string) => {
+    cancelJump.current?.();
     setQuery(q);
-    setIndex(0);
+    setIndex(-1);
   }, []);
 
   // Stable identity so memoized diff surfaces don't re-render on every

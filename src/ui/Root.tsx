@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { App } from "./App";
 import { BrandMark } from "./components/BrandMark";
+import { DiffNavigationStatus } from "./components/DiffNavigationStatus";
 import { PlanReviewApp } from "./components/PlanReviewApp";
 import { MockupReviewApp } from "./components/MockupReviewApp";
 import { PrReviewApp } from "./components/PrReviewApp";
@@ -92,7 +93,7 @@ export function Root() {
 		return <MockupReviewApp />;
 	}
 	if (path === "/gh/pr" || path.startsWith("/gh/pr/")) {
-		return <PrReviewApp />;
+		return <><PrReviewApp /><DiffNavigationStatus key={path} /></>;
 	}
-	return <App />;
+	return <><App /><DiffNavigationStatus key={path} /></>;
 }

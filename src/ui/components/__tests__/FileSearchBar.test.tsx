@@ -245,14 +245,12 @@ describe('FileSearchBar', () => {
     expect(windowKeyDown).not.toHaveBeenCalled()
   })
 
-  it('handles Enter and Escape on the wrapper too', () => {
+  it('leaves button Enter to native activation but still closes on Escape', () => {
     const { onNext, onClose } = renderBar({ hits: makeHits() })
-
-    const wrapper = screen.getByRole('search')
-    fireEvent.keyDown(wrapper, { key: 'Enter' })
-    fireEvent.keyDown(wrapper, { key: 'Escape' })
-
-    expect(onNext).toHaveBeenCalledTimes(1)
+    const button = screen.getByRole('button', { name: 'Close search' })
+    expect(fireEvent.keyDown(button, { key: 'Enter' })).toBe(true)
+    expect(onNext).not.toHaveBeenCalled()
+    fireEvent.keyDown(screen.getByRole('search'), { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 

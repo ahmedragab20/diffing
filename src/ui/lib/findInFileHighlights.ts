@@ -1,4 +1,4 @@
-import { findElementInElOrShadow } from '../utils'
+import { findElementInElOrShadow, rowMatchesSide } from './diffRows'
 import type { DiffLineEntry } from '../hooks/useDiffSearch'
 
 /**
@@ -26,12 +26,6 @@ import type { DiffLineEntry } from '../hooks/useDiffSearch'
 export const FIND_HIT_CLASS = 'find-hit'
 export const FIND_HIT_CURRENT_CLASS = 'find-hit-current'
 export const FIND_HIT_TEXT_CLASS = 'find-hit-text'
-
-/** `data-line-type` values that represent the additions / deletions side. */
-const SIDE_TYPES: Record<'additions' | 'deletions', readonly string[]> = {
-  additions: ['addition', 'change-addition'],
-  deletions: ['deletion', 'change-deletion'],
-}
 
 export function getFileCardElement(filePath: string): HTMLElement | null {
   if (typeof document === 'undefined') return null
@@ -101,16 +95,17 @@ export function syncFindHighlights(
     }
 
     const rowType = row.getAttribute('data-line-type') ?? ''
-    const sideMatched = candidates.some((i) => SIDE_TYPES[hits[i].side].includes(rowType))
-    const textMatched =
-      !sideMatched &&
-      candidates.some((i) => row.textContent?.toLowerCase().includes(hits[i].content.toLowerCase()))
-    if (!sideMatched && !textMatched) {
+    const changed = ['addition', 'change-addition', 'deletion', 'change-deletion'].includes(rowType)
+    const matching = candidates.filter((i) =>
+      rowMatchesSide(row, hits[i].side) &&
+      (changed || row.textContent?.toLowerCase().includes(hits[i].content.trimEnd().toLowerCase())),
+    )
+    if (matching.length === 0) {
       clearRow(row)
       continue
     }
 
-    const isCurrent = candidates.includes(currentIndex)
+    const isCurrent = matching.includes(currentIndex)
     const wasHighlighted =
       row.classList.contains(FIND_HIT_CLASS) || row.classList.contains(FIND_HIT_CURRENT_CLASS)
     if (isCurrent) {

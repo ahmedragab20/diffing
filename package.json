@@ -68,6 +68,7 @@
     "eval:ai": "tsx scripts/ai-baseline.ts eval",
     "compat:ai": "tsx scripts/ai-live-compat.ts",
     "test:ai:e2e": "node scripts/ai-browser.mjs",
+    "test:search:e2e": "node scripts/search-browser.mjs",
     "verify:tui-bundle": "vitest run src/__tests__/native-bundle.test.ts src/__tests__/find-tui-binary.test.ts",
     "verify:release-bundle": "node scripts/verify-tui-bundle.mjs",
     "prepublishOnly": "pnpm run verify:release-bundle",

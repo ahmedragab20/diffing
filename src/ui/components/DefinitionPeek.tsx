@@ -57,7 +57,7 @@ export function DefinitionPeek({
   // Scroll to and flash the definition once the file has rendered.
   useEffect(() => {
     if (!data?.content || !request || !containerRef.current) return
-    highlightLineInElement(containerRef.current, request.line)
+    const cancelJump = highlightLineInElement(containerRef.current, request.line)
     // Bringing a long line into view drags the horizontal axis with it, which
     // hides the start of every line — the part you actually came to read. Only
     // the vertical move was wanted, so undo the rest once it has settled.
@@ -73,7 +73,7 @@ export function DefinitionPeek({
       root.scrollLeft = 0
       reset(root)
     }, 120)
-    return () => clearTimeout(timer)
+    return () => { cancelJump(); clearTimeout(timer) }
   }, [data?.content, request])
 
   if (!request) return null
