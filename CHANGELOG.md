@@ -1,3 +1,11 @@
+## 0.21.5
+
+### Patch Changes
+
+- 38b2d7d: Make result navigation reliable across lazy rendering
+- 89d2b19: Add snapshot contracts and SQLite store qualification
+- 5f7d790: Retain snapshot-bound file continuations
+
 ## 0.21.4
 
 ### Patch Changes
