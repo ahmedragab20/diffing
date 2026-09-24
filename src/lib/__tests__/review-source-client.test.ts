@@ -14,6 +14,7 @@ import { DEFAULTS } from "../diff-options.js";
 import { ReviewStore } from "../review-store.js";
 import { ReviewClient } from "../review-client.js";
 import type { AgentDiffIndex } from "../agent-diff-index.js";
+import { REVIEW_SOURCE_LIMITS } from "../review-source-contract.js";
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -100,6 +101,23 @@ describe("review source pages", () => {
       const response = await f.app.request(`/api/review-core/source?${query}`, { headers: f.headers() });
       expect(response.status, query).toBe(400);
     }
+  });
+
+  it.each(["a".repeat(3400), "界".repeat(1200)])("bounds file entries including their source anchors (%#)", async (path) => {
+    const patch = `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n${patchFor()}`;
+    const f = await fixture(patch);
+    const snapshotId = await f.captureSource();
+    const page = await f.client.source({ snapshotId, limit: 1 });
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(REVIEW_SOURCE_LIMITS.pageBytes);
+    for (const entry of page.entries) {
+      expect(Buffer.byteLength(JSON.stringify(entry))).toBeLessThanOrEqual(REVIEW_SOURCE_LIMITS.entryBytes);
+    }
+    expect(page.entries).toEqual([{ index: 0, omitted: "row_too_large" }]);
+    expect(page.next).toBe(1);
+    const next = await f.client.source({ snapshotId, offset: page.next!, limit: 1 });
+    expect(next.entries[0]).toMatchObject({ index: 1, file: { path: "a", anchor: { snapshotId } } });
+    expect(next.next).toBeNull();
+    expect(f.capture).toHaveBeenCalledOnce();
   });
 
   it("omits oversized rows explicitly, advances next, and stays within the response limit", async () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -14,7 +14,6 @@ import { ReviewCore } from "../src/lib/review-core.js";
 import { captureInspection } from "../src/lib/inspect-capture.js";
 import { AgentDiffIndexCache } from "../src/lib/agent-diff-index.js";
 import { DEFAULTS } from "../src/lib/diff-options.js";
-import { ReviewStore } from "../src/lib/review-store.js";
 
 const execFileAsync = promisify(execFile);
 const binary = process.env.DIFFING_SQLITE_TEST_BINARY ?? join(process.cwd(), "target/debug", process.platform === "win32" ? "diffing-tui.exe" : "diffing-tui");
@@ -33,7 +32,7 @@ async function fixture() {
   const captured = await captureInspection({ ...DEFAULTS }, async () => ({ patch, complete: true }), async () => ({ repositoryId: identity.repositoryId, workspaceId: identity.workspaceId, head: null, indexDigest: "c".repeat(64), resolvedRevisions: [] }));
   const index = new AgentDiffIndexCache().getOrBuild(patch, true, undefined, captured.manifest);
   let captures = 0;
-  const core = await ReviewCore.open(directory, identity, authority, { capture: async () => { captures++; return index; }, get: (id: string) => id === index.manifest!.snapshotId ? index : undefined }, { openStore: (path) => ReviewStore.open(path) });
+  const core = await ReviewCore.open(directory, identity, authority, { capture: async () => { captures++; return index; }, get: (id: string) => id === index.manifest!.snapshotId ? index : undefined }, { store: { binary } });
   const app = new Hono().route("/api/review-core", createReviewCoreApi(core));
   let server: ReturnType<typeof serve> | undefined;
   const port = await new Promise<number>((resolve) => { server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, (info) => resolve(info.port)); });
@@ -49,6 +48,9 @@ async function fixture() {
 test("native reads are read-only and populated state matches the JS core", { timeout: 150_000 }, async () => {
   const f = await fixture();
   try {
+    // Exercise the shipped storage path on every OS; the journal prototype
+    // requires directory fsync, which is not supported by Node on Windows.
+    assert.equal((await readFile(join(f.directory, "review.sqlite"))).subarray(0, 16).toString(), "SQLite format 3\0");
     const connection = await f.writeConnection();
     const empty = JSON.parse((await runNative(connection, "state")).stdout);
     assert.equal(empty.version, 1);

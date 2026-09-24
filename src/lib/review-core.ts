@@ -213,11 +213,15 @@ export class ReviewCore {
         ? { index: position, row: file.rows[position] }
         : { index: position, file: { index: position, path: sourceFile.newPath ?? sourceFile.oldPath ?? "", oldPath: sourceFile.oldPath, newPath: sourceFile.newPath, kind: sourceFile.kind, binary: sourceFile.isBinary, rows: sourceFile.rows.length, additions: sourceFile.additions, deletions: sourceFile.deletions } };
       let size = Buffer.byteLength(JSON.stringify(entry));
-      if (size > REVIEW_SOURCE_LIMITS.entryBytes || ("file" in entry && [entry.file.path, entry.file.oldPath, entry.file.newPath].some((path) => path && path.length > 4096))) {
+      if ("file" in entry && [entry.file.path, entry.file.oldPath, entry.file.newPath].some((path) => path && path.length > 4096)) {
         entry = { index: position, omitted: "row_too_large" }; size = 100;
       } else if ("file" in entry) {
         entry.file.anchor = createSourceAnchor(index, query.snapshotId, position);
         size = Buffer.byteLength(JSON.stringify(entry));
+      }
+      // Anchors repeat paths and revision metadata; bound the complete entry.
+      if (size > REVIEW_SOURCE_LIMITS.entryBytes) {
+        entry = { index: position, omitted: "row_too_large" }; size = 100;
       }
       if (bytes + size > REVIEW_SOURCE_LIMITS.pageBytes) break;
       entries.push(entry); bytes += size;
