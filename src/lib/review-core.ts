@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AgentDiffIndex } from "./agent-diff-index.js";
-import { ReviewAuthority, reviewIdentitySchema, type ReviewActor, type ReviewIdentity, type ReviewPermission } from "./review-authority.js";
+import { ReviewAuthority, reviewIdentitySchema, type ReviewActor, type ReviewIdentity } from "./review-authority.js";
+import { reviewOperations, reviewCapabilitiesSchema, reviewNextActionsSchema, REVIEW_BATCH_LIMIT, type ReviewOperationName } from "./review-operations.js";
+import { reviewSourceQuerySchema, reviewSourcePageSchema, REVIEW_SOURCE_LIMITS } from "./review-source-contract.js";
 import { reviewCoreEventSchema, reviewRequestSchema, reviewOperationResultSchema, type ReviewOperationResult, type DurableReviewState, type ReviewCoreEvent, type ReviewCommand } from "./review-core-contract.js";
 import { ReviewStore, ReviewStoreError, REVIEW_STORE_LIMITS, type ReviewTransaction } from "./review-store.js";
 import { SqliteReviewStore } from "./review-sqlite.js";
@@ -106,13 +108,7 @@ function project(history: readonly ReviewTransaction[], identity: ReviewIdentity
   return state;
 }
 
-const permissionFor = (command: ReviewCommand): ReviewPermission => {
-  if (command.op === "capture") return "capture";
-  if (command.op === "comment.resolve" || command.op === "comment.reopen" || command.op === "decision.record" || ["handoff.cancel", "handoff.expire", "handoff.reclaim"].includes(command.op)) return "decide";
-  if (command.op === "handoff.create") return "handoff";
-  if (command.op.startsWith("handoff.")) return "work";
-  return "comment";
-};
+const permissionFor = (command: ReviewCommand) => reviewOperations[command.op].permission;
 
 /** Authoritative local review transitions; transports supply trusted grants. */
 export class ReviewCore {
@@ -184,6 +180,87 @@ export class ReviewCore {
           : !current?.complete || sourceIdentity(current.manifest) !== sourceIdentity(manifest) ? "unverified" as const : "current" as const,
       })),
     };
+  }
+
+  capabilities(token: string) {
+    const grant = this.authority.describe(token, this.identity);
+    return reviewCapabilitiesSchema.parse({
+      protocolVersion: 1, identity: this.identity, ...grant,
+      operations: Object.values(reviewOperations).filter((operation) => grant.permissions.includes(operation.permission)).map(({ name, permission, snapshot, idempotency }) => ({ name, permission, snapshot, idempotency })),
+      batch: { mode: "per-item", limit: REVIEW_BATCH_LIMIT, order: "sequential", onError: "continue" },
+    });
+  }
+
+  source(token: string, input: unknown) {
+    this.authority.authorize(token, this.identity, "read");
+    const parsed = reviewSourceQuerySchema.safeParse(input);
+    if (!parsed.success) throw new ReviewCoreError("invalid_request");
+    const query = parsed.data;
+    const state = this.project();
+    if (!state.snapshots.some((snapshot) => snapshot.manifest.snapshotId === query.snapshotId)) throw new ReviewCoreError("not_found");
+    const index = this.sources.get(query.snapshotId);
+    if (!index || index.manifest?.snapshotId !== query.snapshotId) throw new ReviewCoreError("snapshot_expired");
+    const file = query.fileIndex === undefined ? undefined : index.files[query.fileIndex];
+    if (query.fileIndex !== undefined && !file) throw new ReviewCoreError("not_found");
+    const total = file ? file.rows.length : index.files.length;
+    if (query.offset > total) throw new ReviewCoreError("invalid_request");
+    const entries: z.infer<typeof reviewSourcePageSchema>["entries"] = [];
+    let bytes = 1024;
+    let position = query.offset;
+    for (; position < Math.min(total, query.offset + query.limit); position++) {
+      const sourceFile = index.files[position];
+      let entry: z.infer<typeof reviewSourcePageSchema>["entries"][number] = file
+        ? { index: position, row: file.rows[position] }
+        : { index: position, file: { index: position, path: sourceFile.newPath ?? sourceFile.oldPath ?? "", oldPath: sourceFile.oldPath, newPath: sourceFile.newPath, kind: sourceFile.kind, binary: sourceFile.isBinary, rows: sourceFile.rows.length, additions: sourceFile.additions, deletions: sourceFile.deletions } };
+      let size = Buffer.byteLength(JSON.stringify(entry));
+      if (size > REVIEW_SOURCE_LIMITS.entryBytes || ("file" in entry && [entry.file.path, entry.file.oldPath, entry.file.newPath].some((path) => path && path.length > 4096))) {
+        entry = { index: position, omitted: "row_too_large" }; size = 100;
+      } else if ("file" in entry) {
+        entry.file.anchor = createSourceAnchor(index, query.snapshotId, position);
+        size = Buffer.byteLength(JSON.stringify(entry));
+      }
+      if (bytes + size > REVIEW_SOURCE_LIMITS.pageBytes) break;
+      entries.push(entry); bytes += size;
+    }
+    return reviewSourcePageSchema.parse({ identity: this.identity, snapshotId: query.snapshotId, fileIndex: query.fileIndex ?? null, offset: query.offset, next: position < total ? position : null, total, complete: index.complete, freshness: "not-checked", entries });
+  }
+
+  /** Hints reflect this projection only. execute always rechecks source,
+   * version, authority and claim ownership before committing. */
+  nextActions(token: string) {
+    const { actor, operations } = this.capabilities(token);
+    const state = this.project();
+    const allowed = new Set(operations.map((operation) => operation.name));
+    const actions: Array<{ operation: ReviewOperationName; handoffId?: string }> = [];
+    const add = (operation: ReviewOperationName, handoffId?: string) => {
+      if (allowed.has(operation)) actions.push({ operation, ...(handoffId ? { handoffId } : {}) });
+    };
+    if (!state.migrationPending) {
+      add("capture");
+      const current = state.currentSnapshotId ? this.sources.get(state.currentSnapshotId) : undefined;
+      if (current) {
+        if (current.files.length) { add("comment.add"); add("view.mark"); }
+        if (state.comments.length) {
+          add("comment.reply"); add("comment.edit"); add("comment.delete");
+          add("comment.resolve"); add("comment.reopen");
+        }
+        add("handoff.create");
+        if (current.complete) add("decision.record");
+      }
+      for (const handoff of state.handoffs) {
+        if (handoff.status === "available" && handoff.recipient === actor.id) add("handoff.claim", handoff.id);
+        if (handoff.claim?.actorId === actor.id) {
+          if (handoff.status === "acknowledged") add("handoff.start", handoff.id);
+          if (["acknowledged", "working"].includes(handoff.status)) add("handoff.result", handoff.id);
+          if (["acknowledged", "working", "cancellation-requested"].includes(handoff.status)) add("handoff.fail", handoff.id);
+          if (handoff.status === "cancellation-requested") add("handoff.cancel-confirm", handoff.id);
+        }
+        if (["available", "acknowledged", "working"].includes(handoff.status)) add("handoff.cancel", handoff.id);
+        if (["available", "acknowledged", "working", "cancellation-requested"].includes(handoff.status)) add("handoff.expire", handoff.id);
+        if (["acknowledged", "working", "failed", "expired", "cancelled", "outcome-unknown"].includes(handoff.status)) add("handoff.reclaim", handoff.id);
+      }
+    }
+    return reviewNextActionsSchema.parse({ identity: this.identity, version: state.version, snapshotId: state.currentSnapshotId, actions, requiresServerValidation: true });
   }
 
   events(token: string, cursor: ReviewIdentity & { after: number }, limit = 100) {

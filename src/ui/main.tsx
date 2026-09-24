@@ -46,9 +46,7 @@ createRoot(document.getElementById('root')!).render(
         }}
       >
         <TooltipProvider>
-          <AiProvider>
-            <Root />
-          </AiProvider>
+          {window.location.pathname === "/review-core" ? <Root /> : <AiProvider><Root /></AiProvider>}
         </TooltipProvider>
       </WorkerPoolContextProvider>
     </HotkeysProvider>

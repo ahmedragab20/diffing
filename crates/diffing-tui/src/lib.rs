@@ -7,6 +7,7 @@ pub mod agent_api;
 pub mod app;
 pub mod diff;
 pub mod diff_context;
+pub mod durable_review;
 pub mod editorconfig;
 pub mod fs_rpc;
 pub mod handoff;

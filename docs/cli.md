@@ -2743,3 +2743,12 @@ The API includes `/api/review-core/state`, `/events`, `/handoffs/:id`, POST
 diff summary/files/hunks/slice/search reads are exposed alongside it. Other routes
 return `headless_review`. See [review core contracts](dev/review-core-contracts.md)
 for request envelopes, archive recovery, ownership and failure behavior.
+
+
+### Durable connections across clients
+
+`diffing review-core serve --adopt --ui` exposes the opt-in browser workspace.
+Use `DIFFING_REVIEW_CONNECTION` or `--connection` for typed state/source/events,
+versioned execute and per-item batch commands. MCP uses an agent connection;
+`diffing --tui` supports a read-only durable subset. See the complete
+[connection, retry and compatibility contract](dev/durable-review-clients.md).

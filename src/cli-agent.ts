@@ -2720,6 +2720,11 @@ export async function runSubcommand(
 	name: string,
 	args: string[],
 ): Promise<number> {
+	const connection = process.env.DIFFING_REVIEW_CONNECTION;
+	if (connection && ["comments", "reply", "resolve", "unresolve", "comment", "await-review", "progress", "inspect", "url", "plan", "mockup", "design", "evidence"].includes(name)) {
+		const { runDurableAlias } = await import("./cli-review-core.js");
+		return runDurableAlias(name, args, connection);
+	}
 	switch (name) {
 		case "await-review":
 			return awaitReview(args);

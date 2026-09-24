@@ -1,4 +1,5 @@
 import { commentApiPath } from "./lib/comment-api.js";
+import { createReviewCoreMcpServer } from "./mcp-review-core.js";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -174,6 +175,7 @@ interface DiffResponse {
 
 export interface CreateMcpServerOptions {
 	repoRoot: string;
+	reviewConnectionFile?: string;
 	ownerId?: string;
 	clientDir?: string;
 	startServerFn?: typeof startServer;
@@ -538,6 +540,8 @@ interface SessionStartResult extends Record<string, unknown> {
 }
 
 export function createMcpServer(options: CreateMcpServerOptions): McpServer {
+	const connectionFile = options.reviewConnectionFile ?? process.env.DIFFING_REVIEW_CONNECTION;
+	if (connectionFile) return createReviewCoreMcpServer({ connectionFile, version: MCP_VERSION });
 	const repoRoot = resolveMcpRepository(options.repoRoot, true);
 	const startServerFn = options.startServerFn ?? startServer;
 	const now = options.now ?? Date.now;

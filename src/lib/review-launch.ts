@@ -17,7 +17,7 @@ const credentialLifetime = 24 * 60 * 60_000;
  * give integrations only agent.json. No HTTP operation can mint a human grant.
  * This does not restrict a process with independent access to the user's shell.
  */
-export async function startDurableReview(options: { adopt?: boolean; port?: number } = {}) {
+export async function startDurableReview(options: { adopt?: boolean; port?: number; clientDir?: string } = {}) {
   if (options.port !== undefined && (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535)) throw new Error("Port must be between 1 and 65535.");
   const repoRoot = getRepoRoot();
   const directory = getProjectStorageDir(repoRoot);
@@ -49,8 +49,8 @@ export async function startDurableReview(options: { adopt?: boolean; port?: numb
     let human = "";
     const expiresAt = Date.now() + credentialLifetime;
     server = await startServer({
-      port: options.port ?? 0, host: "127.0.0.1", clientDir: "", diffOpts,
-      headlessReview: true,
+      port: options.port ?? 0, host: "127.0.0.1", clientDir: options.clientDir ?? "", diffOpts,
+      headlessReview: options.clientDir ? "ui" : true,
       security: { bindHost: "127.0.0.1", authToken: sessionToken },
       reviewCore: (sources) => openMigratedWorkspaceReview(directory, workspace, authority, sources, (opened) => {
         identity = opened;

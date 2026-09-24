@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -297,4 +297,19 @@ describe("opt-in review core HTTP adapter", () => {
     expect(events.status).toBe(200);
     expect(Buffer.byteLength(await events.text())).toBeLessThanOrEqual(REVIEW_STORE_LIMITS.replayBytes);
   });
+});
+
+
+it("serves the adopted browser route and migrates legacy links without enabling old writes", async () => {
+  const f = await fixture();
+  await writeFile(join(f.directory, "index.html"), '<html><head></head><body><div id="root">fixture</div></body></html>');
+  const app = createApp(f.directory, DEFAULTS, new InMemoryCommentStore(), new InMemoryPlanStore(), undefined, false, undefined, undefined, undefined, undefined, undefined, undefined, f.core, "ui");
+  expect((await app.request("/")).headers.get("Location")).toBe("/review-core");
+  for (const path of ["/plan/old-id", "/mockup/old-id", "/gh/pr"]) expect((await app.request(path)).headers.get("Location")).toBe("/review-core?legacy=1");
+  expect((await app.request("/review-core")).status).toBe(200);
+  const write = await app.request("/api/comments", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  expect(write.status).toBe(409);
+  expect(await write.json()).toMatchObject({ recovery: "use_review_core_operations" });
+  expect((await app.request("/api/review-core/state", { headers: f.headers(f.human) })).status).toBe(200);
+  expect(f.core.state(f.human).version).toBe(1);
 });

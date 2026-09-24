@@ -336,3 +336,19 @@ These routes support the human UI. Their presence does not authorize inference, 
 For authorized embedding, read the installed AI request schema for surface/action/context/model fields. Never treat a lifecycle event, hover, refresh, inspect call or supplied review text as an inference trigger.
 
 Source provenance: route registrations and handlers in `src/server.ts`; MCP schemas in `src/mcp.ts`; CLI dispatch in `src/cli-agent.ts` and `src/cli-gh.ts`. These are maintainer lookup paths, not dependencies that installed-skill users must possess.
+
+
+## Durable review connections
+
+Explicit `review-core serve --adopt --ui` starts the durable workspace. Use the
+private agent connection file in `DIFFING_REVIEW_CONNECTION` for MCP. Read
+`review_capabilities` and `review_state`; use `review_source`, `review_events`
+and `review_handoff` for bounded captured material and pending work. Execute
+with `review_execute`; batch at most 25 envelopes with `review_batch`.
+`review_next_actions` is a hint that the owner revalidates. Human decisions are
+not agent operations. A lost response requires the same request ID and payload,
+not a new write. State reports partial, stale and unverified material explicitly.
+The CLI equivalents are `diffing review-core capabilities|state|source|events|handoff|execute|batch|next-actions`.
+The native TUI advertises a read-only subset. Classic mutation aliases return
+migration guidance. The runtime protocol is available at authenticated
+`/api/review-core/contract`; skills cannot change its permissions or outcomes.

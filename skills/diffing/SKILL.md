@@ -29,6 +29,17 @@ The task involves diffing: choosing a session, reading a diff, posting findings,
 | API-only operation or embedding | [Headless API](references/headless-api.md) |
 | Install/select/reconnect/troubleshoot | [Sessions and transports](references/sessions-and-transports.md) |
 
+## Adopted durable reviews
+
+When `DIFFING_REVIEW_CONNECTION` is selected, use `review_capabilities`,
+`review_state`, then bounded `review_source` or `review_events`. Mutations use
+`review_execute` with a full versioned envelope; `review_batch` declares per-item
+outcomes. Retain the identical envelope after `outcome_unknown`. MCP requires
+an agent connection; human decisions belong to the separately authorized human
+client. The owner checks authority even if this skill is absent or ignored.
+Classic aliases may return `use_review_core_operations`; do not retry them
+against legacy files. See [durable clients](references/headless-api.md#durable-review-connections).
+
 ## Before you start
 
 Open with status; in PR mode confirm identity too:

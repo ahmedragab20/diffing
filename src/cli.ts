@@ -61,7 +61,11 @@ if (args[0] === "review-core") {
 		await runReviewCoreCommand(args.slice(1));
 		process.exit(0);
 	} catch (error) {
-		console.error(error instanceof Error ? error.message : "Durable review launch failed.");
+		if (args[1] === "serve") console.error(error instanceof Error ? error.message : "Durable review launch failed.");
+		else {
+			const { reviewCommandFailure } = await import("./cli-review-core.js");
+			console.error(JSON.stringify(reviewCommandFailure(error)));
+		}
 		process.exit(1);
 	}
 }
@@ -263,6 +267,12 @@ if (opts.version) {
 	);
 	console.log(pkg.version);
 	process.exit(0);
+}
+
+// A selected durable connection already identifies its owner and source. Do
+// not run classic setup or require a checkout just to render its retained data.
+if (process.env.DIFFING_REVIEW_CONNECTION && opts.outputMode === "tui") {
+	process.exit(await launchTui(args, opts));
 }
 
 const { handleFirstRunGate } = await import("./lib/setup.js");
@@ -628,6 +638,24 @@ function runTerminalFallback(opts: DiffOptions): number {
  * single stderr line and falls back to the default `git diff` output.
  */
 async function launchTui(args: string[], opts: DiffOptions): Promise<number> {
+	const durableConnection = process.env.DIFFING_REVIEW_CONNECTION;
+	if (durableConnection) {
+		// Explicit durable selection must never fall back to Git or classic stores.
+		if (args.some((arg) => arg !== "--tui")) {
+			console.error("Durable TUI uses retained source. Use only --tui; capture through review-core first.");
+			return 1;
+		}
+		const binary = _findTuiBinary(import.meta.url);
+		if (!binary || !process.stdout.isTTY || !process.stdin.isTTY) {
+			console.error("Durable TUI requires a compatible native binary and a TTY. Use diffing review-core state for JSON.");
+			return 1;
+		}
+		return new Promise<number>((resolve) => {
+			const child = spawn(binary, ["--review-connection", durableConnection], { stdio: "inherit" });
+			child.once("error", () => resolve(1));
+			child.once("exit", (code) => resolve(code ?? 1));
+		});
+	}
 	const viewOnly = args.includes("--view");
 	const requestedMode = viewOnly ? "diffing view" : "diffing --tui";
 	// The native source pipeline currently executes git diff. Passing show

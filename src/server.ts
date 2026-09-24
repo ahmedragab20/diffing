@@ -407,7 +407,7 @@ export function createApp(
 	/** Opt-in review or factory; the factory receives this app's retained sources. */
 	reviewCore?: ReviewCore | ReviewCoreFactory,
 	/** Foundation-only launch: expose durable operations and bounded source reads. */
-	headlessReview = false,
+	headlessReview: boolean | "ui" = false,
 ) {
 	const app = new Hono();
 	app.onError((error, c) => {
@@ -436,6 +436,11 @@ export function createApp(
 	if (headlessReview) {
 		if (!reviewCore) throw new Error("Headless review requires an owned core.");
 		app.use("*", async (c, next) => {
+			if (headlessReview === "ui" && c.req.method === "GET" && !c.req.path.startsWith("/api/")) {
+				if (c.req.path === "/") return c.redirect("/review-core");
+				if (/^\/(plan|mockup|gh)(\/|$)/.test(c.req.path)) return c.redirect("/review-core?legacy=1");
+				return next();
+			}
 			if (c.req.path.startsWith("/api/review-core/") ||
 				(c.req.method === "GET" && /^\/api\/diff\/(summary|files|hunks|slice|search)$/.test(c.req.path))) return next();
 			return c.json({ code: "headless_review", recovery: "use_review_core_operations" }, 409);
@@ -5603,7 +5608,7 @@ export async function startServer(options: {
 	security: ServerAuthConfig;
 	/** Explicit opt-in. The server owns factory-created cores; supplied instances remain caller-owned. No grant issuance. */
 	reviewCore?: ReviewCore | ReviewCoreFactory;
-	headlessReview?: boolean;
+	headlessReview?: boolean | "ui";
 	/**
 	 * If set, the server builds a `pr-session.json` from this ref on startup so
 	 * the web UI opens in PR mode. The session is persisted in the per-repo
@@ -5613,7 +5618,7 @@ export async function startServer(options: {
 	prRef?: string;
 }): Promise<StartedServer> {
 	try {
-		if (!options.headlessReview) await readFile(join(options.clientDir, "index.html"));
+		if (options.headlessReview !== true) await readFile(join(options.clientDir, "index.html"));
 	} catch {
 		throw new Error(
 			`Review UI bundle not found at ${join(options.clientDir, "index.html")}. ` +

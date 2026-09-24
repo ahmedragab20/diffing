@@ -27,9 +27,17 @@ use tracing_subscriber::EnvFilter;
     version,
 )]
 struct Args {
+    /// Connect to an adopted review in read-only mode, without opening classic stores.
+    #[arg(long, conflicts_with_all = ["review_store_rpc", "fs_rpc", "view_only"])]
+    review_connection: Option<PathBuf>,
+
+    /// Read one durable JSON projection without a terminal: state, capabilities, next-actions.
+    #[arg(long, requires = "review_connection")]
+    review_read: Option<String>,
+
     /// Path to the git repository whose diff is being reviewed. Must match
     /// the value the Node CLI computed via `git rev-parse --show-toplevel`.
-    #[arg(long, env = "DIFFING_REPO", required_unless_present = "review_store_rpc")]
+    #[arg(long, env = "DIFFING_REPO", required_unless_present_any = ["review_store_rpc", "review_connection"])]
     repo: Option<String>,
 
     /// Serve the private review-store protocol in one fixed directory.
@@ -66,6 +74,10 @@ fn real_main() -> Result<()> {
     if let Some(directory) = args.review_store_rpc {
         anyhow::ensure!(args.git_diff_args.is_empty(), "review store RPC does not accept diff arguments");
         return review_store::run(&directory);
+    }
+    if let Some(connection) = args.review_connection {
+        anyhow::ensure!(args.git_diff_args.is_empty(), "durable review uses retained source; diff arguments are unsupported");
+        return diffing_tui::durable_review::run(&connection, args.review_read.as_deref());
     }
     let repo = args.repo.context("--repo is required")?;
     if args.fs_rpc {

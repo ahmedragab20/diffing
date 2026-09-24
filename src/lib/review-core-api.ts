@@ -1,3 +1,4 @@
+import { reviewProtocolDocument } from "./review-protocol.js";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
@@ -8,6 +9,7 @@ import { SourceAnchorError } from "./source-anchor.js";
 import { InspectCaptureError } from "./inspect-capture.js";
 import { REVIEW_CREDENTIAL_HEADER, reviewAcknowledgementSchema, reviewEventsSchema, reviewHandoffPayloadSchema, reviewLegacySourcePageSchema, reviewStateSchema } from "./review-core-contract.js";
 import { LEGACY_CHUNK_BYTES, LEGACY_FILES } from "./review-legacy-contract.js";
+import { reviewBatchRequestSchema, reviewBatchResultSchema, reviewRecovery } from "./review-operations.js";
 
 export { REVIEW_CREDENTIAL_HEADER } from "./review-core-contract.js";
 const count = z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
@@ -41,7 +43,33 @@ export function createReviewCoreApi(core: ReviewCore | Promise<ReviewCore>): Hon
     return c.json({ code: "internal_error" }, 500);
   });
   app.use("*", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
-  app.use("*", bodyLimit({ maxSize: REVIEW_STORE_LIMITS.recordBytes, onError: (c) => c.json({ code: "request_too_large" }, 413) }));
+  app.use("*", bodyLimit({ maxSize: REVIEW_STORE_LIMITS.recordBytes, onError: (c) => c.json({ code: "request_too_large", ...(c.req.header("X-Diffing-Review-Protocol") === "1" ? { recovery: "fix_request" } : {}) }, 413) }));
+  app.use("*", async (c, next) => {
+    const version = c.req.header("X-Diffing-Review-Protocol");
+    if (version !== undefined && version !== "1") return c.json({ code: "unsupported_version", recovery: "upgrade_client" }, 409);
+    c.header("X-Diffing-Review-Protocol", "1");
+    await next();
+    if (version === "1" && c.res.status >= 400) {
+      const error = await c.res.clone().json().catch(() => null);
+      if (error && typeof error.code === "string" && !error.recovery) {
+        c.res = new Response(JSON.stringify({ ...error, recovery: reviewRecovery(error.code) }), { status: c.res.status, headers: c.res.headers });
+      }
+    }
+  });
+  app.get("/contract", async (c) => { (await core).capabilities(c.req.header(REVIEW_CREDENTIAL_HEADER) ?? ""); return c.json(reviewProtocolDocument()); });
+  app.get("/capabilities", async (c) => c.json((await core).capabilities(c.req.header(REVIEW_CREDENTIAL_HEADER) ?? "")));
+  app.get("/next-actions", async (c) => c.json((await core).nextActions(c.req.header(REVIEW_CREDENTIAL_HEADER) ?? "")));
+  app.get("/source", async (c) => {
+    const query: Record<string, unknown> = c.req.query();
+    if (Object.values(c.req.queries()).some((values) => values.length !== 1)) return c.json({ code: "invalid_request", recovery: "fix_request" }, 400);
+    for (const name of ["fileIndex", "offset", "limit"]) {
+      if (name in query) {
+        if (!/^\d+$/.test(String(query[name]))) return c.json({ code: "invalid_request", recovery: "fix_request" }, 400);
+        query[name] = Number(query[name]);
+      }
+    }
+    return c.json((await core).source(c.req.header(REVIEW_CREDENTIAL_HEADER) ?? "", query));
+  });
   app.get("/state", async (c) => {
     const state = reviewStateSchema.parse((await core).state(c.req.header(REVIEW_CREDENTIAL_HEADER) ?? ""));
     const body = JSON.stringify(state);
@@ -87,6 +115,24 @@ export function createReviewCoreApi(core: ReviewCore | Promise<ReviewCore>): Hon
     }
     const committed = await (await core).execute(c.req.header(REVIEW_CREDENTIAL_HEADER) ?? "", input);
     return c.json(reviewAcknowledgementSchema.parse({ version: 1, sequence: committed.sequence, result: committed.result }), 200, { "Cache-Control": "no-store" });
+  });
+  app.post("/batch", async (c) => {
+    const owned = await core;
+    const credential = c.req.header(REVIEW_CREDENTIAL_HEADER) ?? "";
+    owned.capabilities(credential);
+    const input = reviewBatchRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ code: "invalid_request", recovery: "fix_request" }, 400);
+    const results = [];
+    for (const request of input.data.requests) {
+      try {
+        const committed = await owned.execute(credential, request);
+        results.push({ requestId: request.requestId, ok: true as const, acknowledgement: reviewAcknowledgementSchema.parse({ version: 1, sequence: committed.sequence, result: committed.result }) });
+      } catch (error) {
+        const code = error instanceof ReviewCoreError || error instanceof ReviewAuthorityError || error instanceof ReviewStoreError || error instanceof SourceAnchorError || error instanceof InspectCaptureError ? error.code : "outcome_unknown";
+        results.push({ requestId: request.requestId, ok: false as const, error: { code, recovery: reviewRecovery(code), ...(error instanceof ReviewStoreError && error.sequence !== undefined ? { sequence: error.sequence } : {}) } });
+      }
+    }
+    return c.json(reviewBatchResultSchema.parse({ version: 1, mode: "per-item", results }));
   });
   return app;
 }

@@ -7,9 +7,11 @@ import {
 import { reviewIdentitySchema, type ReviewIdentity } from "./review-identity.js";
 import { REVIEW_STORE_LIMITS } from "./review-store-contract.js";
 import { LEGACY_CHUNK_BYTES, LEGACY_FILES } from "./review-legacy-contract.js";
+import { reviewBatchRequestSchema, reviewBatchResultSchema, reviewCapabilitiesSchema, reviewNextActionsSchema, reviewRecovery, reviewRecoverySchema } from "./review-operations.js";
+import { reviewSourceQuerySchema, reviewSourcePageSchema, type ReviewSourceQuery } from "./review-source-contract.js";
 
 const sameIdentity = (a: ReviewIdentity, b: ReviewIdentity) => a.reviewId === b.reviewId && a.workspaceId === b.workspaceId && a.repositoryId === b.repositoryId;
-const errorSchema = z.object({ code: z.string().regex(/^[a-z_]+$/).max(80), recovery: z.string().regex(/^[a-z_]+$/).max(80).optional(), sequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional() });
+const errorSchema = z.object({ code: z.string().regex(/^[a-z_]+$/).max(80), recovery: reviewRecoverySchema.optional(), sequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional() });
 
 export class ReviewClientError extends Error {
   constructor(readonly code: string, readonly recovery?: string, readonly status?: number, readonly sequence?: number) { super(code); }
@@ -39,6 +41,7 @@ export class ReviewClient {
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.headers = new Headers(options.headers);
     this.headers.set(REVIEW_CREDENTIAL_HEADER, options.credential);
+    this.headers.set("X-Diffing-Review-Protocol", "1");
     this.identity = options.identity ? reviewIdentitySchema.parse(options.identity) : undefined;
   }
 
@@ -51,6 +54,44 @@ export class ReviewClient {
     const state = await this.read("/state", reviewStateSchema);
     this.bind(state.identity);
     return state;
+  }
+
+  async capabilities() {
+    const result = await this.read("/capabilities", reviewCapabilitiesSchema);
+    this.bind(result.identity);
+    return result;
+  }
+
+  async nextActions() {
+    const result = await this.read("/next-actions", reviewNextActionsSchema);
+    this.bind(result.identity);
+    return result;
+  }
+
+  async source(input: ReviewSourceQuery) {
+    const query = reviewSourceQuerySchema.parse(input);
+    const params = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));
+    const page = await this.read(`/source?${params}`, reviewSourcePageSchema);
+    this.bind(page.identity);
+    const end = page.offset + page.entries.length;
+    if (page.snapshotId !== query.snapshotId || page.fileIndex !== (query.fileIndex ?? null) || page.offset !== query.offset || page.entries.length > query.limit || end > page.total || page.next !== (end < page.total ? end : null) || (page.next !== null && !page.entries.length) || page.entries.some((entry, i) => entry.index !== query.offset + i || (query.fileIndex === undefined ? "row" in entry : "file" in entry))) throw new ReviewClientError("invalid_response", "capture_source");
+    if (page.entries.some((entry) => "file" in entry && (entry.file.index !== entry.index || (entry.file.anchor && (entry.file.anchor.snapshotId !== page.snapshotId || entry.file.anchor.workspaceId !== page.identity.workspaceId || entry.file.anchor.repositoryId !== page.identity.repositoryId))))) throw new ReviewClientError("invalid_response", "capture_source");
+    return page;
+  }
+
+  async batch(input: z.infer<typeof reviewBatchRequestSchema>) {
+    const batch = reviewBatchRequestSchema.parse(input);
+    for (const request of batch.requests) this.bind(request);
+    const body = JSON.stringify(batch);
+    if (new TextEncoder().encode(body).byteLength > REVIEW_STORE_LIMITS.recordBytes) throw new ReviewClientError("request_too_large", "fix_request");
+    const result = await this.read("/batch", reviewBatchResultSchema, body);
+    if (result.results.length !== batch.requests.length) throw new ReviewClientError("outcome_unknown", "retry_same_request");
+    for (const [index, item] of result.results.entries()) {
+      const request = batch.requests[index];
+      if (item.requestId !== request.requestId) throw new ReviewClientError("outcome_unknown", "retry_same_request");
+      if (item.ok) this.validateAcknowledgement(request, item.acknowledgement);
+    }
+    return result;
   }
 
   async handoff(id: string) {
@@ -111,12 +152,16 @@ export class ReviewClient {
     const body = JSON.stringify(request);
     if (new TextEncoder().encode(body).byteLength > REVIEW_STORE_LIMITS.recordBytes) throw new ReviewClientError("request_too_large");
     const acknowledgement = await this.read("/operations", reviewAcknowledgementSchema, body);
+    this.validateAcknowledgement(request, acknowledgement);
+    return acknowledgement;
+  }
+
+  private validateAcknowledgement(request: ReviewRequest, acknowledgement: z.infer<typeof reviewAcknowledgementSchema>) {
     const result = acknowledgement.result;
     if (!sameIdentity(result.identity, request) || result.operation !== request.command.op || result.sequence !== request.expectedVersion + 1 ||
       (request.command.op === "capture" ? result.id !== result.snapshotId : result.snapshotId !== request.snapshotId)) {
       throw new ReviewClientError("outcome_unknown", "retry_same_request");
     }
-    return acknowledgement;
   }
 
   private async read<T>(path: string, schema: z.ZodType<T>, body?: string): Promise<T> {
@@ -125,8 +170,13 @@ export class ReviewClient {
     if (body !== undefined) headers.set("Content-Type", "application/json");
     let response: Response;
     try {
-      response = await this.fetcher(`${this.origin}/api/review-core${path}`, { method: body === undefined ? "GET" : "POST", headers, body, cache: "no-store", redirect: "error" });
+      response = await this.fetcher(`${this.origin}/api/review-core${path}`, { method: body === undefined ? "GET" : "POST", headers, body, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(30_000) });
     } catch { throw new ReviewClientError(body === undefined ? "connection_failed" : "outcome_unknown", body === undefined ? "reconnect" : "retry_same_request"); }
+    const protocol = response.headers.get("X-Diffing-Review-Protocol");
+    if (protocol !== null && protocol !== "1") {
+      await response.body?.cancel().catch(() => {});
+      throw body === undefined ? new ReviewClientError("unsupported_version", "upgrade_client") : unknown();
+    }
     const reader = response.body?.getReader();
     if (!reader) throw unknown();
     let data: unknown;
@@ -153,7 +203,7 @@ export class ReviewClient {
       // The adapter can fail while producing the response after committing.
       // A generic server failure cannot establish that the operation was rejected.
       if (body !== undefined && error.data.code === "internal_error") throw unknown();
-      throw new ReviewClientError(error.data.code, error.data.recovery, response.status, error.data.sequence);
+      throw new ReviewClientError(error.data.code, error.data.recovery ?? reviewRecovery(error.data.code), response.status, error.data.sequence);
     }
     const parsed = schema.safeParse(data);
     if (!parsed.success) throw unknown();

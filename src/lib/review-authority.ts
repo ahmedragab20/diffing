@@ -50,5 +50,9 @@ export class ReviewAuthority {
   }
 
   revoke(token: string): void { this.grants.delete(this.digest(token)); }
+  describe(token: string, identity: ReviewIdentity) {
+    const actor = this.authorize(token, identity, "read");
+    return { actor, permissions: [...this.grants.get(this.digest(token))!.permissions] };
+  }
   private digest(token: string): string { return createHash("sha256").update(token).digest("hex"); }
 }

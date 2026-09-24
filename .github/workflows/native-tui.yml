@@ -17,6 +17,8 @@ on:
       - "scripts/legacy-lease-qualification.test.ts"
       - "scripts/review-launch-qualification.test.ts"
       - "scripts/review-source-qualification.test.ts"
+      - "scripts/review-client-qualification.test.ts"
+      - "src/mcp-review-core.ts"
       - "scripts/postinstall.test.mjs"
       - "scripts/postinstall.mjs"
       - "src/lib/git.ts"
@@ -60,6 +62,7 @@ jobs:
       - run: node --import tsx --test scripts/legacy-lease-qualification.test.ts
       - run: node --import tsx --test scripts/review-launch-qualification.test.ts
       - run: node --import tsx --test scripts/review-source-qualification.test.ts
+      - run: node --import tsx --test scripts/review-client-qualification.test.ts
       - run: node --test scripts/postinstall.test.mjs
 
   build-native:

@@ -6,6 +6,7 @@ import { MockupReviewApp } from "./components/MockupReviewApp";
 import { PrReviewApp } from "./components/PrReviewApp";
 import { navigate, useRoutePath } from "./router";
 import { initUiState } from "./utils/uiState";
+import { DurableReviewApp } from "./components/DurableReviewApp";
 
 /**
  * Top-level view switch. diffing has three surfaces — the local diff review
@@ -18,6 +19,11 @@ import { initUiState } from "./utils/uiState";
  * loading surface.
  */
 export function Root() {
+	const path = useRoutePath();
+	return path === "/review-core" ? <DurableReviewApp /> : <ClassicRoot />;
+}
+
+function ClassicRoot() {
 	const path = useRoutePath();
 	const [loaded, setLoaded] = useState(false);
 	// When the server is in PR mode but the user landed on `/` (bookmark, stale
