@@ -1,3 +1,9 @@
+## 0.21.8
+
+### Patch Changes
+
+- 7aa7d2d: Improve TUI rendering, web recovery, and CLI performance
+
 ## 0.21.7
 
 ### Patch Changes
