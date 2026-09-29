@@ -37,13 +37,13 @@ describe('local comment annotation safety', () => {
     expect(filterSupportedLineAnnotations([valid, malformed, fileLevel])).toEqual([valid])
   })
 
-  it('uses vivid semantic diff roles and viewport-safe review cards', () => {
+  it('uses semantic diff colors without accent rails and keeps review cards viewport-safe', () => {
     const css = buildUnsafeCSS(2, 13, 'monospace')
 
     expect(css).toContain('var(--gl-added-surface)')
     expect(css).toContain('var(--gl-removed-surface)')
-    expect(css).toContain('inset 2px 0 var(--gl-positive)')
-    expect(css).toContain('inset 2px 0 var(--gl-negative)')
+    expect(css).not.toContain('inset 2px 0 var(--gl-positive)')
+    expect(css).not.toContain('inset 2px 0 var(--gl-negative)')
     expect(css).toContain('[data-line-type="change-addition"]')
     expect(css).toContain('[data-line-type="change-deletion"]')
     expect(css).toContain('--diffs-addition-color: var(--gl-positive)')
