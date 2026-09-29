@@ -1,12 +1,19 @@
-import { useEffect, useState } from "react";
-import { App } from "./App";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { BrandMark } from "./components/BrandMark";
 import { DiffNavigationStatus } from "./components/DiffNavigationStatus";
-import { PlanReviewApp } from "./components/PlanReviewApp";
-import { MockupReviewApp } from "./components/MockupReviewApp";
-import { PrReviewApp } from "./components/PrReviewApp";
 import { navigate, useRoutePath } from "./router";
 import { initUiState } from "./utils/uiState";
+
+const App = lazy(() => import("./App").then((module) => ({ default: module.App })));
+const PlanReviewApp = lazy(() =>
+	import("./components/PlanReviewApp").then((module) => ({ default: module.PlanReviewApp })),
+);
+const MockupReviewApp = lazy(() =>
+	import("./components/MockupReviewApp").then((module) => ({ default: module.MockupReviewApp })),
+);
+const PrReviewApp = lazy(() =>
+	import("./components/PrReviewApp").then((module) => ({ default: module.PrReviewApp })),
+);
 
 /**
  * Top-level view switch. diffing has three surfaces — the local diff review
@@ -76,24 +83,28 @@ export function Root() {
 		};
 	}, [path]);
 
-	if (!loaded || !prRedirectChecked) {
-		return (
-			<div className="boot-loader" role="status" aria-live="polite">
-				<BrandMark size={40} className="boot-loader-mark" />
-				<div className="boot-loader-spinner" aria-hidden="true" />
-				<span className="boot-loader-label">Loading review session…</span>
-			</div>
-		);
-	}
+	if (!loaded || !prRedirectChecked) return <ReviewLoading />;
+
+	let page;
 
 	if (path === "/plan" || path.startsWith("/plan/")) {
-		return <PlanReviewApp />;
+		page = <PlanReviewApp />;
+	} else if (path === "/mockup" || path.startsWith("/mockup/")) {
+		page = <MockupReviewApp />;
+	} else if (path === "/gh/pr" || path.startsWith("/gh/pr/")) {
+		page = <><PrReviewApp /><DiffNavigationStatus key={path} /></>;
+	} else {
+		page = <><App /><DiffNavigationStatus key={path} /></>;
 	}
-	if (path === "/mockup" || path.startsWith("/mockup/")) {
-		return <MockupReviewApp />;
-	}
-	if (path === "/gh/pr" || path.startsWith("/gh/pr/")) {
-		return <><PrReviewApp /><DiffNavigationStatus key={path} /></>;
-	}
-	return <><App /><DiffNavigationStatus key={path} /></>;
+	return <Suspense fallback={<ReviewLoading />}>{page}</Suspense>;
+}
+
+function ReviewLoading() {
+	return (
+		<div className="boot-loader" role="status" aria-live="polite">
+			<BrandMark size={40} className="boot-loader-mark" />
+			<div className="boot-loader-spinner" aria-hidden="true" />
+			<span className="boot-loader-label">Loading review session…</span>
+		</div>
+	);
 }

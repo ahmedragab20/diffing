@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, act } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffLineAnnotation, FileDiffMetadata } from "@pierre/diffs";
 import type { EditSessionView } from "../../hooks/useEditSessions";
 import type { ReviewComment } from "../../../lib/types";
@@ -55,6 +55,11 @@ vi.mock("@pierre/diffs/react", () => ({
 import { FileDiffCard } from "../FileDiffCard";
 
 const FILE_PATH = "src/example.ts";
+const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+afterEach(() => {
+  if (scrollIntoViewDescriptor) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+  else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+});
 
 const fileDiff = {
   name: FILE_PATH,
@@ -91,7 +96,8 @@ type RenderArgs = Pick<
   | "onEditAttach"
   | "onEditSave"
   | "onEditDiscard"
->;
+  | "fileSearch"
+> & { fileType?: FileDiffMetadata['type'] };
 
 function renderCard(args: RenderArgs = {}) {
   const {
@@ -102,6 +108,8 @@ function renderCard(args: RenderArgs = {}) {
     onEditAttach = vi.fn(),
     onEditSave = vi.fn(),
     onEditDiscard = vi.fn(),
+    fileType = fileDiff.type,
+    fileSearch,
   } = args;
   const annotations: DiffLineAnnotation<ReviewComment>[] = [];
   return {
@@ -112,7 +120,7 @@ function renderCard(args: RenderArgs = {}) {
     onEditDiscard,
     ...render(
       <FileDiffCard
-        fileDiff={fileDiff}
+        fileDiff={fileType === fileDiff.type ? fileDiff : { ...fileDiff, type: fileType }}
         filePath={FILE_PATH}
         annotations={annotations}
         diffStyle="split"
@@ -142,6 +150,7 @@ function renderCard(args: RenderArgs = {}) {
         onEditAttach={onEditAttach}
         onEditSave={onEditSave}
         onEditDiscard={onEditDiscard}
+        fileSearch={fileSearch}
       />,
     ),
   };
@@ -170,6 +179,64 @@ const EDIT_IN_PLACE = "Edit file in place";
 const SAVE_LABEL = "Save edits (Cmd/Ctrl+S)";
 
 describe("FileDiffCard in-place edit surface", () => {
+  it("mounts an editor for a newly added file with an empty old baseline", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).includes("version=old")
+        ? { content: "", missing: true }
+        : { content: "new content", missing: false },
+    )));
+    renderCard({ canEdit: true, fileType: "new", editSession: session() });
+    expect(await screen.findByTestId("multifile-diff")).toHaveAttribute("data-edit", "true");
+    expect(lastMultiFileDiffProps.oldFileContents).toBe("");
+    expect(lastMultiFileDiffProps.newFileContents).toBe("new content");
+  });
+
+  it("searches a newly added file with no old version", async () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).includes("version=old")
+        ? { content: "", missing: true }
+        : { content: "new content", missing: false },
+    )));
+    const setExpandedEntries = vi.fn();
+    renderCard({ canEdit: true, fileType: "new", editSession: session(), fileSearch: {
+      filePath: FILE_PATH, query: "content", hits: [], index: 0, focusNonce: 0,
+      open: vi.fn(), close: vi.fn(), setQuery: vi.fn(), next: vi.fn(), prev: vi.fn(), setExpandedEntries,
+    } });
+    await waitFor(() => expect(setExpandedEntries).toHaveBeenCalledWith(FILE_PATH, expect.arrayContaining([
+      expect.objectContaining({ filePath: FILE_PATH, side: "additions", lineNumber: 1, content: "new content" }),
+    ])));
+  });
+
+  it("shows a recoverable full-content error instead of a permanent loading placeholder", async () => {
+    let fail = true;
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (fail) return new Response(JSON.stringify({ error: "Read failed" }), { status: 500 });
+      return new Response(JSON.stringify({
+        content: String(input).includes("version=old") ? "old content" : "new content",
+        missing: false,
+      }));
+    });
+    renderCard({ canEdit: true, editSession: session() });
+    expect(await screen.findByRole("alert")).toHaveTextContent(/500|read failed/i);
+    expect(screen.queryByText("Loading full file…")).not.toBeInTheDocument();
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    expect(await screen.findByTestId("multifile-diff")).toHaveAttribute("data-edit", "true");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("reports a missing working file after loading finishes", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify({
+      content: "old content",
+      missing: String(input).includes("version=new"),
+    })));
+    renderCard({ canEdit: true, editSession: session() });
+    expect(await screen.findByRole("alert")).toHaveTextContent("File contents are unavailable");
+    expect(screen.queryByText("Loading full file…")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("multifile-diff")).not.toBeInTheDocument();
+  });
+
   it("shows the Edit button when canEdit=true and clicks call onRequestEdit(filePath)", async () => {
     const { onRequestEdit } = renderCard({ canEdit: true });
     const editBtn = screen.getByLabelText(EDIT_IN_PLACE);

@@ -418,6 +418,7 @@ dependencies = [
  "tracing-subscriber",
  "tui-textarea",
  "two-face",
+ "unicode-segmentation",
  "unicode-width 0.2.0",
 ]
 

@@ -1,65 +1,6 @@
-/**
- * Shell completion scripts for bash / zsh / fish.
- */
+/** Shell completion scripts generated from the command catalog. */
+import { CLI_COMMANDS } from './cli-commands.js'
 
-const SUBCOMMANDS = [
-  'setup',
-  'init',
-  'onboard',
-  'await-review',
-  'reply',
-  'resolve',
-  'unresolve',
-  'comment',
-  'comments',
-  'url',
-  'mcp',
-  'plan',
-  'mockup',
-  'update',
-  'gh',
-  'doctor',
-  'view',
-  'show',
-  'completion',
-  'progress',
-  'inspect',
-  'mode',
-  'sessions',
-]
-
-const PLAN_ACTIONS = [
-  'submit',
-  'await',
-  'list',
-  'show',
-  'versions',
-  'reply',
-  'resolve',
-]
-const MOCKUP_ACTIONS = [
-  'submit',
-  'await',
-  'list',
-  'show',
-  'versions',
-  'reply',
-  'resolve',
-  'inspect',
-  'screen',
-  'threads',
-]
-const GH_ACTIONS = [
-  'status',
-  'overview',
-  'threads',
-  'reviews',
-  'pr-fetch',
-  'pr-review',
-  'pr-list-comments',
-]
-const INSPECT_ACTIONS = ['summary', 'files', 'hunks', 'slice', 'search']
-const SESSION_ACTIONS = ['list', 'use', 'open', 'stop', 'kill']
 const GLOBAL_FLAGS = [
   '--help',
   '--version',
@@ -80,56 +21,53 @@ const GLOBAL_FLAGS = [
   '--gh-pr',
 ]
 
+function shellQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'"
+}
+
 export function bashCompletion(): string {
+  const actions = CLI_COMMANDS.filter((command) => command.actions).map(
+    (command) => `      ${command.name}) candidates=${shellQuote(command.actions!.join(' '))} ;;`,
+  ).join('\n')
   return `# diffing bash completion
 _diffing() {
-  local cur prev words cword
-  _init_completion || return
-  case "\${words[1]}" in
-    plan) COMPREPLY=( $(compgen -W "${PLAN_ACTIONS.join(' ')}" -- "$cur") ) ;;
-    mockup) COMPREPLY=( $(compgen -W "${MOCKUP_ACTIONS.join(' ')}" -- "$cur") ) ;;
-    gh) COMPREPLY=( $(compgen -W "${GH_ACTIONS.join(' ')}" -- "$cur") ) ;;
-    inspect) COMPREPLY=( $(compgen -W "${INSPECT_ACTIONS.join(' ')}" -- "$cur") ) ;;
-    sessions) COMPREPLY=( $(compgen -W "${SESSION_ACTIONS.join(' ')}" -- "$cur") ) ;;
-    mode) COMPREPLY=( $(compgen -W "web tui" -- "$cur") ) ;;
-    completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ) ;;
-    comments) COMPREPLY=( $(compgen -W "--open --json --format" -- "$cur") ) ;;
-    *)
-      if [[ "$cur" == -* ]]; then
-        COMPREPLY=( $(compgen -W "${GLOBAL_FLAGS.join(' ')}" -- "$cur") )
-      else
-        COMPREPLY=( $(compgen -W "${SUBCOMMANDS.join(' ')}" -- "$cur") )
-      fi
-      ;;
-  esac
+  local cur="\${COMP_WORDS[COMP_CWORD]}" candidates="" item
+  COMPREPLY=()
+  compopt +o filenames 2>/dev/null || true
+  if [[ "$cur" == -* ]]; then
+    candidates=${shellQuote(GLOBAL_FLAGS.join(' '))}
+  elif (( COMP_CWORD == 1 )); then
+    candidates=${shellQuote(CLI_COMMANDS.map(({ name }) => name).join(' '))}
+  elif (( COMP_CWORD == 2 )); then
+    case "\${COMP_WORDS[1]}" in
+${actions}
+    esac
+  fi
+  if [[ -n "$candidates" ]]; then
+    while IFS= read -r item; do COMPREPLY+=("$item"); done < <(compgen -W "$candidates" -- "$cur")
+  else
+    compopt -o filenames 2>/dev/null || true
+    while IFS= read -r item; do COMPREPLY+=("$item"); done < <(compgen -f -- "$cur")
+  fi
 }
 complete -F _diffing diffing
 `
 }
 
 export function zshCompletion(): string {
+  const commands = CLI_COMMANDS.map(({ name, description }) =>
+    `    ${shellQuote(`${name}:${description.replaceAll(':', '\\:')}`)}`,
+  ).join('\n')
+  const actions = CLI_COMMANDS.filter((command) => command.actions).map(
+    (command) => `        ${command.name}) _values ${shellQuote(`${command.name} action`)} ${command.actions!.map(shellQuote).join(' ')} ;;`,
+  ).join('\n')
   return `#compdef diffing
 _diffing() {
+  local context state state_descr line
+  typeset -A opt_args
   local -a commands
   commands=(
-    'setup:First-time setup wizard'
-    'await-review:Block until human sends review'
-    'reply:Reply to a comment'
-    'resolve:Resolve a comment'
-    'comments:Dump comments'
-    'url:Print server URL'
-    'mcp:Run MCP server'
-    'plan:Plan review commands'
-    'mockup:HTML mockup review commands'
-    'update:Upgrade diffing'
-    'gh:GitHub PR commands'
-    'doctor:Diagnose setup'
-    'view:Browse diffs in the native TUI'
-    'show:Show commit(s) like git show'
-    'completion:Print shell completions'
-    'inspect:Read bounded diff data'
-    'mode:Get or set the default interactive mode'
-    'sessions:Manage running review sessions'
+${commands}
   )
   _arguments -C \\
     '1: :->cmd' \\
@@ -137,14 +75,13 @@ _diffing() {
   case $state in
     cmd) _describe 'command' commands ;;
     args)
+      if (( CURRENT != 2 )); then
+        _files
+        return
+      fi
       case $words[1] in
-        plan) _values 'plan action' ${PLAN_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
-        mockup) _values 'mockup action' ${MOCKUP_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
-        gh) _values 'gh action' ${GH_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
-        inspect) _values 'inspect action' ${INSPECT_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
-        sessions) _values 'session action' ${SESSION_ACTIONS.map((a) => `'${a}'`).join(' ')} ;;
-        mode) _values 'mode' web tui ;;
-        completion) _values 'shell' bash zsh fish ;;
+${actions}
+        *) _files ;;
       esac
       ;;
   esac
@@ -156,47 +93,27 @@ compdef _diffing diffing
 export function fishCompletion(): string {
   const lines = [
     'complete -c diffing -f',
-    ...SUBCOMMANDS.map(
-      (s) => `complete -c diffing -n "__fish_use_subcommand" -a ${s}`,
+    ...CLI_COMMANDS.map(({ name, description }) =>
+      `complete -c diffing -n ${shellQuote('__fish_use_subcommand')} -a ${shellQuote(name)} -d ${shellQuote(description)}`,
     ),
-    ...GLOBAL_FLAGS.map(
-      (f) =>
-        `complete -c diffing -n "__fish_use_subcommand" -l ${f.replace(/^--/, '')}`,
+    ...GLOBAL_FLAGS.map((flag) =>
+      `complete -c diffing -n ${shellQuote('__fish_use_subcommand')} -l ${shellQuote(flag.replace(/^--/, ''))}`,
     ),
-    ...PLAN_ACTIONS.map(
-      (a) =>
-        `complete -c diffing -n "__fish_seen_subcommand_from plan" -a ${a}`,
+    ...CLI_COMMANDS.filter((command) => command.actions).flatMap((command) =>
+      command.actions!.map((action) =>
+        `complete -c diffing -n ${shellQuote(`__fish_seen_subcommand_from ${command.name}; and test (count (commandline -opc)) -eq 2`)} -a ${shellQuote(action)}`,
+      ),
     ),
-    ...MOCKUP_ACTIONS.map(
-      (a) =>
-        `complete -c diffing -n "__fish_seen_subcommand_from mockup" -a ${a}`,
-    ),
-    ...GH_ACTIONS.map(
-      (a) => `complete -c diffing -n "__fish_seen_subcommand_from gh" -a ${a}`,
-    ),
-    ...INSPECT_ACTIONS.map(
-      (a) =>
-        `complete -c diffing -n "__fish_seen_subcommand_from inspect" -a ${a}`,
-    ),
-    ...SESSION_ACTIONS.map(
-      (a) =>
-        `complete -c diffing -n "__fish_seen_subcommand_from sessions" -a ${a}`,
-    ),
-    'complete -c diffing -n "__fish_seen_subcommand_from mode" -a "web tui"',
-    'complete -c diffing -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"',
+    `complete -c diffing -n ${shellQuote('test (count (commandline -opc)) -ge 3')} -F`,
   ]
   return lines.join('\n') + '\n'
 }
 
 export function completionFor(shell: string): string | null {
   switch (shell.toLowerCase()) {
-    case 'bash':
-      return bashCompletion()
-    case 'zsh':
-      return zshCompletion()
-    case 'fish':
-      return fishCompletion()
-    default:
-      return null
+    case 'bash': return bashCompletion()
+    case 'zsh': return zshCompletion()
+    case 'fish': return fishCompletion()
+    default: return null
   }
 }

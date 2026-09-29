@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { subscribeLive } from '../live'
 import type { DiffOverview } from '../../lib/diff-overview'
 
@@ -64,6 +64,7 @@ export function useDiff(options: DiffOptions, enabled = true) {
   useEffect(() => {
     if (!enabled) return
     let cancelled = false
+    const controller = new AbortController()
 
     // Only the very first load shows the full skeleton. Background refreshes
     // (triggered by `change` events while you keep working) update the diff in
@@ -72,7 +73,7 @@ export function useDiff(options: DiffOptions, enabled = true) {
     else setLoading(true)
     setError(null)
 
-    fetch(`/api/diff?staged=${options.staged}&untracked=${options.untracked}`)
+    fetch(`/api/diff?staged=${options.staged}&untracked=${options.untracked}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         return res.json()
@@ -93,6 +94,7 @@ export function useDiff(options: DiffOptions, enabled = true) {
 
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [options.staged, options.untracked, enabled, refreshCount])
 
@@ -110,14 +112,20 @@ export function useDiff(options: DiffOptions, enabled = true) {
     }
     const unsubChange = subscribeLive('change', bump)
     const unsubPr = subscribeLive('pr-session', bump)
+    const unsubReconnect = subscribeLive('reconnect', bump)
     return () => {
       if (timer) clearTimeout(timer)
       unsubChange()
       unsubPr()
+      unsubReconnect()
     }
   }, [enabled])
 
+  const retry = useCallback(() => setRefreshCount((count) => count + 1), [])
+
   return {
+    hasData: data !== null,
+    retry,
     patch: data?.patch ?? null,
     repoName: data?.repoName ?? '',
     branch: data?.branch ?? '',

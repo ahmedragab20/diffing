@@ -47,6 +47,47 @@ describe('plan review keymaps', () => {
     expect(actions.onToggleCommentsRail).toHaveBeenCalledOnce()
   })
 
+  it('ignores events already handled by a component', () => {
+    const actions = makeActions()
+    render(<Harness actions={actions} />)
+    const event = new KeyboardEvent('keydown', { key: 'm', bubbles: true, cancelable: true })
+    event.preventDefault()
+    window.dispatchEvent(event)
+    expect(actions.onToggleViewMode).not.toHaveBeenCalled()
+    fireEvent.keyDown(window, { key: 'm' })
+    expect(actions.onToggleViewMode).toHaveBeenCalledOnce()
+  })
+
+  it.each([{ isComposing: true }, { keyCode: 229 }])('ignores composition events %j', (properties) => {
+    const actions = makeActions()
+    render(<Harness actions={actions} />)
+    fireEvent.keyDown(window, { key: 'm', ...properties })
+    expect(actions.onToggleViewMode).not.toHaveBeenCalled()
+  })
+
+  it.each(['dialog', 'alertdialog'])('does not dispatch shortcuts behind an open %s', (role) => {
+    const actions = makeActions()
+    render(<><Harness actions={actions} /><div role={role}><button>Keep editing</button></div></>)
+    for (const key of ['m', 'z', 'J', 'K', 'a']) fireEvent.keyDown(window, { key })
+    fireEvent.keyDown(window, { key: 'i', ctrlKey: true })
+    expect(actions.onToggleViewMode).not.toHaveBeenCalled()
+    expect(actions.onToggleZenMode).not.toHaveBeenCalled()
+    expect(actions.onNavigatePlan).not.toHaveBeenCalled()
+    expect(actions.onToggleAiAssistant).not.toHaveBeenCalled()
+  })
+
+  it('clears a buffered chord while a modal is open', () => {
+    const actions = makeActions()
+    const { rerender } = render(<><Harness actions={actions} /></>)
+    fireEvent.keyDown(window, { key: 'g' })
+    rerender(<><Harness actions={actions} /><div role="dialog" /></>)
+    fireEvent.keyDown(window, { key: 'Shift' })
+    rerender(<><Harness actions={actions} /></>)
+    fireEvent.keyDown(window, { key: 't' })
+    expect(actions.onOpenTheme).not.toHaveBeenCalled()
+    expect(actions.onCycleTabSize).toHaveBeenCalledOnce()
+  })
+
   it('does not steal ⌘C / Ctrl+C for the comments-rail shortcut', () => {
     const actions = makeActions()
     render(<Harness actions={actions} />)

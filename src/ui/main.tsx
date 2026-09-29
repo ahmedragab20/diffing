@@ -11,6 +11,7 @@ import '../../node_modules/@pierre/diffs/dist/components/web-components.js'
 import { TooltipProvider } from './primitives/Tooltip'
 import { observePageVisibility } from './lib/pauseWhenHidden'
 import { Root } from './Root'
+import { subscribeLive } from './live'
 import { installSessionAuth } from './session-auth'
 import { AiProvider } from './ai/AiContext'
 import './styles/global.css'
@@ -22,6 +23,11 @@ import './styles/gridline.css'
 const queryClient = new QueryClient()
 
 installSessionAuth()
+
+// The server does not replay SSE history. Reconcile caches after a reconnect.
+subscribeLive('reconnect', () => {
+  void queryClient.invalidateQueries()
+})
 
 observePageVisibility()
 

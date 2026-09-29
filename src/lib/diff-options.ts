@@ -376,8 +376,7 @@ function getVersion(): string {
   }
 }
 
-export function printHelp(): void {
-  const version = getVersion()
+export function printHelp(version = getVersion()): void {
   console.log(`diffing v${version} – Local code review tool for git diffs
 
 Usage: diffing [<git diff options>] [<revision>...] [-- <path>...]
@@ -440,6 +439,8 @@ Subcommands:
   mode [web|tui]       Get or set the default interactive review mode
   doctor               Environment self-check
   completion <bash|zsh|fish>
+  commands [--json] [command]
+                       Discover commands and actions for scripts and integrations
   update               Check for a newer npm release
 
 Custom ranges (e.g. main..feature) and 'gh pr' sessions also display a

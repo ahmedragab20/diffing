@@ -50,6 +50,7 @@ diffing --stat              # terminal mode
 
 | Command | Role |
 | --------- | ------ |
+| `commands [--json] [command]` | Discover available commands and actions |
 | `sessions …` | List / use / open / stop live sessions |
 | `mode [web\|tui]` | Get/set default interactive mode |
 | `await-review` | Sync wait for Send to agent |
@@ -69,6 +70,40 @@ diffing --stat              # terminal mode
 | `completion <shell>` | Shell completions |
 | `update` | Self-upgrade via npm/pnpm |
 | `view` | Read-only TUI viewer |
+
+### commands
+
+List the command catalog or filter it to one exact command name. No Git
+repository or running review server is required.
+
+```bash
+diffing commands
+diffing commands plan
+diffing commands --json
+diffing commands --json init
+```
+
+JSON output contains `schemaVersion: 1` and a `commands` array. Entries contain
+`name` and `description`, plus optional `actions` (action names) and `aliasFor`
+(the canonical command name). The filtered `init` response is:
+
+```json
+{
+  "schemaVersion": 1,
+  "commands": [
+    {
+      "name": "init",
+      "description": "Alias for setup",
+      "aliasFor": "setup",
+      "actions": ["skills", "mcp"]
+    }
+  ]
+}
+```
+
+The catalog is discovery metadata, not a complete argument or flag schema.
+Unknown commands/options and extra command names exit with code `5`. Bash,
+Zsh, and Fish completions share the command and action catalog.
 
 ### sessions
 

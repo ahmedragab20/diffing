@@ -164,22 +164,38 @@ export function useMockups(activeId: string | null) {
 	});
 	useEffect(() => {
 		let cancelled = false;
-		fetch("/api/mockup-review/status")
-			.then((r) => r.json())
-			.then((s) => {
-				if (!cancelled) setAgentStatus(s);
-			})
-			.catch(() => {});
+		let current: AbortController | null = null;
+		const refresh = () => {
+			if (cancelled) return;
+			current?.abort();
+			const controller = new AbortController();
+			current = controller;
+			fetch("/api/mockup-review/status", { signal: controller.signal })
+				.then((response) => {
+					if (!response.ok) throw new Error(`HTTP ${response.status}`);
+					return response.json();
+				})
+				.then((status) => {
+					if (!cancelled && !controller.signal.aborted) setAgentStatus(status);
+				})
+				.catch(() => {});
+		};
+		refresh();
 		const unsubscribe = subscribeLive("mockup-review-status", (data) => {
 			try {
-				setAgentStatus(JSON.parse(data));
+				const status = JSON.parse(data);
+				current?.abort();
+				setAgentStatus(status);
 			} catch {
 				/* ignore */
 			}
 		});
+		const unsubscribeReconnect = subscribeLive("reconnect", refresh);
 		return () => {
 			cancelled = true;
+			current?.abort();
 			unsubscribe();
+			unsubscribeReconnect();
 		};
 	}, []);
 

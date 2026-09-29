@@ -469,6 +469,8 @@ export const FileDiffCard = memo(function FileDiffCard({
   const oldFilePath = fileDiff.prevName ?? filePath;
   const {
     loading: contentsLoading,
+    error: contentsFetchError,
+    loaded: contentsLoaded,
     oldContent,
     newContent,
     refetch: refetchContents,
@@ -477,11 +479,17 @@ export const FileDiffCard = memo(function FileDiffCard({
     (contextExpanded && canExpandContext) || editing,
     oldFilePath,
   );
+  const contentsError = contentsFetchError ?? (
+    contentsLoaded && !contentsLoading && (newContent === null || (oldContent === null && fileDiff.type !== "new"))
+      ? "File contents are unavailable. Refresh the diff or retry."
+      : null
+  );
   const contentsReady =
-    contextExpanded && oldContent !== null && newContent !== null;
+    contextExpanded && !contentsError && newContent !== null &&
+    (oldContent !== null || fileDiff.type === "new");
   navigationReadyRef.current =
     !((contextExpanded && isChangedFile) || editing) ||
-    (contentsReady && !contentsLoading);
+    Boolean(contentsError) || (contentsReady && !contentsLoading);
 
   // Refetch full contents when the underlying patch changes while context is
   // expanded or an edit session is active (save / revert-hunk / external
@@ -584,7 +592,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   const expandedSearchEntries = useMemo(
     () =>
       searchSessionActive && contentsReady
-        ? buildExpandedFileSearchEntries(filePath, oldContent!, newContent!)
+        ? buildExpandedFileSearchEntries(filePath, oldContent ?? "", newContent!)
         : null,
     [searchSessionActive, contentsReady, filePath, oldContent, newContent],
   );
@@ -1994,6 +2002,12 @@ export const FileDiffCard = memo(function FileDiffCard({
               partial patch. Lazy-mounted until near the viewport.
               An active edit session always renders the full-context
               surface with the editor attached (edit + editorOptions). */}
+          {bodyMounted && (editing || contextExpanded) && contentsError && (
+            <div className="file-content-error" role="alert">
+              <span>Could not load full context: {contentsError}</span>
+              <button type="button" onClick={refetchContents}>Retry</button>
+            </div>
+          )}
           {bodyMounted && contentsReady ? (
             editing && editSession ? (
               <MultiFileDiff<
@@ -2034,8 +2048,8 @@ export const FileDiffCard = memo(function FileDiffCard({
               />
             )
           ) : bodyMounted ? (
-            editing ? (
-              <div className="file-diff-body-placeholder" aria-hidden="true">
+            editing && !contentsError ? (
+              <div className="file-diff-body-placeholder" role="status">
                 Loading full file…
               </div>
             ) : (

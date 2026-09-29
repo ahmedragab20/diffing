@@ -1,3 +1,4 @@
+import { fetchSessionApi, sessionApiOrigin } from "./lib/session-fetch.js";
 import { commentApiPath } from "./lib/comment-api.js";
 import { parseArgs } from "node:util";
 import { readFile, mkdir, writeFile, readdir, stat } from "node:fs/promises";
@@ -76,7 +77,7 @@ function baseUrl(): string {
 	activeCapability = lock.mode === "tui" ? lock.capability : undefined;
 	activeAuthToken = lock.authToken;
 	activeMode = lock.mode;
-	return `http://${host}:${lock.port}`;
+	return sessionApiOrigin(host, lock.port);
 }
 
 /** Resolve scope and credentials together; never fall back to another comment store. */
@@ -90,25 +91,10 @@ function apiFetch(
 	input: string | URL | Request,
 	init: RequestInit = {},
 ): Promise<Response> {
-	let target: URL;
-	try {
-		target = new URL(
-			input instanceof Request
-				? input.url
-				: input instanceof URL
-					? input.href
-					: input,
-		);
-	} catch {
-		return Promise.reject(new Error("Invalid diffing API URL"));
-	}
-	if (!["127.0.0.1", "localhost", "::1"].includes(target.hostname)) {
-		throw new Error(`Refusing non-loopback diffing API URL: ${target.origin}`);
-	}
 	const headers = new Headers(init.headers);
 	if (activeCapability) headers.set("X-Diffing-Capability", activeCapability);
 	if (activeAuthToken) headers.set(SESSION_TOKEN_HEADER, activeAuthToken);
-	return fetch(input, { ...init, headers });
+	return fetchSessionApi(input, { ...init, headers });
 }
 
 function connectionErrorMessage(err: unknown): string {
@@ -1067,29 +1053,8 @@ async function doctor(): Promise<number> {
 }
 
 async function completion(args: string[]): Promise<number> {
-	if (args.includes("--help") || args.includes("-h")) {
-		console.error("Usage: diffing completion <bash|zsh|fish>");
-		console.error("  # Install examples:");
-		console.error("  #   diffing completion bash >> ~/.bashrc");
-		console.error("  #   diffing completion zsh  > ~/.zfunc/_diffing");
-		console.error(
-			"  #   diffing completion fish > ~/.config/fish/completions/diffing.fish",
-		);
-		return EXIT_OK;
-	}
-	const shell = args[0];
-	if (!shell) {
-		console.error("Usage: diffing completion <bash|zsh|fish>");
-		return EXIT_USAGE;
-	}
-	const { completionFor } = await import("./lib/completions.js");
-	const script = completionFor(shell);
-	if (!script) {
-		console.error(`Unknown shell: ${shell}. Use bash, zsh, or fish.`);
-		return EXIT_USAGE;
-	}
-	process.stdout.write(script);
-	return EXIT_OK;
+	const { runCompletionCommand } = await import("./lib/cli-discovery.js");
+	return runCompletionCommand(args);
 }
 
 /**

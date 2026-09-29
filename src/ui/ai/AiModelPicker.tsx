@@ -129,6 +129,7 @@ export function AiModelPicker({ onOpenAssistant, onManage }: { onOpenAssistant?:
 	const models = ai?.models ?? [];
 	const selectedModel = ai?.selectedModel ?? "";
 	const current = models.find((model) => model.id === selectedModel);
+	const modelLabel = current ? `${current.displayName} · ${aiSourceLabel(current.sourceId)}${current.credentialRoute === "runtime-key" ? " BYOK" : ""}` : "Choose model";
 	if (!ai) return null;
 	const { selectModel, loading } = ai;
 	if (loading) return <div className="ai-toolbar-loading" role="status" aria-label="Loading AI models"><span className="ai-loading-icon" /><span className="ai-loading-copy"><i /><i /></span></div>;
@@ -147,7 +148,7 @@ export function AiModelPicker({ onOpenAssistant, onManage }: { onOpenAssistant?:
 				onOpenChange={setOpen}
 				ariaLabel="AI model"
 				className="ai-model-popover"
-				trigger={<button type="button" className="btn btn-sm ai-model-trigger"><Bot size={13} /><span>{current ? `${current.displayName} · ${aiSourceLabel(current.sourceId)}${current.credentialRoute === "runtime-key" ? " BYOK" : ""}` : "Choose model"}</span><ChevronDown size={12} /></button>}
+				trigger={<button type="button" className="btn btn-sm ai-model-trigger" aria-label={modelLabel} title={modelLabel}><Bot size={13} /><span>{modelLabel}</span><ChevronDown size={12} /></button>}
 			>
 				<AiModelMenu
 					models={models}
@@ -170,8 +171,8 @@ export function AiModelPicker({ onOpenAssistant, onManage }: { onOpenAssistant?:
 				/>
 			</Popover>
 			{onOpenAssistant && (
-				<button type="button" className="btn btn-sm ai-ask-btn" onClick={onOpenAssistant}>
-					<Sparkles size={13} /> Ask AI
+				<button type="button" className="btn btn-sm ai-ask-btn" onClick={onOpenAssistant} aria-label="Ask AI" title="Ask AI">
+					<Sparkles size={13} /><span className="btn-label">Ask AI</span>
 				</button>
 			)}
 		</div>

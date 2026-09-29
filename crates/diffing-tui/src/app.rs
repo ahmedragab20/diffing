@@ -388,6 +388,8 @@ pub struct App {
     lsp_revision: u64,
     queued_lsp: Option<RequestKind>,
     pending_lsp: Option<RequestToken>,
+    language_request_position: Option<(PathBuf, u32, u32)>,
+    clipboard_result: Option<crate::clipboard::ClipboardJob>,
     hover_content: Option<String>,
     hover_scroll: u16,
     visual_anchor: Option<(usize, u64)>,
@@ -892,6 +894,8 @@ impl App {
             lsp_revision: 0,
             queued_lsp: None,
             pending_lsp: None,
+            language_request_position: None,
+            clipboard_result: None,
             hover_content: None,
             hover_scroll: 0,
             visual_anchor: None,
@@ -1176,6 +1180,7 @@ impl App {
             | self.tick_search()
             | self.tick_search_preview()
             | self.tick_lsp()
+            | self.tick_clipboard()
             | self.image_diff.poll()
             | self.tick_toasts()
             | review_dirty
@@ -1281,6 +1286,16 @@ impl App {
 
     fn tick_lsp(&mut self) -> bool {
         let mut dirty = false;
+        if (self.pending_lsp.is_some() || self.queued_lsp.is_some())
+            && !language_request_is_current(
+                self.mode,
+                self.focus,
+                self.language_request_position.as_ref(),
+                self.current_language_position().as_ref(),
+            )
+        {
+            self.cancel_pending_language_request();
+        }
         let revision = self.lsp.diagnostics_revision();
         if revision != self.lsp_revision {
             self.lsp_revision = revision;
@@ -1357,12 +1372,13 @@ impl App {
 
     fn request_language(&mut self, kind: RequestKind) {
         self.cancel_pending_language_request();
-        let Some((path, _, _)) = self.current_language_position() else {
+        let Some((path, line, character)) = self.current_language_position() else {
             self.status_message = Some(
                 "language actions require an added or context line in a supported file".to_string(),
             );
             return;
         };
+        self.language_request_position = Some((path.clone(), line, character));
         match self.lsp.sync_document(&path) {
             Ok(ServerState::Ready) => self.start_language_request(kind),
             Ok(ServerState::Starting) => {
@@ -1401,6 +1417,7 @@ impl App {
         };
         match request {
             Ok(token) => {
+                self.language_request_position = Some((path, line, character));
                 self.pending_lsp = Some(token);
                 self.status_message = Some(match kind {
                     RequestKind::Hover => "loading hover…".to_string(),
@@ -1414,6 +1431,8 @@ impl App {
     }
 
     fn cancel_pending_language_request(&mut self) {
+        self.queued_lsp = None;
+        self.language_request_position = None;
         if let Some(token) = self.pending_lsp.take() {
             self.lsp.cancel_request(&token);
         }
@@ -2749,6 +2768,7 @@ impl App {
     }
 
     fn open_search_palette(&mut self, scope: SearchScope) {
+        self.cancel_pending_language_request();
         self.mode = Mode::Search;
         self.clear_modal_input();
         self.search_scope = scope;
@@ -3686,6 +3706,9 @@ impl App {
     }
 
     fn copy_send_review(&mut self) {
+        if self.clipboard_result.is_some() {
+            return;
+        }
         let Some(sr) = self.send_review.as_mut() else {
             return;
         };
@@ -3698,13 +3721,38 @@ impl App {
                     self.review_round + 1,
                 )
                 .unwrap_or_default();
-                sr.feedback = Some(match copy_to_clipboard(&xml) {
-                    Ok(()) => "Review copied · paste it into your agent chat".into(),
-                    Err(error) => format!("Could not copy review: {error}"),
-                });
+                match crate::clipboard::ClipboardJob::start(move |cancel| {
+                    copy_to_clipboard(&xml, cancel)
+                }) {
+                    Ok(job) => {
+                        self.clipboard_result = Some(job);
+                        sr.feedback = Some("Copying review…".into());
+                    }
+                    Err(error) => sr.feedback = Some(format!("Could not copy review: {error}")),
+                }
             }
             Err(error) => sr.feedback = Some(format!("Could not read comments: {error}")),
         }
+    }
+
+    fn tick_clipboard(&mut self) -> bool {
+        let Some(receiver) = &self.clipboard_result else {
+            return false;
+        };
+        let Some(result) = receiver.try_result() else {
+            return false;
+        };
+        self.clipboard_result = None;
+        let message = match result {
+            Ok(()) => "Review snapshot copied · paste it into your agent chat".to_string(),
+            Err(error) => format!("Could not copy review: {error}"),
+        };
+        if let Some(sr) = self.send_review.as_mut() {
+            sr.feedback = Some(message);
+        } else {
+            self.status_message = Some(message);
+        }
+        true
     }
 
     fn submit_send_review(&mut self) {
@@ -7866,37 +7914,39 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
+fn copy_to_clipboard(text: &str, cancel: &std::sync::atomic::AtomicBool) -> std::io::Result<()> {
+    use std::process::Command;
+    let mut last_error = std::io::Error::other("no clipboard tool found");
     for cmd in clipboard_candidates() {
         let argv = cmd.argv();
-        if let Ok(mut child) = Command::new(argv[0])
-            .args(&argv[1..])
-            .stdin(Stdio::piped())
-            .spawn()
-        {
-            if let Some(mut stdin) = child.stdin.take() {
-                let payload = if cmd.want_crlf() {
-                    // `clip.exe` reads raw stdin; pasting into typical Windows
-                    // apps works best with CRLF endings.
-                    text.replace('\n', "\r\n")
-                } else {
-                    text.to_string()
-                };
-                if stdin.write_all(payload.as_bytes()).is_ok() {
-                    let _ = stdin.flush();
-                    drop(stdin);
-                    if child.wait().map(|s| s.success()).unwrap_or(false) {
-                        return Ok(());
-                    }
-                }
-            }
+        let mut command = Command::new(argv[0]);
+        command.args(&argv[1..]);
+        let payload = if cmd.want_crlf() {
+            text.replace('\n', "\r\n")
+        } else {
+            text.to_string()
+        };
+        match crate::clipboard::run_helper(
+            &mut command,
+            payload.into_bytes(),
+            Duration::from_secs(2),
+            cancel,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => return Err(error),
+            Err(error) => last_error = error,
         }
     }
-    Err(std::io::Error::other(
-        "no clipboard tool found (tried pbcopy / wl-copy / xclip / xsel / clip / powershell)",
-    ))
+    Err(last_error)
+}
+
+fn language_request_is_current(
+    mode: Mode,
+    focus: Focus,
+    expected: Option<&(PathBuf, u32, u32)>,
+    current: Option<&(PathBuf, u32, u32)>,
+) -> bool {
+    mode == Mode::Normal && focus == Focus::Diff && expected.is_some() && expected == current
 }
 
 /// One clipboard tool candidate. We model the `clip.exe` line-ending quirk
@@ -8029,6 +8079,49 @@ fn with_context_lines(args: &[String], context: u32) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn delayed_language_results_require_the_original_unobstructed_target() {
+        let target = (PathBuf::from("src/app.rs"), 4, 8);
+        assert!(language_request_is_current(
+            Mode::Normal,
+            Focus::Diff,
+            Some(&target),
+            Some(&target)
+        ));
+        for mode in [
+            Mode::Search,
+            Mode::CommentForm,
+            Mode::SendReview,
+            Mode::Help,
+            Mode::Command,
+        ] {
+            assert!(!language_request_is_current(
+                mode,
+                Focus::Diff,
+                Some(&target),
+                Some(&target)
+            ));
+        }
+        assert!(!language_request_is_current(
+            Mode::Normal,
+            Focus::Tracker,
+            Some(&target),
+            Some(&target)
+        ));
+        assert!(!language_request_is_current(
+            Mode::Normal,
+            Focus::Diff,
+            Some(&target),
+            Some(&(target.0.clone(), 5, 8))
+        ));
+        assert!(!language_request_is_current(
+            Mode::Normal,
+            Focus::Diff,
+            None,
+            None
+        ));
+    }
     use super::*;
     use crate::search::interleave_search_hits;
 

@@ -36,12 +36,12 @@ notify-debouncer-full = { workspace = true }
 once_cell         = { workspace = true }
 tui-textarea      = "0.7"
 unicode-width     = "0.2"
+unicode-segmentation = "1.13"
 flate2            = "1"
 crc32fast         = "1"
 rusqlite          = { version = "0.40.2", default-features = false, features = ["bundled", "backup"] }
 sha2             = { workspace = true }
 
-[dev-dependencies]
 tempfile = "3"
 
 [[bench]]

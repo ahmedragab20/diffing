@@ -68,22 +68,38 @@ export function usePlans() {
   const [agentStatus, setAgentStatus] = useState<PlanAgentStatus>({ round: 0, waiters: 0, lastDecidedAt: null })
   useEffect(() => {
     let cancelled = false
-    fetch('/api/plan-review/status')
-      .then((r) => r.json())
-      .then((s) => {
-        if (!cancelled) setAgentStatus(s)
-      })
-      .catch(() => {})
+    let current: AbortController | null = null
+    const refresh = () => {
+      if (cancelled) return
+      current?.abort()
+      const controller = new AbortController()
+      current = controller
+      fetch('/api/plan-review/status', { signal: controller.signal })
+        .then((response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`)
+          return response.json()
+        })
+        .then((status) => {
+          if (!cancelled && !controller.signal.aborted) setAgentStatus(status)
+        })
+        .catch(() => {})
+    }
+    refresh()
     const unsubscribe = subscribeLive('plan-review-status', (data) => {
       try {
-        setAgentStatus(JSON.parse(data))
+        const status = JSON.parse(data)
+        current?.abort()
+        setAgentStatus(status)
       } catch {
         /* ignore malformed */
       }
     })
+    const unsubscribeReconnect = subscribeLive('reconnect', refresh)
     return () => {
       cancelled = true
+      current?.abort()
       unsubscribe()
+      unsubscribeReconnect()
     }
   }, [])
 

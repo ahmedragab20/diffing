@@ -15,7 +15,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_segmentation::UnicodeSegmentation;
+#[cfg(test)]
 use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 use crate::diff::highlight::{highlight_line, reset_highlight_session};
 use crate::lsp::LspDiagnostic;
@@ -442,15 +445,18 @@ pub fn render_card(
         max_lines: frame_height.max(1) as usize,
         palette,
     };
-    // Four bytes per terminal cell covers the largest UTF-8 scalar. Wrapped
-    // rows need only enough source for the physical viewport; unwrapped rows
-    // additionally retain the horizontal prefix that must be skipped.
+    // Budget for multi-scalar graphemes (joined emoji, combining marks),
+    // with a hard cap for pathological zero-width source. Wrapped rows retain
+    // only the physical viewport; unwrapped rows also need the skipped prefix.
     let visible_cells = if wrap {
         (area.width as usize).saturating_mul(frame_height.max(1) as usize)
     } else {
         horizontal_offset.saturating_add(area.width as usize)
     };
-    let max_line_bytes = visible_cells.saturating_mul(4).saturating_add(8);
+    let max_line_bytes = visible_cells
+        .saturating_mul(32)
+        .saturating_add(64)
+        .min(DEFAULT_VIEWPORT_MAX_BYTES.saturating_mul(4));
     let frame = {
         let Ok(viewport_rows) = cache.rows(
             index,
@@ -1176,27 +1182,36 @@ fn render_line(
             .set_symbol(" ")
             .set_style(Style::default().bg(background));
     }
-    let mut x = area.x;
+    // A grapheme can cross syntax/intraline span boundaries. Segment the
+    // complete visible row and use the style of its first scalar.
+    let mut content = String::new();
+    let mut styles = Vec::with_capacity(line.spans.len());
     for span in line.spans {
-        if x >= area.x + area.width {
+        styles.push((content.len(), span.style));
+        content.extend(span.content.chars().map(safe_terminal_character));
+    }
+    let mut style_index = 0;
+    let mut x = area.x;
+    let right = area.x.saturating_add(area.width);
+    for (index, symbol) in content.grapheme_indices(true) {
+        while style_index + 1 < styles.len() && styles[style_index + 1].0 <= index {
+            style_index += 1;
+        }
+        let cells = UnicodeWidthStr::width(symbol);
+        if cells == 0 {
+            continue;
+        }
+        if x.saturating_add(cells as u16) > right {
             break;
         }
+        let style = styles[style_index].1;
         let style = if interactive {
-            span.style.bg(palette.selection_bg)
+            style.bg(palette.selection_bg)
         } else {
-            span.style
+            style
         };
-        for symbol in span.content.chars().map(safe_terminal_character) {
-            let symbol_width = UnicodeWidthChar::width(symbol).unwrap_or(0);
-            if x.saturating_add(symbol_width as u16) > area.x + area.width {
-                break;
-            }
-            if symbol_width == 0 {
-                continue;
-            }
-            buf[(x, area.y)].set_char(symbol).set_style(style);
-            x += symbol_width as u16;
-        }
+        buf[(x, area.y)].set_symbol(symbol).set_style(style);
+        x += cells as u16;
     }
 }
 
@@ -1484,8 +1499,9 @@ fn split_segments(
 ) -> Vec<(String, Vec<bool>)> {
     let mut segments = vec![(String::new(), Vec::new())];
     let mut column = 0;
-    for (index, character) in content.chars().enumerate() {
-        let cells = UnicodeWidthChar::width(character).unwrap_or(0);
+    let mut index = 0;
+    for grapheme in content.graphemes(true) {
+        let cells = UnicodeWidthStr::width(grapheme);
         if column + cells > width {
             if !wrap || segments.len() >= max_lines.max(1) {
                 break;
@@ -1494,8 +1510,12 @@ fn split_segments(
             column = 0;
         }
         let (text, changed) = segments.last_mut().unwrap();
-        text.push(character);
-        changed.push(mask.get(index).copied().unwrap_or(false));
+        text.push_str(grapheme);
+        let scalars = grapheme.chars().count();
+        changed.extend(
+            (index..index + scalars).map(|offset| mask.get(offset).copied().unwrap_or(false)),
+        );
+        index += scalars;
         column += cells;
     }
     segments
@@ -1630,6 +1650,18 @@ fn highlight_with_intraline(
             .map(|span| Span::styled(span.text.clone(), span.style.bg(background)))
             .collect();
     };
+    // Accent-only changes still change the visible grapheme. Keep the scalar
+    // mask shape expected by the syntax highlighter, but promote whole clusters.
+    let mut grapheme_mask = Vec::with_capacity(mask.len());
+    let mut offset = 0;
+    for grapheme in content.graphemes(true) {
+        let scalars = grapheme.chars().count();
+        let changed =
+            (offset..offset + scalars).any(|index| mask.get(index).copied().unwrap_or(false));
+        grapheme_mask.extend(std::iter::repeat(changed).take(scalars));
+        offset += scalars;
+    }
+    let mask = &grapheme_mask;
     let mut output = Vec::new();
     let mut cursor = 0usize;
     for styled in highlighted.iter() {
@@ -1842,8 +1874,8 @@ fn bounded_expand_slice(
     let end = horizontal_offset.saturating_add(width.max(1));
     let mut column = 0usize;
     let mut visible = String::with_capacity(width.min(content.len()));
-    for character in content.chars() {
-        if character == '\t' {
+    for grapheme in content.graphemes(true) {
+        if grapheme == "\t" {
             let spaces = tab_size - column % tab_size;
             for _ in 0..spaces {
                 if column >= horizontal_offset && column < end {
@@ -1856,15 +1888,14 @@ fn bounded_expand_slice(
             }
             continue;
         }
-
-        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
-        let next = column.saturating_add(character_width);
-        if character_width == 0 {
-            if column >= horizontal_offset && column < end {
-                visible.push(character);
-            }
+        let cells = UnicodeWidthStr::width(grapheme);
+        let next = column.saturating_add(cells);
+        if column >= horizontal_offset && next <= end {
+            visible.push_str(grapheme);
         } else if next > horizontal_offset && column < end {
-            visible.push(character);
+            // Keep the following columns aligned when a wide glyph straddles
+            // either viewport edge; never display half an emoji or CJK glyph.
+            visible.push_str(&" ".repeat(next.min(end) - column.max(horizontal_offset)));
         }
         column = next;
         if column >= end {
@@ -1889,18 +1920,15 @@ fn bounded_wrapped_segments(
     let mut line_width = 0usize;
     let mut expanded_column = 0usize;
 
-    for character in content.chars() {
-        let (expanded, repetitions) = if character == '\t' {
-            (' ', tab_size - expanded_column % tab_size)
+    for grapheme in content.graphemes(true) {
+        let (expanded, repetitions) = if grapheme == "\t" {
+            (" ", tab_size - expanded_column % tab_size)
         } else {
-            (character, 1)
+            (grapheme, 1)
         };
         for _ in 0..repetitions {
-            let character_width = UnicodeWidthChar::width(expanded).unwrap_or(0);
-            if character_width > 0
-                && line_width > 0
-                && line_width.saturating_add(character_width) > width
-            {
+            let cells = UnicodeWidthStr::width(expanded);
+            if cells > 0 && line_width > 0 && line_width.saturating_add(cells) > width {
                 if segments.len() >= max_lines {
                     return segments;
                 }
@@ -1910,9 +1938,9 @@ fn bounded_wrapped_segments(
             segments
                 .last_mut()
                 .expect("segments always contains one line")
-                .push(expanded);
-            line_width = line_width.saturating_add(character_width);
-            expanded_column = expanded_column.saturating_add(character_width);
+                .push_str(expanded);
+            line_width = line_width.saturating_add(cells);
+            expanded_column = expanded_column.saturating_add(cells);
         }
     }
     segments
@@ -1937,18 +1965,15 @@ fn expand_tabs(content: &str, tab_size: u8) -> String {
 }
 
 fn cell_width(value: &str) -> usize {
-    value
-        .chars()
-        .map(|character| UnicodeWidthChar::width(character).unwrap_or(0))
-        .sum()
+    UnicodeWidthStr::width(value)
 }
 
 fn take_cells(value: &str, width: usize) -> String {
     let mut used = 0;
     value
-        .chars()
-        .take_while(|character| {
-            let next = used + UnicodeWidthChar::width(*character).unwrap_or(0);
+        .graphemes(true)
+        .take_while(|grapheme| {
+            let next = used + UnicodeWidthStr::width(*grapheme);
             if next > width {
                 false
             } else {
@@ -1979,6 +2004,213 @@ mod tests {
     use super::*;
     use diffing_core::index::build_index_from_reader;
     use std::io::Cursor;
+
+    #[test]
+    fn indexed_joined_emoji_fill_the_available_code_columns() {
+        let emoji = "👩\u{200d}💻";
+        let patch = format!(
+            "diff --git a/emoji.txt b/emoji.txt\n--- a/emoji.txt\n+++ b/emoji.txt\n@@ -0,0 +1 @@\n+{}\n",
+            emoji.repeat(100)
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let index =
+            build_index_from_reader(Cursor::new(patch), &dir.path().join("patch"), 1, |_| {})
+                .unwrap();
+        let area = Rect::new(0, 0, 80, 8);
+        let mut buffer = Buffer::empty(area);
+        let mut cache = DiffRenderCache::default();
+        let palette = Palette::default();
+        render_card(
+            &index,
+            &mut cache,
+            0,
+            area,
+            0,
+            u64::MAX,
+            None,
+            None,
+            0,
+            false,
+            false,
+            false,
+            4,
+            ThemeName::default(),
+            &[],
+            &[],
+            0,
+            &palette,
+            &mut buffer,
+        );
+        let row = (0..area.height)
+            .find(|&y| buffer[(4, y)].symbol() == emoji)
+            .expect("emoji source row must be visible");
+        // Two annotation cells and the two-cell diff marker precede the code.
+        for column in (4..area.width).step_by(2) {
+            assert_eq!(
+                buffer[(column, row)].symbol(),
+                emoji,
+                "emoji at code column {column}"
+            );
+        }
+        assert_eq!(
+            (4..area.width)
+                .filter(|&x| buffer[(x, row)].symbol() == emoji)
+                .count(),
+            38
+        );
+    }
+
+    #[test]
+    fn accent_only_intraline_change_styles_the_complete_grapheme() {
+        let palette = Palette::default();
+        let background = Color::Black;
+        let semantic = Color::Red;
+        let spans = highlight_with_intraline(
+            "sample.txt",
+            "e\u{301}",
+            Some(&[false, true]),
+            ThemeName::default(),
+            &palette,
+            background,
+            semantic,
+        );
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>(),
+            "e\u{301}"
+        );
+        for span in &spans {
+            assert_eq!(span.style.fg, Some(semantic));
+            assert_eq!(span.style.bg, Some(background));
+            assert!(span
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::UNDERLINED));
+        }
+        let area = Rect::new(0, 0, 2, 1);
+        let mut buffer = Buffer::empty(area);
+        render_line(Line::from(spans), area, false, false, &palette, &mut buffer);
+        assert_eq!(buffer[(0, 0)].symbol(), "e\u{301}");
+        assert_eq!(buffer[(0, 0)].fg, semantic);
+        assert!(buffer[(0, 0)]
+            .modifier
+            .contains(Modifier::BOLD | Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn rendered_graphemes_preserve_combining_marks_and_emoji_alignment() {
+        let palette = Palette::default();
+        for (text, first, next_column) in [
+            ("e\u{301}x", "e\u{301}", 1),
+            ("ب\u{64e}x", "ب\u{64e}", 1),
+            ("👩\u{200d}💻x", "👩\u{200d}💻", 2),
+        ] {
+            let area = Rect::new(0, 0, 4, 1);
+            let mut buffer = Buffer::empty(area);
+            render_line(
+                Line::from(Span::raw(text)),
+                area,
+                false,
+                false,
+                &palette,
+                &mut buffer,
+            );
+            assert_eq!(buffer[(0, 0)].symbol(), first, "grapheme in {text}");
+            assert_eq!(
+                buffer[(next_column, 0)].symbol(),
+                "x",
+                "following column in {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn rendered_graphemes_cross_syntax_span_boundaries() {
+        let palette = Palette::default();
+        let area = Rect::new(0, 0, 3, 1);
+        let mut buffer = Buffer::empty(area);
+        let base_style = Style::default().fg(Color::Red);
+        let line = Line::from(vec![
+            Span::styled("e", base_style),
+            Span::styled("\u{301}", Style::default().fg(Color::Blue)),
+            Span::raw("x"),
+        ]);
+        render_line(line, area, false, false, &palette, &mut buffer);
+        assert_eq!(buffer[(0, 0)].symbol(), "e\u{301}");
+        assert_eq!(buffer[(0, 0)].fg, Color::Red);
+        assert_eq!(buffer[(1, 0)].symbol(), "x");
+    }
+
+    #[test]
+    fn viewport_clipping_preserves_clusters_and_pads_partial_wide_cells() {
+        assert_eq!(bounded_expand_slice("e\u{301}x", 4, 0, 1), "e\u{301}");
+        assert_eq!(
+            bounded_expand_slice("👩\u{200d}💻x", 4, 0, 2),
+            "👩\u{200d}💻"
+        );
+        assert_eq!(bounded_expand_slice("👩\u{200d}💻x", 4, 0, 1), " ");
+        assert_eq!(bounded_expand_slice("a界b", 4, 0, 2), "a ");
+        let clipped = bounded_expand_slice("a界b", 4, 2, 2);
+        assert_eq!(clipped, " b");
+        let area = Rect::new(0, 0, 2, 1);
+        let mut buffer = Buffer::empty(area);
+        render_line(
+            Line::from(Span::raw(clipped)),
+            area,
+            false,
+            false,
+            &Palette::default(),
+            &mut buffer,
+        );
+        assert_eq!(buffer[(0, 0)].symbol(), " ");
+        assert_eq!(buffer[(1, 0)].symbol(), "b");
+        assert_eq!(take_cells("e\u{301}x", 1), "e\u{301}");
+        assert_eq!(take_cells("👩\u{200d}💻x", 1), "");
+        assert_eq!(take_cells("👩\u{200d}💻x", 2), "👩\u{200d}💻");
+    }
+
+    #[test]
+    fn wrapped_rows_keep_graphemes_whole_at_width_boundaries() {
+        assert_eq!(
+            bounded_wrapped_segments("e\u{301}x", 4, 1, 2),
+            vec!["e\u{301}", "x"]
+        );
+        assert_eq!(
+            bounded_wrapped_segments("a👩\u{200d}💻x", 4, 2, 3),
+            vec!["a", "👩\u{200d}💻", "x"]
+        );
+        assert_eq!(
+            bounded_wrapped_segments("a👩\u{200d}💻x", 4, 2, 1),
+            vec!["a"]
+        );
+    }
+
+    #[test]
+    fn split_row_masks_follow_scalar_counts_inside_graphemes() {
+        let content = "e\u{301}👩\u{200d}💻x";
+        let mask = [true, false, false, true, false, true];
+        let segments = split_segments(content, &mask, 2, 3, true);
+        assert_eq!(
+            segments,
+            vec![
+                ("e\u{301}".to_string(), vec![true, false]),
+                ("👩\u{200d}💻".to_string(), vec![false, true, false]),
+                ("x".to_string(), vec![true]),
+            ]
+        );
+        for (text, changed) in &segments {
+            assert_eq!(text.chars().count(), changed.len());
+        }
+        assert_eq!(
+            segments
+                .iter()
+                .flat_map(|(_, changed)| changed.iter().copied())
+                .collect::<Vec<_>>(),
+            mask
+        );
+    }
 
     #[test]
     fn render_decodes_only_the_viewport() {

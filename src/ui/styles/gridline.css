@@ -2007,9 +2007,52 @@ file-tree,
   }
 }
 
+@media (max-width: 768px) {
+  .toolbar.diff-app-toolbar .toolbar-left {
+    flex: 0 0 min(35%, 180px);
+  }
+
+  .toolbar.diff-app-toolbar .toolbar-meta,
+  .toolbar.diff-app-toolbar .ai-model-trigger > span,
+  .toolbar.diff-app-toolbar .ai-ask-btn > .btn-label,
+  .toolbar.diff-app-toolbar .toolbar-zen-btn > .btn-label {
+    display: none;
+  }
+
+  .toolbar.diff-app-toolbar .toolbar-right {
+    min-width: 0;
+    flex-shrink: 1;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .toolbar.diff-app-toolbar .toolbar-right > * {
+    flex-shrink: 0;
+  }
+
+  .toolbar.diff-app-toolbar .toolbar-title {
+    max-width: 110px;
+  }
+}
+
 @media (max-width: 640px) {
   :root {
     --gl-inline-pad: 8px;
+  }
+
+  .file-diff-card-header {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .file-diff-header-left {
+    flex: 1 0 100%;
+  }
+
+  .file-diff-header-right {
+    max-width: 100%;
+    margin-inline-start: auto;
+    flex-wrap: wrap;
   }
 
   .toolbar,
@@ -2641,3 +2684,29 @@ html[data-page-hidden='true'] *::before,
 html[data-page-hidden='true'] *::after {
   animation-play-state: paused !important;
 }
+
+/* Recoverable read/write failures stay beside the review they affect. */
+.file-content-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 10px 14px;
+  color: var(--gl-negative);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.file-content-error > span { flex: 1; min-width: 0; }
+.file-content-error button {
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.file-content-error button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }

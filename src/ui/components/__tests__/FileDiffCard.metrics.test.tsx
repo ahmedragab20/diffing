@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { FileSearchSession } from "../../hooks/useFileSearch";
@@ -154,7 +154,7 @@ describe("FileDiffCard virtualization metrics", () => {
 
     await findByTestId("multifilediff");
     expect(lastProps.options?.expandUnchanged).toBe(true);
-    expect(setExpandedEntries).toHaveBeenCalledWith(
+    await waitFor(() => expect(setExpandedEntries).toHaveBeenCalledWith(
       FILE_PATH,
       expect.arrayContaining([
         expect.objectContaining({
@@ -164,7 +164,7 @@ describe("FileDiffCard virtualization metrics", () => {
           content: "content",
         }),
       ]),
-    );
+    ));
   });
 
   it("keeps unchanged context collapsed when the active search query is empty", async () => {

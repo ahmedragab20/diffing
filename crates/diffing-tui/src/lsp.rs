@@ -6,7 +6,7 @@
 //! machine.
 
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -144,7 +144,7 @@ struct LspSession {
     child: Child,
     write_tx: SyncSender<LspWriteJob>,
     writer_handle: Option<JoinHandle<()>>,
-    responses: Arc<Mutex<HashMap<u64, Value>>>,
+    responses: Arc<Mutex<HashMap<u64, Option<Value>>>>,
     reader_alive: Arc<AtomicBool>,
     opened: HashMap<PathBuf, OpenDocument>,
     open_order: VecDeque<PathBuf>,
@@ -198,7 +198,7 @@ impl LspSession {
                             }
                             if let Some(id) = message.get("id").and_then(Value::as_u64) {
                                 if let Ok(mut values) = reader_responses.lock() {
-                                    values.insert(id, message);
+                                    record_response(&mut values, id, message);
                                 }
                                 continue;
                             }
@@ -252,7 +252,16 @@ impl LspSession {
 
     fn request(&mut self, method: &str, params: Value) -> Result<u64> {
         let id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))?;
+        self.responses
+            .lock()
+            .map_err(|_| anyhow::anyhow!("language response lock poisoned"))?
+            .insert(id, None);
+        if let Err(error) =
+            self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+        {
+            self.discard_response(id);
+            return Err(error);
+        }
         Ok(id)
     }
 
@@ -268,7 +277,17 @@ impl LspSession {
     }
 
     fn take_raw_response(&self, id: u64) -> Option<Value> {
-        self.responses.lock().ok()?.remove(&id)
+        let mut values = self.responses.lock().ok()?;
+        if values.get(&id)?.is_none() {
+            return None;
+        }
+        values.remove(&id).flatten()
+    }
+
+    fn discard_response(&self, id: u64) {
+        if let Ok(mut values) = self.responses.lock() {
+            values.remove(&id);
+        }
     }
 
     fn poll_initialized(&mut self) -> Result<bool> {
@@ -680,8 +699,11 @@ impl LspManager {
             return Some(Err("language server stopped".to_string()));
         };
         let Some(value) = session.take_raw_response(token.id) else {
-            return (token.started.elapsed() > Duration::from_secs(5))
-                .then(|| Err("language request timed out".to_string()));
+            if token.started.elapsed() > Duration::from_secs(5) {
+                session.discard_response(token.id);
+                return Some(Err("language request timed out".to_string()));
+            }
+            return None;
         };
         if let Some(error) = value.get("error") {
             return Some(Err(error.to_string()));
@@ -696,7 +718,7 @@ impl LspManager {
     pub fn cancel_request(&mut self, token: &RequestToken) {
         if let Some(session) = self.sessions.get_mut(&token.server) {
             let _ = session.notify("$/cancelRequest", json!({ "id": token.id }));
-            let _ = session.take_raw_response(token.id);
+            session.discard_response(token.id);
         }
     }
 
@@ -985,6 +1007,16 @@ fn run_lsp_writer(mut stdin: ChildStdin, rx: mpsc::Receiver<LspWriteJob>) {
     }
 }
 
+// Only outstanding requests own response slots. Late/unsolicited responses
+// cannot retain arbitrary payloads after cancellation or timeout.
+fn record_response(values: &mut HashMap<u64, Option<Value>>, id: u64, message: Value) {
+    if let Some(slot) = values.get_mut(&id) {
+        if slot.is_none() {
+            *slot = Some(message);
+        }
+    }
+}
+
 fn write_message(writer: &mut impl Write, message: &Value) -> Result<()> {
     let body = serde_json::to_vec(message)?;
     write!(writer, "Content-Length: {}\r\n\r\n", body.len())?;
@@ -1002,7 +1034,13 @@ fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>> {
             anyhow::bail!("LSP header line limit exceeded");
         }
         let mut header = String::new();
-        if reader.read_line(&mut header)? == 0 {
+        // Limit allocation while reading, including unterminated headers.
+        let remaining = MAX_LSP_HEADER_BYTES.saturating_sub(header_bytes) + 1;
+        if (&mut *reader)
+            .take(remaining as u64)
+            .read_line(&mut header)?
+            == 0
+        {
             return Ok(None);
         }
         header_bytes += header.len();
@@ -1105,6 +1143,33 @@ pub fn character_column_from_utf16(text: &str, utf16_column: u32) -> usize {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn oversized_unterminated_header_is_rejected_with_bounded_consumption() {
+        let mut reader = Cursor::new(vec![b'x'; MAX_LSP_HEADER_BYTES * 4]);
+        let error = read_message(&mut reader).unwrap_err();
+        assert!(error.to_string().contains("header byte limit"));
+        assert!(reader.position() <= (MAX_LSP_HEADER_BYTES + 1) as u64);
+    }
+
+    #[test]
+    fn responses_require_an_outstanding_request_and_preserve_first_result() {
+        let mut responses = HashMap::from([(7, None), (8, None)]);
+        let expected = json!({"jsonrpc":"2.0","id":7,"result":"first"});
+        record_response(&mut responses, 7, expected.clone());
+        assert_eq!(responses.get(&7), Some(&Some(expected.clone())));
+        record_response(
+            &mut responses,
+            999,
+            json!({"id":999,"result":"unsolicited"}),
+        );
+        assert!(!responses.contains_key(&999));
+        responses.remove(&8);
+        record_response(&mut responses, 8, json!({"id":8,"result":"cancelled"}));
+        assert!(!responses.contains_key(&8));
+        record_response(&mut responses, 7, json!({"id":7,"result":"duplicate"}));
+        assert_eq!(responses, HashMap::from([(7, Some(expected))]));
+    }
 
     #[test]
     fn json_rpc_framing_round_trips() {

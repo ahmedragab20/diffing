@@ -1,3 +1,4 @@
+import { fetchSessionApi, sessionApiOrigin } from './lib/session-fetch.js'
 import { parseArgs } from 'node:util'
 import { resolveActiveServerLock } from './lib/server-lock.js'
 import { SESSION_TOKEN_HEADER } from './lib/server-auth.js'
@@ -36,13 +37,13 @@ function baseUrl(): string {
   }
   const host = lock.host === '0.0.0.0' || lock.host === '::' ? '127.0.0.1' : lock.host
   activeAuthToken = lock.authToken
-  return `http://${host}:${lock.port}`
+  return sessionApiOrigin(host, lock.port)
 }
 
 function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers)
   if (activeAuthToken) headers.set(SESSION_TOKEN_HEADER, activeAuthToken)
-  return fetch(input, { ...init, headers })
+  return fetchSessionApi(input, { ...init, headers })
 }
 
 async function fetchJson<T>(path: string): Promise<{ ok: true; data: T } | { ok: false; status: number; error: string }> {

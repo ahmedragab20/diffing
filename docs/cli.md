@@ -189,10 +189,11 @@ prompt. See **[getting-started.md](getting-started.md)** and **`setup`** below.
 
 ## 4. Agent-Facing Subcommands
 
-A specialized suite of subcommands is integrated into the `diffing` binary to coordinate handoffs and synchronize review cycles. These commands automatically discover the active server via the lockfile.
+A specialized suite of subcommands is integrated into the `diffing` binary to coordinate handoffs and synchronize review cycles. Review commands automatically discover the active server via the lockfile; command discovery runs without a repository or server.
 
 | Subcommand | Role |
 | ------------ | ------ |
+| `commands [--json] [command]` | Discover available commands and actions |
 | `await-review` | Block until human **Send to agent** |
 | `comments` | Snapshot comments (XML / JSON / Markdown) |
 | `reply` / `resolve` / `unresolve` | Thread lifecycle |
@@ -208,6 +209,40 @@ A specialized suite of subcommands is integrated into the `diffing` binary to co
 | `mode [web\|tui]` | Get or set the default interactive review mode |
 | `setup` / `init` / `onboard` | First-time setup wizard (see below) |
 | `doctor` / `completion` / `update` | DX |
+
+### `commands`
+
+List the command catalog, or filter it to one exact command name. This works
+outside a Git repository and does not start or require a review server.
+
+```bash
+diffing commands
+diffing commands plan
+diffing commands --json
+diffing commands --json init
+```
+
+JSON output has `schemaVersion: 1` and a `commands` array. Each entry has a
+`name` and `description`, with optional `actions` (action names) and `aliasFor`
+(the canonical command name). For example, `diffing commands --json init` returns:
+
+```json
+{
+  "schemaVersion": 1,
+  "commands": [
+    {
+      "name": "init",
+      "description": "Alias for setup",
+      "aliasFor": "setup",
+      "actions": ["skills", "mcp"]
+    }
+  ]
+}
+```
+
+This is discovery metadata, not a complete schema for arguments and flags.
+Unknown commands, unknown options, or extra command names exit with code `5`.
+Bash, Zsh, and Fish completions use the same command and action catalog.
 
 ### `sessions`
 

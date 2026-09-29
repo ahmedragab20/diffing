@@ -32,6 +32,11 @@ export function usePlanReviewKeymaps(actions: PlanReviewKeymapActions) {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
+          document.querySelector('[role="dialog"], [role="alertdialog"]')) {
+        resetBuffer()
+        return
+      }
       // ⌘I / Ctrl+I toggles Ask AI even while an editor is focused, like ⌘K.
       if (
         matchesAiShortcut(event, 'toggle-rail') &&

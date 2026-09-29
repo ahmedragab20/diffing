@@ -142,6 +142,7 @@ export function PrReviewApp() {
     patch: fullPatch,
     loading: fullLoading,
     error: fullError,
+    retry: retryFullDiff,
   } = useDiff({ staged: false, untracked: false }, sessionLoaded && !!session);
   const fullReview = useViewed();
   const commitReview = usePrCommits(session);
@@ -1101,16 +1102,17 @@ export function PrReviewApp() {
               fileCount={files.length}
               prUrl={session.url}
             />
+            {!selectedSha && fullReview.error && <div className="file-content-error" role="alert">{fullReview.error}</div>}
             {(error || sessionError) && (
               <div className="pr-error" role="alert">
                 <AlertCircle size={14} /> Failed to load{" "}
                 {selectedSha ? "commit" : "the PR"}:{" "}
                 {error || sessionError?.message}
-                {selectedSha && (
+                {error && (
                   <button
                     type="button"
                     className="btn btn-sm"
-                    onClick={() => void commitReview.retryDiff()}
+                    onClick={() => selectedSha ? void commitReview.retryDiff() : retryFullDiff()}
                   >
                     Retry diff
                   </button>
@@ -1121,7 +1123,7 @@ export function PrReviewApp() {
               <div className="pr-app-loading" role="status">
                 Loading {selectedSha ? "commit" : "PR"} diff…
               </div>
-            ) : error ? null : filteredFiles.length === 0 ? (
+            ) : error && patch === null ? null : filteredFiles.length === 0 ? (
               <div className="empty-state" role="status">
                 <div className="empty-state-icon">
                   <GitCompare size={24} />

@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
+
+const { liveHandlers } = vi.hoisted(() => ({ liveHandlers: new Map<string, Set<(data: string) => void>>() }))
+vi.mock('../../live', () => ({
+  subscribeLive: (event: string, callback: (data: string) => void) => {
+    const handlers = liveHandlers.get(event) ?? new Set<(data: string) => void>()
+    liveHandlers.set(event, handlers)
+    handlers.add(callback)
+    return () => handlers.delete(callback)
+  },
+}))
 import { useDiff } from '../useDiff.js'
 
 const mockFetch = vi.fn()
@@ -113,12 +123,59 @@ describe('useDiff', () => {
     )
 
     await waitFor(() => expect(result.current.loading).toBe(false))
-    expect(mockFetch).toHaveBeenCalledWith('/api/diff?staged=true&untracked=true')
+    expect(mockFetch).toHaveBeenCalledWith('/api/diff?staged=true&untracked=true', { signal: expect.any(AbortSignal) })
 
     mockFetch.mockClear()
     rerender({ staged: false, untracked: true })
 
-    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('/api/diff?staged=false&untracked=true'))
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('/api/diff?staged=false&untracked=true', { signal: expect.any(AbortSignal) }))
+  })
+
+  it.each(['unmount', 'refresh', 'options'] as const)('aborts an outstanding fetch on %s', (operation) => {
+    mockFetch.mockReturnValue(new Promise<Response>(() => {}))
+    const { result, rerender, unmount } = renderHook(
+      (options) => useDiff(options),
+      { initialProps: { staged: true, untracked: true } },
+    )
+    const signal = (mockFetch.mock.calls[0][1] as RequestInit | undefined)?.signal
+    expect(signal).toBeInstanceOf(AbortSignal)
+    expect(signal?.aborted).toBe(false)
+    if (operation === 'unmount') unmount()
+    else if (operation === 'refresh') act(() => result.current.retry())
+    else rerender({ staged: false, untracked: true })
+    expect(signal?.aborted).toBe(true)
+    if (operation !== 'unmount') expect(mockFetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('retains the last successful diff after a refresh failure and retries successfully', async () => {
+    const updated = { ...diffData, patch: 'updated patch' }
+    mockFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify(diffData)))
+      .mockResolvedValueOnce(new Response('Unavailable', { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(updated)))
+    const { result } = renderHook(() => useDiff({ staged: true, untracked: true }))
+    await waitFor(() => expect(result.current.patch).toBe(diffData.patch))
+    act(() => { for (const handler of liveHandlers.get('change') ?? []) handler('changed') })
+    await waitFor(() => expect(result.current.error).toBe('HTTP 500'))
+    expect(result.current.hasData).toBe(true)
+    expect(result.current.patch).toBe(diffData.patch)
+    expect(result.current.loading).toBe(false)
+    expect(result.current.refreshing).toBe(false)
+    act(() => result.current.retry())
+    await waitFor(() => expect(result.current.patch).toBe(updated.patch))
+    expect(result.current.error).toBeNull()
+    expect(result.current.hasData).toBe(true)
+  })
+
+  it('refetches after reconnect to reconcile missed changes', async () => {
+    mockFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify(diffData)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...diffData, patch: 'reconnected patch' })))
+    const { result } = renderHook(() => useDiff({ staged: true, untracked: true }))
+    await waitFor(() => expect(result.current.patch).toBe(diffData.patch))
+    act(() => { for (const handler of liveHandlers.get('reconnect') ?? []) handler('') })
+    await waitFor(() => expect(result.current.patch).toBe('reconnected patch'))
+    expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 
   it('returns default values for partial data', async () => {

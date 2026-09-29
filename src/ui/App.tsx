@@ -105,6 +105,8 @@ export function App() {
 		loading,
 		refreshing,
 		error,
+		hasData,
+		retry,
 	} = useDiff(
 		{
 			staged: settings.staged,
@@ -510,7 +512,7 @@ export function App() {
 			/* ignore persist / parse errors */
 		}
 	}, [commentPanelHeight]);
-	const { viewedFiles, setViewed } = useViewed();
+	const { viewedFiles, setViewed, error: viewedError } = useViewed();
 	const diffViewerRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -1411,7 +1413,7 @@ export function App() {
 		);
 	}
 
-	if (error) {
+	if (error && !hasData) {
 		return (
 			<div className="error empty-state" role="alert">
 				<div
@@ -1422,6 +1424,7 @@ export function App() {
 				</div>
 				<p className="empty-state-title">Couldn&apos;t load the diff</p>
 				<p className="empty-state-hint">{error}</p>
+				<button type="button" onClick={retry}>Retry</button>
 			</div>
 		);
 	}
@@ -1643,6 +1646,13 @@ export function App() {
 							/>
 						)}
 						<main className="main" ref={diffViewerRef} id="diff-main" tabIndex={-1}>
+							{error && (
+								<div className="file-content-error" role="alert">
+									<span>Could not refresh. Showing the last loaded diff. {error}</span>
+									<button type="button" onClick={retry}>Retry</button>
+								</div>
+							)}
+							{viewedError && <div className="file-content-error" role="alert">{viewedError}</div>}
 							{complete === false && (
 								<div className="diff-incomplete-banner" role="status">
 									<strong>Review is incomplete</strong>

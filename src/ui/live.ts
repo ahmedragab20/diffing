@@ -37,7 +37,8 @@ export type LiveEvent =
 	| "agent-progress"
 	| "viewed"
 	| "code-intel-diagnostics"
-	| "heartbeat";
+	| "heartbeat"
+	| "reconnect";
 
 type Handler = (data: string) => void;
 
@@ -47,22 +48,27 @@ let source: EventSource | null = null;
 function ensureConnected() {
 	if (source || typeof EventSource === "undefined") return;
 	source = new EventSource(liveEventSourceUrl());
+	let opened = false;
+	source.addEventListener("open", () => {
+		if (opened) dispatch("reconnect", "");
+		opened = true;
+	});
 	for (const event of handlers.keys()) {
 		attach(event);
 	}
 }
 
+function dispatch(event: LiveEvent, data: string) {
+	for (const handler of handlers.get(event) ?? []) {
+		try { handler(data); }
+		catch (err) { console.error(`live channel handler for "${event}" threw:`, err); }
+	}
+}
+
 function attach(event: LiveEvent) {
-	source?.addEventListener(event, (e) => {
-		const data = (e as MessageEvent).data as string;
-		for (const handler of handlers.get(event) ?? []) {
-			try {
-				handler(data);
-			} catch (err) {
-				console.error(`live channel handler for "${event}" threw:`, err);
-			}
-		}
-	});
+	// Reconnect is local recovery, never an event supplied by the server.
+	if (event === "reconnect") return;
+	source?.addEventListener(event, (e) => dispatch(event, (e as MessageEvent).data as string));
 }
 
 function maybeDisconnect() {
