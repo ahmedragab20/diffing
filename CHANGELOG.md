@@ -1,3 +1,9 @@
+## 0.21.6
+
+### Patch Changes
+
+- 146f02f: Simplify reviews with commit navigation and reliable avatars
+
 ## 0.21.5
 
 ### Patch Changes
