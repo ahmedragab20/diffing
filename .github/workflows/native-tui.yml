@@ -7,6 +7,8 @@ on:
       - "Cargo.*"
       - "scripts/stage-tui-binary.mjs"
       - "scripts/verify-tui-bundle.mjs"
+      - "scripts/wait-for-npm-version.mjs"
+      - "scripts/wait-for-npm-version.test.mjs"
       - "src/lib/find-tui-binary.ts"
       - "src/lib/review-*.ts"
       - "scripts/review-sqlite-qualification.test.ts"
@@ -137,6 +139,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run verify:tui-bundle
+      - run: node --test scripts/wait-for-npm-version.test.mjs
       - run: pnpm run build:ts
       - name: Verify release tag
         if: startsWith(github.ref, 'refs/tags/v')
@@ -232,32 +235,31 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: publish-root
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Wait for npm processing
+        shell: bash
+        run: node scripts/wait-for-npm-version.mjs "${GITHUB_REF_NAME#v}"
       - name: Install published diffing package
         shell: bash
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          for attempt in 1 2 3 4 5; do
-            install_prefix="$RUNNER_TEMP/diffing-registry-$attempt"
-            native_binary="$install_prefix/lib/node_modules/diffing/dist/native/tui-linux-x64-gnu/diffing-tui"
-            if npm install --global --prefer-online \
-                --prefix "$install_prefix" "diffing@$version" \
-              && "$native_binary" --version \
-              && NO_COLOR=1 "$install_prefix/bin/diffing" doctor \
-                | tee "$RUNNER_TEMP/diffing-registry-doctor.txt" \
-              && grep -Eq \
-                '/diffing/dist/native/tui-linux-x64-gnu/diffing-tui$' \
-                "$RUNNER_TEMP/diffing-registry-doctor.txt"; then
-              exit 0
-            fi
-            sleep 10
-          done
-          exit 1
+          install_prefix="$RUNNER_TEMP/diffing-registry"
+          native_binary="$install_prefix/lib/node_modules/diffing/dist/native/tui-linux-x64-gnu/diffing-tui"
+          npm install --global --prefer-online \
+            --registry=https://registry.npmjs.org \
+            --prefix "$install_prefix" "diffing@$version"
+          test "$("$install_prefix/bin/diffing" --version)" = "$version"
+          test "$("$native_binary" --version)" = "diffing-tui $version"
+          NO_COLOR=1 "$install_prefix/bin/diffing" doctor \
+            | tee "$RUNNER_TEMP/diffing-registry-doctor.txt"
+          grep -Eq '/diffing/dist/native/tui-linux-x64-gnu/diffing-tui$' \
+            "$RUNNER_TEMP/diffing-registry-doctor.txt"
 
   create-release:
     name: Create GitHub release
