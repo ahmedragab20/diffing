@@ -21,6 +21,7 @@ use diffing_tui::handoff::review::ReviewDecision;
 
 fn comment(id: &str, file_path: &str, body: &str) -> ReviewComment {
     ReviewComment {
+        extra: Default::default(),
         id: id.to_string(),
         file_path: file_path.to_string(),
         side: CommentSide::Additions,
@@ -37,6 +38,7 @@ fn comment(id: &str, file_path: &str, body: &str) -> ReviewComment {
 
 fn reply(id: &str, body: &str, model: &str) -> CommentReply {
     CommentReply {
+        extra: Default::default(),
         id: id.to_string(),
         body: body.to_string(),
         created_at: 2000,

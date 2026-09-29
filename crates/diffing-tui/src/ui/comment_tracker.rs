@@ -6,13 +6,13 @@
 use diffing_core::comments::{CommentSeverity, CommentStatus, ReviewComment};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::widgets::{List, StatefulWidget, Widget};
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{List, StatefulWidget};
 use std::collections::HashSet;
 
 use crate::themes::Palette;
 use crate::ui::comment_thread::render_tracker_row;
-use crate::ui::gridline::{focus_rail, square_block, GridlineTokens};
+use crate::ui::gridline::{fill, vertical_rule, GridlineTokens, GLYPHS};
 
 pub struct TrackerState {
     pub cursor: usize,
@@ -172,6 +172,27 @@ impl Default for TrackerState {
     }
 }
 
+/// Shared by painting, scrolling, and pointer mapping.
+pub fn tracker_row_height(inner: Rect) -> u16 {
+    if inner.width < 72 && inner.height >= 9 {
+        3
+    } else if inner.width < 72 && inner.height >= 2 {
+        2
+    } else {
+        1
+    }
+}
+
+pub fn tracker_content_area(area: Rect) -> Rect {
+    let top = if area.height >= 10 { 2 } else { 1 };
+    Rect::new(
+        area.x + 1,
+        area.y + top,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(top + 1),
+    )
+}
+
 pub fn render_tracker(
     comments: &[ReviewComment],
     visible_indices: &[usize],
@@ -184,18 +205,40 @@ pub fn render_tracker(
 ) {
     let tokens = GridlineTokens::from(palette);
     let visible = visible_indices;
-    let title = format!(
-        " comments {}/{} · {} · {} ",
-        visible.len(),
-        comments.len(),
-        state.status_filter.label(),
-        state.severity_filter.label()
+    let mut title = format!(" Comments {} ", visible.len());
+    if state.status_filter != TrackerStatusFilter::All {
+        title.push_str(&format!("· {} ", state.status_filter.label()));
+    }
+    if state.severity_filter != TrackerSeverityFilter::Any {
+        title.push_str(&format!("· {} ", state.severity_filter.label()));
+    }
+    fill(area, tokens.surface, buf);
+    vertical_rule(
+        Rect::new(area.x, area.y, 1, area.height),
+        palette,
+        tokens.surface,
+        buf,
     );
-    let block = square_block(title, palette, focused);
-    let inner = block.inner(area);
-    block.render(area, buf);
+    buf.set_stringn(
+        area.x + 2,
+        area.y,
+        title.trim(),
+        area.width.saturating_sub(4) as usize,
+        Style::default()
+            .fg(tokens.text)
+            .bg(tokens.surface)
+            .add_modifier(Modifier::BOLD),
+    );
+    let inner = tracker_content_area(area);
+    if focused && area.height > 2 {
+        buf[(area.x, area.y + 1)]
+            .set_symbol(GLYPHS.focus_rail)
+            .set_style(Style::default().fg(tokens.focus).bg(tokens.surface));
+    }
 
-    state.keep_cursor_visible(comments, inner.height as usize);
+    let row_height = tracker_row_height(inner);
+    let capacity = (inner.height / row_height) as usize;
+    state.keep_cursor_visible(comments, capacity);
     let visible_cursor = visible.iter().position(|index| *index == state.cursor);
     if visible.is_empty() && inner.width > 0 && inner.height > 0 {
         let message = if comments.is_empty() {
@@ -210,32 +253,37 @@ pub fn render_tracker(
             inner.width.saturating_sub(2) as usize,
             Style::default().fg(tokens.muted).bg(tokens.surface),
         );
-        focus_rail(area, focused, palette, buf);
         return;
     }
     let items: Vec<_> = visible
         .iter()
         .skip(state.scroll)
-        .take(inner.height as usize)
+        .take(capacity)
         .filter_map(|index| comments.get(*index).map(|comment| (*index, comment)))
         .map(|(index, comment)| {
             render_tracker_row(
                 comment,
                 index == state.cursor,
                 outdated_comments.contains(&comment.id),
+                inner.width,
+                row_height,
+                focused,
                 palette,
             )
         })
         .collect();
-    let list = List::new(items).highlight_style(Style::default().bg(tokens.selected));
+    let list = List::new(items).highlight_style(Style::default().bg(if focused {
+        tokens.selected
+    } else {
+        tokens.surface
+    }));
     let mut ls = ratatui::widgets::ListState::default();
     if let Some(cursor) = visible_cursor.and_then(|cursor| cursor.checked_sub(state.scroll)) {
-        if cursor < inner.height as usize {
+        if cursor < capacity {
             ls.select(Some(cursor));
         }
     }
     StatefulWidget::render(&list, inner, buf, &mut ls);
-    focus_rail(area, focused, palette, buf);
 }
 
 #[cfg(test)]
@@ -246,6 +294,7 @@ mod tests {
 
     fn make_comment(id: &str, status: CommentStatus) -> ReviewComment {
         ReviewComment {
+            extra: Default::default(),
             id: id.to_string(),
             file_path: "src/a.rs".to_string(),
             side: CommentSide::Additions,
@@ -365,5 +414,40 @@ mod tests {
         );
         assert!(state.scroll > 0);
         assert!(state.scroll <= 7);
+    }
+
+    #[test]
+    fn narrow_tracker_keeps_body_and_last_selection_visible() {
+        let comments = (0..8)
+            .map(|index| {
+                let mut comment = make_comment(&index.to_string(), CommentStatus::Open);
+                comment.body = format!("Comment body {index}");
+                comment
+            })
+            .collect::<Vec<_>>();
+        let mut state = TrackerState::new();
+        state.cursor = 7;
+        let area = Rect::new(0, 0, 38, 7);
+        let mut buffer = Buffer::empty(area);
+        let visible = state.visible_indices(&comments);
+        render_tracker(
+            &comments,
+            &visible,
+            &HashSet::new(),
+            &mut state,
+            true,
+            area,
+            &Palette::default(),
+            &mut buffer,
+        );
+        let row = |y| {
+            (0..area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        };
+        assert!(row(1).contains("src/a.rs:1"));
+        assert!(row(2).contains("Comment body 6"));
+        assert!(row(4).contains("Comment body 7"));
+        assert_eq!(state.scroll, 6);
     }
 }

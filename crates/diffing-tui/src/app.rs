@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, Once, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -21,7 +21,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::agent_api::AgentApi;
+use crate::agent_api::{AgentApi, AgentSnapshot};
 use crate::diff::highlight::highlight_line;
 use crate::diff_context::DiffContext;
 use crate::editorconfig::EditorConfigCache;
@@ -42,11 +42,14 @@ use crate::search::{
 };
 use crate::themes::{Palette, ThemeName};
 use crate::ui::agent_activity_toast::{render_toast, Toast};
+use crate::ui::command_palette::matching_commands;
 use crate::ui::comment_form::{
     comment_form_regions, render_form, textarea_char_count, CommentFormState,
 };
 use crate::ui::comment_thread::render_thread;
-use crate::ui::comment_tracker::{render_tracker, TrackerState};
+use crate::ui::comment_tracker::{
+    render_tracker, tracker_content_area, tracker_row_height, TrackerState,
+};
 use crate::ui::file_diff_card::{render_card, DiffRenderCache};
 use crate::ui::file_tree::FileTree;
 use crate::ui::file_tree_render::{
@@ -54,8 +57,8 @@ use crate::ui::file_tree_render::{
 };
 use crate::ui::gridline::{
     chip_row, dim_buffer, fill, hint_line, horizontal_rule, overlay_block, safe_terminal_character,
-    safe_terminal_text, shortcut_help, shortcut_help_columns, tail_ellipsize, vertical_rule,
-    GridlineTokens, GLYPHS, METRICS,
+    safe_terminal_text, shortcut_help_columns, shortcut_help_wrapped, tail_ellipsize,
+    vertical_rule, GridlineTokens, GLYPHS, METRICS,
 };
 use crate::ui::image_diff::{
     default_compare_mode, is_image_path, render_image_diff, ImageCompareMode, ImageDiffData,
@@ -140,6 +143,7 @@ pub enum AgentStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolbarAction {
     SendReview,
+    ToggleViewed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +210,7 @@ struct UiRegions {
     modal_input: Option<Rect>,
     search_results: Vec<(Rect, usize)>,
     search_preview: Option<Rect>,
+    command_rows: Vec<(Rect, usize)>,
 }
 
 impl UiRegions {
@@ -341,6 +346,7 @@ pub struct App {
     default_context_lines: u32,
     context_lines: u32,
     indexing: bool,
+    index_error: Option<String>,
     reindex_pending: bool,
     refresh_anchor: Option<RefreshAnchor>,
     pub agent_api: Option<AgentApi>,
@@ -349,6 +355,7 @@ pub struct App {
     pub experience: Experience,
     pub diff_context: DiffContext,
     viewed_paths: HashSet<PathBuf>,
+    viewed_count: usize,
     pub focus: Focus,
     pub mode: Mode,
     pub wrap: bool,
@@ -390,6 +397,8 @@ pub struct App {
     pub comment_height: u16,
     pub sidebar_visible: bool,
     pub comments_visible: bool,
+    /// Temporary reading layout; never overwrites saved pane preferences.
+    pub focus_mode: bool,
     regions: UiRegions,
     drag: Option<DragState>,
     mouse_position: Option<(u16, u16)>,
@@ -401,6 +410,7 @@ pub struct App {
     pub keymap: Keymap,
     pub modal_input: String,
     modal_cursor: usize,
+    command_cursor: usize,
     pub search_cursor: usize,
     search_client: Option<SearchClient>,
     search_scope: SearchScope,
@@ -442,8 +452,12 @@ pub struct App {
     comment_detail_scroll: u16,
     pub comment_form: Option<CommentFormState>,
     pub send_review: Option<SendReviewState>,
+    send_review_draft: Option<SendReviewState>,
+    require_view_all_before_send: bool,
     pub toasts: Vec<Toast>,
     pub agent_status: AgentStatus,
+    pub agent_snapshot: AgentSnapshot,
+    latest_agent_comment: Option<String>,
     pub review_round: u32,
     pub last_comment_count: usize,
     #[allow(dead_code)]
@@ -755,6 +769,12 @@ impl App {
         diff_context: DiffContext,
         search_client: Option<SearchClient>,
     ) -> Result<Self> {
+        static SYNTAX_WARMUP: Once = Once::new();
+        SYNTAX_WARMUP.call_once(|| {
+            let _ = thread::Builder::new()
+                .name("diffing-syntax".to_string())
+                .spawn(crate::diff::highlight::prepare_syntax);
+        });
         let empty_spool = diffing_core::project_storage_dir(repo_root.to_str().unwrap_or("."))
             .join("diff-index")
             .join("pending.patch");
@@ -800,7 +820,13 @@ impl App {
             persisted.trust_repo_local_bin,
         );
         let store = FileCommentStore::new(repo_str);
-        let comments = store.load().unwrap_or_default();
+        let (comments, comment_error) = match store.load() {
+            Ok(comments) => (comments, None),
+            Err(error) => (
+                Vec::new(),
+                Some(format!("Unable to load comments: {error}")),
+            ),
+        };
         let last_comment_count = comments.len();
         let storage_dir = diffing_core::comments::comments_path(repo_str)
             .parent()
@@ -820,6 +846,7 @@ impl App {
             default_context_lines,
             context_lines: default_context_lines,
             indexing: true,
+            index_error: None,
             reindex_pending: false,
             refresh_anchor: None,
             agent_api,
@@ -828,6 +855,7 @@ impl App {
             experience,
             diff_context,
             viewed_paths: persisted.viewed_files,
+            viewed_count: 0,
             focus: Focus::Diff,
             mode: Mode::Normal,
             wrap: persisted.wrap,
@@ -873,6 +901,7 @@ impl App {
             comment_height: persisted.comment_height,
             sidebar_visible: persisted.sidebar_visible,
             comments_visible: experience == Experience::Review && persisted.comments_visible,
+            focus_mode: false,
             regions: UiRegions::default(),
             drag: None,
             mouse_position: None,
@@ -884,6 +913,7 @@ impl App {
             keymap: Keymap::default(),
             modal_input: String::new(),
             modal_cursor: 0,
+            command_cursor: 0,
             search_cursor: 0,
             search_client,
             search_scope: SearchScope::All,
@@ -912,7 +942,7 @@ impl App {
             preview_result_rx,
             file_tree_scroll: 0,
             file_filter_mode: FileFilterMode::All,
-            status_message: None,
+            status_message: comment_error,
             status_message_at: None,
             pending_delete_id: None,
             pending_resolve_all: false,
@@ -925,8 +955,12 @@ impl App {
             comment_store: store,
             comment_form: None,
             send_review: None,
+            send_review_draft: None,
+            require_view_all_before_send: persisted.require_view_all_before_send,
             toasts: Vec::new(),
             agent_status,
+            agent_snapshot: AgentSnapshot::default(),
+            latest_agent_comment: None,
             review_round: 0,
             last_comment_count,
             watcher,
@@ -936,6 +970,7 @@ impl App {
 
     pub fn tick_index(&mut self) -> bool {
         let mut newest = None;
+        let mut failed = false;
         while let Ok(event) = self.index_rx.try_recv() {
             match event {
                 IndexEvent::Snapshot(snapshot)
@@ -948,14 +983,17 @@ impl App {
                 }
                 IndexEvent::Snapshot(_) => {}
                 IndexEvent::Failed(error) => {
-                    self.status_message = Some(format!("diff index failed: {error}"));
+                    self.status_message =
+                        Some(format!("diff index failed: {error} · :refresh to retry"));
+                    self.index_error = Some(error);
                     self.indexing = false;
                     self.refresh_anchor = None;
+                    failed = true;
                 }
             }
         }
         let Some(snapshot) = newest else {
-            return false;
+            return failed;
         };
         let selected_path = self
             .file_tree
@@ -965,15 +1003,7 @@ impl App {
         self.files = metadata_files(&snapshot);
         self.editorconfig.clear();
         self.visual_anchor = None;
-        self.file_tree = FileTree::build(&self.files);
-        for index in 0..self.files.len() {
-            let viewed = self
-                .files
-                .get(index)
-                .map(|file| self.viewed_paths.contains(file.display_path()))
-                .unwrap_or(false);
-            self.file_tree.set_viewed(index, viewed);
-        }
+        self.file_tree.refresh(&self.files);
         if let Some(path) = selected_path {
             if let Some(file_index) = self
                 .files
@@ -1015,6 +1045,9 @@ impl App {
     fn reload_comments_with_notifications(&mut self, notify: bool) {
         match self.comment_store.load() {
             Ok(comments) => {
+                if comments == self.comments {
+                    return;
+                }
                 let detail_id = (self.mode == Mode::CommentDetail)
                     .then(|| {
                         self.comments
@@ -1033,7 +1066,39 @@ impl App {
                             .map(|comment| comment.replies.len())
                             .sum::<usize>(),
                     );
-                if notify && delta > 0 {
+                let known_replies: HashSet<&str> = self
+                    .comments
+                    .iter()
+                    .flat_map(|comment| comment.replies.iter().map(|reply| reply.id.as_str()))
+                    .collect();
+                let incoming_reply = comments
+                    .iter()
+                    .flat_map(|comment| comment.replies.iter().map(move |reply| (comment, reply)))
+                    .filter(|(_, reply)| {
+                        reply.role.as_deref() != Some("user")
+                            && !known_replies.contains(reply.id.as_str())
+                    })
+                    .max_by_key(|(_, reply)| reply.created_at);
+                if let Some((comment, reply)) = incoming_reply.filter(|_| notify) {
+                    self.latest_agent_comment = Some(comment.id.clone());
+                    let preview: String = reply
+                        .body
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .chars()
+                        .take(160)
+                        .collect();
+                    self.toasts.push(Toast::reply(
+                        safe_terminal_text(&format!(
+                            "{} · {}: {}",
+                            reply.model.as_deref().unwrap_or("Agent replied"),
+                            comment.file_path,
+                            preview
+                        )),
+                        comment.id.clone(),
+                    ));
+                } else if notify && delta > 0 {
                     self.toasts.push(Toast::info(format!(
                         "{} new comment{}",
                         delta,
@@ -1103,7 +1168,7 @@ impl App {
         let pointer_dirty = std::mem::take(&mut self.pointer_overlay_dirty);
         let repo_dirty = self.tick_repo_watcher();
         let review_dirty = if self.experience == Experience::Review {
-            self.tick_watcher()
+            self.tick_agent() | self.tick_watcher()
         } else {
             false
         };
@@ -1117,6 +1182,28 @@ impl App {
             | repo_dirty
             | pointer_dirty
             | status_expired
+    }
+
+    fn tick_agent(&mut self) -> bool {
+        let Some(snapshot) = self
+            .agent_api
+            .as_ref()
+            .and_then(|api| api.snapshot_since(self.agent_snapshot.revision))
+        else {
+            return false;
+        };
+        let comments_changed = snapshot.comments_revision != self.agent_snapshot.comments_revision;
+        self.agent_status = if snapshot.waiters > 0 {
+            AgentStatus::Waiting
+        } else {
+            AgentStatus::Idle
+        };
+        self.review_round = snapshot.round;
+        self.agent_snapshot = snapshot;
+        if comments_changed {
+            self.reload_comments();
+        }
+        true
     }
 
     fn tick_status_message_ttl(&mut self) -> bool {
@@ -1453,6 +1540,7 @@ impl App {
     }
 
     fn start_reindex(&mut self) {
+        self.index_error = None;
         if self.refresh_anchor.is_none() {
             self.refresh_anchor = self.capture_refresh_anchor();
         }
@@ -1657,9 +1745,7 @@ impl App {
                 self.set_status_message("comment cancelled");
             }
             Mode::SendReview => {
-                self.send_review = None;
-                self.mode = Mode::Normal;
-                self.set_status_message("send cancelled");
+                self.close_send_review();
             }
             _ => {}
         }
@@ -1930,9 +2016,9 @@ impl App {
                     if contains(regions.send_button, mouse.column, mouse.row) {
                         self.submit_send_review();
                     } else if contains(regions.cancel_button, mouse.column, mouse.row) {
-                        self.send_review = None;
-                        self.mode = Mode::Normal;
-                        self.status_message = Some("send cancelled".to_string());
+                        self.close_send_review();
+                    } else if contains(regions.copy_button, mouse.column, mouse.row) {
+                        self.copy_send_review();
                     } else if let Some(decision) = regions
                         .verdict_rows
                         .iter()
@@ -1941,12 +2027,35 @@ impl App {
                     {
                         if let Some(state) = self.send_review.as_mut() {
                             state.verdict = decision;
+                            state.guard_acknowledged = false;
+                            state.feedback = None;
                             state.focused = SendField::Verdict;
+                        }
+                    } else if contains(regions.verdict, mouse.column, mouse.row) {
+                        if let Some(state) = self.send_review.as_mut() {
+                            state.focused = SendField::Verdict;
+                            state.cycle_verdict(1);
+                        }
+                    } else if contains(regions.comments, mouse.column, mouse.row) {
+                        if let Some(state) = self.send_review.as_mut() {
+                            state.focused = SendField::Comments;
                         }
                     } else if contains(regions.general, mouse.column, mouse.row) {
                         if let Some(state) = self.send_review.as_mut() {
                             state.focused = SendField::General;
                         }
+                    }
+                }
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                    if contains(regions.comments, mouse.column, mouse.row) =>
+                {
+                    if let Some(state) = self.send_review.as_mut() {
+                        state.focused = SendField::Comments;
+                        state.comment_cursor = if mouse.kind == MouseEventKind::ScrollDown {
+                            (state.comment_cursor + 1).min(self.comments.len().saturating_sub(1))
+                        } else {
+                            state.comment_cursor.saturating_sub(1)
+                        };
                     }
                 }
                 MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
@@ -2022,28 +2131,55 @@ impl App {
         // Text-entry modals own the pointer; do not let clicks leak through to
         // the diff underneath them.
         if self.mode == Mode::Command {
-            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-                if let Some(input) = self
-                    .regions
-                    .modal_input
-                    .filter(|area| contains(*area, mouse.column, mouse.row))
-                {
-                    self.place_modal_cursor(":", input, mouse.column);
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.move_command_cursor(3),
+                MouseEventKind::ScrollUp => self.move_command_cursor(-3),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some((_, index)) = self
+                        .regions
+                        .command_rows
+                        .iter()
+                        .find(|(area, _)| contains(*area, mouse.column, mouse.row))
+                        .copied()
+                    {
+                        self.command_cursor = index;
+                        self.activate_palette_command();
+                    } else if let Some(input) = self
+                        .regions
+                        .modal_input
+                        .filter(|area| contains(*area, mouse.column, mouse.row))
+                    {
+                        self.place_modal_cursor("> ", input, mouse.column);
+                    }
                 }
+                _ => {}
             }
             return true;
         }
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(toast_id) = self
+                if let Some((toast_area, toast_id)) = self
                     .regions
                     .toast_rows
                     .iter()
                     .find(|(area, _)| contains(*area, mouse.column, mouse.row))
-                    .map(|(_, id)| *id)
+                    .map(|(area, id)| (*area, *id))
                 {
+                    let comment_id = self
+                        .toasts
+                        .iter()
+                        .find(|toast| toast.id == toast_id)
+                        .and_then(|toast| toast.comment_id.clone());
                     self.toasts.retain(|toast| toast.id != toast_id);
+                    if mouse.column < toast_area.right().saturating_sub(2) {
+                        if let Some(index) = comment_id.and_then(|id| {
+                            self.comments.iter().position(|comment| comment.id == id)
+                        }) {
+                            self.tracker.cursor = index;
+                            self.open_comment_detail();
+                        }
+                    }
                     return true;
                 }
                 if self
@@ -2253,6 +2389,7 @@ impl App {
     fn activate_toolbar(&mut self, action: ToolbarAction) {
         match action {
             ToolbarAction::SendReview => self.open_send_review(),
+            ToolbarAction::ToggleViewed => self.toggle_viewed_current(),
         }
     }
 
@@ -2314,10 +2451,12 @@ impl App {
             }
             Action::OpenCommand => {
                 self.mode = Mode::Command;
+                self.command_cursor = 0;
                 self.clear_modal_input();
             }
             Action::OpenImagePreview => self.open_image_preview(),
             Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::ToggleFocus => self.toggle_focus_mode(),
             Action::ToggleLineNumbers => {
                 self.line_numbers = !self.line_numbers;
                 self.persist_settings();
@@ -2481,7 +2620,10 @@ impl App {
                 self.theme_cursor = 0;
                 self.preview_theme_at_cursor();
             }
-            Mode::Command => self.insert_modal_text(&text),
+            Mode::Command => {
+                self.insert_modal_text(&text);
+                self.command_cursor = 0;
+            }
             _ => {
                 self.status_message = Some("paste is available in text fields".to_string());
             }
@@ -2567,7 +2709,13 @@ impl App {
         );
     }
 
+    fn toggle_focus_mode(&mut self) {
+        self.focus_mode = !self.focus_mode;
+        self.focus = Focus::Diff;
+    }
+
     fn cycle_focus(&mut self, delta: isize) {
+        self.focus_mode = false;
         let mut order = vec![Focus::Diff];
         if self.sidebar_visible {
             order.push(Focus::FileTree);
@@ -2584,6 +2732,7 @@ impl App {
     }
 
     fn toggle_sidebar(&mut self) {
+        self.focus_mode = false;
         self.sidebar_visible = !self.sidebar_visible;
         if !self.sidebar_visible && self.focus == Focus::FileTree {
             self.focus = Focus::Diff;
@@ -3159,15 +3308,21 @@ impl App {
         } else {
             HashMap::new()
         };
-        for index in 0..self.files.len() {
-            let path = self.files[index].display_path();
-            let count = comment_counts.get(path).copied().unwrap_or(0);
-            self.file_tree.set_comment_count(index, count);
-            self.file_tree.set_viewed(
-                index,
+        self.viewed_count = self
+            .files
+            .iter()
+            .filter(|file| self.viewed_paths.contains(file.display_path()))
+            .count();
+        self.file_tree.update_metadata(|index| {
+            let file = &self.index.files[index];
+            let path = file.display_path();
+            (
                 self.experience == Experience::Review && self.viewed_paths.contains(path),
-            );
-        }
+                comment_counts.get(path).copied().unwrap_or(0),
+                file.additions,
+                file.deletions,
+            )
+        });
         self.file_tree.apply_filter(
             "",
             self.file_filter_mode == FileFilterMode::Unviewed,
@@ -3227,12 +3382,19 @@ impl App {
     fn handle_command_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let previous_input = self.modal_input.clone();
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
                 self.clear_modal_input();
             }
-            KeyCode::Enter => self.execute_ex_command(),
+            KeyCode::Enter => self.activate_palette_command(),
+            KeyCode::Down => self.move_command_cursor(1),
+            KeyCode::Up => self.move_command_cursor(-1),
+            KeyCode::Char('n') if control => self.move_command_cursor(1),
+            KeyCode::Char('p') if control => self.move_command_cursor(-1),
+            KeyCode::PageDown => self.move_command_cursor(8),
+            KeyCode::PageUp => self.move_command_cursor(-8),
             KeyCode::Tab => self.complete_ex_command(),
             KeyCode::Left => self.move_modal_cursor(-1),
             KeyCode::Right => self.move_modal_cursor(1),
@@ -3249,12 +3411,70 @@ impl App {
             }
             _ => {}
         }
+        if self.modal_input != previous_input {
+            self.command_cursor = 0;
+        }
+    }
+
+    fn move_command_cursor(&mut self, delta: isize) {
+        let count =
+            matching_commands(&self.modal_input, self.experience == Experience::Review).len();
+        self.command_cursor = self
+            .command_cursor
+            .saturating_add_signed(delta)
+            .min(count.saturating_sub(1));
+    }
+
+    fn activate_palette_command(&mut self) {
+        let query = self.modal_input.trim();
+        // Preserve exact ex commands and numeric line addresses. Free-form
+        // queries execute the highlighted, visibly named action.
+        let exact = EX_COMMANDS.contains(&query) || query.parse::<u32>().is_ok();
+        if !exact {
+            if let Some(entry) = matching_commands(query, self.experience == Experience::Review)
+                .get(self.command_cursor)
+            {
+                self.modal_input = entry.command.to_string();
+            } else {
+                return;
+            }
+        }
+        self.execute_ex_command();
     }
 
     fn execute_ex_command(&mut self) {
         let command = self.modal_input.trim().to_ascii_lowercase();
         self.mode = Mode::Normal;
         match command.as_str() {
+            "agent-reply" if self.experience == Experience::Review => {
+                let index = self
+                    .latest_agent_comment
+                    .as_ref()
+                    .and_then(|id| self.comments.iter().position(|comment| &comment.id == id));
+                if let Some(index) = index {
+                    self.tracker.cursor = index;
+                    self.open_comment_detail();
+                } else {
+                    self.set_status_message("No new agent replies in this session");
+                }
+            }
+            "search" => self.open_search_palette(SearchScope::All),
+            "find" => self.open_search_palette(SearchScope::Files),
+            "symbols" => self.open_search_palette(SearchScope::Symbols),
+            "next" => self.jump_to_relative_file(1),
+            "previous" => self.jump_to_relative_file(-1),
+            "next-hunk" => self.jump_relative_hunk(1),
+            "previous-hunk" => self.jump_relative_hunk(-1),
+            "comment" if self.experience == Experience::Review => self.open_new_comment_form(),
+            "file-comment" if self.experience == Experience::Review => {
+                self.open_file_comment_form()
+            }
+            "send" if self.experience == Experience::Review => self.open_send_review(),
+            "viewed" if self.experience == Experience::Review => self.toggle_viewed_current(),
+            "numbers" => {
+                self.line_numbers = !self.line_numbers;
+                self.persist_settings();
+            }
             "q" | "quit" => self.quit = true,
             "w" | "wrap" => {
                 self.wrap = !self.wrap;
@@ -3284,6 +3504,7 @@ impl App {
             }
             "mouse" => self.set_mouse_enabled(true),
             "nomouse" => self.set_mouse_enabled(false),
+            "focus" => self.toggle_focus_mode(),
             "sidebar" | "files" => self.toggle_sidebar(),
             "comments" if self.experience == Experience::Review => {
                 self.comments_visible = !self.comments_visible;
@@ -3317,6 +3538,27 @@ impl App {
                 count: 1,
             }),
             "" => {}
+            value if value.parse::<u32>().is_ok() => {
+                let line = value.parse::<u32>().unwrap();
+                let target = self.file_tree.active_file_idx().and_then(|file| {
+                    self.find_comment_line_row(file, CommentSide::Additions, line)
+                        .or_else(|| self.find_comment_line_row(file, CommentSide::Deletions, line))
+                        .map(|row| (file, row))
+                });
+                if let Some((file, row)) = target {
+                    self.focus = Focus::Diff;
+                    self.cursor_row = row;
+                    self.scroll = row.saturating_sub((self.viewport_height / 2) as u64) as usize;
+                    self.continuous_cursor = self.continuous_offset_for_file(file) + row;
+                    self.continuous_scroll = self
+                        .continuous_cursor
+                        .saturating_sub((self.viewport_height / 2) as u64);
+                } else {
+                    self.set_status_message(format!(
+                        "Line {line} is outside this diff · + expands context"
+                    ));
+                }
+            }
             _ => {
                 self.status_message = Some(format!(
                     "unknown command: {command} · try :help, :settings, :refresh, :image"
@@ -3340,131 +3582,199 @@ impl App {
         self.modal_cursor = self.modal_input.chars().count();
     }
 
+    fn close_send_review(&mut self) {
+        self.send_review_draft = self.send_review.take();
+        self.mode = Mode::Normal;
+        self.set_status_message("Review draft kept · S to return");
+    }
+
     fn handle_send_review_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
         if key.code == KeyCode::Esc {
-            self.send_review = None;
-            self.mode = Mode::Normal;
-            self.status_message = Some("send cancelled".to_string());
+            self.close_send_review();
             return;
         }
-        if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.submit_send_review();
-            return;
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('s') => {
+                    self.submit_send_review();
+                    return;
+                }
+                KeyCode::Char('y') => {
+                    self.copy_send_review();
+                    return;
+                }
+                _ => {}
+            }
         }
+        let show_comments = self
+            .regions
+            .root
+            .map(send_review_regions)
+            .is_some_and(|r| r.comments.height > 0)
+            && !self.comments.is_empty();
         let Some(sr) = self.send_review.as_mut() else {
             return;
         };
-        // Toggle focused field.
-        if key.code == KeyCode::Tab
-            || (key.code == KeyCode::BackTab && !key.modifiers.contains(KeyModifiers::CONTROL))
-        {
-            sr.focused = match sr.focused {
-                SendField::Verdict => SendField::General,
-                SendField::General => SendField::Verdict,
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+            let fields = if show_comments {
+                vec![SendField::Verdict, SendField::Comments, SendField::General]
+            } else {
+                vec![SendField::Verdict, SendField::General]
             };
+            let current = fields
+                .iter()
+                .position(|field| *field == sr.focused)
+                .unwrap_or(0);
+            let delta = if key.code == KeyCode::BackTab {
+                fields.len() - 1
+            } else {
+                1
+            };
+            sr.focused = fields[(current + delta) % fields.len()];
             return;
         }
-        if key.code == KeyCode::BackTab && key.modifiers.contains(KeyModifiers::CONTROL) {
-            // Ctrl-Tab toggles back; same as Tab here.
-            sr.focused = match sr.focused {
-                SendField::Verdict => SendField::General,
-                SendField::General => SendField::Verdict,
-            };
-            return;
-        }
-        // When the verdict is focused, ←/→ cycles the verdict radios.
-        if sr.focused == SendField::Verdict {
-            if key.code == KeyCode::Right {
-                sr.cycle_verdict(1);
-                return;
+        match sr.focused {
+            SendField::Verdict => match key.code {
+                KeyCode::Right | KeyCode::Down | KeyCode::Char('j' | 'l') => sr.cycle_verdict(1),
+                KeyCode::Left | KeyCode::Up | KeyCode::Char('k' | 'h') => sr.cycle_verdict(-1),
+                KeyCode::Enter => sr.focused = SendField::General,
+                _ => {}
+            },
+            SendField::Comments => match key.code {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    sr.comment_cursor =
+                        (sr.comment_cursor + 1).min(self.comments.len().saturating_sub(1))
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    sr.comment_cursor = sr.comment_cursor.saturating_sub(1)
+                }
+                KeyCode::Enter => {
+                    self.tracker.cursor = sr.comment_cursor;
+                    self.close_send_review();
+                    self.open_comment_detail();
+                }
+                _ => {}
+            },
+            SendField::General => {
+                if sr.general_char_count >= MAX_TEXTAREA_CHARACTERS && textarea_key_inserts(&key) {
+                    sr.feedback = Some(format!(
+                        "Note limited to {MAX_TEXTAREA_CHARACTERS} characters"
+                    ));
+                    return;
+                }
+                sr.general.input(key);
+                sr.general_char_count = textarea_char_count(&sr.general);
+                sr.feedback = None;
             }
-            if key.code == KeyCode::Left {
-                sr.cycle_verdict(-1);
-                return;
-            }
-        }
-        // Otherwise feed the key to the general-comment textarea.
-        if sr.focused == SendField::General {
-            if sr.general_char_count >= MAX_TEXTAREA_CHARACTERS && textarea_key_inserts(&key) {
-                self.status_message = Some(format!(
-                    "general comment limited to {MAX_TEXTAREA_CHARACTERS} characters"
-                ));
-                return;
-            }
-            sr.general.input(key);
-            sr.general_char_count = textarea_char_count(&sr.general);
         }
     }
 
     fn open_send_review(&mut self) {
-        let unviewed = self
-            .files
-            .iter()
-            .filter(|file| !self.viewed_paths.contains(file.display_path()))
-            .count();
-        self.send_review = Some(SendReviewState::new(unviewed));
+        self.tick_agent();
+        self.reload_comments_with_notifications(false);
+        let unviewed = self.files.len().saturating_sub(self.viewed_count);
+        let mut state = self
+            .send_review_draft
+            .take()
+            .unwrap_or_else(|| SendReviewState::new(unviewed));
+        state.unviewed_files = unviewed;
+        state.guard_acknowledged = false;
+        state.feedback = None;
+        self.send_review = Some(state);
         self.mode = Mode::SendReview;
+    }
+
+    fn copy_send_review(&mut self) {
+        let Some(sr) = self.send_review.as_mut() else {
+            return;
+        };
+        match self.comment_store.load() {
+            Ok(comments) => {
+                let xml = build_send_payload(
+                    &comments,
+                    &sr.body(),
+                    Some(sr.verdict),
+                    self.review_round + 1,
+                )
+                .unwrap_or_default();
+                sr.feedback = Some(match copy_to_clipboard(&xml) {
+                    Ok(()) => "Review copied · paste it into your agent chat".into(),
+                    Err(error) => format!("Could not copy review: {error}"),
+                });
+            }
+            Err(error) => sr.feedback = Some(format!("Could not read comments: {error}")),
+        }
     }
 
     fn submit_send_review(&mut self) {
         if let Some(state) = self.send_review.as_mut() {
-            if state.unviewed_files > 0 && !state.guard_acknowledged {
+            let unviewed = self.files.len().saturating_sub(self.viewed_count);
+            if unviewed != state.unviewed_files {
+                state.guard_acknowledged = false;
+            }
+            state.unviewed_files = unviewed;
+            if self.require_view_all_before_send
+                && state.unviewed_files > 0
+                && !state.guard_acknowledged
+            {
                 state.guard_acknowledged = true;
-                self.status_message = Some(format!(
-                    "{} unviewed file{} · activate Send again to confirm",
-                    state.unviewed_files,
-                    if state.unviewed_files == 1 { "" } else { "s" }
-                ));
                 return;
             }
         }
-        let Some(sr) = self.send_review.take() else {
+        let Some(mut sr) = self.send_review.take() else {
             return;
         };
-        let body = sr.body();
-        let verdict = sr.verdict;
-        let next_round = self.review_round.saturating_add(1);
-        let Some(xml) = build_send_payload(&self.comments, &body, Some(verdict), next_round) else {
-            self.send_review = Some(sr);
-            self.status_message = Some("nothing to send (no comments, no verdict)".to_string());
-            return;
+        // Read the authoritative store at send time: a reply may have arrived
+        // after the last watcher tick or while the reviewer was writing a note.
+        let comments = match self.comment_store.load() {
+            Ok(comments) => comments,
+            Err(error) => {
+                sr.feedback = Some(format!("Could not read comments: {error}"));
+                self.send_review = Some(sr);
+                return;
+            }
         };
-        // 1. Persist the XML next to comments.json.
+        let xml = build_send_payload(
+            &comments,
+            &sr.body(),
+            Some(sr.verdict),
+            self.review_round + 1,
+        )
+        .unwrap_or_default();
         let path = crate::ui::send_review_popover::pending_review_path(
             self.repo_root.to_str().unwrap_or("."),
         );
-        let persisted = path
-            .parent()
-            .map(std::fs::create_dir_all)
-            .transpose()
-            .and_then(|_| std::fs::write(&path, &xml));
-        if let Err(e) = persisted {
+        let persisted = crate::handoff::persist_review(&path, &xml);
+        if let Err(error) = persisted {
+            sr.feedback = Some(format!("Could not save review: {error}"));
             self.send_review = Some(sr);
-            self.mode = Mode::SendReview;
-            self.status_message = Some(format!("send failed: {e}"));
             return;
         }
+        let Some(api) = self.agent_api.as_ref() else {
+            sr.feedback = Some("Agent channel unavailable. Ctrl-Y copies the review.".into());
+            self.send_review = Some(sr);
+            return;
+        };
+        let waiting = api.waiter_count();
+        self.review_round = api.release_review(xml, comments, sr.verdict);
         self.mode = Mode::Normal;
-        // 2. Release every CLI/MCP waiter through the embedded loopback API.
-        self.review_round = self
-            .agent_api
-            .as_ref()
-            .map(|api| api.release_review(xml.clone()))
-            .unwrap_or(self.review_round);
-        // 3. Best-effort clipboard copy.
-        let _ = copy_to_clipboard(&xml);
-        // 4. Surface a toast and status message.
-        self.toasts.push(Toast::success(format!(
-            "review sent · {} · xml in pending-review.xml",
-            verdict.as_str()
-        )));
-        self.status_message = Some(format!(
-            "review #{} sent ({} cmts, {})",
-            self.review_round,
-            self.comments.len(),
-            verdict.as_str()
-        ));
+        self.send_review_draft = None;
+        self.tick_agent();
+        let message = if waiting > 0 {
+            format!(
+                "Review #{} sent · {}",
+                self.review_round,
+                sr.verdict.label()
+            )
+        } else {
+            format!(
+                "Review #{} ready · ask your agent to collect it",
+                self.review_round
+            )
+        };
+        self.toasts.push(Toast::success(message.clone()));
+        self.set_status_message(message);
     }
 
     fn handle_form_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -4885,10 +5195,31 @@ impl App {
         };
         dim_buffer(area, buf);
         let width = area.width.saturating_sub(METRICS.modal_margin_x).min(104);
+        let content_width = width.saturating_sub(4).max(1) as usize;
+        // Sizing needs only enough text to fill the largest dialog. Stop at
+        // that bound instead of rescanning a potentially huge thread here.
+        let mut content_rows = 0usize;
+        let lines = comment.body.lines().chain(
+            comment
+                .replies
+                .iter()
+                .flat_map(|reply| ["", ""].into_iter().chain(reply.body.lines())),
+        );
+        for line in lines.take(25) {
+            let cells = line
+                .chars()
+                .take(content_width * 25)
+                .map(|character| UnicodeWidthChar::width(character).unwrap_or(0))
+                .sum::<usize>();
+            content_rows += cells.max(1).div_ceil(content_width);
+            if content_rows >= 25 {
+                break;
+            }
+        }
         let height = area
             .height
             .saturating_sub(METRICS.modal_margin_y)
-            .clamp(7, 30);
+            .min((content_rows + 5).clamp(9, 30) as u16);
         let popup = Rect::new(
             area.x + area.width.saturating_sub(width) / 2,
             area.y + area.height.saturating_sub(height) / 2,
@@ -4899,7 +5230,12 @@ impl App {
         let max_scroll = render_thread(
             comment,
             self.comment_detail_scroll,
-            popup,
+            Rect::new(
+                popup.x,
+                popup.y,
+                popup.width,
+                popup.height.saturating_sub(2),
+            ),
             &self.palette,
             buf,
         );
@@ -4907,6 +5243,9 @@ impl App {
         if popup.width > 20 && popup.height > 0 {
             let y = popup.y + popup.height.saturating_sub(1);
             let end = popup.x + popup.width.saturating_sub(1);
+            let close_label = "Esc Close";
+            let close_width = UnicodeWidthStr::width(close_label) as u16 + 2;
+            let close_x = end.saturating_sub(close_width);
             let resolve_label = if comment.status == CommentStatus::Resolved {
                 "x Reopen"
             } else {
@@ -4919,14 +5258,14 @@ impl App {
             };
             let mut x = popup.x + 1;
             for (label, control) in [
-                ("Enter Jump", CommentDetailControl::Jump),
-                ("e Edit", CommentDetailControl::Edit),
                 ("r Reply", CommentDetailControl::Reply),
                 (resolve_label, CommentDetailControl::Resolve),
+                ("Enter Jump", CommentDetailControl::Jump),
+                ("e Edit", CommentDetailControl::Edit),
                 (delete_label, CommentDetailControl::Delete),
             ] {
                 let width = UnicodeWidthStr::width(label) as u16 + 2;
-                if x.saturating_add(width) >= end {
+                if x.saturating_add(width) >= close_x {
                     break;
                 }
                 let region =
@@ -4934,10 +5273,7 @@ impl App {
                 self.regions.comment_detail_controls.push((region, control));
                 x = x.saturating_add(width + 1);
             }
-            let close_label = "Esc Close";
-            let close_width = UnicodeWidthStr::width(close_label) as u16 + 2;
-            let close_x = end.saturating_sub(close_width);
-            if close_x > x {
+            {
                 let region = render_chip(
                     close_x,
                     y,
@@ -4972,7 +5308,14 @@ impl App {
             self.focus = Focus::Diff;
         }
 
-        let header_height = METRICS.header_height;
+        if self.focus != Focus::Diff {
+            self.focus_mode = false;
+        }
+        let header_height = if area.height >= 18 {
+            3
+        } else {
+            METRICS.header_height
+        };
         let header = Rect::new(area.x, area.y, area.width, header_height);
         let status = Rect::new(
             area.x,
@@ -4986,14 +5329,11 @@ impl App {
         let (mut show_sidebar, mut show_comments) = panel_visibility(
             area.width,
             area.height,
-            self.sidebar_visible,
-            comments_requested,
+            self.sidebar_visible && !self.focus_mode,
+            comments_requested && !self.focus_mode,
         );
-        if self.experience == Experience::Viewer {
-            show_sidebar = self.sidebar_visible && area.width >= 84;
-            show_comments = false;
-        }
-        let compact_workspace = area.width < 88;
+        let compact_workspace = area.width < 96
+            || (self.focus == Focus::Tracker && comments_requested && !show_comments);
         let show_diff = !compact_workspace || self.focus == Focus::Diff;
         if compact_workspace {
             show_sidebar = self.sidebar_visible && self.focus == Focus::FileTree;
@@ -5007,7 +5347,7 @@ impl App {
         let comments_workspace = compact_workspace && show_comments;
         let tracker_height = if show_comments && !comments_right && !comments_workspace {
             self.comment_height
-                .clamp(4, area.height.saturating_sub(18).min(20))
+                .clamp(4, area.height.saturating_sub(10).clamp(4, 20))
         } else {
             0
         };
@@ -5035,7 +5375,7 @@ impl App {
             0
         };
         let file_area = show_sidebar.then(|| Rect::new(body.x, body.y, sidebar_width, body.height));
-        let divider = show_sidebar.then(|| {
+        let divider = (sidebar_divider_width > 0).then(|| {
             Rect::new(
                 body.x + sidebar_width,
                 body.y,
@@ -5090,12 +5430,12 @@ impl App {
             self.regions.sidebar_divider = Some(divider);
         }
         if show_diff && diff_area.width > 0 {
-            let diff_header_height = if self.experience == Experience::Review
-                || self.file_display != FileDisplay::Continuous
-            {
+            let diff_header_height = if self.file_display == FileDisplay::Continuous {
+                0
+            } else if body.height >= 10 {
                 2
             } else {
-                0
+                1
             };
             let diff_header = Rect::new(
                 diff_area.x,
@@ -5141,14 +5481,15 @@ impl App {
                 self.regions.comment_divider = Some(divider);
                 Rect::new(area.x, divider_y, area.width, tracker_height)
             };
-            let tracker_inner = inset(tracker_area, 1);
-            self.tracker
-                .keep_cursor_visible(&self.comments, tracker_inner.height as usize);
+            let tracker_inner = tracker_content_area(tracker_area);
+            let row_height = tracker_row_height(tracker_inner);
+            let capacity = (tracker_inner.height / row_height) as usize;
+            self.tracker.keep_cursor_visible(&self.comments, capacity);
             let visible_comments = self.tracker.visible_indices(&self.comments);
             let outdated_comments: HashSet<String> = visible_comments
                 .iter()
                 .skip(self.tracker.scroll)
-                .take(tracker_inner.height as usize)
+                .take(capacity)
                 .filter_map(|index| self.comments.get(*index))
                 .filter(|comment| self.comment_is_outdated(comment))
                 .map(|comment| comment.id.clone())
@@ -5165,14 +5506,19 @@ impl App {
             );
             self.regions.comment_panel = Some(tracker_area);
             let inner = tracker_inner;
-            self.regions.comment_rows = (0..inner.height as usize)
+            self.regions.comment_rows = (0..capacity)
                 .filter_map(|offset| {
                     visible_comments
                         .get(self.tracker.scroll + offset)
                         .copied()
                         .map(|comment| {
                             (
-                                Rect::new(inner.x, inner.y + offset as u16, inner.width, 1),
+                                Rect::new(
+                                    inner.x,
+                                    inner.y + offset as u16 * row_height,
+                                    inner.width,
+                                    row_height,
+                                ),
                                 comment,
                             )
                         })
@@ -5187,7 +5533,11 @@ impl App {
             "VISUAL"
         } else {
             match self.mode {
-                Mode::Normal => "NORMAL",
+                Mode::Normal => match self.focus {
+                    Focus::Diff => "DIFF",
+                    Focus::FileTree => "FILES",
+                    Focus::Tracker => "COMMENTS",
+                },
                 Mode::CommentForm => "EDIT",
                 Mode::SendReview => "SEND",
                 Mode::Search => "SEARCH",
@@ -5200,30 +5550,23 @@ impl App {
                 Mode::CommentDetail => "THREAD",
             }
         };
-        self.agent_status = if self
-            .agent_api
-            .as_ref()
-            .is_some_and(|api| api.waiter_count() > 0)
-        {
-            AgentStatus::Waiting
-        } else {
-            AgentStatus::Idle
-        };
         let active_file_idx = self.file_tree.active_file_idx();
-        let navigable_files = self.file_tree.navigable_file_indices().to_vec();
-        let (status_location_label, diagnostic_hint) = self.status_bar_hints();
         let file_idx = active_file_idx
-            .and_then(|selected| navigable_files.iter().position(|index| *index == selected))
+            .and_then(|selected| {
+                self.file_tree
+                    .navigable_file_indices()
+                    .iter()
+                    .position(|index| *index == selected)
+            })
             .unwrap_or(0);
-        let file_count = navigable_files.len();
+        let file_count = self.file_tree.filtered_file_count();
+        let (status_location_label, diagnostic_hint) = self.status_bar_hints();
         let hint = match self.mode {
-            Mode::ThemePicker => "type to filter · ↑↓ preview · Enter apply · Esc restore",
             Mode::CommentForm => "Ctrl-S save · Esc cancel",
-            Mode::SendReview => "Tab field · ←→ verdict · Ctrl-S send · Esc cancel",
+            Mode::SendReview => "",
             // Search owns its keyboard reference inside the overlay. Keeping
             // the dimmed application strip quiet avoids duplicate controls.
-            Mode::Search => "",
-            Mode::Settings => "↑↓ select · ←→ change · Esc close",
+            Mode::Search | Mode::Command | Mode::Help | Mode::Settings | Mode::ThemePicker => "",
             Mode::Hover => "j/k or wheel scroll · Esc close",
             Mode::ImagePreview => "Tab mode · +/- zoom · hjkl pan · 0 fit · Esc close",
             Mode::CommentDetail => {
@@ -5236,14 +5579,17 @@ impl App {
                 Focus::FileTree if self.experience == Experience::Viewer => {
                     "jk select · Enter open · h parent/collapse · l expand · Tab diff · / search"
                 }
-                Focus::FileTree => {
-                    "click/jk select · h parent/collapse · l expand · v viewed · Tab diff"
+                Focus::FileTree => "↑↓ select · Enter open · a filter · Ctrl-p actions",
+                Focus::Tracker => "Enter open · x resolve · s filter · Ctrl-p actions",
+                Focus::Diff if self.focus_mode => "zf restore panels · / search · Ctrl-p actions",
+                Focus::Diff if area.width < 72 => "Ctrl-p actions · ? help",
+                Focus::Diff if area.width < 96 && self.experience == Experience::Review => {
+                    "c comment · v viewed · Ctrl-p actions"
                 }
-                Focus::Tracker => "jk select · s status · p severity · o open · x resolve",
                 Focus::Diff if self.experience == Experience::Viewer => {
-                    "jk move · J/K files · ]h/[h hunks · / search · ? help"
+                    "↑↓ move · J/K files · / search · Ctrl-p actions"
                 }
-                Focus::Diff => "wheel/jk move · c comment · / search · , settings · ? help",
+                Focus::Diff => "c comment · v viewed · / search · Ctrl-p actions",
             },
         };
         let pending_key_hint = self.keymap.pending_hint();
@@ -5264,7 +5610,7 @@ impl App {
             } else {
                 "working tree clean".to_string()
             })
-        } else if navigable_files.is_empty() {
+        } else if file_count == 0 {
             Some(format!(
                 "{} filter · no matching files",
                 self.file_filter_mode.label()
@@ -5277,7 +5623,15 @@ impl App {
                     if self.experience == Experience::Viewer || self.comments.is_empty() {
                         String::new()
                     } else {
-                        format!(" · {} comments", self.comments.len())
+                        format!(
+                            " · {} {}",
+                            self.comments.len(),
+                            if self.comments.len() == 1 {
+                                "comment"
+                            } else {
+                                "comments"
+                            }
+                        )
                     },
                     if self.keymap.pending_display().is_empty() {
                         String::new()
@@ -5305,12 +5659,20 @@ impl App {
             render_form(form, area, &self.palette, buf);
         }
         if let Some(sr) = self.send_review.as_mut() {
-            render_send_popover(sr, area, &self.palette, &self.comments, &self.files, buf);
+            render_send_popover(
+                sr,
+                area,
+                &self.palette,
+                &self.comments,
+                &self.files,
+                &self.agent_snapshot,
+                buf,
+            );
         }
         match self.mode {
             Mode::Help => self.render_help(area, buf),
             Mode::Search => self.render_search_palette(area, buf),
-            Mode::Command => self.render_prompt(area, ':', "command", buf),
+            Mode::Command => self.render_command_palette(area, buf),
             Mode::ThemePicker => self.render_theme_picker(area, buf),
             Mode::Settings => render_settings(
                 &self.settings_state,
@@ -5376,15 +5738,15 @@ impl App {
             .mouse_position
             .and_then(|(column, row)| self.diff_target_at(area, column, row));
         self.rendered_diff_rows.clear();
-        for y in area.y..area.y + area.height {
-            for x in area.x..area.x + area.width {
-                let cell = &mut buf[(x, y)];
-                cell.set_symbol(" ");
-                cell.set_style(ratatui::style::Style::default().bg(self.palette.bg));
-            }
-        }
         let Some(idx) = self.file_tree.active_file_idx() else {
-            let (marker, title, detail, tone) = if !self.index.files.is_empty() {
+            let (marker, title, detail, tone) = if self.index_error.is_some() {
+                (
+                    "!",
+                    "Unable to load changes",
+                    "Ctrl-p → Refresh changes to retry",
+                    self.palette.removed,
+                )
+            } else if !self.index.files.is_empty() {
                 (
                     "›",
                     "Choose a file",
@@ -5426,6 +5788,10 @@ impl App {
             return;
         }
         let file_row_count = file.row_count;
+        // The fixed path bar owns the single-file title. Logical row zero is
+        // still retained for continuous view and headless inspect contracts.
+        let first_row = usize::from(!file.is_binary && file_row_count > 1);
+        self.cursor_row = self.cursor_row.max(first_row as u64);
         self.viewport_height = area.height.max(1) as usize;
         let total = file.row_count as usize;
         let effective_split = self.split && area.width >= 76;
@@ -5434,6 +5800,7 @@ impl App {
         } else if total > 0 {
             self.scroll = self.scroll.min(total - 1);
         }
+        self.scroll = self.scroll.max(first_row);
         let hovered_row = hovered_target
             .filter(|(file_index, _)| *file_index == idx)
             .map(|(_, row)| row);
@@ -5492,157 +5859,111 @@ impl App {
         self.pointer_overlay_dirty |= current != previous;
     }
 
-    fn render_active_file_header(&self, area: Rect, buf: &mut Buffer) {
-        if area.width == 0 || area.height == 0 {
+    fn render_active_file_header(&mut self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
             return;
         }
         let tokens = GridlineTokens::from(&self.palette);
         fill_area(area, tokens.surface, buf);
-        if self.focus == Focus::Diff {
-            for y in area.y..area.y.saturating_add(area.height) {
-                buf[(area.x, y)]
-                    .set_symbol(GLYPHS.focus_rail)
-                    .set_style(Style::default().fg(tokens.focus).bg(tokens.surface));
-            }
-        }
         let Some(index) = self.file_tree.active_file_idx() else {
-            buf.set_string(
-                area.x + 2,
-                area.y,
-                "Local changes",
-                Style::default().fg(tokens.muted).bg(tokens.surface),
-            );
             return;
         };
         let Some(file) = self.index.files.get(index) else {
             return;
         };
         let path = file.display_path().to_string_lossy();
-        let marker = match file.kind {
-            IndexedChangeKind::Modified => "M",
-            IndexedChangeKind::Added => "A",
-            IndexedChangeKind::Deleted => "D",
-            IndexedChangeKind::Renamed => "R",
-            IndexedChangeKind::Untracked => "U",
-            IndexedChangeKind::Binary => "B",
-        };
-        let comments = self
-            .comments
-            .iter()
-            .filter(|comment| comment.file_path == path)
-            .count();
-        let diagnostics = self.lsp.diagnostic_count(file.display_path());
-        let language_state = self.lsp.state_for_path(file.display_path());
         let viewed = self.viewed_paths.contains(file.display_path());
-        let marker_color = match file.kind {
-            IndexedChangeKind::Added | IndexedChangeKind::Untracked => tokens.positive,
-            IndexedChangeKind::Deleted => tokens.negative,
-            IndexedChangeKind::Binary => tokens.warning,
-            IndexedChangeKind::Modified | IndexedChangeKind::Renamed => tokens.accent,
+        let action_width = if self.experience == Experience::Review && area.width >= 64 {
+            15
+        } else {
+            0
         };
-        buf.set_string(
+        let title_right = area.right().saturating_sub(action_width);
+        let metadata = if file.is_binary {
+            if is_image_path(file.display_path()) {
+                "image".to_string()
+            } else {
+                "binary".to_string()
+            }
+        } else {
+            format!(
+                "+{}  -{}{}",
+                file.additions,
+                file.deletions,
+                if self.split && area.width < 76 {
+                    " · unified"
+                } else {
+                    ""
+                },
+            )
+        };
+        let metadata_width = UnicodeWidthStr::width(metadata.as_str()) as u16;
+        let show_metadata = area.width.saturating_sub(action_width) >= metadata_width + 24;
+        let path_width = area
+            .width
+            .saturating_sub(action_width)
+            .saturating_sub(if show_metadata { metadata_width + 6 } else { 4 });
+        let (directory, basename) = compact_path(&path, path_width as usize);
+        buf.set_stringn(
             area.x + 2,
             area.y,
-            marker,
-            Style::default()
-                .fg(marker_color)
-                .bg(tokens.surface)
-                .add_modifier(Modifier::BOLD),
-        );
-        let path_x = area.x + 5;
-        let path_width = area.width.saturating_sub(7) as usize;
-        let (directory, basename) = compact_path(&path, path_width);
-        buf.set_string(
-            path_x,
-            area.y,
             &directory,
+            path_width as usize,
             Style::default().fg(tokens.muted).bg(tokens.surface),
         );
-        buf.set_string(
-            path_x + UnicodeWidthStr::width(directory.as_str()) as u16,
+        buf.set_stringn(
+            area.x + 2 + UnicodeWidthStr::width(directory.as_str()) as u16,
             area.y,
             basename,
+            path_width.saturating_sub(UnicodeWidthStr::width(directory.as_str()) as u16) as usize,
             Style::default()
                 .fg(tokens.text)
                 .bg(tokens.surface)
                 .add_modifier(Modifier::BOLD),
         );
-        if area.height < 2 {
-            return;
+        if show_metadata {
+            buf.set_stringn(
+                title_right - metadata_width - 2,
+                area.y,
+                metadata,
+                metadata_width as usize,
+                Style::default().fg(tokens.text_subtle).bg(tokens.surface),
+            );
         }
-        let mut x = if file.is_binary {
-            area.x + 5
-        } else {
+        if show_metadata && !file.is_binary {
             render_change_counts(
-                area.x + 5,
-                area.y + 1,
+                title_right - metadata_width - 2,
+                area.y,
                 file.additions,
                 file.deletions,
                 tokens.surface,
                 &self.palette,
                 buf,
-            )
-        };
-        let end = area.x.saturating_add(area.width).saturating_sub(2);
-        let mut metadata = vec![(
-            if is_image_path(file.display_path()) {
-                "  image · Tab mode · i fullscreen".to_string()
-            } else if file.is_binary {
-                "  binary file".to_string()
-            } else {
-                format!("  {} hunks", file.hunks.len())
-            },
-            Style::default()
-                .fg(if is_image_path(file.display_path()) {
-                    tokens.info
+            );
+        }
+        if action_width > 0 {
+            let rect = render_chip(
+                area.right() - action_width,
+                area.y,
+                if viewed {
+                    "v ✓ Viewed"
                 } else {
-                    tokens.muted
-                })
-                .bg(tokens.surface),
-        )];
-        if self.split && area.width < 76 {
-            metadata.push((
-                "  unified · widen for split".to_string(),
-                Style::default().fg(tokens.warning).bg(tokens.surface),
-            ));
+                    "v Mark viewed"
+                },
+                viewed,
+                self.mouse_position,
+                &self.palette,
+                buf,
+            );
+            self.regions
+                .toolbar
+                .push((rect, ToolbarAction::ToggleViewed));
         }
-        if self.experience == Experience::Viewer {
-            render_metadata_segments(&mut x, end, area.y + 1, metadata, buf);
-            return;
+        if self.focus == Focus::Diff {
+            buf[(area.x, area.y)]
+                .set_symbol(GLYPHS.focus_rail)
+                .set_style(Style::default().fg(tokens.focus).bg(tokens.surface));
         }
-        if comments > 0 {
-            metadata.push((
-                format!("  {comments} comments"),
-                Style::default().fg(tokens.info).bg(tokens.surface),
-            ));
-        }
-        if diagnostics > 0 {
-            metadata.push((
-                format!("  {diagnostics} diagnostics"),
-                Style::default().fg(tokens.warning).bg(tokens.surface),
-            ));
-        }
-        if matches!(language_state, ServerState::Starting | ServerState::Error) {
-            metadata.push((
-                format!("  lsp {}", language_state.label()),
-                Style::default().fg(tokens.warning).bg(tokens.surface),
-            ));
-        }
-        metadata.push((
-            if viewed {
-                "  ✓ viewed".to_string()
-            } else {
-                "  unviewed".to_string()
-            },
-            Style::default()
-                .fg(if viewed {
-                    tokens.positive
-                } else {
-                    tokens.muted
-                })
-                .bg(tokens.surface),
-        ));
-        render_metadata_segments(&mut x, end, area.y + 1, metadata, buf);
     }
 
     fn render_continuous_diff(
@@ -5848,165 +6169,104 @@ impl App {
 
     fn render_header(&mut self, area: Rect, buf: &mut Buffer) {
         let tokens = GridlineTokens::from(&self.palette);
-        fill_area(area, self.palette.bg, buf);
+        let y = area.y + u16::from(area.height >= 3);
         let repo = safe_terminal_text(
             self.repo_root
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("repository"),
         );
-        let title = if repo == "diffing" {
-            "diffing".to_string()
-        } else {
-            format!("diffing · {repo}")
-        };
-        buf.set_string(
-            area.x + 2,
-            area.y,
-            "diffing",
-            Style::default()
-                .fg(tokens.accent)
-                .bg(tokens.canvas)
-                .add_modifier(Modifier::BOLD),
-        );
-        if repo != "diffing" {
-            buf.set_string(
-                area.x + 9,
-                area.y,
-                "·",
-                Style::default().fg(tokens.rule).bg(tokens.canvas),
-            );
-            buf.set_string(
-                area.x + 11,
-                area.y,
-                &repo,
-                Style::default().fg(tokens.text).bg(tokens.canvas),
-            );
-        }
-        let agent = if self.experience == Experience::Review
-            && self
-                .agent_api
-                .as_ref()
-                .is_some_and(|api| api.waiter_count() > 0)
-        {
-            "  ● agent"
-        } else {
-            ""
-        };
-        let file_count = format!(
-            "{} {}",
-            self.files.len(),
-            if self.files.len() == 1 {
-                "file"
-            } else {
-                "files"
-            }
-        );
-        let additions = format!("+{}", self.index.additions);
-        let deletions = format!("-{}", self.index.deletions);
-        let indexing = if self.indexing { "  ◌ indexing" } else { "" };
-        let summary_width: u16 = [
-            file_count.as_str(),
-            "  ",
-            additions.as_str(),
-            "  ",
-            deletions.as_str(),
-            agent,
-            indexing,
-        ]
-        .iter()
-        .map(|part| UnicodeWidthStr::width(*part) as u16)
-        .sum();
-        let summary_x = area
-            .x
-            .saturating_add(area.width.saturating_sub(summary_width + 1));
-        if summary_width + 14 < area.width {
-            let mut x = summary_x;
-            buf.set_string(
-                x,
-                area.y,
-                &file_count,
-                Style::default()
-                    .fg(tokens.text_subtle)
-                    .bg(tokens.canvas)
-                    .add_modifier(Modifier::BOLD),
-            );
-            x += UnicodeWidthStr::width(file_count.as_str()) as u16 + 2;
-            x = render_change_counts(
-                x,
-                area.y,
-                self.index.additions,
-                self.index.deletions,
-                self.palette.bg,
-                &self.palette,
-                buf,
-            );
-            if !agent.is_empty() {
-                buf.set_string(
-                    x,
-                    area.y,
-                    agent,
-                    Style::default().fg(tokens.info).bg(tokens.canvas),
-                );
-                x += UnicodeWidthStr::width(agent) as u16;
-            }
-            if !indexing.is_empty() {
-                buf.set_string(
-                    x,
-                    area.y,
-                    indexing,
-                    Style::default().fg(tokens.warning).bg(tokens.canvas),
-                );
-            }
-        }
-        let action_x = area.x + UnicodeWidthStr::width(title.as_str()) as u16 + 5;
-        if self.experience == Experience::Review && action_x + 15 < summary_x {
+        let mut right = area.right().saturating_sub(2);
+        if self.experience == Experience::Review && area.width >= 72 {
             let rect = render_chip(
-                action_x,
-                area.y,
-                "S send review",
+                right.saturating_sub(15),
+                y,
+                "S Send review",
                 true,
                 self.mouse_position,
                 &self.palette,
                 buf,
             );
+            right = rect.x.saturating_sub(3);
             self.regions.toolbar.push((rect, ToolbarAction::SendReview));
         }
-        if area.height >= 2 {
-            let detail = self
-                .diff_context
-                .detail
-                .as_deref()
-                .map(|detail| format!(" · {detail}"))
+        // Review progress counts only files in this diff, not stale saved paths.
+        let viewed = self.viewed_count;
+        let summary = if self.indexing {
+            "Indexing…".to_string()
+        } else if self.focus_mode {
+            "Focus mode".to_string()
+        } else if self.experience == Experience::Review {
+            format!("{viewed}/{} viewed", self.files.len())
+        } else {
+            format!("{} files", self.files.len())
+        };
+        let summary_width = UnicodeWidthStr::width(summary.as_str()) as u16;
+        let summary_x = right.saturating_sub(summary_width);
+        buf.set_stringn(
+            summary_x,
+            y,
+            &summary,
+            summary_width as usize,
+            Style::default().fg(if viewed > 0 && viewed == self.files.len() {
+                tokens.positive
+            } else {
+                tokens.muted
+            }),
+        );
+        let identity_budget = summary_x.saturating_sub(area.x + 5).min(area.width / 3);
+        let identity = tail_ellipsize(&repo, identity_budget as usize);
+        buf.set_stringn(
+            area.x + 2,
+            y,
+            &identity,
+            identity_budget as usize,
+            Style::default()
+                .fg(tokens.text)
+                .add_modifier(Modifier::BOLD),
+        );
+        let context_x = area.x + 4 + UnicodeWidthStr::width(identity.as_str()) as u16;
+        let context_budget = summary_x.saturating_sub(context_x + 3);
+        let context = if let Some(progress) = &self.agent_snapshot.progress {
+            let model = progress["model"].as_str().unwrap_or("Agent");
+            let message = progress["message"].as_str().unwrap_or("");
+            let pct = progress["pct"]
+                .as_f64()
+                .map(|pct| format!(" {pct:.0}%"))
                 .unwrap_or_default();
-            let context = format!("{}{}", self.diff_context.headline, detail);
-            let context = ellipsize(&context, area.width.saturating_sub(6) as usize);
-            buf.set_string(
-                area.x + 2,
-                area.y + 1,
-                self.diff_context.marker(),
-                Style::default()
-                    .fg(tokens.accent)
-                    .bg(tokens.canvas)
-                    .add_modifier(Modifier::BOLD),
+            format!("{model}{pct} · {message}")
+        } else if self.agent_snapshot.waiters > 0 {
+            crate::ui::send_review_popover::agent_connection_label(&self.agent_snapshot)
+        } else if self.review_round > 0 {
+            format!("Last sent #{} · S send another", self.review_round)
+        } else {
+            match &self.diff_context.detail {
+                Some(detail) => format!("{} · {detail}", self.diff_context.headline),
+                None => self.diff_context.headline.clone(),
+            }
+        };
+        if context_budget >= 12 {
+            buf.set_stringn(
+                context_x,
+                y,
+                ellipsize(&safe_terminal_text(&context), context_budget as usize),
+                context_budget as usize,
+                Style::default().fg(tokens.muted),
             );
-            buf.set_string(
-                area.x + 4,
-                area.y + 1,
-                context,
-                Style::default().fg(tokens.text_subtle).bg(tokens.canvas),
+        } else if area.height >= 2
+            && (self.agent_snapshot.waiters > 0 || self.agent_snapshot.progress.is_some())
+        {
+            buf.set_stringn(
+                area.x + 1,
+                area.bottom() - 1,
+                ellipsize(
+                    &safe_terminal_text(&context),
+                    area.width.saturating_sub(2) as usize,
+                ),
+                area.width.saturating_sub(2) as usize,
+                Style::default().fg(tokens.text_subtle),
             );
         }
-        horizontal_rule(
-            Rect::new(
-                area.x,
-                area.y + area.height.saturating_sub(1),
-                area.width,
-                1,
-            ),
-            &self.palette,
-            buf,
-        );
     }
 
     fn render_theme_picker(&mut self, area: Rect, buf: &mut Buffer) {
@@ -6115,7 +6375,11 @@ impl App {
             self.regions.theme_rows.push((row, *theme));
         }
         let footer = hint_line(
-            "↑↓ preview · Enter apply · Esc restore",
+            if inner.width < 50 {
+                "↑↓ preview · Enter · Esc"
+            } else {
+                "↑↓ preview · Enter apply · Esc restore"
+            },
             tokens.raised,
             &self.palette,
         );
@@ -6157,7 +6421,7 @@ impl App {
         let help = if inner_width >= 72 {
             shortcut_help_columns(help, inner_width.saturating_sub(2) / 2, &self.palette)
         } else {
-            shortcut_help(help, &self.palette)
+            shortcut_help_wrapped(help, inner_width, &self.palette)
         };
         let body = Rect::new(
             inner.x,
@@ -6181,11 +6445,15 @@ impl App {
             .scroll((scroll, 0))
             .render(body, buf);
         if inner.height > 0 {
-            let footer = format!(
-                "j/k scroll · PgUp/PgDn page · Esc close · {}/{}",
-                scroll.saturating_add(1),
-                max_scroll.saturating_add(1)
-            );
+            let footer = if inner.width < 60 {
+                "↑↓ scroll · Esc close".to_string()
+            } else {
+                format!(
+                    "j/k scroll · PgUp/PgDn page · Esc close · {}/{}",
+                    scroll.saturating_add(1),
+                    max_scroll.saturating_add(1)
+                )
+            };
             Paragraph::new(hint_line(&footer, self.palette.elevated, &self.palette)).render(
                 Rect::new(
                     inner.x,
@@ -6791,55 +7059,138 @@ impl App {
             .render(inner, buf);
     }
 
-    fn render_prompt(&mut self, area: Rect, prefix: char, title: &str, buf: &mut Buffer) {
+    fn render_command_palette(&mut self, area: Rect, buf: &mut Buffer) {
         dim_buffer(area, buf);
-        let width = area.width.saturating_sub(METRICS.modal_margin_x).min(90);
-        let height = 4.min(area.height);
+        let tokens = GridlineTokens::from(&self.palette);
+        let matches = matching_commands(&self.modal_input, self.experience == Experience::Review);
+        self.command_cursor = self.command_cursor.min(matches.len().saturating_sub(1));
+        let width = area.width.saturating_sub(4).min(72);
+        let height = area.height.saturating_sub(2).min(17);
         let popup = Rect::new(
-            area.x + area.width.saturating_sub(width) / 2,
-            area.y + area.height.saturating_sub(height),
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 3,
             width,
             height,
         );
         Clear.render(popup, buf);
-        let block = overlay_block(format!(" {title} · Tab completes "), &self.palette);
+        let block = overlay_block(" Actions ", &self.palette);
         let inner = block.inner(popup);
         block.render(popup, buf);
-        self.regions.modal_input = Some(Rect::new(inner.x, inner.y, inner.width, 1));
-        buf.set_string(
-            inner.x,
-            inner.y,
+        let input = Rect::new(inner.x + 1, inner.y, inner.width.saturating_sub(2), 1);
+        self.regions.modal_input = Some(input);
+        buf.set_stringn(
+            input.x,
+            input.y,
             modal_input_display(
-                &prefix.to_string(),
+                "> ",
                 &self.modal_input,
                 self.modal_cursor,
-                inner.width as usize,
+                input.width as usize,
             ),
-            Style::default()
-                .fg(self.palette.fg)
-                .bg(self.palette.elevated),
+            input.width as usize,
+            Style::default().fg(tokens.text).bg(tokens.raised),
         );
         if inner.height > 1 {
-            let query = self.modal_input.trim().to_ascii_lowercase();
-            let matches = EX_COMMANDS
-                .iter()
-                .filter(|command| command.starts_with(&query))
-                .take(8)
-                .copied()
-                .collect::<Vec<_>>();
-            let suggestions = if matches.is_empty() {
-                "No matching commands".to_string()
+            horizontal_rule(
+                Rect::new(inner.x, inner.y + 1, inner.width, 1),
+                &self.palette,
+                buf,
+            );
+        }
+        if self.modal_input.is_empty() && input.width >= 30 {
+            buf.set_stringn(
+                input.x + 3,
+                input.y,
+                "Search actions or type a line number",
+                input.width.saturating_sub(3) as usize,
+                Style::default().fg(tokens.muted).bg(tokens.raised),
+            );
+        }
+        let footer_rows = if inner.height >= 10 { 4 } else { 1 };
+        let rows = inner.height.saturating_sub(2 + footer_rows) as usize;
+        let start = self.command_cursor.saturating_sub(rows.saturating_sub(1));
+        for (index, command) in matches.iter().enumerate().skip(start).take(rows) {
+            let row = Rect::new(
+                inner.x,
+                inner.y + 2 + (index - start) as u16,
+                inner.width,
+                1,
+            );
+            let selected = index == self.command_cursor;
+            let background = if selected {
+                tokens.selected
             } else {
-                matches.join("  ")
+                tokens.raised
+            };
+            fill_area(row, background, buf);
+            let style = Style::default()
+                .fg(tokens.text)
+                .bg(background)
+                .add_modifier(if selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                });
+            if selected {
+                buf.set_string(row.x, row.y, GLYPHS.cursor, style);
+            }
+            let key_width = UnicodeWidthStr::width(command.key) as u16;
+            let label_width = row.width.saturating_sub(key_width + 5);
+            buf.set_stringn(row.x + 2, row.y, command.label, label_width as usize, style);
+            if key_width > 0 && row.width >= key_width + 5 {
+                buf.set_string(
+                    row.right() - key_width - 2,
+                    row.y,
+                    command.key,
+                    Style::default().fg(tokens.muted).bg(background),
+                );
+            }
+            self.regions.command_rows.push((row, index));
+        }
+        if matches.is_empty() && rows > 0 {
+            let message = if self.modal_input.trim().parse::<u32>().is_ok() {
+                "Enter to go to this line in the current diff"
+            } else {
+                "No matching actions · try another word"
             };
             buf.set_stringn(
-                inner.x,
-                inner.y + 1,
-                suggestions,
-                inner.width as usize,
-                Style::default()
-                    .fg(self.palette.dim)
-                    .bg(self.palette.elevated),
+                inner.x + 1,
+                inner.y + 2,
+                message,
+                inner.width.saturating_sub(2) as usize,
+                Style::default().fg(tokens.muted).bg(tokens.raised),
+            );
+        }
+        if footer_rows == 4 {
+            if let Some(command) = matches.get(self.command_cursor) {
+                Paragraph::new(command.description())
+                    .style(Style::default().fg(tokens.muted).bg(tokens.raised))
+                    .wrap(Wrap { trim: true })
+                    .render(
+                        Rect::new(
+                            inner.x + 2,
+                            inner.bottom() - 3,
+                            inner.width.saturating_sub(4),
+                            2,
+                        ),
+                        buf,
+                    );
+            }
+        }
+        if inner.height > 0 {
+            let footer = if inner.width < 50 {
+                "↑↓ select · Enter run · Esc"
+            } else {
+                "↑↓ select · Enter run · Esc close"
+            };
+            Paragraph::new(hint_line(footer, tokens.raised, &self.palette)).render(
+                Rect::new(
+                    inner.x + 1,
+                    inner.bottom() - 1,
+                    inner.width.saturating_sub(2),
+                    1,
+                ),
+                buf,
             );
         }
     }
@@ -7415,23 +7766,6 @@ fn render_change_counts(
             .add_modifier(Modifier::BOLD),
     );
     x.saturating_add(removed.chars().count() as u16)
-}
-
-fn render_metadata_segments(
-    x: &mut u16,
-    end: u16,
-    y: u16,
-    segments: Vec<(String, Style)>,
-    buf: &mut Buffer,
-) {
-    for (text, style) in segments {
-        let width = UnicodeWidthStr::width(text.as_str()) as u16;
-        if (*x).saturating_add(width) > end {
-            break;
-        }
-        buf.set_string(*x, y, text, style);
-        *x = (*x).saturating_add(width);
-    }
 }
 
 fn fill_area(area: Rect, color: ratatui::style::Color, buf: &mut Buffer) {

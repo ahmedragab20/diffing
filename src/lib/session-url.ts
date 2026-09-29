@@ -3,11 +3,18 @@ import { isLoopbackHost, SESSION_TOKEN_QUERY } from './server-auth.js'
 
 /** Loopback-safe review URL for web / gh-pr locks; null for TUI or invalid ports. */
 export function reviewSessionBaseUrl(lock: ServerLock): string | null {
-  if ((lock.mode ?? 'web') === 'tui' || !(lock.port > 0)) return null
+  if ((lock.mode ?? 'web') === 'tui') return null
+  const origin = reviewSessionApiOrigin(lock)
+  if (!origin) return null
+  return `${origin}${lock.mode === 'gh-pr' ? '/gh/pr' : ''}`
+}
+
+/** API origin for every local session. A TUI API is not a human review URL. */
+export function reviewSessionApiOrigin(lock: ServerLock): string | null {
+  if (!Number.isInteger(lock.port) || lock.port <= 0 || lock.port > 65535) return null
   if (!isLoopbackHost(lock.host) && lock.host !== '0.0.0.0' && lock.host !== '::') return null
   const host = lock.host === '0.0.0.0' || lock.host === '::' ? '127.0.0.1' : lock.host
-  const path = lock.mode === 'gh-pr' ? '/gh/pr' : ''
-  return `http://${host}:${lock.port}${path}`
+  return `http://${host === '::1' ? '[::1]' : host}:${lock.port}`
 }
 
 /** Browseable review URL without auth query params (auth uses cookie + header). */

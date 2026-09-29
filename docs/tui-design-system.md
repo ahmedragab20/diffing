@@ -72,19 +72,24 @@ border; one boundary should occupy one cell.
 ### Pane
 
 - Use `surface` and a `rule_subtle` boundary.
-- Use a bold title only while the pane is focused.
-- Use `focus_rail` for a focused bordered pane.
+- Use a bold title for each pane and a local focus marker for the active pane.
+- Prefer one shared boundary over enclosing a side pane in a box.
 - Preserve two columns between the edge and primary content.
 
 ### Selectable row
 
-- Fill the entire row with `selected`.
+- Fill an actively focused row with `selected`; use `element` for the current
+  file in an unfocused rail, so source orientation does not compete with input focus.
 - Prefix it with `selection_marker`.
 - Keep primary text readable; use `muted` only for metadata.
 - Show semantic state in its own marker, not in the focus rail.
-- In the file rail, right-align comment and change counts so filenames form a
-  stable scan column. At narrow widths, drop change counts before review state
-  and preserve a useful filename prefix.
+- In the file rail, right-align comment counts and viewed markers so filenames
+  form a stable scan column. Change counts live in the active-file header.
+- Narrow comment rails use a location row followed by the comment body. Share
+  row height between scrolling and pointer targets so both rows select the
+  same thread. Give tall rails one blank row between threads. Show active filters
+  only; use `!`, `?`, `~`, and `+` for severity and `✓` for resolved threads.
+  Fit previews by terminal cell width and signal clipped text with an ellipsis.
 
 ### Overlay and field
 
@@ -174,6 +179,36 @@ border; one boundary should occupy one cell.
 - Keep the standalone renderer useful without its Node search bridge: changed
   files, text, symbols, and bounded working-tree previews must still work.
 
+### Review workspace and preferences
+
+- The application bar shows repository context, viewed progress for the current
+  diff, and Send review. The file header exposes Mark viewed with the same `v`
+  keyboard action; keep review progress cached outside the render loop.
+- Size line-number gutters from each file's final hunk ranges, keep their width
+  stable while scrolling, and omit the nonexistent side for added/deleted files.
+  Unified clipping and wrapping share the same prefix budget; split sides use
+  the corresponding old/new widths.
+- `zf` toggles focused reading without changing saved panel preferences. Repeating
+  it restores the layout; Tab restores panels before moving keyboard focus.
+- Settings groups are Diff display, Workspace, Language intelligence, and
+  Appearance. Section headings are not selectable. Keep descriptions separate
+  from keyboard hints, values right aligned, and the active row visible at 42×8.
+- Size thread dialogs for their content. Keep actions outside the content border
+  and reserve the Close target before fitting other actions.
+
+### Actions
+
+- `Ctrl-P` and `:` open the same searchable action palette. Match command names
+  and human-readable labels; hide review mutations in the read-only viewer.
+- Put common review tasks first, show a query placeholder and a description of
+  the selected action, and keep the dimmed background shortcut strip quiet.
+- Arrow keys select, Enter runs, and Escape closes. Keep legacy colon commands
+  and numeric addresses (`:42`) usable without navigating the list.
+- A numeric address selects the new-side line, falling back to the old side;
+  unavailable lines report a status message instead of jumping elsewhere.
+- The compact workspace shows the focused pane below 96 columns. Tab must
+  reveal the pane it focuses, including the comments pane at short heights.
+
 ### Frame delivery
 
 - Clear the alternate screen once on entry and disable terminal line wrapping
@@ -183,6 +218,10 @@ border; one boundary should occupy one cell.
   ordinary output where the protocol is unsupported.
 - Redraw only for input or changed background state; never add a timer-driven
   animation loop to make static chrome feel active.
+- Warm immutable syntax tables alongside indexing. Build file-tree adjacency
+  and batch metadata once per index update; keep collapsed directories on refresh.
+- The agent API blocks while idle and wakes on shutdown. Coalesce repository
+  notifications before repeated Git-ignore probes when a refresh is pending.
 
 ### Feedback and review state
 
@@ -219,6 +258,8 @@ must not turn a static screen into a high-frequency animation loop.
 - A subtle rule is never stronger than the default rule.
 - Truecolor palettes degrade to ANSI-256, and `NO_COLOR`/`TERM=dumb` remains a
   monochrome path.
+- Recheck contrast after ANSI-256 quantization, including fixed grayscale
+  entries. Do not assume the nearest RGB cube entry preserves readability.
 - Square terminal corners and plain rules are intentional; do not introduce a
   second border language for individual components.
 
@@ -229,7 +270,26 @@ a theme or component, run:
 cargo test -p diffing-tui themes::tests --lib
 cargo test -p diffing-tui ui:: --lib
 cargo test -p diffing-tui --lib --tests
+cargo bench -p diffing-tui --bench render_diff
+cargo bench -p diffing-tui --bench workspace
 ```
+
+`workspace_flow` exercises the real application, persistence, search, live
+refresh, modal states, and compact layouts. Set `DIFFING_TUI_CAPTURE_DIR` to a
+directory outside the checkout for SVG captures of the actual rendered cells.
+Optionally set `DIFFING_TUI_CAPTURE_REPO` to a checkout for additional read-only
+working-tree captures. `focus_flow` checks temporary layout restoration, keyboard
+pane navigation, and the viewed mouse action. Help columns wrap independently,
+so descriptions remain readable and reachable through scrolling.
+`pty_review` drives comments, replies, resolution, resize, handoff, and terminal
+restoration through a real PTY. `DIFFING_TUI_TEST_BIN` can target a release binary;
+`DIFFING_TUI_TEST_CLI` can target the built `dist/cli.mjs` launch path.
+Tests and benchmarks isolate settings with `DIFFING_CONFIG_DIR` and review data
+with `DIFFING_STORAGE_ROOT`.
+
+The workspace benchmark includes construction, a 5,000-file index, the first
+160×48 application frame, and cursor frames. The diff benchmark isolates the
+viewport renderer. Neither includes a terminal emulator's painting time.
 
 ## Contributor checklist
 
@@ -248,3 +308,20 @@ cargo test -p diffing-tui --lib --tests
 - Are binary/image dimensions, allocations, subprocesses, and Git paths
   bounded and repository-contained?
 - Did this add a third place that shows the same binding?
+
+
+### Agent handoff
+
+Use one Send to agent dialog for verdict, comment preview, and note. Match the
+web's four review decisions, including comment-only behavior. Keep availability
+and review counts above the form, the selected intent description beneath the
+verdict, and send/copy/back in a dedicated footer. On short terminals collapse
+the verdict into a cycling row, preserve a writable note and visible feedback,
+and remove fields from the Tab order when hidden.
+
+Agent progress updates the existing header instead of stacking progress toasts.
+Reply notifications carry a short preview and open the relevant thread; the
+Actions palette keeps the latest incoming reply reachable after dismissal.
+Returning from the handoff preserves the draft. Explicit copy and send are
+separate actions; sending must not change the clipboard. Errors remain inside
+the dialog. An available handoff must never be described as completed agent work.

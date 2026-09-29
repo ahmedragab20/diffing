@@ -257,6 +257,7 @@ diffing await-review [options]
 
 - **Options**:
   - `-t, --timeout <seconds>`: Maximum duration to block (default: `570` seconds).
+  - `--since <round>`: Last received review round. Omit to collect the latest cached handoff, including one sent before this command started. Pass the previous `DIFFING_REVIEW_ROUND` to wait for the next round.
 - **Behavior**:
   - Connects to the local server and establishes a long-polling request.
   - If a review is released, it prints the XML structured comments to `stdout` and prints the internal round number to `stderr` (`DIFFING_REVIEW_ROUND=N`).
@@ -1442,26 +1443,37 @@ clients are open, and vice versa.
 
 ### Send review & agent handoff
 
-The TUI's compact "send review" popover (verdict radios + general-comment
-field) calls the same `format_comments` Rust port that the web UI uses — the
-generated output remains byte-identical to `<code-review-comments>` without
-exposing the transport payload in the primary review workflow. On
-send it:
+Press **S** to open **Send to agent**. Choose **Approve**, **Request edits**,
+**Reject**, or **Comment only**. Comment only sends the same no-file-edits
+instruction and structured `mode` as the web review.
 
-1. Snapshots the current comment store.
-2. Writes `pending-review.xml` to `~/.diffing/<repo>-<hash>/` (mirroring
-   the web UI's handoff protocol).
-3. Copies the XML to the system clipboard using the platform's
-   preferred tool: `pbcopy` on macOS, `wl-copy` (Wayland) → `xclip` →
-   `xsel` (X11) on Linux, `clip.exe` (with CRLF endings) → PowerShell
-   `Set-Clipboard` on Windows.
-4. Increments the review-session `round` and refreshes `server.json`
-   with `mode: "tui"`.
-5. Releases CLI/MCP `await-review` waiters through the embedded loopback API.
-6. Updates the agent-status dot and a persistent status message in the TUI.
+The dialog shows agent availability, open/resolved counts, viewed files, a
+browsable comment preview, and an optional note. Tab moves between fields;
+arrows select a verdict or comment; Enter opens the selected thread. Escape
+returns to the workspace and keeps the draft for the next **S**. Short
+terminals use a single cycling verdict row and keep the note and send controls
+visible. **Ctrl+S** sends; **Ctrl+Y** explicitly copies the review without sending.
+Sending never overwrites the clipboard.
 
-If any changed files are still unviewed, the popover shows the count and the
-first `Ctrl+S` arms the review guard; a second `Ctrl+S` confirms the handoff.
+Sending reads the latest comments, atomically replaces `pending-review.xml`,
+and releases waiting CLI/MCP clients with the review round, timestamp, decision,
+mode, open count, comments, and XML. A save failure keeps the draft open and does
+not release a handoff. If no agent is waiting, the review remains available for
+`diffing await-review` or MCP `await_review` while the TUI session is running.
+This records a handoff, not proof that an agent has acted on it.
+
+The TUI respects the shared `requireViewAllBeforeSend` preference. When enabled,
+unviewed files require a second **Ctrl+S**; otherwise the count is informational.
+Agent progress appears in the header without interrupting review. Incoming reply
+notifications show the agent and a short preview; click one to open its thread,
+or use **Actions → Open latest agent reply** after the notification disappears.
+
+The capability-authenticated loopback API supports `/api/agent/register`,
+`/api/agent/progress`, `/api/review/status`, `/api/review/await`, and
+`/api/review/history`. The last 20 round summaries are available to agents.
+History, progress, and cached delivery are session-local; `pending-review.xml`
+is the on-disk export. CLI and native sessions share `DIFFING_STORAGE_ROOT`
+when configured, and attach the TUI capability automatically.
 
 ### Cross-platform notes
 

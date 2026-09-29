@@ -4,13 +4,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, StatefulWidget};
+use ratatui::widgets::{List, ListItem, Paragraph, StatefulWidget, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::themes::Palette;
 use crate::ui::file_tree::{FileNodeKind, FileTree};
 use crate::ui::gridline::{
-    fill, safe_terminal_text, selected_row_style, selection_marker, GridlineTokens, METRICS,
+    fill, hint_line, safe_terminal_text, selection_marker, GridlineTokens, METRICS,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -73,6 +73,17 @@ pub fn render_file_tree(
             );
         }
     }
+    if !minimal && area.height >= 10 {
+        Paragraph::new(hint_line("f find file · a filter", surface, palette)).render(
+            Rect::new(
+                area.x + 2,
+                area.bottom() - 1,
+                area.width.saturating_sub(4),
+                1,
+            ),
+            buf,
+        );
+    }
     let inner = content_area(area, minimal);
 
     if tree.nodes.is_empty() && inner.width > 0 && inner.height > 0 {
@@ -95,7 +106,11 @@ pub fn render_file_tree(
         .take(body_height)
         .map(|(index, node)| build_item(node, index == tree.cursor, focused, inner.width, palette))
         .collect();
-    let list = List::new(items).highlight_style(selected_row_style(true, palette));
+    let list = List::new(items).highlight_style(Style::default().bg(if focused {
+        tokens.selected
+    } else {
+        tokens.element
+    }));
     let mut state = ratatui::widgets::ListState::default();
     let visible_cursor = tree.cursor.saturating_sub(scroll);
     if visible_cursor < body_height {
@@ -107,10 +122,22 @@ pub fn render_file_tree(
 pub fn content_area(area: Rect, minimal: bool) -> Rect {
     Rect::new(
         area.x.saturating_add(METRICS.compact_pad),
-        area.y.saturating_add(u16::from(!minimal)),
+        area.y.saturating_add(if minimal {
+            0
+        } else if area.height >= 10 {
+            2
+        } else {
+            1
+        }),
         area.width
             .saturating_sub(METRICS.compact_pad.saturating_mul(2)),
-        area.height.saturating_sub(if minimal { 0 } else { 2 }),
+        area.height.saturating_sub(if minimal {
+            0
+        } else if area.height >= 10 {
+            4
+        } else {
+            2
+        }),
     )
 }
 
@@ -134,10 +161,10 @@ fn build_item(
         ),
         FileNodeKind::File => {
             let marker_color = match node.change_marker {
-                'M' => tokens.accent,
+                'M' => tokens.muted,
                 'A' => tokens.positive,
                 'D' => tokens.negative,
-                'R' => tokens.accent,
+                'R' => tokens.muted,
                 'B' => tokens.info,
                 _ => tokens.muted,
             };
@@ -145,6 +172,8 @@ fn build_item(
         }
     };
     let name_color = if node.kind == FileNodeKind::Dir && !is_cursor {
+        tokens.muted
+    } else if node.viewed && !is_cursor {
         tokens.muted
     } else {
         tokens.text
@@ -168,17 +197,8 @@ fn build_item(
                 Style::default().fg(tokens.info),
             ));
         }
-        if node.additions > 0 {
-            stats.push(Span::styled(
-                format!("  +{}", node.additions),
-                Style::default().fg(tokens.positive),
-            ));
-        }
-        if node.deletions > 0 {
-            stats.push(Span::styled(
-                format!("  -{}", node.deletions),
-                Style::default().fg(tokens.negative),
-            ));
+        if node.viewed {
+            stats.push(Span::styled("  ✓", Style::default().fg(tokens.positive)));
         }
     }
 
@@ -186,7 +206,7 @@ fn build_item(
     // On narrow rails, keep review state before diff counts; the active-file
     // header still owns the complete count summary.
     if spans_width(&stats).saturating_add(4) > available {
-        stats.retain(|span| span.content.contains('['));
+        stats.retain(|span| span.content.contains('[') || span.content.contains('✓'));
     }
     if spans_width(&stats).saturating_add(4) > available {
         stats.clear();
@@ -197,10 +217,7 @@ fn build_item(
     let name_budget = available
         .saturating_sub(stats_width)
         .saturating_sub(gap_width);
-    let mut name = safe_terminal_text(&node.name);
-    if node.viewed {
-        name.push_str(" ✓");
-    }
+    let name = safe_terminal_text(&node.name);
     let name = ellipsize(&name, name_budget);
     let name_width = UnicodeWidthStr::width(name.as_str());
     spans.push(Span::styled(name, Style::default().fg(name_color)));
@@ -290,8 +307,9 @@ mod tests {
     #[test]
     fn file_rows_align_review_and_change_metadata_to_the_right() {
         let rendered = render_row(40);
-        assert!(rendered.contains("long-renderer-name…"));
-        assert!(rendered.ends_with("[2]  +12  -3"));
+        assert!(rendered.contains("long-renderer-name.rs"));
+        assert!(rendered.ends_with("[2]"));
+        assert!(!rendered.contains("+12"));
     }
 
     #[test]

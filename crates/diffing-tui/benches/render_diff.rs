@@ -518,6 +518,7 @@ fn generated_long_line_patch(bytes: usize) -> Vec<u8> {
 fn dense_comments() -> Vec<ReviewComment> {
     (1..=2_000)
         .map(|line| ReviewComment {
+            extra: Default::default(),
             id: format!("comment-{line}"),
             file_path: "src/generated-0.rs".to_string(),
             side: if line % 5 == 1 {

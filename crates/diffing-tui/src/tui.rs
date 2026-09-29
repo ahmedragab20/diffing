@@ -107,10 +107,7 @@ fn event_loop(
             // terminal output stream while keeping key input responsive.
             for event_index in 0..MAX_EVENTS_PER_FRAME {
                 match crossterm::event::read().context("reading input")? {
-                    Event::Key(key) => {
-                        if key.kind == KeyEventKind::Release {
-                            continue;
-                        }
+                    Event::Key(key) if key.kind != KeyEventKind::Release => {
                         app.handle_key(key);
                         if app.quit {
                             return Ok(());
@@ -124,6 +121,7 @@ fn event_loop(
                         }
                         dirty = true;
                     }
+                    Event::Key(_) => {}
                     Event::Paste(text) => {
                         app.handle_paste(&text);
                         dirty = true;

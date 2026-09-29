@@ -56,11 +56,15 @@ impl CommentSeverity {
 pub struct CommentReply {
     pub id: String,
     pub body: String,
+    #[serde(rename = "createdAt", alias = "created_at")]
     pub created_at: u64,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub model: Option<String>,
+    /// Preserve fields written by other clients or newer versions.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,6 +90,9 @@ pub struct ReviewComment {
     pub replies: Vec<CommentReply>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub severity: Option<CommentSeverity>,
+    /// Source anchors and other web metadata must survive native edits.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,6 +221,7 @@ impl FileCommentStore {
                     ),
                 };
             let new = ReviewComment {
+                extra: Default::default(),
                 id,
                 file_path,
                 side,
@@ -299,6 +307,7 @@ impl FileCommentStore {
                 return Ok(None);
             };
             c.replies.push(CommentReply {
+                extra: Default::default(),
                 id: new_uuid(),
                 body: body.to_string(),
                 created_at: now_ms,
@@ -434,6 +443,52 @@ mod tests {
             body,
             severity: None,
         }
+    }
+
+    #[test]
+    fn web_and_legacy_native_replies_share_the_web_timestamp_on_write() {
+        for field in ["createdAt", "created_at"] {
+            let value = serde_json::json!({ "id": "r1", "body": "reply", field: 1234, "createdAtPlanVersion": 7 });
+            let reply: CommentReply = serde_json::from_value(value).unwrap();
+            assert_eq!(reply.created_at, 1234);
+            let serialized = serde_json::to_value(reply).unwrap();
+            assert_eq!(serialized["createdAt"], 1234);
+            assert!(serialized.get("created_at").is_none());
+            assert_eq!(serialized["createdAtPlanVersion"], 7);
+        }
+    }
+
+    #[test]
+    fn native_reply_and_resolve_preserve_web_source_metadata() {
+        let dir = tempdir();
+        let store = FileCommentStore::new(dir.to_str().unwrap());
+        let comment = store.add(sample_inline("review"), 1).unwrap();
+        let mut value = serde_json::to_value(vec![comment.clone()]).unwrap();
+        let anchor =
+            serde_json::json!({ "snapshotId": "retained-id", "generation": 5, "fileIndex": 0 });
+        value[0]["sourceAnchor"] = anchor.clone();
+        value[0]["outdated"] = serde_json::json!(true);
+        value[0]["replies"] = serde_json::json!([{ "id": "web-r1", "body": "web reply", "createdAt": 2, "role": "user" }]);
+        std::fs::write(&store.path, serde_json::to_vec(&value).unwrap()).unwrap();
+        store
+            .add_reply(
+                &comment.id,
+                "native reply",
+                Some("agent"),
+                Some("fixture"),
+                3,
+            )
+            .unwrap();
+        store
+            .update(&comment.id, None, Some(CommentStatus::Resolved))
+            .unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&store.path).unwrap()).unwrap();
+        assert_eq!(saved[0]["sourceAnchor"], anchor);
+        assert_eq!(saved[0]["outdated"], true);
+        assert_eq!(saved[0]["status"], "resolved");
+        assert_eq!(saved[0]["replies"][0]["createdAt"], 2);
+        assert_eq!(saved[0]["replies"][1]["createdAt"], 3);
     }
 
     fn sample_file_level<'a>(body: &'a str) -> NewComment<'a> {

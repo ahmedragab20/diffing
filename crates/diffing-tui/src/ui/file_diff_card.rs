@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use diffing_core::comments::{CommentSeverity, CommentSide, CommentStatus, ReviewComment};
 use diffing_core::index::{
-    DiffIndex, IndexedChangeKind, IndexedLineKind, ViewRow, DEFAULT_VIEWPORT_MAX_BYTES,
+    DiffIndex, IndexedChangeKind, IndexedFile, IndexedLineKind, ViewRow, DEFAULT_VIEWPORT_MAX_BYTES,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -125,6 +125,7 @@ struct FrameKey {
     line_numbers: bool,
     tab_size: u8,
     theme: ThemeName,
+    palette: Palette,
     annotation_revision: u64,
 }
 
@@ -372,6 +373,7 @@ pub fn render_card(
         line_numbers,
         tab_size,
         theme,
+        palette: *palette,
         annotation_revision,
     };
     let sequential = cache.sequential_request(request);
@@ -429,6 +431,11 @@ pub fn render_card(
         wrap,
         split,
         line_numbers,
+        number_widths: index
+            .files
+            .get(file_index)
+            .map(LineNumberWidths::for_file)
+            .unwrap_or(LineNumberWidths { old: 1, new: 1 }),
         tab_size,
         theme,
         width: area.width.saturating_sub(2),
@@ -933,17 +940,105 @@ fn review_markers(
 }
 
 #[derive(Clone, Copy)]
+struct LineNumberWidths {
+    old: usize,
+    new: usize,
+}
+
+impl LineNumberWidths {
+    fn for_file(file: &IndexedFile) -> Self {
+        // Git hunks are source-ordered. Their final ranges bound the numbers
+        // across this file without scanning its rows or resizing on scroll.
+        let (old, new) = file
+            .hunks
+            .last()
+            .map(|hunk| {
+                (
+                    hunk.old_start
+                        .saturating_add(hunk.old_lines.saturating_sub(1)),
+                    hunk.new_start
+                        .saturating_add(hunk.new_lines.saturating_sub(1)),
+                )
+            })
+            .unwrap_or((1, 1));
+        Self {
+            old: if matches!(
+                file.kind,
+                IndexedChangeKind::Added | IndexedChangeKind::Untracked
+            ) {
+                0
+            } else {
+                old.max(1).ilog10() as usize + 1
+            },
+            new: if file.kind == IndexedChangeKind::Deleted {
+                0
+            } else {
+                new.max(1).ilog10() as usize + 1
+            },
+        }
+    }
+
+    fn unified_width(self) -> usize {
+        self.old + usize::from(self.old > 0) + self.new + usize::from(self.new > 0)
+    }
+
+    fn unified_prefix(self, old: Option<u32>, new: Option<u32>) -> String {
+        let mut prefix = String::with_capacity(self.unified_width());
+        for (line, width) in [(old, self.old), (new, self.new)] {
+            if width == 0 {
+                continue;
+            }
+            if let Some(line) = line {
+                prefix.push_str(&format!("{line:>width$} "));
+            } else {
+                prefix.push_str(&" ".repeat(width + 1));
+            }
+        }
+        prefix
+    }
+}
+
+#[derive(Clone, Copy)]
 struct RowRenderOptions<'a> {
     path: &'a str,
     horizontal_offset: usize,
     wrap: bool,
     split: bool,
     line_numbers: bool,
+    number_widths: LineNumberWidths,
     tab_size: u8,
     theme: ThemeName,
     width: u16,
     max_lines: usize,
     palette: &'a Palette,
+}
+
+impl RowRenderOptions<'_> {
+    fn unified_prefix_width(self) -> usize {
+        if self.line_numbers {
+            self.number_widths.unified_width() + 2
+        } else {
+            2
+        }
+    }
+
+    fn split_content_width(self) -> usize {
+        let left = self.width.saturating_sub(1) as usize / 2;
+        let right = self.width.saturating_sub(1) as usize - left;
+        let old = if self.line_numbers {
+            self.number_widths.old
+        } else {
+            0
+        };
+        let new = if self.line_numbers {
+            self.number_widths.new
+        } else {
+            0
+        };
+        left.saturating_sub(old + 2)
+            .min(right.saturating_sub(new + 2))
+            .max(1)
+    }
 }
 
 fn build_row_lines(row: &ViewRow, options: RowRenderOptions<'_>) -> Vec<Line<'static>> {
@@ -952,12 +1047,12 @@ fn build_row_lines(row: &ViewRow, options: RowRenderOptions<'_>) -> Vec<Line<'st
         horizontal_offset,
         wrap,
         split,
-        line_numbers,
         tab_size,
         theme: _,
         width,
         max_lines,
         palette,
+        ..
     } = options;
     if let ViewRow::Line {
         kind,
@@ -968,9 +1063,7 @@ fn build_row_lines(row: &ViewRow, options: RowRenderOptions<'_>) -> Vec<Line<'st
     } = row
     {
         if split {
-            let gutter = if line_numbers { 8 } else { 2 };
-            let content_width =
-                (width.saturating_sub(3) / 2).saturating_sub(gutter).max(1) as usize;
+            let content_width = options.split_content_width();
             let visible = bounded_expand_slice(
                 content,
                 tab_size,
@@ -998,9 +1091,9 @@ fn build_row_lines(row: &ViewRow, options: RowRenderOptions<'_>) -> Vec<Line<'st
                 .collect();
         }
         if wrap {
-            let content_width = width
-                .saturating_sub(if line_numbers { 18 } else { 5 })
-                .max(1) as usize;
+            let content_width = (width as usize)
+                .saturating_sub(options.unified_prefix_width())
+                .max(1);
             let segments = bounded_wrapped_segments(content, tab_size, content_width, max_lines);
             return segments
                 .into_iter()
@@ -1191,27 +1284,18 @@ fn build_diff_line(
     let with_background = |style: Style| style.bg(background);
     let mut spans = Vec::new();
     if line_numbers {
-        let old = old_lineno
-            .map(|line| format!("{line:>6}"))
-            .unwrap_or_else(|| "      ".to_string());
-        let new = new_lineno
-            .map(|line| format!("{line:>6}"))
-            .unwrap_or_else(|| "      ".to_string());
         spans.push(Span::styled(
-            format!(" {old} {new} "),
+            options.number_widths.unified_prefix(old_lineno, new_lineno),
             with_background(Style::default().fg(tokens.gutter)),
         ));
     }
     spans.push(Span::styled(
-        format!(" {marker} "),
+        format!("{marker} "),
         with_background(line_style.add_modifier(Modifier::BOLD)),
     ));
-    let gutter_width = if line_numbers { 15 } else { 0 };
-    let content_width = options
-        .width
-        .saturating_sub(gutter_width)
-        .saturating_sub(3)
-        .max(1) as usize;
+    let content_width = (options.width as usize)
+        .saturating_sub(options.unified_prefix_width())
+        .max(1);
     let visible_content = bounded_expand_slice(content, tab_size, horizontal_offset, content_width);
     let highlight_background = if background == Color::Reset {
         tokens.canvas
@@ -1243,8 +1327,7 @@ fn build_paired_split_lines(
     let width = options.width;
     let left_width = width.saturating_sub(1) as usize / 2;
     let right_width = width.saturating_sub(1) as usize - left_width;
-    let gutter = if options.line_numbers { 8 } else { 2 };
-    let content_width = left_width.min(right_width).saturating_sub(gutter).max(1);
+    let content_width = options.split_content_width();
 
     let visible_cells = if options.wrap {
         content_width.saturating_mul(options.max_lines.max(1))
@@ -1272,35 +1355,31 @@ fn build_paired_split_lines(
     let left_mask = &masks.old;
     let right_mask = &masks.new;
 
-    let left_visible = left_data
+    let segments = |data: &SplitLineData, mask: &[bool]| {
+        split_segments(
+            &data.content,
+            mask,
+            content_width,
+            options.max_lines,
+            options.wrap,
+        )
+    };
+    let left_visible = left_data.as_ref().map(|data| segments(data, left_mask));
+    let right_visible = right_data.as_ref().map(|data| segments(data, right_mask));
+    let segment_count = left_visible
         .as_ref()
-        .map(|data| visible_side(&data.content, left_mask, 0, options.wrap));
-    let right_visible = right_data
-        .as_ref()
-        .map(|data| visible_side(&data.content, right_mask, 0, options.wrap));
-    let left_len = left_visible
-        .as_ref()
-        .map(|(content, _)| cell_width(content))
-        .unwrap_or(0);
-    let right_len = right_visible
-        .as_ref()
-        .map(|(content, _)| cell_width(content))
-        .unwrap_or(0);
-    let segment_count = if options.wrap {
-        left_len.max(right_len).max(1).div_ceil(content_width)
-    } else {
-        1
-    }
-    .min(options.max_lines.max(1));
+        .map_or(0, Vec::len)
+        .max(right_visible.as_ref().map_or(0, Vec::len))
+        .max(1);
 
     (0..segment_count)
         .map(|segment_index| {
-            let start = segment_index * content_width;
-            let end = start + content_width;
-            let mut spans = if let (Some(data), Some((content, mask))) =
-                (left_data.as_ref(), left_visible.as_ref())
-            {
-                let (segment, segment_mask) = cell_slice(content, mask, start, end);
+            let mut spans = if let (Some(data), Some((segment, segment_mask))) = (
+                left_data.as_ref(),
+                left_visible
+                    .as_ref()
+                    .and_then(|segments| segments.get(segment_index)),
+            ) {
                 build_split_side(
                     (segment_index == 0).then_some(data.line_number).flatten(),
                     if data.kind == IndexedLineKind::Context {
@@ -1308,9 +1387,10 @@ fn build_paired_split_lines(
                     } else {
                         '-'
                     },
-                    &segment,
-                    Some(&segment_mask),
+                    segment,
+                    Some(segment_mask),
                     left_width,
+                    options.number_widths.old,
                     if data.kind == IndexedLineKind::Del {
                         tokens.removed_surface
                     } else {
@@ -1326,10 +1406,12 @@ fn build_paired_split_lines(
                 "│",
                 Style::default().fg(tokens.rule_subtle).bg(tokens.canvas),
             ));
-            if let (Some(data), Some((content, mask))) =
-                (right_data.as_ref(), right_visible.as_ref())
-            {
-                let (segment, segment_mask) = cell_slice(content, mask, start, end);
+            if let (Some(data), Some((segment, segment_mask))) = (
+                right_data.as_ref(),
+                right_visible
+                    .as_ref()
+                    .and_then(|segments| segments.get(segment_index)),
+            ) {
                 spans.extend(build_split_side(
                     (segment_index == 0).then_some(data.line_number).flatten(),
                     if data.kind == IndexedLineKind::Context {
@@ -1337,9 +1419,10 @@ fn build_paired_split_lines(
                     } else {
                         '+'
                     },
-                    &segment,
-                    Some(&segment_mask),
+                    segment,
+                    Some(segment_mask),
                     right_width,
+                    options.number_widths.new,
                     if data.kind == IndexedLineKind::Add {
                         tokens.added_surface
                     } else {
@@ -1390,46 +1473,32 @@ fn split_line_data(
     })
 }
 
-fn visible_side(
+/// Wrap complete terminal characters and carry the intraline mask with them.
+/// Fixed cell slices overlap at wide glyphs and can clip the following character.
+fn split_segments(
     content: &str,
     mask: &[bool],
-    horizontal_offset: usize,
+    width: usize,
+    max_lines: usize,
     wrap: bool,
-) -> (String, Vec<bool>) {
-    let offset = if wrap { 0 } else { horizontal_offset };
+) -> Vec<(String, Vec<bool>)> {
+    let mut segments = vec![(String::new(), Vec::new())];
     let mut column = 0;
-    let mut visible = String::new();
-    let mut visible_mask = Vec::new();
     for (index, character) in content.chars().enumerate() {
-        let width = UnicodeWidthChar::width(character).unwrap_or(0);
-        if column + width <= offset {
-            column += width;
-            continue;
+        let cells = UnicodeWidthChar::width(character).unwrap_or(0);
+        if column + cells > width {
+            if !wrap || segments.len() >= max_lines.max(1) {
+                break;
+            }
+            segments.push((String::new(), Vec::new()));
+            column = 0;
         }
-        visible.push(character);
-        visible_mask.push(mask.get(index).copied().unwrap_or(false));
-        column += width;
+        let (text, changed) = segments.last_mut().unwrap();
+        text.push(character);
+        changed.push(mask.get(index).copied().unwrap_or(false));
+        column += cells;
     }
-    (visible, visible_mask)
-}
-
-fn cell_slice(value: &str, mask: &[bool], start: usize, end: usize) -> (String, Vec<bool>) {
-    let mut column = 0;
-    let mut text = String::new();
-    let mut sliced_mask = Vec::new();
-    for (index, character) in value.chars().enumerate() {
-        let width = UnicodeWidthChar::width(character).unwrap_or(0);
-        let next = column + width;
-        if next > start && column < end {
-            text.push(character);
-            sliced_mask.push(mask.get(index).copied().unwrap_or(false));
-        }
-        column = next;
-        if column >= end {
-            break;
-        }
-    }
-    (text, sliced_mask)
+    segments
 }
 
 fn empty_split_side(width: usize, background: Color, palette: &Palette) -> Vec<Span<'static>> {
@@ -1457,27 +1526,45 @@ fn build_split_diff_line(
         IndexedLineKind::Del => (tokens.removed_surface, tokens.canvas),
         IndexedLineKind::Context => (tokens.canvas, tokens.canvas),
     };
-    let mut spans = build_split_side(
-        old_lineno,
-        '-',
-        content,
-        None,
-        left_width,
-        left_background,
-        tokens.negative,
-        options,
-    );
+    let mut spans = if kind == IndexedLineKind::Add {
+        empty_split_side(left_width, left_background, palette)
+    } else {
+        build_split_side(
+            old_lineno,
+            if kind == IndexedLineKind::Context {
+                ' '
+            } else {
+                '-'
+            },
+            content,
+            None,
+            left_width,
+            options.number_widths.old,
+            left_background,
+            tokens.negative,
+            options,
+        )
+    };
     spans.push(Span::styled("│", Style::default().fg(tokens.rule_subtle)));
-    spans.extend(build_split_side(
-        new_lineno,
-        '+',
-        content,
-        None,
-        right_width,
-        right_background,
-        tokens.positive,
-        options,
-    ));
+    spans.extend(if kind == IndexedLineKind::Del {
+        empty_split_side(right_width, right_background, palette)
+    } else {
+        build_split_side(
+            new_lineno,
+            if kind == IndexedLineKind::Context {
+                ' '
+            } else {
+                '+'
+            },
+            content,
+            None,
+            right_width,
+            options.number_widths.new,
+            right_background,
+            tokens.positive,
+            options,
+        )
+    });
     Line::from(spans)
 }
 
@@ -1488,20 +1575,17 @@ fn build_split_side(
     content: &str,
     changed: Option<&[bool]>,
     width: usize,
+    number_width: usize,
     background: Color,
     semantic: Color,
     options: &RowRenderOptions<'_>,
 ) -> Vec<Span<'static>> {
     let palette = options.palette;
     let tokens = GridlineTokens::from(palette);
-    let Some(line_number) = line_number else {
-        return vec![Span::styled(
-            " ".repeat(width),
-            Style::default().fg(tokens.gutter).bg(background),
-        )];
-    };
     let prefix = if options.line_numbers {
-        format!("{line_number:>6}  ")
+        line_number
+            .map(|line| format!("{line:>number_width$}{marker} "))
+            .unwrap_or_else(|| " ".repeat(number_width + 2))
     } else {
         format!("{marker} ")
     };
@@ -1934,6 +2018,157 @@ mod tests {
     }
 
     #[test]
+    fn number_gutters_fit_the_file_and_omit_a_missing_side() {
+        for (headers, hunk, expected_column) in [
+            (
+                "--- a/a.rs\n+++ b/a.rs",
+                "@@ -1,1 +1,1 @@\n-BEFORE\n+AFTER",
+                8,
+            ),
+            (
+                "new file mode 100644\n--- /dev/null\n+++ b/a.rs",
+                "@@ -0,0 +1,1 @@\n+AFTER",
+                6,
+            ),
+            (
+                "deleted file mode 100644\n--- a/a.rs\n+++ /dev/null",
+                "@@ -1,1 +0,0 @@\n-BEFORE",
+                6,
+            ),
+            (
+                "--- a/a.rs\n+++ b/a.rs",
+                "@@ -1000000,1 +1000000,1 @@\n-BEFORE\n+AFTER",
+                20,
+            ),
+            (
+                "--- a/a.rs\n+++ b/a.rs",
+                "@@ -1,1 +1,1 @@\n-BEFORE\n+AFTER\n@@ -100,1 +100,1 @@\n-BEFORE\n+AFTER",
+                12,
+            ),
+        ] {
+            let patch = format!("diff --git a/a.rs b/a.rs\n{headers}\n{hunk}\n");
+            let dir = tempfile::tempdir().unwrap();
+            let index = build_index_from_reader(
+                Cursor::new(patch.as_bytes()),
+                &dir.path().join("patch"),
+                1,
+                |_| {},
+            )
+            .unwrap();
+            let area = Rect::new(0, 0, 80, 10);
+            let mut buffer = Buffer::empty(area);
+            render_card(
+                &index,
+                &mut DiffRenderCache::default(),
+                0,
+                area,
+                0,
+                0,
+                None,
+                None,
+                0,
+                false,
+                false,
+                true,
+                4,
+                ThemeName::default(),
+                &[],
+                &[],
+                0,
+                &Palette::default(),
+                &mut buffer,
+            );
+            let source_rows: Vec<_> = (0..area.height)
+                .filter_map(|y| {
+                    let text = (0..area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>();
+                    text.find("BEFORE")
+                        .or_else(|| text.find("AFTER"))
+                        .map(|column| (column, text))
+                })
+                .collect();
+            assert!(!source_rows.is_empty());
+            for (column, text) in source_rows {
+                assert_eq!(column, expected_column, "wrong source gutter: {text:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn compact_and_large_gutters_preserve_wrapped_source_on_both_layouts() {
+        let palette = Palette::default();
+        let source = "abcdefghijklmnopqrstuvwxyz0123456789";
+        for (number, digits) in [(1, 1), (1_000_000, 7)] {
+            for numbers in [false, true] {
+                let options = RowRenderOptions {
+                    path: "sample.txt",
+                    horizontal_offset: 0,
+                    wrap: true,
+                    split: false,
+                    line_numbers: numbers,
+                    number_widths: LineNumberWidths {
+                        old: digits,
+                        new: digits,
+                    },
+                    tab_size: 4,
+                    theme: ThemeName::default(),
+                    width: 41,
+                    max_lines: 20,
+                    palette: &palette,
+                };
+                let row = ViewRow::Line {
+                    hunk_index: 0,
+                    kind: IndexedLineKind::Context,
+                    old_lineno: Some(number),
+                    new_lineno: Some(number),
+                    content: source.to_string(),
+                };
+                let unified = build_row_lines(&row, options);
+                let prefix = if numbers { 2 * digits + 4 } else { 2 };
+                let decoded = unified
+                    .iter()
+                    .map(|line| {
+                        let text = line
+                            .spans
+                            .iter()
+                            .map(|span| span.content.as_ref())
+                            .collect::<String>();
+                        text.chars().skip(prefix).collect::<String>()
+                    })
+                    .collect::<String>();
+                assert_eq!(decoded, source, "unified numbers={numbers} digits={digits}");
+                let split = build_paired_split_lines(Some(&row), Some(&row), &options);
+                let prefix = if numbers { digits + 2 } else { 2 };
+                for side in [0, 1] {
+                    let decoded = split
+                        .iter()
+                        .map(|line| {
+                            let text = line
+                                .spans
+                                .iter()
+                                .map(|span| span.content.as_ref())
+                                .collect::<String>();
+                            text.split('│')
+                                .nth(side)
+                                .unwrap()
+                                .chars()
+                                .skip(prefix)
+                                .collect::<String>()
+                                .trim_end()
+                                .to_string()
+                        })
+                        .collect::<String>();
+                    assert_eq!(
+                        decoded, source,
+                        "split side={side} numbers={numbers} digits={digits}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn adjacent_scrolls_reuse_the_overscanned_viewport() {
         let mut patch =
             String::from("diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,400 +1,400 @@\n");
@@ -1995,6 +2230,7 @@ mod tests {
             wrap: true,
             split: false,
             line_numbers: true,
+            number_widths: LineNumberWidths { old: 6, new: 6 },
             tab_size: 4,
             theme: ThemeName::default(),
             width: 28,
@@ -2135,6 +2371,59 @@ mod tests {
     }
 
     #[test]
+    fn split_wrap_keeps_continuation_text_without_repeating_line_numbers() {
+        let palette = Palette::default();
+        let options = RowRenderOptions {
+            path: "sample.txt",
+            horizontal_offset: 0,
+            wrap: true,
+            split: true,
+            line_numbers: true,
+            number_widths: LineNumberWidths { old: 6, new: 6 },
+            tab_size: 4,
+            theme: ThemeName::default(),
+            width: 81,
+            max_lines: 8,
+            palette: &palette,
+        };
+        let row = ViewRow::Line {
+            hunk_index: 0,
+            kind: IndexedLineKind::Context,
+            old_lineno: Some(7),
+            new_lineno: Some(7),
+            content: format!("{}CONTINUED", "a".repeat(32)),
+        };
+        let lines = build_paired_split_lines(Some(&row), Some(&row), &options);
+        assert_eq!(lines.len(), 2);
+        let second = lines[1]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(second.matches("CONTINUED").count(), 2);
+        assert!(!second.contains('7'));
+        let wide = ViewRow::Line {
+            hunk_index: 0,
+            kind: IndexedLineKind::Context,
+            old_lineno: Some(7),
+            new_lineno: Some(7),
+            content: format!("{}界{}TAIL", "a".repeat(31), "b".repeat(31)),
+        };
+        let lines = build_paired_split_lines(Some(&wide), Some(&wide), &options);
+        let text = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(text.matches('界').count(), 2);
+        assert_eq!(
+            text.matches('b').count(),
+            62,
+            "wide wrap boundary lost source text"
+        );
+    }
+
+    #[test]
     fn split_rows_preserve_syntax_token_styles() {
         let theme = crate::themes::ThemeName::GithubDark;
         let palette = Palette::for_theme(theme);
@@ -2144,6 +2433,7 @@ mod tests {
             wrap: false,
             split: true,
             line_numbers: true,
+            number_widths: LineNumberWidths { old: 6, new: 6 },
             tab_size: 4,
             theme,
             width: 100,
@@ -2174,6 +2464,7 @@ mod tests {
             wrap: false,
             split: true,
             line_numbers: true,
+            number_widths: LineNumberWidths { old: 6, new: 6 },
             tab_size: 4,
             theme,
             width: 120,
@@ -2192,6 +2483,15 @@ mod tests {
             line.spans.iter().filter_map(|span| span.style.fg).collect();
         assert!(colors.contains(&palette.syntax_keyword));
         assert!(colors.contains(&palette.syntax_string));
+        let text = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(
+            text.contains("12+ "),
+            "added split rows need a non-color marker"
+        );
     }
 
     #[test]
@@ -2204,6 +2504,7 @@ mod tests {
             wrap: false,
             split: false,
             line_numbers: true,
+            number_widths: LineNumberWidths { old: 6, new: 6 },
             tab_size: 4,
             theme,
             width: 100,
@@ -2278,6 +2579,7 @@ mod tests {
     fn comment_marker_covers_every_line_of_inclusive_range_on_its_side() {
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
         let comment = ReviewComment {
+            extra: Default::default(),
             id: "range".to_string(),
             file_path: "src/main.rs".to_string(),
             side: CommentSide::Additions,

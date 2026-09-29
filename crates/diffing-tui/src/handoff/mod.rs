@@ -11,14 +11,42 @@
 pub mod format;
 pub mod review;
 
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use notify::{Event, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
+
+/// Replace the offline handoff only after the whole new review is on disk.
+/// A failed write leaves the previous review intact and does not release agents.
+pub fn persist_review(path: &Path, xml: &str) -> Result<()> {
+    let parent = path.parent().context("review storage has no parent")?;
+    std::fs::create_dir_all(parent)?;
+    let mut nonce = [0_u8; 16];
+    getrandom::getrandom(&mut nonce).map_err(|error| anyhow::anyhow!("review nonce: {error}"))?;
+    let temporary = path.with_extension(format!("xml.{:032x}.tmp", u128::from_le_bytes(nonce)));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let result = (|| -> Result<()> {
+        file.write_all(xml.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
 
 pub struct CommentsWatcher {
     _debouncer: Debouncer<notify::RecommendedWatcher, FileIdMap>,
@@ -31,7 +59,7 @@ pub struct CommentsWatcher {
 /// the TUI continues without live refresh instead of failing startup.
 pub struct RepoWatcher {
     _watcher: notify::RecommendedWatcher,
-    rx: Receiver<()>,
+    dirty: Arc<AtomicBool>,
 }
 
 impl RepoWatcher {
@@ -39,9 +67,15 @@ impl RepoWatcher {
     /// Returns `None` when the OS refuses the watch — callers should log and
     /// continue without live refresh.
     pub fn start(repo_root: &Path) -> Option<Self> {
-        let (tx, rx) = mpsc::sync_channel(1);
+        let dirty = Arc::new(AtomicBool::new(false));
+        let pending = dirty.clone();
         let root = repo_root.to_path_buf();
         let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+            // One pending refresh already covers the current working tree.
+            // Avoid spawning check-ignore for every event in a save/build burst.
+            if pending.load(Ordering::Acquire) {
+                return;
+            }
             let Ok(event) = event else {
                 return;
             };
@@ -50,7 +84,7 @@ impl RepoWatcher {
                 .iter()
                 .any(|path| repo_watch_path_is_relevant(&root, path))
             {
-                let _ = tx.try_send(());
+                pending.store(true, Ordering::Release);
             }
         })
         .ok()?;
@@ -63,17 +97,13 @@ impl RepoWatcher {
         }
         Some(Self {
             _watcher: watcher,
-            rx,
+            dirty,
         })
     }
 
     /// Drain coalesced refresh signals without blocking.
     pub fn try_recv(&self) -> bool {
-        let mut dirty = false;
-        while self.rx.try_recv().is_ok() {
-            dirty = true;
-        }
-        dirty
+        self.dirty.swap(false, Ordering::AcqRel)
     }
 }
 

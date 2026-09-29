@@ -39,7 +39,7 @@ import {
 import {
 	appendSessionToken,
 	joinSessionApiUrl,
-	reviewSessionBaseUrl,
+	reviewSessionApiOrigin,
 	reviewSessionUrl,
 } from "./lib/session-url.js";
 import type { Plan } from "./lib/plan-types.js";
@@ -603,7 +603,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 			);
 		}
 		ensureReusableLock(lock);
-		const apiOrigin = reviewSessionBaseUrl(lock);
+		const apiOrigin = reviewSessionApiOrigin(lock);
 		if (!apiOrigin) {
 			throw new Error(
 				"The active diffing session does not expose a reachable loopback API.",

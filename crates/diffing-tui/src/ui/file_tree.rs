@@ -22,8 +22,8 @@ pub struct FileNode {
     pub viewed: bool,
     pub comment_count: u32,
     pub change_marker: char,
-    pub additions: u32,
-    pub deletions: u32,
+    pub additions: u64,
+    pub deletions: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +59,29 @@ impl FileTree {
                 parent = directory.parent();
             }
         }
-        flatten_directory(Path::new(""), 0, files, &directories, &mut nodes);
+        let mut children: HashMap<PathBuf, Vec<(usize, u8, TreeEntry)>> = HashMap::new();
+        for (path, first_seen) in directories {
+            let parent = path.parent().unwrap_or(Path::new("")).to_path_buf();
+            children
+                .entry(parent)
+                .or_default()
+                .push((first_seen, 0, TreeEntry::Directory(path)));
+        }
+        for (index, file) in files.iter().enumerate() {
+            children
+                .entry(
+                    file.display_path()
+                        .parent()
+                        .unwrap_or(Path::new(""))
+                        .to_path_buf(),
+                )
+                .or_default()
+                .push((index, 1, TreeEntry::File(index)));
+        }
+        for entries in children.values_mut() {
+            entries.sort_by_key(|(first_seen, kind, _)| (*first_seen, *kind));
+        }
+        flatten_directory(Path::new(""), 0, files, &children, &mut nodes);
 
         let cursor = nodes
             .iter()
@@ -81,6 +103,13 @@ impl FileTree {
 
     pub fn selected_file_idx(&self) -> Option<usize> {
         self.nodes.get(self.cursor).and_then(|n| n.file_diff_idx)
+    }
+
+    pub fn refresh(&mut self, files: &[FileDiff]) {
+        let collapsed = std::mem::take(&mut self.collapsed);
+        *self = Self::build(files);
+        self.collapsed = collapsed;
+        self.rebuild_visible(None);
     }
 
     pub fn active_file_idx(&self) -> Option<usize> {
@@ -298,6 +327,20 @@ impl FileTree {
         }
     }
 
+    /// Apply one snapshot's review state and counts in a single tree walk.
+    /// Updating each file via set_viewed/set_comment_count is quadratic.
+    pub fn update_metadata(&mut self, metadata: impl Fn(usize) -> (bool, u32, u64, u64)) {
+        for node in self.nodes.iter_mut().chain(self.all_nodes.iter_mut()) {
+            if let Some(index) = node.file_diff_idx {
+                let (viewed, comments, additions, deletions) = metadata(index);
+                node.viewed = viewed;
+                node.comment_count = comments;
+                node.additions = additions;
+                node.deletions = deletions;
+            }
+        }
+    }
+
     pub fn set_viewed(&mut self, file_idx: usize, viewed: bool) {
         for node in self
             .nodes
@@ -345,26 +388,35 @@ impl FileTree {
 
     fn rebuild_visible(&mut self, selected_path: Option<PathBuf>) {
         let filtered: HashSet<usize> = self.filtered_file_indices.iter().copied().collect();
-        self.nodes =
-            self.all_nodes
-                .iter()
-                .filter(|node| match node.kind {
-                    FileNodeKind::File => node
-                        .file_diff_idx
-                        .is_some_and(|index| filtered.contains(&index)),
-                    FileNodeKind::Dir => self.all_nodes.iter().any(|file| {
-                        file.file_diff_idx
-                            .is_some_and(|index| filtered.contains(&index))
-                            && file.path.starts_with(&node.path)
-                    }),
-                })
-                .filter(|node| {
-                    !self.collapsed.iter().any(|directory| {
-                        node.path != *directory && node.path.starts_with(directory)
-                    })
-                })
-                .cloned()
-                .collect();
+        let mut visible_directories = HashSet::new();
+        for node in &self.all_nodes {
+            if node
+                .file_diff_idx
+                .is_some_and(|index| filtered.contains(&index))
+            {
+                for parent in node.path.ancestors().skip(1) {
+                    visible_directories.insert(parent.to_path_buf());
+                }
+            }
+        }
+        self.nodes = self
+            .all_nodes
+            .iter()
+            .filter(|node| match node.kind {
+                FileNodeKind::File => node
+                    .file_diff_idx
+                    .is_some_and(|index| filtered.contains(&index)),
+                FileNodeKind::Dir => visible_directories.contains(&node.path),
+            })
+            .filter(|node| {
+                !node
+                    .path
+                    .ancestors()
+                    .skip(1)
+                    .any(|parent| self.collapsed.contains(parent))
+            })
+            .cloned()
+            .collect();
         for node in &mut self.nodes {
             if node.kind == FileNodeKind::Dir {
                 node.expanded = !self.collapsed.contains(&node.path);
@@ -408,27 +460,16 @@ fn flatten_directory(
     parent: &Path,
     depth: usize,
     files: &[FileDiff],
-    directories: &HashMap<PathBuf, usize>,
+    children: &HashMap<PathBuf, Vec<(usize, u8, TreeEntry)>>,
     nodes: &mut Vec<FileNode>,
 ) {
-    let mut entries: Vec<(usize, u8, TreeEntry)> = directories
-        .iter()
-        .filter(|(path, _)| path.parent() == Some(parent))
-        .map(|(path, first_seen)| (*first_seen, 0, TreeEntry::Directory(path.clone())))
-        .chain(
-            files
-                .iter()
-                .enumerate()
-                .filter(|(_, file)| file.display_path().parent() == Some(parent))
-                .map(|(index, _)| (index, 1, TreeEntry::File(index))),
-        )
-        .collect();
-    entries.sort_by_key(|(first_seen, kind, _)| (*first_seen, *kind));
-
+    let Some(entries) = children.get(parent) else {
+        return;
+    };
     for (_, _, entry) in entries {
         match entry {
             TreeEntry::File(index) => {
-                let file = &files[index];
+                let file = &files[*index];
                 let path = file.display_path();
                 let (additions, deletions) = file.hunks.iter().flat_map(|hunk| &hunk.lines).fold(
                     (0, 0),
@@ -447,7 +488,7 @@ fn flatten_directory(
                     path: path.to_path_buf(),
                     depth,
                     kind: FileNodeKind::File,
-                    file_diff_idx: Some(index),
+                    file_diff_idx: Some(*index),
                     expanded: false,
                     viewed: false,
                     comment_count: 0,
@@ -457,7 +498,7 @@ fn flatten_directory(
                 });
             }
             TreeEntry::Directory(directory) => {
-                let (path, name) = compact_directory(directory, files, directories);
+                let (path, name) = compact_directory(directory.clone(), children);
                 nodes.push(FileNode {
                     name,
                     path: path.clone(),
@@ -471,7 +512,7 @@ fn flatten_directory(
                     additions: 0,
                     deletions: 0,
                 });
-                flatten_directory(&path, depth + 1, files, directories, nodes);
+                flatten_directory(&path, depth + 1, files, children, nodes);
             }
         }
     }
@@ -479,26 +520,17 @@ fn flatten_directory(
 
 fn compact_directory(
     mut directory: PathBuf,
-    files: &[FileDiff],
-    directories: &HashMap<PathBuf, usize>,
+    children: &HashMap<PathBuf, Vec<(usize, u8, TreeEntry)>>,
 ) -> (PathBuf, String) {
     let mut name = directory
         .file_name()
         .and_then(|part| part.to_str())
         .unwrap_or("")
         .to_string();
-    loop {
-        let has_direct_files = files
-            .iter()
-            .any(|file| file.display_path().parent() == Some(directory.as_path()));
-        let children: Vec<&PathBuf> = directories
-            .keys()
-            .filter(|path| path.parent() == Some(directory.as_path()))
-            .collect();
-        if has_direct_files || children.len() != 1 {
+    while let Some(entries) = children.get(&directory) {
+        let [(_, _, TreeEntry::Directory(child))] = entries.as_slice() else {
             break;
-        }
-        let child = children[0];
+        };
         let child_name = child
             .file_name()
             .and_then(|part| part.to_str())
@@ -528,6 +560,36 @@ fn change_marker_for(f: &FileDiff) -> char {
 mod tests {
     use super::*;
     use diffing_core::diff::{ChangeKind, FileDiff};
+
+    #[test]
+    fn refresh_and_bulk_metadata_preserve_collapsed_review_state() {
+        let files = vec![
+            fd("src/a.rs", ChangeKind::Modified),
+            fd("docs/b.md", ChangeKind::Added),
+        ];
+        let mut tree = FileTree::build(&files);
+        tree.set_cursor(0);
+        tree.collapse_selected();
+        tree.refresh(&files);
+        tree.update_metadata(|index| (index == 0, if index == 0 { 2 } else { 0 }, 9, 3));
+        assert!(!tree
+            .nodes
+            .iter()
+            .any(|node| node.path == Path::new("src/a.rs")));
+        tree.apply_filter("", false, true);
+        assert_eq!(tree.navigable_file_indices(), &[0]);
+        tree.jump_to_file(0);
+        let node = &tree.nodes[tree.cursor];
+        assert_eq!(
+            (
+                node.viewed,
+                node.comment_count,
+                node.additions,
+                node.deletions
+            ),
+            (true, 2, 9, 3)
+        );
+    }
 
     fn fd(name: &str, kind: ChangeKind) -> FileDiff {
         FileDiff {

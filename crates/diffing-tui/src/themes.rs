@@ -64,7 +64,7 @@ impl Default for ThemeName {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
     pub bg: Color,
     pub panel: Color,
@@ -124,8 +124,43 @@ impl Palette {
         if truecolor {
             palette
         } else {
-            palette.map_colors(ansi256)
+            palette.for_ansi256()
         }
+    }
+
+    fn for_ansi256(self) -> Self {
+        let mut palette = self.map_colors(ansi256);
+        let surfaces = [
+            palette.bg,
+            palette.panel,
+            palette.elevated,
+            palette.element,
+            palette.selection_bg,
+            palette.added_bg,
+            palette.removed_bg,
+        ];
+        let readable = |source, minimum| {
+            (16..=255)
+                .map(Color::Indexed)
+                .filter(|candidate| {
+                    surfaces
+                        .iter()
+                        .all(|surface| contrast_ratio(*candidate, *surface) >= minimum)
+                })
+                .min_by_key(|candidate| color_distance(source, *candidate))
+                .unwrap_or_else(|| ansi256(ensure_contrast(source, &surfaces, minimum)))
+        };
+        palette.fg = readable(self.fg, 4.5);
+        palette.code_fg = readable(self.code_fg, 4.5);
+        palette.dim = readable(self.dim, 3.0);
+        palette.gutter = palette.dim;
+        palette.syntax_comment = palette.dim;
+        palette.syntax_keyword = readable(self.syntax_keyword, 4.5);
+        palette.syntax_string = readable(self.syntax_string, 4.5);
+        palette.syntax_type = readable(self.syntax_type, 4.5);
+        palette.syntax_constant = readable(self.syntax_constant, 4.5);
+        palette.syntax_function = readable(self.syntax_function, 4.5);
+        palette
     }
 
     fn map_colors(self, map: impl Fn(Color) -> Color) -> Self {
@@ -160,11 +195,22 @@ impl Palette {
 }
 
 fn ansi256(color: Color) -> Color {
-    let Color::Rgb(red, green, blue) = color else {
+    let Color::Rgb(..) = color else {
         return color;
     };
-    let component = |value: u8| ((value as u16 * 5 + 127) / 255) as u8;
-    Color::Indexed(16 + 36 * component(red) + 6 * component(green) + component(blue))
+    (16..=255)
+        .map(Color::Indexed)
+        .min_by_key(|candidate| color_distance(color, *candidate))
+        .unwrap_or(color)
+}
+
+fn color_distance(left: Color, right: Color) -> u32 {
+    let (lr, lg, lb) = rgb(left);
+    let (rr, rg, rb) = rgb(right);
+    [(lr, rr), (lg, rg), (lb, rb)]
+        .iter()
+        .map(|(a, b)| (i32::from(*a) - i32::from(*b)).pow(2) as u32)
+        .sum()
 }
 
 fn parse_theme_catalog() -> Vec<ThemeDefinition> {
@@ -333,9 +379,18 @@ fn parse_hex(value: &str) -> Option<Color> {
     Some(Color::Rgb(r, g, b))
 }
 
-fn rgb(color: Color) -> (u8, u8, u8) {
+pub(crate) fn rgb(color: Color) -> (u8, u8, u8) {
     match color {
         Color::Rgb(r, g, b) => (r, g, b),
+        Color::Indexed(index @ 16..=231) => {
+            const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+            let index = (index - 16) as usize;
+            (LEVELS[index / 36], LEVELS[index / 6 % 6], LEVELS[index % 6])
+        }
+        Color::Indexed(index @ 232..=255) => {
+            let gray = 8 + (index - 232) * 10;
+            (gray, gray, gray)
+        }
         _ => (128, 128, 128),
     }
 }
@@ -434,6 +489,35 @@ fn display_name(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ansi_palettes_preserve_text_contrast_on_every_surface() {
+        for theme in ThemeName::all() {
+            let palette = Palette::for_theme(*theme).for_ansi256();
+            for background in [
+                palette.bg,
+                palette.panel,
+                palette.elevated,
+                palette.element,
+                palette.selection_bg,
+                palette.added_bg,
+                palette.removed_bg,
+            ] {
+                for foreground in [palette.fg, palette.code_fg] {
+                    assert!(
+                        contrast_ratio(foreground, background) >= 4.5,
+                        "{} loses text contrast after ANSI conversion",
+                        theme.label()
+                    );
+                }
+                assert!(
+                    contrast_ratio(palette.dim, background) >= 3.0,
+                    "{} loses muted contrast after ANSI conversion",
+                    theme.label()
+                );
+            }
+        }
+    }
 
     #[test]
     fn rgb_colors_have_a_256_color_fallback() {

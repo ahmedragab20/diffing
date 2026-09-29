@@ -7,6 +7,7 @@ pub enum ReviewDecision {
     Approved,
     ChangesRequested,
     Rejected,
+    CommentOnly,
 }
 
 impl ReviewDecision {
@@ -14,6 +15,7 @@ impl ReviewDecision {
         ReviewDecision::Approved,
         ReviewDecision::ChangesRequested,
         ReviewDecision::Rejected,
+        ReviewDecision::CommentOnly,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -21,14 +23,16 @@ impl ReviewDecision {
             ReviewDecision::Approved => "approved",
             ReviewDecision::ChangesRequested => "changes-requested",
             ReviewDecision::Rejected => "rejected",
+            ReviewDecision::CommentOnly => "comment-only",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            ReviewDecision::Approved => "Approved",
-            ReviewDecision::ChangesRequested => "Request changes",
-            ReviewDecision::Rejected => "Rejected",
+            ReviewDecision::Approved => "Approve",
+            ReviewDecision::ChangesRequested => "Request edits",
+            ReviewDecision::Rejected => "Reject",
+            ReviewDecision::CommentOnly => "Comment only",
         }
     }
 
@@ -38,7 +42,25 @@ impl ReviewDecision {
             "approved" => Some(ReviewDecision::Approved),
             "changes-requested" => Some(ReviewDecision::ChangesRequested),
             "rejected" => Some(ReviewDecision::Rejected),
+            "comment-only" => Some(ReviewDecision::CommentOnly),
             _ => None,
+        }
+    }
+
+    pub fn mode(self) -> &'static str {
+        if self == Self::CommentOnly {
+            "comment-only"
+        } else {
+            "standard"
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Approved => "The changes look good. The agent can proceed.",
+            Self::ChangesRequested => "Ask the agent to address your comments and make edits.",
+            Self::Rejected => "Ask the agent to rethink this approach before continuing.",
+            Self::CommentOnly => "Discuss and answer questions. The agent must not edit files.",
         }
     }
 }

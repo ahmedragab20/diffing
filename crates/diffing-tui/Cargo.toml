@@ -47,3 +47,7 @@ tempfile = "3"
 [[bench]]
 name = "render_diff"
 harness = false
+
+[[bench]]
+name = "workspace"
+harness = false

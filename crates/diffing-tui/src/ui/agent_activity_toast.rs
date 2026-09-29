@@ -22,6 +22,7 @@ pub struct Toast {
     pub accent: ToastAccent,
     pub created_at: Instant,
     pub ttl: Duration,
+    pub comment_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +42,11 @@ impl Toast {
     pub fn warn(msg: impl Into<String>) -> Self {
         Self::new(msg, ToastAccent::Warn, Duration::from_secs(6))
     }
+    pub fn reply(message: impl Into<String>, comment_id: String) -> Self {
+        let mut toast = Self::new(message, ToastAccent::Info, Duration::from_secs(8));
+        toast.comment_id = Some(comment_id);
+        toast
+    }
     fn new(msg: impl Into<String>, accent: ToastAccent, ttl: Duration) -> Self {
         Self {
             id: NEXT_TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -48,6 +54,7 @@ impl Toast {
             accent,
             created_at: Instant::now(),
             ttl,
+            comment_id: None,
         }
     }
     pub fn is_expired(&self) -> bool {

@@ -30,6 +30,7 @@ pub enum Action {
     FocusDiff,
     FocusTracker,
     ToggleSidebar,
+    ToggleFocus,
     ToggleWrap,
     ToggleLineNumbers,
     ToggleLayout,
@@ -114,6 +115,7 @@ impl Keymap {
                 (']', KeyCode::Char('c')) => Some(Action::NextComment),
                 ('[', KeyCode::Char('c')) => Some(Action::PrevComment),
                 ('z', KeyCode::Char('z')) => Some(Action::CenterCursor),
+                ('z', KeyCode::Char('f')) => Some(Action::ToggleFocus),
                 (' ', KeyCode::Char('e')) => Some(Action::ToggleSidebar),
                 _ => None,
             };
@@ -160,7 +162,7 @@ impl Keymap {
             Some('g') => Some("g: top · h: hover · d: definition · s: symbols · n: line numbers"),
             Some(']') => Some("]h: next hunk · ]c: next comment"),
             Some('[') => Some("[h: previous hunk · [c: previous comment"),
-            Some('z') => Some("zz: center cursor"),
+            Some('z') => Some("zz: center cursor · zf: focus mode"),
             Some(' ') => Some("Space e: toggle file sidebar"),
             _ => None,
         }
@@ -240,6 +242,7 @@ pub fn classify(key: &KeyEvent) -> Action {
         KeyCode::Char('f') if !ctrl => Action::OpenFileFilter,
         KeyCode::Char('a') if !ctrl => Action::CycleFileFilter,
         KeyCode::Char(':') if !ctrl => Action::OpenCommand,
+        KeyCode::Char('p') if ctrl => Action::OpenCommand,
         KeyCode::Char('n') if !ctrl => Action::NextSearch,
         KeyCode::Char('N') if !ctrl => Action::PrevSearch,
         KeyCode::Char('m') if !ctrl => Action::ToggleLayout,
@@ -270,6 +273,8 @@ pub fn classify(key: &KeyEvent) -> Action {
         KeyCode::BackTab if ctrl => Action::FocusVerdict,
         KeyCode::PageDown => Action::ScrollHalfDown,
         KeyCode::PageUp => Action::ScrollHalfUp,
+        KeyCode::Home => Action::ScrollTop,
+        KeyCode::End => Action::ScrollBottom,
         KeyCode::Down => Action::ScrollDown,
         KeyCode::Up => Action::ScrollUp,
         KeyCode::Right => Action::ScrollRight,
@@ -290,7 +295,7 @@ pub fn help_text() -> &'static str {
   Enter/+ / -    expand/collapse context
   h / l          horizontal scroll
   Alt-h/l        symbol column left/right
-  zz             center cursor
+  zz / zf        center cursor / focus mode
 
 SEARCH · POWERED BY FFF
   / / f / gs     all / files / symbols search (changed-only)
@@ -327,7 +332,7 @@ IMAGE DIFFS
 LAYOUT & TOOLS
   m              split/unified layout
   a              all/unviewed/commented files
-  :              command line
+  Ctrl-p / :     search commands (or :42 to go to a line)
   ,              settings
   # / gn         toggle line numbers (, settings too)
   Space e / b    toggle file sidebar
@@ -349,7 +354,7 @@ pub fn viewer_help_text() -> &'static str {
   ]h / [h        next/previous hunk
   Enter/+ / -    expand/collapse context
   h / l          horizontal scroll
-  zz             center cursor
+  zz / zf        center cursor / focus mode
 
 SEARCH · POWERED BY FFF
   / / f / gs     all / files / symbols search (changed-only)
@@ -377,6 +382,7 @@ CODE & IMAGES
   h/j/k/l        pan a zoomed image
 
 LAYOUT & TOOLS
+  Ctrl-p / :     search commands (or :42 to go to a line)
   m              split/unified diff
   Space e / b    toggle file sidebar
   w              toggle line wrap

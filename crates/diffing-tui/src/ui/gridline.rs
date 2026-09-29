@@ -107,7 +107,7 @@ pub const METRICS: GridlineMetrics = GridlineMetrics {
     compact_pad: 1,
     inline_pad: 2,
     section_gap: 1,
-    header_height: 3,
+    header_height: 2,
     status_height: 1,
     modal_margin_x: 4,
     modal_margin_y: 2,
@@ -343,6 +343,53 @@ pub fn shortcut_help(source: &str, palette: &Palette) -> Text<'static> {
     Text::from(lines)
 }
 
+/// Wrap each column before combining it, so descriptions cannot paint over
+/// the adjacent column and every shortcut remains reachable by scrolling.
+pub fn shortcut_help_wrapped(source: &str, width: usize, palette: &Palette) -> Text<'static> {
+    let width = width.max(1);
+    let mut output = Vec::new();
+    for line in shortcut_help(source, palette).lines {
+        if line.width() <= width {
+            output.push(line);
+            continue;
+        }
+        let indent = if line.spans.len() > 1 {
+            18.min(width / 2)
+        } else {
+            0
+        };
+        let mut spans = Vec::new();
+        let mut used = 0;
+        for span in line.spans {
+            for piece in span.content.split_inclusive(' ') {
+                let piece_width = UnicodeWidthStr::width(piece);
+                if used > indent && used + piece_width > width {
+                    output.push(Line::from(std::mem::take(&mut spans)));
+                    spans.push(Span::raw(" ".repeat(indent)));
+                    used = indent;
+                }
+                let mut chunk = String::new();
+                for character in piece.chars() {
+                    let cells = UnicodeWidthChar::width(character).unwrap_or(0);
+                    if used + cells > width {
+                        spans.push(Span::styled(std::mem::take(&mut chunk), span.style));
+                        output.push(Line::from(std::mem::take(&mut spans)));
+                        spans.push(Span::raw(" ".repeat(indent)));
+                        used = indent;
+                    }
+                    chunk.push(character);
+                    used += cells;
+                }
+                if !chunk.is_empty() {
+                    spans.push(Span::styled(chunk, span.style));
+                }
+            }
+        }
+        output.push(Line::from(spans));
+    }
+    Text::from(output)
+}
+
 pub fn shortcut_help_columns(
     source: &str,
     column_width: usize,
@@ -352,9 +399,21 @@ pub fn shortcut_help_columns(
     if sections.len() < 2 {
         return shortcut_help(source, palette);
     }
-    let split = sections.len().div_ceil(2);
-    let left = shortcut_help(&sections[..split].join("\n\n"), palette);
-    let right = shortcut_help(&sections[split..].join("\n\n"), palette);
+    let total = sections
+        .iter()
+        .map(|section| section.lines().count() + 1)
+        .sum::<usize>();
+    let split = (1..sections.len())
+        .min_by_key(|split| {
+            let left = sections[..*split]
+                .iter()
+                .map(|section| section.lines().count() + 1)
+                .sum::<usize>();
+            (left * 2).abs_diff(total)
+        })
+        .unwrap_or(1);
+    let left = shortcut_help_wrapped(&sections[..split].join("\n\n"), column_width, palette);
+    let right = shortcut_help_wrapped(&sections[split..].join("\n\n"), column_width, palette);
     let tokens = GridlineTokens::from(palette);
     let rows = left.lines.len().max(right.lines.len());
     let mut lines = Vec::with_capacity(rows);
@@ -366,7 +425,7 @@ pub fn shortcut_help_columns(
             .unwrap_or_default();
         let used = spans
             .iter()
-            .map(|span| span.content.chars().count())
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
             .sum::<usize>();
         spans.push(Span::styled(
             " ".repeat(column_width.saturating_sub(used).saturating_add(2)),
@@ -399,6 +458,9 @@ pub fn fill(area: Rect, color: Color, buf: &mut Buffer) {
 }
 
 pub fn horizontal_rule(area: Rect, palette: &Palette, buf: &mut Buffer) {
+    if area.is_empty() {
+        return;
+    }
     let tokens = GridlineTokens::from(palette);
     for x in area.x..area.x.saturating_add(area.width) {
         buf[(x, area.y)]
@@ -408,6 +470,9 @@ pub fn horizontal_rule(area: Rect, palette: &Palette, buf: &mut Buffer) {
 }
 
 pub fn vertical_rule(area: Rect, palette: &Palette, background: Color, buf: &mut Buffer) {
+    if area.is_empty() {
+        return;
+    }
     let tokens = GridlineTokens::from(palette);
     for y in area.y..area.y.saturating_add(area.height) {
         buf[(area.x, y)]
@@ -647,6 +712,32 @@ mod tests {
     fn terminal_text_makes_escape_and_bidi_controls_visible() {
         assert_eq!(safe_terminal_text("a\u{1b}[2J\u{202e}b"), "a�[2J�b");
         assert_eq!(safe_terminal_text("emoji 👩‍💻"), "emoji 👩‍💻");
+    }
+
+    #[test]
+    fn help_columns_wrap_long_descriptions_without_overlap_or_lost_words() {
+        let palette = Palette::default();
+        let source = "LEFT\n  Ctrl-p         open the searchable command palette\n\nRIGHT\n  Esc            restore the original theme and close";
+        let columns = shortcut_help_columns(source, 28, &palette);
+        assert!(columns.lines.iter().all(|line| line.width() <= 58));
+        let left = shortcut_help_wrapped(source, 28, &palette);
+        assert!(left.lines.iter().all(|line| line.width() <= 28));
+        let text = left
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        for word in [
+            "searchable",
+            "command",
+            "palette",
+            "original",
+            "theme",
+            "close",
+        ] {
+            assert!(text.contains(word), "missing {word}");
+        }
     }
 
     #[test]

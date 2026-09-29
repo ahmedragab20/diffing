@@ -1,13 +1,14 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Clear, Paragraph, Widget};
+use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use crate::lsp::IntelligenceMode;
 use crate::persistence::FileDisplay;
 use crate::themes::Palette;
 use crate::ui::gridline::{
-    dim_buffer, fill, hint_line, overlay_block, GridlineTokens, GLYPHS, METRICS,
+    dim_buffer, fill, hint_line, overlay_block, tail_ellipsize, GridlineTokens, GLYPHS, METRICS,
 };
 
 pub const SETTINGS_ROWS: usize = 12;
@@ -41,12 +42,8 @@ impl SettingsState {
 }
 
 fn settings_geometry(area: Rect) -> (Rect, Rect) {
-    let width = area.width.saturating_sub(METRICS.modal_margin_x).min(70);
-    let height = area
-        .height
-        .saturating_sub(METRICS.modal_margin_y)
-        .min(26)
-        .max(8.min(area.height));
+    let width = area.width.saturating_sub(METRICS.modal_margin_x).min(68);
+    let height = area.height.saturating_sub(METRICS.modal_margin_y).min(24);
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -54,54 +51,47 @@ fn settings_geometry(area: Rect) -> (Rect, Rect) {
         height,
     );
     let inner = Rect::new(
-        popup.x.saturating_add(1),
-        popup.y.saturating_add(1),
-        popup.width.saturating_sub(2),
-        popup.height.saturating_sub(2),
+        popup.x + 1,
+        popup.y + 1,
+        width.saturating_sub(2),
+        height.saturating_sub(2),
     );
     (popup, inner)
 }
 
+// Non-selectable headings share a single layout with keyboard scrolling and
+// pointer hit testing. The selected setting stays visible even at 42×8.
+const GROUPS: &[(usize, &str)] = &[
+    (0, "Diff display"),
+    (5, "Workspace"),
+    (9, "Language intelligence"),
+    (11, "Appearance"),
+];
+fn setting_position(index: usize) -> usize {
+    index + GROUPS.iter().filter(|(start, _)| *start <= index).count()
+}
+fn settings_body(inner: Rect) -> Rect {
+    let footer = if inner.height >= 10 { 4 } else { 1 };
+    Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(footer),
+    )
+}
+fn setting_scroll(cursor: usize, visible: usize) -> usize {
+    setting_position(cursor.min(SETTINGS_ROWS - 1))
+        .saturating_sub(visible.saturating_sub(1))
+        .min((SETTINGS_ROWS + GROUPS.len()).saturating_sub(visible))
+}
 pub fn settings_row_at(state: &SettingsState, area: Rect, column: u16, row: u16) -> Option<usize> {
     let (_, inner) = settings_geometry(area);
-    let stride = settings_row_stride(inner);
-    let visible = visible_setting_rows(inner, stride);
-    let scroll = setting_scroll(state.cursor, visible);
-    (0..visible).find_map(|offset| {
-        let index = scroll + offset;
-        let y = inner.y + 1 + offset as u16 * stride;
-        (index < SETTINGS_ROWS
-            && row == y
-            && column >= inner.x
-            && column < inner.x.saturating_add(inner.width))
-        .then_some(index)
-    })
-}
-
-fn settings_row_stride(inner: Rect) -> u16 {
-    let spacious_height = SETTINGS_ROWS as u16 * 2 + 2;
-    if inner.height >= spacious_height {
-        2
-    } else {
-        1
+    let body = settings_body(inner);
+    if column < body.x || column >= body.right() || row < body.y || row >= body.bottom() {
+        return None;
     }
-}
-
-fn visible_setting_rows(inner: Rect, stride: u16) -> usize {
-    if inner.height < 3 {
-        0
-    } else {
-        (usize::from(inner.height - 3) / usize::from(stride.max(1)) + 1).min(SETTINGS_ROWS)
-    }
-}
-
-fn setting_scroll(cursor: usize, visible: usize) -> usize {
-    if visible == 0 {
-        return 0;
-    }
-    cursor
-        .saturating_sub(visible.saturating_sub(1))
-        .min(SETTINGS_ROWS.saturating_sub(visible))
+    let position = setting_scroll(state.cursor, body.height as usize) + usize::from(row - body.y);
+    (0..SETTINGS_ROWS).find(|index| setting_position(*index) == position)
 }
 
 pub fn render_settings(
@@ -120,9 +110,8 @@ pub fn render_settings(
     block.render(popup, buf);
 
     let sidebar_width = format!("{} cols", values.sidebar_width);
-    let stride = settings_row_stride(inner);
-    let visible = visible_setting_rows(inner, stride);
-    let scroll = setting_scroll(state.cursor, visible);
+    let body = settings_body(inner);
+    let scroll = setting_scroll(state.cursor, body.height as usize);
     let rows = [
         ("File display", values.file_display.label()),
         (
@@ -185,14 +174,24 @@ pub fn render_settings(
         ("Theme", values.theme_name),
     ];
 
-    for (offset, (index, (label, value))) in rows
-        .into_iter()
-        .enumerate()
-        .skip(scroll)
-        .take(visible)
-        .enumerate()
-    {
-        let y = inner.y + 1 + offset as u16 * stride;
+    for &(start, label) in GROUPS {
+        let position = setting_position(start) - 1;
+        if position >= scroll && position < scroll + body.height as usize {
+            buf.set_stringn(
+                body.x + 2,
+                body.y + (position - scroll) as u16,
+                label,
+                body.width.saturating_sub(4) as usize,
+                Style::default().fg(tokens.muted).bg(tokens.raised),
+            );
+        }
+    }
+    for (index, (label, value)) in rows.into_iter().enumerate() {
+        let position = setting_position(index);
+        if position < scroll || position >= scroll + body.height as usize {
+            continue;
+        }
+        let row = Rect::new(body.x, body.y + (position - scroll) as u16, body.width, 1);
         let selected = state.cursor == index;
         let enabled = index != 8 || values.review_enabled;
         let background = if selected {
@@ -200,20 +199,30 @@ pub fn render_settings(
         } else {
             tokens.raised
         };
-        let row = Rect::new(inner.x, y, inner.width, 1);
         fill(row, background, buf);
-        let marker = if selected { GLYPHS.focus_rail } else { " " };
-        let value_width = value.chars().count() as u16;
-        buf.set_string(
-            row.x,
-            row.y,
-            marker,
-            Style::default().fg(tokens.focus).bg(background),
+        let value = if selected && enabled {
+            format!("‹ {value} ›")
+        } else {
+            value.to_string()
+        };
+        let value = tail_ellipsize(
+            &value,
+            row.width.saturating_sub(10).min(row.width / 2) as usize,
         );
-        buf.set_string(
+        let value_width = UnicodeWidthStr::width(value.as_str()) as u16;
+        if selected {
+            buf.set_string(
+                row.x,
+                row.y,
+                GLYPHS.focus_rail,
+                Style::default().fg(tokens.focus).bg(background),
+            );
+        }
+        buf.set_stringn(
             row.x + 2,
             row.y,
             label,
+            row.width.saturating_sub(value_width + 5) as usize,
             Style::default()
                 .fg(if enabled { tokens.text } else { tokens.muted })
                 .bg(background)
@@ -223,18 +232,16 @@ pub fn render_settings(
                     Modifier::empty()
                 }),
         );
-        let value_x = row.x + row.width.saturating_sub(value_width + 2);
-        buf.set_string(
-            value_x,
+        buf.set_stringn(
+            row.right().saturating_sub(value_width + 2),
             row.y,
             value,
+            value_width as usize,
             Style::default()
-                .fg(if !enabled {
-                    tokens.muted
-                } else if selected {
+                .fg(if selected && enabled {
                     tokens.focus
                 } else {
-                    tokens.muted
+                    tokens.text_subtle
                 })
                 .bg(background),
         );
@@ -254,21 +261,40 @@ pub fn render_settings(
         "Allow language servers from this repository's node_modules/.bin",
         "Choose a terminal-aware color palette",
     ];
-    let footer = format!(
-        "{}/{} · {} · ↑↓ select · ←→/Enter change · Esc close",
-        state.cursor.min(SETTINGS_ROWS - 1) + 1,
-        SETTINGS_ROWS,
-        DESCRIPTIONS[state.cursor.min(SETTINGS_ROWS - 1)]
-    );
-    Paragraph::new(hint_line(&footer, tokens.raised, palette)).render(
-        Rect::new(
-            inner.x + 1,
-            inner.y + inner.height.saturating_sub(1),
-            inner.width.saturating_sub(2),
-            1,
-        ),
-        buf,
-    );
+    if inner.height >= 10 {
+        Paragraph::new(DESCRIPTIONS[state.cursor.min(SETTINGS_ROWS - 1)])
+            .style(Style::default().fg(tokens.muted).bg(tokens.raised))
+            .wrap(Wrap { trim: true })
+            .render(
+                Rect::new(
+                    inner.x + 2,
+                    inner.bottom() - 3,
+                    inner.width.saturating_sub(4),
+                    2,
+                ),
+                buf,
+            );
+    }
+    if inner.height > 0 {
+        Paragraph::new(hint_line(
+            if inner.width < 50 {
+                "↑↓ select · ←→ change · Esc"
+            } else {
+                "↑↓ select · ←→ change · Esc done"
+            },
+            tokens.raised,
+            palette,
+        ))
+        .render(
+            Rect::new(
+                inner.x + 2,
+                inner.bottom() - 1,
+                inner.width.saturating_sub(4),
+                1,
+            ),
+            buf,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -285,39 +311,35 @@ mod tests {
     }
 
     #[test]
-    fn settings_rows_are_mouse_addressable() {
+    fn settings_rows_are_mouse_addressable_at_every_size() {
+        for area in [
+            Rect::new(0, 0, 100, 30),
+            Rect::new(0, 0, 80, 14),
+            Rect::new(3, 2, 42, 8),
+        ] {
+            for index in 0..SETTINGS_ROWS {
+                let state = SettingsState { cursor: index };
+                let (_, inner) = settings_geometry(area);
+                let body = settings_body(inner);
+                let y = body.y
+                    + (setting_position(index) - setting_scroll(index, body.height as usize))
+                        as u16;
+                assert!(y < body.bottom());
+                assert_eq!(settings_row_at(&state, area, body.x + 3, y), Some(index));
+                assert_eq!(settings_row_at(&state, area, body.x - 1, y), None);
+                assert_eq!(
+                    settings_row_at(&state, area, body.x + 3, inner.bottom() - 1),
+                    None
+                );
+            }
+        }
         let area = Rect::new(0, 0, 100, 30);
         let (_, inner) = settings_geometry(area);
-        let state = SettingsState::default();
         assert_eq!(
-            settings_row_at(&state, area, inner.x + 3, inner.y + 1),
-            Some(0)
+            settings_row_at(&SettingsState::default(), area, inner.x + 3, inner.y),
+            None,
+            "group heading is not a setting"
         );
-        for index in 0..SETTINGS_ROWS {
-            let stride = settings_row_stride(inner);
-            let scroll = setting_scroll(state.cursor, visible_setting_rows(inner, stride));
-            let row = inner.y + 1 + ((index - scroll) as u16) * stride;
-            assert_eq!(settings_row_at(&state, area, inner.x + 3, row), Some(index));
-        }
-        assert_eq!(
-            settings_row_at(&state, area, inner.x - 1, inner.y + 1),
-            None
-        );
-    }
-
-    #[test]
-    fn compact_settings_keep_every_row_reachable() {
-        let area = Rect::new(0, 0, 80, 14);
-        let (_, inner) = settings_geometry(area);
-        assert_eq!(settings_row_stride(inner), 1);
-        let state = SettingsState {
-            cursor: SETTINGS_ROWS - 1,
-        };
-        let visible = visible_setting_rows(inner, 1);
-        let scroll = setting_scroll(state.cursor, visible);
-        let row = inner.y + 1 + (state.cursor - scroll) as u16;
-        assert!(row < inner.y + inner.height.saturating_sub(1));
-        assert_eq!(settings_row_at(&state, area, inner.x + 3, row), Some(11));
     }
 
     #[test]

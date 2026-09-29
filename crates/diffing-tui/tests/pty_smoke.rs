@@ -65,6 +65,7 @@ fn viewer_starts_and_quits_cleanly_in_a_real_pty() {
         .arg(repo.path())
         .arg("--view-only")
         .env("DIFFING_STORAGE_ROOT", storage.path())
+        .env("DIFFING_CONFIG_DIR", storage.path().join("config"))
         .stdin(Stdio::from(slave.try_clone().unwrap()))
         .stdout(Stdio::from(slave.try_clone().unwrap()))
         .stderr(Stdio::from(slave));

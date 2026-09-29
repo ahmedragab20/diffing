@@ -13,7 +13,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, ListItem, Paragraph, Widget, Wrap};
 
 use crate::themes::Palette;
-use crate::ui::gridline::{selection_marker, GridlineTokens, Tone, GLYPHS};
+use crate::ui::gridline::{
+    safe_terminal_text, selection_marker, tail_ellipsize, GridlineTokens, Tone, GLYPHS,
+};
+use unicode_width::UnicodeWidthStr;
 
 pub fn render_thread(
     comment: &ReviewComment,
@@ -39,7 +42,15 @@ pub fn render_thread(
     let replies = if comment.replies.is_empty() {
         String::new()
     } else {
-        format!(" · {} replies", comment.replies.len())
+        format!(
+            " · {} {}",
+            comment.replies.len(),
+            if comment.replies.len() == 1 {
+                "reply"
+            } else {
+                "replies"
+            }
+        )
     };
     let title = format!(
         " {} · {}{}{} ",
@@ -114,58 +125,105 @@ pub fn render_tracker_row(
     comment: &ReviewComment,
     is_cursor: bool,
     outdated: bool,
+    width: u16,
+    height: u16,
+    focused: bool,
     palette: &Palette,
 ) -> ListItem<'static> {
     let tokens = GridlineTokens::from(palette);
-    let marker = match comment.status {
-        CommentStatus::Open => GLYPHS.bullet,
-        CommentStatus::Resolved => GLYPHS.resolved,
+    let resolved = comment.status == CommentStatus::Resolved;
+    // Status and severity remain distinguishable without color.
+    let marker = if resolved {
+        "✓"
+    } else {
+        match comment.severity {
+            Some(CommentSeverity::Blocking) => "!",
+            Some(CommentSeverity::Question) => "?",
+            Some(CommentSeverity::Nit) => "~",
+            Some(CommentSeverity::Praise) => "+",
+            _ => GLYPHS.bullet,
+        }
     };
-    let marker_color = match comment.status {
-        CommentStatus::Open => tokens.tone(comment_tone(comment)),
-        CommentStatus::Resolved => tokens.muted,
+    let marker_color = if resolved {
+        tokens.muted
+    } else {
+        tokens.tone(comment_tone(comment))
     };
-    let file = shorten_path(&comment.file_path);
-    let line = comment_location_label(comment, &file);
-    let body = comment
-        .body
-        .lines()
-        .next()
-        .unwrap_or("")
-        .chars()
-        .take(60)
-        .collect::<String>();
-    let reply_count = comment.replies.len();
-    let reply_suffix = if reply_count > 0 {
-        format!("  ↳{reply_count}")
+    let location = comment_location_label(comment, &shorten_path(&comment.file_path));
+    let suffix = if outdated {
+        " · outdated".to_string()
+    } else if !comment.replies.is_empty() {
+        format!(
+            " · {} {}",
+            comment.replies.len(),
+            if comment.replies.len() == 1 {
+                "reply"
+            } else {
+                "replies"
+            }
+        )
     } else {
         String::new()
     };
-    let body_lines = comment.body.split('\n').count();
-    let body_suffix = if body_lines > 1 {
-        format!("  ↵{body_lines}")
-    } else {
-        String::new()
-    };
-    let mut spans: Vec<Span<'static>> = vec![
-        Span::styled(format!("{marker} "), Style::default().fg(marker_color)),
-        Span::styled(
-            format!("{:<24}", truncate(&line, 24)),
-            Style::default().fg(tokens.info),
-        ),
-        Span::styled(
-            if outdated { " ! outdated" } else { "" },
-            Style::default()
-                .fg(tokens.negative)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" {body}"), Style::default().fg(tokens.text)),
-        Span::styled(body_suffix, Style::default().fg(tokens.muted)),
-        Span::styled(reply_suffix, Style::default().fg(tokens.muted)),
+    let budget = width.saturating_sub(4) as usize;
+    let body = safe_terminal_text(comment.body.lines().next().unwrap_or(""));
+    let body = preview_ellipsize(&format!("{body}{suffix}"), budget);
+    let body_style = Style::default().fg(if resolved { tokens.muted } else { tokens.text });
+    let marker_spans = vec![
+        selection_marker(is_cursor, focused, palette),
+        Span::styled(format!(" {marker} "), Style::default().fg(marker_color)),
     ];
-    spans.insert(0, Span::raw(" "));
-    spans.insert(0, selection_marker(is_cursor, true, palette));
-    ListItem::new(Line::from(spans))
+    if height >= 2 {
+        let mut location_spans = marker_spans;
+        location_spans.push(Span::styled(
+            tail_ellipsize(&location, budget),
+            Style::default().fg(tokens.muted),
+        ));
+        let mut lines = vec![
+            Line::from(location_spans),
+            Line::from(vec![Span::raw("    "), Span::styled(body, body_style)]),
+        ];
+        if height >= 3 {
+            lines.push(Line::default());
+        }
+        ListItem::new(lines)
+    } else {
+        let location_width = budget.min(32).min(budget / 2);
+        let location = tail_ellipsize(&location, location_width);
+        let mut spans = marker_spans;
+        spans.push(Span::styled(
+            format!("{location}  "),
+            Style::default().fg(tokens.muted),
+        ));
+        spans.push(Span::styled(
+            preview_ellipsize(
+                &body,
+                budget.saturating_sub(UnicodeWidthStr::width(location.as_str()) + 2),
+            ),
+            body_style,
+        ));
+        ListItem::new(Line::from(spans))
+    }
+}
+
+fn preview_ellipsize(value: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(value) <= width {
+        return value.to_string();
+    }
+    let mut result = String::new();
+    let mut used = 0;
+    for character in value.chars() {
+        let cells = unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
+        if used + cells > width.saturating_sub(1) {
+            break;
+        }
+        result.push(character);
+        used += cells;
+    }
+    if width > 0 {
+        result.push('…');
+    }
+    result
 }
 
 fn comment_tone(comment: &ReviewComment) -> Tone {
@@ -206,16 +264,6 @@ fn shorten_path(p: &str) -> String {
     }
 }
 
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
-        out.push('…');
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +271,7 @@ mod tests {
 
     fn sample_comment() -> ReviewComment {
         ReviewComment {
+            extra: Default::default(),
             id: "c1".to_string(),
             file_path: "src/a.rs".to_string(),
             side: CommentSide::Additions,
@@ -233,6 +282,7 @@ mod tests {
             status: CommentStatus::Open,
             created_at: 1000,
             replies: vec![CommentReply {
+                extra: Default::default(),
                 id: "r1".to_string(),
                 body: "agreed".to_string(),
                 created_at: 2000,
@@ -247,7 +297,7 @@ mod tests {
     fn tracker_row_marks_open_status() {
         let c = sample_comment();
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
-        let item = render_tracker_row(&c, false, false, &palette);
+        let item = render_tracker_row(&c, false, false, 80, 1, false, &palette);
         // We can't easily inspect a ListItem's text, but at least make sure
         // it builds without panicking.
         let _ = item;
@@ -258,7 +308,45 @@ mod tests {
         let mut c = sample_comment();
         c.body = "x".repeat(200);
         let palette = Palette::for_theme(crate::themes::ThemeName::GithubDark);
-        let _ = render_tracker_row(&c, true, false, &palette);
+        let _ = render_tracker_row(&c, true, false, 38, 3, true, &palette);
+    }
+
+    #[test]
+    fn compact_previews_expose_severity_and_truncation_without_color() {
+        for (severity, marker) in [
+            (CommentSeverity::Blocking, "!"),
+            (CommentSeverity::Question, "?"),
+            (CommentSeverity::Nit, "~"),
+            (CommentSeverity::Praise, "+"),
+        ] {
+            let mut comment = sample_comment();
+            comment.severity = Some(severity);
+            comment.body =
+                "Please preserve this very long Unicode preview 世界世界世界".to_string();
+            let area = Rect::new(0, 0, 32, 3);
+            let mut buffer = Buffer::empty(area);
+            ratatui::widgets::List::new(vec![render_tracker_row(
+                &comment,
+                false,
+                false,
+                area.width,
+                area.height,
+                false,
+                &Palette::default(),
+            )])
+            .render(area, &mut buffer);
+            let text = buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains(marker), "missing severity {severity:?}");
+            assert!(text.contains("Please preserve"));
+            assert!(
+                text.contains('…'),
+                "clipped previews need a visible continuation"
+            );
+        }
     }
 
     #[test]

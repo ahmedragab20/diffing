@@ -1,4 +1,5 @@
 pub mod agent_activity_toast;
+pub mod command_palette;
 pub mod comment_form;
 pub mod comment_thread;
 pub mod comment_tracker;

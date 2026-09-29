@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { writeJsonAtomically } from "./json-atomic.js";
 
-const CONFIG_DIR = join(homedir(), ".config", "diffing");
+const CONFIG_DIR = process.env.DIFFING_CONFIG_DIR || join(homedir(), ".config", "diffing");
 const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
 
 export type LineDiffType = "word" | "word-alt" | "char" | "none";

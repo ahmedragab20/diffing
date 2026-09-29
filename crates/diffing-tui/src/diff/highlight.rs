@@ -15,10 +15,17 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::{Theme, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
-use crate::themes::{Palette, ThemeName};
+use crate::themes::{rgb, Palette, ThemeName};
 
 static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(two_face::syntax::extra_newlines);
 static THEME_SET: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
+
+/// Load immutable syntax tables alongside Git indexing, before source is
+/// painted. Rendering remains correct if an unusually fast index wins the race.
+pub fn prepare_syntax() {
+    Lazy::force(&SYNTAX_SET);
+    Lazy::force(&THEME_SET);
+}
 thread_local! {
     static CACHE: RefCell<HighlightCache> = RefCell::new(HighlightCache::default());
     static SEQUENTIAL: RefCell<Option<SequentialSession>> = const { RefCell::new(None) };
@@ -397,6 +404,9 @@ fn map_source_color(source: Color, palette: &Palette) -> (Color, SyntaxRole) {
 }
 
 fn ensure_contrast(color: Color, fallback: Color, background: Color, minimum: f32) -> Color {
+    if color == Color::Reset || background == Color::Reset {
+        return color;
+    }
     if contrast_ratio(color, background) >= minimum {
         return color;
     }
@@ -436,8 +446,17 @@ fn relative_luminance(color: Color) -> f32 {
 }
 
 fn color_key(color: Color) -> u32 {
-    let (r, g, b) = rgb(color);
-    ((r as u32) << 16) | ((g as u32) << 8) | b as u32
+    match color {
+        Color::Rgb(r, g, b) => ((r as u32) << 16) | ((g as u32) << 8) | b as u32,
+        Color::Indexed(index) => 0x0100_0000 | index as u32,
+        Color::Reset => 0x0200_0000,
+        _ => {
+            use std::hash::{Hash, Hasher};
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            color.hash(&mut hash);
+            0x8000_0000 | hash.finish() as u32
+        }
+    }
 }
 
 fn palette_key(palette: &Palette) -> u64 {
@@ -454,13 +473,6 @@ fn palette_key(palette: &Palette) -> u64 {
     .fold(0xcbf2_9ce4_8422_2325u64, |hash, color| {
         (hash ^ color_key(color) as u64).wrapping_mul(0x100_0000_01b3)
     })
-}
-
-fn rgb(color: Color) -> (u8, u8, u8) {
-    match color {
-        Color::Rgb(r, g, b) => (r, g, b),
-        _ => (128, 128, 128),
-    }
 }
 
 #[cfg(test)]

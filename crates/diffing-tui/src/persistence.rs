@@ -78,6 +78,7 @@ pub struct PersistedTuiState {
     pub comment_height: u16,
     pub sidebar_visible: bool,
     pub comments_visible: bool,
+    pub require_view_all_before_send: bool,
 }
 
 pub fn load(repo_root: &str) -> PersistedTuiState {
@@ -181,6 +182,10 @@ pub fn load(repo_root: &str) -> PersistedTuiState {
         comment_height,
         sidebar_visible,
         comments_visible,
+        require_view_all_before_send: settings
+            .get("requireViewAllBeforeSend")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
@@ -271,6 +276,9 @@ pub fn save_settings(
 }
 
 fn settings_path() -> Option<PathBuf> {
+    if let Some(directory) = std::env::var_os("DIFFING_CONFIG_DIR") {
+        return Some(PathBuf::from(directory).join("settings.json"));
+    }
     directories::UserDirs::new().map(|dirs| dirs.home_dir().join(".config/diffing/settings.json"))
 }
 

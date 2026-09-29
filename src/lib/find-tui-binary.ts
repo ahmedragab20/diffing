@@ -9,7 +9,7 @@ const execFileAsync = promisify(execFile);
 const BINARY_PROBE_TIMEOUT_MS = 1_500;
 
 function bundledBinary(callerUrl: string, ext: string): string {
-  const report = process.report?.getReport() as
+  const report = (process.platform === "linux" ? process.report?.getReport() : undefined) as
     | { header?: { glibcVersionRuntime?: string } }
     | undefined;
   const runtime =
@@ -117,6 +117,7 @@ export function nativeFileEnvironment(): NodeJS.ProcessEnv {
 async function probeTuiBinary(
   candidate: string,
   capability: string,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync(candidate, ["--help"], {
@@ -124,6 +125,7 @@ async function probeTuiBinary(
       timeout: BINARY_PROBE_TIMEOUT_MS,
       maxBuffer: 64 * 1024,
       windowsHide: true,
+      signal,
       ...(capability !== "--view-only" ? { env: nativeFileEnvironment() } : {}),
     });
     return stdout.includes(capability) ? candidate : null;
@@ -135,13 +137,25 @@ async function probeTuiBinary(
 export async function findViewerTuiBinary(
   callerUrl: string,
 ): Promise<string | null> {
-  const candidates = findTuiBinaries(callerUrl);
-  const matches = await Promise.all(
-    candidates.map((candidate) => probeTuiBinary(candidate, "--view-only")),
-  );
-  return (
-    matches.find((candidate): candidate is string => candidate !== null) ?? null
-  );
+  async function firstCompatible(candidates: string[]): Promise<string | null> {
+    const controller = new AbortController();
+    // Start together to bound stale-candidate delays, but consume in priority
+    // order. A fast preferred match never waits for lower-priority probes.
+    const probes = candidates.map((candidate) =>
+      probeTuiBinary(candidate, "--view-only", controller.signal),
+    );
+    try {
+      for (const probe of probes) {
+        const match = await probe;
+        if (match) return match;
+      }
+      return null;
+    } finally {
+      controller.abort();
+    }
+  }
+  const local = await firstCompatible(localTuiCandidates(callerUrl).filter(existsSync));
+  return local ?? firstCompatible(pathLookupCandidates());
 }
 
 function fileAccessPackageRoot(callerUrl: string): string | null {

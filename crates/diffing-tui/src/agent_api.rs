@@ -10,15 +10,16 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::handoff::review::ReviewDecision;
 use crate::inspect_scope::{
     directories, display_path, is_lockfile_noise, matching_indexes, parse_exclude, resolve_file,
     FileResolve,
 };
 use anyhow::{Context, Result};
 use diffing_core::comments::{
-    CommentSeverity, CommentSide, CommentStatus, FileCommentStore, NewComment,
+    CommentSeverity, CommentSide, CommentStatus, FileCommentStore, NewComment, ReviewComment,
 };
 use diffing_core::index::DiffIndex;
 use serde_json::{json, Value};
@@ -27,32 +28,73 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PAGE_LINES: usize = 1_000;
 const MAX_CONCURRENT_CONNECTIONS: usize = 32;
+// Leave request slots available for replies and progress while agents wait.
+const MAX_REVIEW_WAITERS: u32 = 24;
 
 #[derive(Clone)]
 pub struct AgentApi {
     pub port: u16,
     pub capability: String,
     review: Arc<(Mutex<ReviewState>, Condvar)>,
-    shutdown: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+    _shutdown: Arc<ApiShutdown>,
 }
 
-impl Drop for AgentApi {
+struct ApiShutdown {
+    tx: mpsc::Sender<()>,
+    port: u16,
+}
+
+impl Drop for ApiShutdown {
     fn drop(&mut self) {
-        if Arc::strong_count(&self.shutdown) == 1 {
-            if let Ok(mut guard) = self.shutdown.lock() {
-                if let Some(shutdown) = guard.take() {
-                    let _ = shutdown.send(());
-                }
-            }
-        }
+        let _ = self.tx.send(());
+        // Arc drops this guard exactly once, including concurrent owner drops.
+        // Wake blocking accept only on shutdown; idle sessions do not poll.
+        let _ = TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], self.port)),
+            Duration::from_millis(100),
+        );
     }
 }
 
 #[derive(Default)]
 struct ReviewState {
     round: u32,
-    payload: Option<String>,
+    payload: Option<Value>,
     waiters: u32,
+    revision: u64,
+    comments_revision: u64,
+    history: Vec<Value>,
+    progress: Option<Value>,
+    agents: HashMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AgentSnapshot {
+    pub revision: u64,
+    pub comments_revision: u64,
+    pub round: u32,
+    pub waiters: u32,
+    pub progress: Option<Value>,
+    pub agents: Vec<Value>,
+}
+
+impl ReviewState {
+    fn changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn snapshot(&self) -> AgentSnapshot {
+        let mut agents: Vec<Value> = self.agents.values().cloned().collect();
+        agents.sort_by_key(|agent| agent["connectedAt"].as_u64().unwrap_or(0));
+        AgentSnapshot {
+            revision: self.revision,
+            comments_revision: self.comments_revision,
+            round: self.round,
+            waiters: self.waiters,
+            progress: self.progress.clone(),
+            agents,
+        }
+    }
 }
 
 struct ApiState {
@@ -77,10 +119,10 @@ impl AgentApi {
         });
         let connection_slots = Arc::new(Mutex::new(0usize));
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
-        let shutdown = Arc::new(Mutex::new(Some(shutdown_tx)));
-        listener
-            .set_nonblocking(true)
-            .context("configuring TUI agent API listener")?;
+        let shutdown = Arc::new(ApiShutdown {
+            tx: shutdown_tx,
+            port,
+        });
         thread::Builder::new()
             .name("diffing-agent-api".to_string())
             .spawn(move || loop {
@@ -89,6 +131,9 @@ impl AgentApi {
                 }
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        if shutdown_rx.try_recv().is_ok() {
+                            break;
+                        }
                         let state = state.clone();
                         let slots = connection_slots.clone();
                         let mut guard = match slots.lock() {
@@ -115,9 +160,7 @@ impl AgentApi {
                             }
                         }
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(5));
-                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
                 }
             })?;
@@ -125,22 +168,57 @@ impl AgentApi {
             port,
             capability,
             review,
-            shutdown,
+            _shutdown: shutdown,
         })
     }
 
-    pub fn release_review(&self, payload: String) -> u32 {
+    pub fn release_review(
+        &self,
+        xml: String,
+        comments: Vec<ReviewComment>,
+        decision: ReviewDecision,
+    ) -> u32 {
         let (lock, wake) = &*self.review;
         let mut state = lock.lock().expect("review state poisoned");
         state.round = state.round.saturating_add(1);
-        state.payload = Some(payload);
         let round = state.round;
+        let sent_at = now_ms();
+        let open_count = comments
+            .iter()
+            .filter(|comment| comment.status == CommentStatus::Open)
+            .count();
+        let mut paths: Vec<_> = comments
+            .iter()
+            .map(|comment| comment.file_path.clone())
+            .collect();
+        paths.sort();
+        paths.dedup();
+        state.payload = Some(json!({
+            "round": round, "sentAt": sent_at, "commentXml": xml,
+            "comments": comments, "openCount": open_count,
+            "decision": decision.as_str(), "mode": decision.mode(),
+        }));
+        state.history.push(json!({
+            "round": round, "sentAt": sent_at, "openCount": open_count,
+            "decision": decision.as_str(), "mode": decision.mode(), "filePaths": paths,
+        }));
+        if state.history.len() > 20 {
+            state.history.remove(0);
+        }
+        state.progress = None;
+        state.changed();
         wake.notify_all();
         round
     }
 
     pub fn waiter_count(&self) -> u32 {
         self.review.0.lock().map(|state| state.waiters).unwrap_or(0)
+    }
+
+    /// No allocations when nothing changed; the UI polls this alongside input.
+    pub fn snapshot_since(&self, revision: u64) -> Option<AgentSnapshot> {
+        let state = self.review.0.lock().ok()?;
+        (state.revision != revision).then(|| state.snapshot())
     }
 }
 
@@ -166,7 +244,14 @@ fn handle_connection(mut stream: TcpStream, state: &ApiState) -> Result<()> {
     }
     let (path, query) = split_target(&request.target);
     let params = parse_query(query);
-    let response = route(&request.method, path, &params, &request.body, state);
+    let response = if request.method == "GET" && path == "/api/review/await" {
+        stream.set_nonblocking(true)?;
+        let response = await_review(&params, state, Some(&stream));
+        stream.set_nonblocking(false)?;
+        response
+    } else {
+        route(&request.method, path, &params, &request.body, state)
+    };
     match response {
         Ok((status, body)) => write_json(&mut stream, status, body),
         Err(error) => {
@@ -189,14 +274,20 @@ fn route(
     state: &ApiState,
 ) -> Result<(u16, Value)> {
     if method == "GET"
-        && matches!(path, "/api/diff/files" | "/api/diff/hunks" | "/api/diff/slice" | "/api/diff/search")
+        && matches!(
+            path,
+            "/api/diff/files" | "/api/diff/hunks" | "/api/diff/slice" | "/api/diff/search"
+        )
         && (params.contains_key("continuation") || params.contains_key("snapshotId"))
     {
-        return Ok((422, json!({
-            "error": "Retained snapshots are unsupported in TUI sessions; use generation and numeric coordinates.",
-            "code": "unsupported_continuation",
-            "recovery": "restart_files"
-        })));
+        return Ok((
+            422,
+            json!({
+                "error": "Retained snapshots are unsupported in TUI sessions; use generation and numeric coordinates.",
+                "code": "unsupported_continuation",
+                "recovery": "restart_files"
+            }),
+        ));
     }
     if method == "GET" && path == "/api/diff/summary" {
         let index = current_index(state);
@@ -398,6 +489,13 @@ fn route(
     if method == "GET" && path == "/api/comments" {
         return Ok((200, serde_json::to_value(store.load()?)?));
     }
+    if method == "POST" && path == "/api/comments/resolve-all" {
+        let resolved = store.resolve_all()?;
+        if resolved > 0 {
+            comments_changed(state);
+        }
+        return Ok((200, json!({ "ok": true, "resolved": resolved })));
+    }
     if method == "POST" && path == "/api/comments" {
         let value = match parse_json_body(body) {
             Ok(value) => value,
@@ -449,6 +547,7 @@ fn route(
             }
         };
         let comment = store.add(new_comment, now_ms())?;
+        comments_changed(state);
         return Ok((200, serde_json::to_value(comment)?));
     }
     if let Some(id) = path.strip_prefix("/api/comments/") {
@@ -458,13 +557,20 @@ fn route(
                     Ok(value) => value,
                     Err(response) => return Ok(response),
                 };
+                let reply_body = value.get("body").and_then(Value::as_str).unwrap_or("");
+                if reply_body.trim().is_empty() {
+                    return Ok((400, json!({ "error": "body is required" })));
+                }
                 let reply = store.add_reply(
                     id,
-                    value.get("body").and_then(Value::as_str).unwrap_or(""),
+                    reply_body,
                     value.get("role").and_then(Value::as_str),
                     value.get("model").and_then(Value::as_str),
                     now_ms(),
                 )?;
+                if reply.is_some() {
+                    comments_changed(state);
+                }
                 return Ok((
                     if reply.is_some() { 200 } else { 404 },
                     serde_json::to_value(reply)?,
@@ -481,50 +587,218 @@ fn route(
                 _ => None,
             };
             let updated = store.update(id, value.get("body").and_then(Value::as_str), status)?;
+            if updated.is_some() {
+                comments_changed(state);
+            }
             return Ok((
                 if updated.is_some() { 200 } else { 404 },
                 serde_json::to_value(updated)?,
             ));
         } else if method == "DELETE" {
             let removed = store.remove(id)?;
+            if removed {
+                comments_changed(state);
+            }
             return Ok((
                 if removed { 200 } else { 404 },
                 json!({ "removed": removed }),
             ));
         }
     }
+    if method == "POST" && path == "/api/agent/progress" {
+        let value = match parse_json_body(body) {
+            Ok(value) => value,
+            Err(response) => return Ok(response),
+        };
+        let message = value
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if message.is_empty() {
+            return Ok((400, json!({ "error": "message is required" })));
+        }
+        if message.len() > 4096
+            || ["model", "agentId", "commentId"].iter().any(|key| {
+                value
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value.len() > 256)
+            })
+        {
+            return Ok((
+                400,
+                json!({ "error": "Progress message is limited to 4096 bytes; identity fields to 256 bytes" }),
+            ));
+        }
+        let mut progress = json!({ "at": now_ms(), "message": message });
+        for key in ["model", "agentId", "commentId"] {
+            if let Some(value) = value.get(key).and_then(Value::as_str) {
+                progress[key] = json!(value);
+            }
+        }
+        if let Some(pct) = value
+            .get("pct")
+            .and_then(Value::as_f64)
+            .filter(|pct| (0.0..=100.0).contains(pct))
+        {
+            progress["pct"] = json!(pct);
+        }
+        let mut review = state.review.0.lock().expect("review state poisoned");
+        review.progress = Some(progress.clone());
+        review.changed();
+        progress["ok"] = json!(true);
+        return Ok((200, progress));
+    }
+    if method == "GET" && path == "/api/agent/progress" {
+        let review = state.review.0.lock().expect("review state poisoned");
+        return Ok((200, json!({ "progress": review.progress })));
+    }
+    if method == "POST" && path == "/api/agent/register" {
+        let value = match parse_json_body(body) {
+            Ok(value) => value,
+            Err(response) => return Ok(response),
+        };
+        if ["model", "agentId", "label"].iter().any(|key| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.len() > 256)
+        }) {
+            return Ok((
+                400,
+                json!({ "error": "Agent identity fields are limited to 256 bytes" }),
+            ));
+        }
+        let id = value
+            .get("agentId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .unwrap_or(new_capability()?);
+        let mut review = state.review.0.lock().expect("review state poisoned");
+        if review.agents.len() >= 64 && !review.agents.contains_key(&id) {
+            return Ok((429, json!({ "error": "Too many registered agents" })));
+        }
+        let mut agent = json!({ "id": id, "connectedAt": now_ms() });
+        for key in ["model", "label"] {
+            if let Some(value) = value.get(key).and_then(Value::as_str) {
+                agent[key] = json!(value);
+            }
+        }
+        review.agents.insert(id.clone(), agent);
+        review.changed();
+        return Ok((200, json!({ "ok": true, "agentId": id })));
+    }
+    if method == "DELETE" {
+        if let Some(id) = path.strip_prefix("/api/agent/register/") {
+            let mut review = state.review.0.lock().expect("review state poisoned");
+            review.agents.remove(&percent_decode(id));
+            review.changed();
+            return Ok((200, json!({ "ok": true })));
+        }
+    }
     if method == "GET" && path == "/api/review/status" {
         let review = state.review.0.lock().expect("review state poisoned");
         return Ok((
             200,
-            json!({ "round": review.round, "waiters": review.waiters }),
+            json!({ "round": review.round, "waiters": review.waiters,
+                "lastSentAt": review.payload.as_ref().and_then(|payload| payload.get("sentAt")),
+                "lastDecision": review.payload.as_ref().and_then(|payload| payload.get("decision")),
+                "lastOpenCount": review.payload.as_ref().and_then(|payload| payload.get("openCount")),
+                "hasSinceLastBaseline": false, "agents": review.snapshot().agents,
+            }),
+        ));
+    }
+    if method == "GET" && path == "/api/review/history" {
+        let review = state.review.0.lock().expect("review state poisoned");
+        return Ok((
+            200,
+            json!({ "rounds": review.history.iter().rev().collect::<Vec<_>>() }),
         ));
     }
     if method == "GET" && path == "/api/review/await" {
-        let since = u32_param(params, "sinceRound", 0);
-        let timeout = u64_param(params, "timeoutMs", 25_000).clamp(1, 30_000);
-        let (lock, wake) = &*state.review;
-        let mut review = lock.lock().expect("review state poisoned");
-        review.waiters = review.waiters.saturating_add(1);
-        if review.round <= since {
-            let result = wake
-                .wait_timeout(review, Duration::from_millis(timeout))
-                .expect("review state poisoned");
-            review = result.0;
-        }
-        review.waiters = review.waiters.saturating_sub(1);
-        if review.round > since {
-            return Ok((
-                200,
-                json!({
-                    "status": "released",
-                    "payload": { "round": review.round, "commentXml": review.payload.clone().unwrap_or_default() }
-                }),
-            ));
-        }
-        return Ok((200, json!({ "status": "timeout", "round": review.round })));
+        return await_review(params, state, None);
     }
     Ok((404, json!({ "error": "unknown TUI API route" })))
+}
+
+fn comments_changed(state: &ApiState) {
+    let mut review = state.review.0.lock().expect("review state poisoned");
+    review.comments_revision = review.comments_revision.wrapping_add(1);
+    review.changed();
+}
+
+fn await_review(
+    params: &HashMap<String, String>,
+    state: &ApiState,
+    stream: Option<&TcpStream>,
+) -> Result<(u16, Value)> {
+    let since = match params.get("sinceRound") {
+        Some(value) => match value.parse::<u32>() {
+            Ok(value) => Some(value),
+            Err(_) => {
+                return Ok((
+                    400,
+                    json!({ "error": "sinceRound must be a non-negative integer" }),
+                ))
+            }
+        },
+        None => None,
+    };
+    let timeout = u64_param(params, "timeoutMs", 25_000).clamp(1, 30_000);
+    let deadline = Instant::now() + Duration::from_millis(timeout);
+    let (lock, wake) = &*state.review;
+    let mut review = lock.lock().expect("review state poisoned");
+    let since = since.unwrap_or(review.round);
+    if review.round > since {
+        return Ok((
+            200,
+            json!({ "status": "released", "payload": review.payload }),
+        ));
+    }
+    if review.waiters >= MAX_REVIEW_WAITERS {
+        return Ok((
+            429,
+            json!({ "error": "Too many waiting agents; retry shortly" }),
+        ));
+    }
+    review.waiters += 1;
+    review.changed();
+    while review.round <= since && Instant::now() < deadline {
+        // A disconnected long poll must stop occupying a slot and showing an
+        // agent as waiting. Peek never consumes data and this socket is nonblocking.
+        if let Some(stream) = stream {
+            match stream.peek(&mut [0u8; 1]) {
+                Ok(0) => break,
+                Err(error) if error.kind() != std::io::ErrorKind::WouldBlock => break,
+                _ => {}
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let wait = if stream.is_some() {
+            remaining.min(Duration::from_millis(250))
+        } else {
+            remaining
+        };
+        review = wake
+            .wait_timeout(review, wait)
+            .expect("review state poisoned")
+            .0;
+    }
+    review.waiters = review.waiters.saturating_sub(1);
+    review.changed();
+    if review.round > since {
+        Ok((
+            200,
+            json!({ "status": "released", "payload": review.payload }),
+        ))
+    } else {
+        Ok((
+            200,
+            json!({ "status": "keep-waiting", "round": review.round }),
+        ))
+    }
 }
 
 fn current_index(state: &ApiState) -> Arc<DiffIndex> {
@@ -603,6 +877,7 @@ fn write_json(stream: &mut TcpStream, status: u16, body: Value) -> Result<()> {
         404 => "Not Found",
         409 => "Conflict",
         422 => "Unprocessable Entity",
+        429 => "Too Many Requests",
         _ => "Internal Server Error",
     };
     write!(
@@ -687,13 +962,6 @@ fn optional_usize(params: &HashMap<String, String>, name: &str) -> Option<usize>
 }
 
 fn u64_param(params: &HashMap<String, String>, name: &str, default: u64) -> u64 {
-    params
-        .get(name)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn u32_param(params: &HashMap<String, String>, name: &str, default: u32) -> u32 {
     params
         .get(name)
         .and_then(|value| value.parse().ok())
@@ -829,12 +1097,197 @@ mod tests {
             port: 1,
             capability: "test".to_string(),
             review: review.clone(),
-            shutdown: Arc::new(Mutex::new(None)),
+            _shutdown: Arc::new(ApiShutdown {
+                tx: mpsc::channel().0,
+                port: 0,
+            }),
         };
-        assert_eq!(api.release_review("<review/>".to_string()), 1);
+        assert_eq!(
+            api.release_review("<review/>".to_string(), vec![], ReviewDecision::Approved),
+            1
+        );
         let state = review.0.lock().unwrap();
         assert_eq!(state.round, 1);
-        assert_eq!(state.payload.as_deref(), Some("<review/>"));
+        assert_eq!(state.payload.as_ref().unwrap()["commentXml"], "<review/>");
+    }
+
+    #[test]
+    fn progress_identity_and_history_match_the_web_contract() {
+        let state = ApiState {
+            repo_root: "/tmp/unused-agent-contract".into(),
+            capability: "cap".into(),
+            index: Arc::new(RwLock::new(Arc::new(DiffIndex::empty(
+                1,
+                "unused".into(),
+                true,
+            )))),
+            review: Arc::new((Mutex::new(ReviewState::default()), Condvar::new())),
+        };
+        let api = AgentApi {
+            port: 0,
+            capability: "cap".into(),
+            review: state.review.clone(),
+            _shutdown: Arc::new(ApiShutdown {
+                tx: mpsc::channel().0,
+                port: 0,
+            }),
+        };
+        let request = |method, path, body: Value| {
+            route(
+                method,
+                path,
+                &HashMap::new(),
+                &serde_json::to_vec(&body).unwrap(),
+                &state,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            request("POST", "/api/agent/progress", json!({ "message": "  " })).0,
+            400
+        );
+        let (status, result) = request(
+            "POST",
+            "/api/agent/progress",
+            json!({ "message": "Checking tests", "model": "fixture", "pct": 40, "commentId": "c1" }),
+        );
+        assert_eq!(status, 200);
+        assert_eq!(result["ok"], true);
+        let progress = request("GET", "/api/agent/progress", Value::Null).1;
+        assert_eq!(progress["progress"]["message"], "Checking tests");
+        assert_eq!(progress["progress"]["pct"], 40.0);
+        assert!(progress["progress"]["at"].is_u64());
+        let snapshot = api.snapshot_since(0).unwrap();
+        assert!(api.snapshot_since(snapshot.revision).is_none());
+        let (_, registered) = request(
+            "POST",
+            "/api/agent/register",
+            json!({ "agentId": "a/b", "label": "Reviewer" }),
+        );
+        assert_eq!(registered["agentId"], "a/b");
+        assert_eq!(
+            request("GET", "/api/review/status", Value::Null).1["agents"][0]["label"],
+            "Reviewer"
+        );
+        assert_eq!(
+            request("DELETE", "/api/agent/register/a%2Fb", Value::Null).0,
+            200
+        );
+        assert!(
+            request("GET", "/api/review/status", Value::Null).1["agents"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        for _ in 0..22 {
+            api.release_review("<review/>".into(), vec![], ReviewDecision::CommentOnly);
+        }
+        let status = request("GET", "/api/review/status", Value::Null).1;
+        assert_eq!(status["round"], 22);
+        assert_eq!(status["lastDecision"], "comment-only");
+        assert_eq!(status["lastOpenCount"], 0);
+        assert!(status["lastSentAt"].is_u64());
+        let history = request("GET", "/api/review/history", Value::Null).1;
+        assert_eq!(history["rounds"].as_array().unwrap().len(), 20);
+        assert_eq!(history["rounds"][0]["round"], 22);
+        assert_eq!(history["rounds"][19]["round"], 3);
+        assert_eq!(history["rounds"][0]["mode"], "comment-only");
+        let params = HashMap::from([("sinceRound".into(), "21".into())]);
+        let payload = await_review(&params, &state, None).unwrap().1;
+        assert_eq!(payload["status"], "released");
+        for field in [
+            "round",
+            "sentAt",
+            "commentXml",
+            "comments",
+            "openCount",
+            "decision",
+            "mode",
+        ] {
+            assert!(payload["payload"].get(field).is_some(), "missing {field}");
+        }
+        let params = HashMap::from([("timeoutMs".into(), "1".into())]);
+        assert_eq!(
+            await_review(&params, &state, None).unwrap().1["status"],
+            "keep-waiting",
+            "omitted cursor must wait for a future send"
+        );
+        let params = HashMap::from([("sinceRound".into(), "-1".into())]);
+        assert_eq!(await_review(&params, &state, None).unwrap().0, 400);
+        state.review.0.lock().unwrap().waiters = MAX_REVIEW_WAITERS;
+        assert_eq!(await_review(&HashMap::new(), &state, None).unwrap().0, 429);
+    }
+
+    #[test]
+    fn disconnected_long_poll_releases_its_waiter_and_connection_slot() {
+        let index = Arc::new(RwLock::new(Arc::new(DiffIndex::empty(
+            1,
+            "unused".into(),
+            true,
+        ))));
+        let api = AgentApi::start("/tmp/unused-agent-disconnect".into(), index).unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", api.port)).unwrap();
+        write!(stream, "GET /api/review/await?sinceRound=0&timeoutMs=30000 HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Diffing-Capability: {}\r\n\r\n", api.capability).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while api.waiter_count() == 0 {
+            assert!(Instant::now() < deadline, "waiter did not connect");
+            thread::yield_now();
+        }
+        drop(stream);
+        while api.waiter_count() != 0 {
+            assert!(
+                Instant::now() < deadline,
+                "disconnected agent remained waiting"
+            );
+            thread::yield_now();
+        }
+        assert!(
+            raw_get(api.port, "/api/review/status", Some(&api.capability))
+                .starts_with("HTTP/1.1 200")
+        );
+    }
+
+    #[test]
+    fn one_review_releases_every_waiter_and_replays_to_late_clients() {
+        let index = Arc::new(RwLock::new(Arc::new(DiffIndex::empty(
+            1,
+            "unused".into(),
+            true,
+        ))));
+        let api = AgentApi::start("/tmp/unused-agent-broadcast".into(), index).unwrap();
+        let clients: Vec<_> = (0..3)
+            .map(|_| {
+                let api = api.clone();
+                thread::spawn(move || {
+                    raw_get(
+                        api.port,
+                        "/api/review/await?sinceRound=0&timeoutMs=2000",
+                        Some(&api.capability),
+                    )
+                })
+            })
+            .collect();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while api.waiter_count() != 3 {
+            assert!(Instant::now() < deadline, "agents failed to start waiting");
+            thread::yield_now();
+        }
+        api.release_review("<review/>".into(), vec![], ReviewDecision::CommentOnly);
+        for client in clients {
+            let response = client.join().unwrap();
+            let body: Value =
+                serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(body["status"], "released");
+            assert_eq!(body["payload"]["round"], 1);
+            assert_eq!(body["payload"]["mode"], "comment-only");
+        }
+        assert_eq!(api.waiter_count(), 0);
+        let response = raw_get(
+            api.port,
+            "/api/review/await?sinceRound=0&timeoutMs=1",
+            Some(&api.capability),
+        );
+        assert!(response.contains("\"status\":\"released\""));
     }
 
     #[test]
@@ -890,7 +1343,14 @@ mod tests {
         for operation in ["files", "hunks", "slice", "search"] {
             for parameter in ["continuation", "snapshotId"] {
                 let params = HashMap::from([(parameter.to_string(), "retained".to_string())]);
-                let (status, body) = route("GET", &format!("/api/diff/{operation}"), &params, b"", &state).unwrap();
+                let (status, body) = route(
+                    "GET",
+                    &format!("/api/diff/{operation}"),
+                    &params,
+                    b"",
+                    &state,
+                )
+                .unwrap();
                 assert_eq!(status, 422);
                 assert_eq!(body["code"], "unsupported_continuation");
             }
@@ -964,5 +1424,29 @@ mod tests {
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
         response
+    }
+
+    #[test]
+    fn idle_listener_closes_after_the_last_owner_drops() {
+        let index = Arc::new(RwLock::new(Arc::new(DiffIndex::empty(
+            1,
+            "/tmp/unused.patch".into(),
+            true,
+        ))));
+        let api = AgentApi::start("/tmp/repo".to_string(), index).unwrap();
+        let port = api.port;
+        let owner = api.clone();
+        drop(api);
+        assert!(raw_get(port, "/api/review/status", Some(&owner.capability))
+            .starts_with("HTTP/1.1 200"));
+        drop(owner);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "idle listener leaked after shutdown"
+            );
+            thread::yield_now();
+        }
     }
 }

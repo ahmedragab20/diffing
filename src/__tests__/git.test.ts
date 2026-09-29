@@ -584,6 +584,19 @@ describe("git", () => {
   });
 
   describe("getProjectStorageDir", () => {
+    it("shares the native storage override without changing repository identity", async () => {
+      const { getProjectStorageDir } = await import("../lib/git.js");
+      const previous = process.env.DIFFING_STORAGE_ROOT;
+      try {
+        delete process.env.DIFFING_STORAGE_ROOT;
+        const original = getProjectStorageDir("/custom/path/some-repo");
+        process.env.DIFFING_STORAGE_ROOT = "/isolated/reviews";
+        expect(getProjectStorageDir("/custom/path/some-repo")).toBe(`/isolated/reviews/${original.split("/").at(-1)}`);
+      } finally {
+        if (previous === undefined) delete process.env.DIFFING_STORAGE_ROOT;
+        else process.env.DIFFING_STORAGE_ROOT = previous;
+      }
+    });
     it("returns correct path format under homedir", async () => {
       mockExecFileSync.mockReturnValue("/Users/user/projects/my-repo\n");
       const { getProjectStorageDir } = await import("../lib/git.js");

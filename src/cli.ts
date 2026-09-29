@@ -12,7 +12,6 @@ import {
 	buildTuiGitDiffArgs,
 } from "./lib/diff-options.js";
 import { runTerminalDiff, validateEnvironment } from "./lib/diff-engine.js";
-import { startServer } from "./server.js";
 import { generateSessionToken, isWildcardBindHost } from "./lib/server-auth.js";
 import { appendSessionToken } from "./lib/session-url.js";
 import { loadSettings } from "./lib/settings.js";
@@ -450,6 +449,9 @@ if (activeSession && opts.replaceSession) {
 
 let actualPort: number;
 let prMode: boolean;
+// Loading the web server also loads search, providers, and HTTP routes. Native
+// and plain-terminal launches must not pay for that dependency graph.
+const { startServer } = await import("./server.js");
 let runningServer: Awaited<ReturnType<typeof startServer>> | null = null;
 try {
 	runningServer = await startServer({

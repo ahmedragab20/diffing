@@ -1226,10 +1226,11 @@ describe('diffing MCP', () => {
     }
   })
 
-  it('replays the latest cached review on first attachment', async () => {
+  it.each(['web', 'tui'] as const)('replays the latest cached review on first %s attachment', async (mode) => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: string | URL | Request) => {
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (mode === 'tui') expect(new Headers(init?.headers).get('X-Diffing-Capability')).toBe('native-capability')
         const url = input instanceof Request ? input.url : String(input)
         if (url.endsWith('/api/review/status'))
           return Response.json({ round: 1 })
@@ -1257,7 +1258,8 @@ describe('diffing MCP', () => {
       repoRoot,
       startedAt: 1,
       version: MCP_VERSION,
-      mode: 'web',
+      mode,
+      capability: mode === 'tui' ? 'native-capability' : undefined,
     }
     const session = await connect({
       repoRoot,

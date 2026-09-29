@@ -167,6 +167,12 @@ async function awaitReview(args: string[]): Promise<number> {
 	);
 	if (timeoutSeconds === null) return EXIT_USAGE;
 	const totalBudgetMs = timeoutSeconds * 1000;
+	const requestedSince = values.since;
+	if (requestedSince !== undefined &&
+		(!/^\d+$/.test(requestedSince) || !Number.isSafeInteger(Number(requestedSince)))) {
+		console.error("--since must be a non-negative safe integer review round.");
+		return EXIT_USAGE;
+	}
 	const base = baseUrl();
 
 	// Register identity so the human UI can show multi-agent waiting chips.
@@ -190,12 +196,15 @@ async function awaitReview(args: string[]): Promise<number> {
 		// Identity is best-effort; await still works without it.
 	}
 
-	// Seed the round cursor so we only react to sends that happen from now on.
-	let sinceRound = 0;
-	const statusRes = await tryApiFetch(`${base}/api/review/status`);
-	if (statusRes?.ok) {
-		const status = (await statusRes.json()) as { round?: number };
-		sinceRound = status.round ?? 0;
+	// Match MCP: a fresh attachment can collect a review sent while the agent
+	// was parked. Continuing agents pass --since with their last received round.
+	let sinceRound = Number(requestedSince ?? 0);
+	if (requestedSince === undefined) {
+		const statusRes = await tryApiFetch(`${base}/api/review/status`);
+		if (statusRes?.ok) {
+			const status = (await statusRes.json()) as { round?: number };
+			sinceRound = Math.max(0, (status.round ?? 0) - 1);
+		}
 	}
 
 	const unregister = async () => {
@@ -211,11 +220,13 @@ async function awaitReview(args: string[]): Promise<number> {
 
 	const deadline = Date.now() + totalBudgetMs;
 	while (Date.now() < deadline) {
+		const remaining = Math.max(1, deadline - Date.now());
+		const pollMs = Math.min(25000, remaining);
 		let res: Response;
 		try {
 			res = await apiFetch(
-				`${base}/api/review/await?timeoutMs=25000&sinceRound=${sinceRound}`,
-				{ signal: AbortSignal.timeout(30000) },
+				`${base}/api/review/await?timeoutMs=${pollMs}&sinceRound=${sinceRound}`,
+				{ signal: AbortSignal.timeout(Math.min(30000, remaining)) },
 			);
 		} catch (err: any) {
 			if (err?.name === "TimeoutError") continue;

@@ -2,9 +2,7 @@
 //!
 //! Produces the `<code-review-comments>` XML envelope that hands a
 //! review off to an AI agent. Shared by the TUI's "send to agent"
-//! popover, the "Copy" button, and the lockfile update that wakes
-//! `diffing await-review`. All three channels emit byte-identical
-//! output.
+//! dialog and explicit clipboard export. Both use the same review snapshot.
 
 use diffing_core::comments::{CommentStatus, ReviewComment};
 
@@ -12,7 +10,7 @@ use crate::handoff::review::ReviewDecision;
 
 const ENVELOPE_INSTRUCTIONS: &str = r#"    You are an AI coding assistant. You are receiving a structured list of code review comments to address in the repository.
     For each file, review the inline comments and apply the changes requested.
-    - The "decision" attribute on the root element is the reviewer's headline verdict: "approved", "changes-requested", or "rejected".
+    - The "decision" attribute is the reviewer's headline verdict: "approved", "changes-requested", "rejected", or "comment-only".
     - `<decision-summary>` tells you, in plain language, what to do next based on that verdict.
     - Target lines are specified by the "line" attribute (e.g. line="10" or line="10-15").
     - "side" indicates whether the comment is on "additions" (added/modified lines) or "deletions" (deleted/old lines).
@@ -31,9 +29,10 @@ const ENVELOPE_INSTRUCTIONS: &str = r#"    You are an AI coding assistant. You a
     (Or the equivalent MCP tools: reply_to_comment, resolve_comment.)
 
     Option B: Via the local HTTP API (if you know the running port)
-      POST http://localhost:<port>/api/comments/<comment-id>/replies
+      For a TUI session, authenticate with the X-Diffing-Capability header from its active session record. Never share the capability. The CLI and MCP attach it automatically.
+      POST http://127.0.0.1:<port>/api/comments/<comment-id>/replies
       Payload: { "body": "Your response or clarification request here", "model": "<your-model-name>" }
-      PUT  http://localhost:<port>/api/comments/<comment-id>  Payload: { "status": "resolved" }
+      PUT  http://127.0.0.1:<port>/api/comments/<comment-id>  Payload: { "status": "resolved" }
 
     Option C: Via Text Response (Offline / Chat Copy-Paste)
     If you do not have local API access, output your comments/replies inside a structured XML block at the end of your response:
@@ -53,6 +52,9 @@ pub fn review_decision_summary(decision: ReviewDecision) -> &'static str {
         ReviewDecision::Rejected => {
             "The reviewer REJECTED these changes. Do NOT keep building on this approach; reconsider it in light of the comments below before continuing."
         }
+        ReviewDecision::CommentOnly => {
+            "The reviewer chose COMMENT-ONLY mode. You MUST NOT edit any files. Only reply to the comments below — answer questions, provide clarification, or discuss. The general comment (if any) is your prompt for the chat."
+        }
     }
 }
 
@@ -68,7 +70,7 @@ pub fn format_comments(
         return String::new();
     }
 
-    // Group comments by file path, preserving the input order.
+    // Keep files together in a deterministic order across store reloads.
     let mut grouped: Vec<(&str, Vec<&ReviewComment>)> = Vec::new();
     for c in comments {
         if let Some((_, list)) = grouped.iter_mut().find(|(p, _)| *p == c.file_path) {
@@ -77,15 +79,27 @@ pub fn format_comments(
             grouped.push((c.file_path.as_str(), vec![c]));
         }
     }
+    grouped.sort_by(|(left, _), (right, _)| left.cmp(right));
 
     let mut lines: Vec<String> = Vec::new();
     lines.push(match decision {
+        Some(ReviewDecision::CommentOnly) => {
+            "<code-review-comments decision=\"comment-only\" mode=\"comment-only\">".to_string()
+        }
         Some(d) => format!("<code-review-comments decision=\"{}\">", d.as_str()),
         None => "<code-review-comments>".to_string(),
     });
+    let instructions = if decision == Some(ReviewDecision::CommentOnly) {
+        ENVELOPE_INSTRUCTIONS.replace(
+            "For each file, review the inline comments and apply the changes requested.",
+            "COMMENT-ONLY MODE: You MUST NOT edit any files. Only reply to comments, answer questions, or discuss. The general comment is your prompt for the chat.",
+        )
+    } else {
+        ENVELOPE_INSTRUCTIONS.to_string()
+    };
     lines.push(format!(
         "  <instructions><![CDATA[{}]]></instructions>",
-        escape_cdata(ENVELOPE_INSTRUCTIONS)
+        escape_cdata(&instructions)
     ));
 
     if let Some(d) = decision {
@@ -284,6 +298,7 @@ mod tests {
 
     fn sample_comment(id: &str, body: &str, status: CommentStatus) -> ReviewComment {
         ReviewComment {
+            extra: Default::default(),
             id: id.to_string(),
             file_path: "src/index.ts".to_string(),
             side: CommentSide::Additions,
@@ -427,6 +442,7 @@ mod tests {
     fn includes_replies_when_present() {
         let mut c = sample_comment("c1", "main", CommentStatus::Open);
         c.replies.push(CommentReply {
+            extra: Default::default(),
             id: "r1".to_string(),
             body: "agent reply".to_string(),
             created_at: 2000,
@@ -479,6 +495,7 @@ mod tests {
         let mut c = sample_comment("c\"1", "body", CommentStatus::Open);
         c.file_path = "src/\"evil\".ts".to_string();
         c.replies.push(CommentReply {
+            extra: Default::default(),
             id: "r\"1".to_string(),
             body: "reply".to_string(),
             created_at: 2000,
