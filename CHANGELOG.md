@@ -1,3 +1,9 @@
+## 0.21.7
+
+### Patch Changes
+
+- 5fd6bda: Refine reviews, rendering performance, and agent handoff
+
 ## 0.21.6
 
 ### Patch Changes
