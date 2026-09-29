@@ -1,3 +1,10 @@
+## 0.21.9
+
+### Patch Changes
+
+- d97ef68: Enable code intelligence across local diffs and pull requests
+- 55ed40f: Wait for npm processing before release verification
+
 ## 0.21.8
 
 ### Patch Changes
