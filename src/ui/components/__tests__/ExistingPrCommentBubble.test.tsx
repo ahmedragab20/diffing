@@ -101,4 +101,69 @@ describe('ExistingPrCommentBubble GitHub actions', () => {
     expect(screen.getByText('uses: actions/download-artifact@v8')).toBeInTheDocument()
     expect(screen.queryByText(/```suggestion/)).not.toBeInTheDocument()
   })
+
+  it('proxies Enterprise GitHub avatar URLs and keeps the login alt text', () => {
+    const avatarUrl = 'https://github.enterprise.example/avatar/u/42?size=64&format=png'
+    const { container } = render(
+      <ExistingPrCommentBubble
+        comment={{ ...comment, author: { login: 'enterprise-reviewer', avatarUrl } }}
+      />,
+    )
+
+    const avatar = container.querySelector('img.pr-existing-avatar')
+    expect(avatar).toHaveAttribute('src', `/api/gh/avatar?url=${encodeURIComponent(avatarUrl)}`)
+    expect(avatar).toHaveAttribute('referrerpolicy', 'no-referrer')
+    expect(avatar).toHaveAttribute('alt', 'enterprise-reviewer')
+  })
+
+  it('renders a fallback when the author has no avatar URL', () => {
+    const { container } = render(
+      <ExistingPrCommentBubble comment={{ ...comment, author: { login: 'reviewer' } }} />,
+    )
+
+    expect(container.querySelector('img.pr-existing-avatar')).not.toBeInTheDocument()
+    expect(container.querySelector('.pr-existing-avatar-fallback')).toBeInTheDocument()
+  })
+
+  it('renders a fallback when the comment has no author', () => {
+    const { container } = render(<ExistingPrCommentBubble comment={{ ...comment, author: null }} />)
+
+    expect(container.querySelector('img.pr-existing-avatar')).not.toBeInTheDocument()
+    expect(container.querySelector('.pr-existing-avatar-fallback')).toBeInTheDocument()
+  })
+
+  it('replaces a broken avatar image with a fallback', () => {
+    const avatarUrl = 'https://avatars.githubusercontent.com/u/42?v=4'
+    const { container } = render(
+      <ExistingPrCommentBubble
+        comment={{ ...comment, author: { login: 'reviewer', avatarUrl } }}
+      />,
+    )
+
+    fireEvent.error(container.querySelector('img.pr-existing-avatar')!)
+
+    expect(container.querySelector('img.pr-existing-avatar')).not.toBeInTheDocument()
+    expect(container.querySelector('.pr-existing-avatar-fallback')).toBeInTheDocument()
+  })
+
+  it('shows a changed avatar URL after the previous avatar failed', () => {
+    const firstAvatarUrl = 'https://avatars.githubusercontent.com/u/42?v=4'
+    const nextAvatarUrl = 'https://github.enterprise.example/avatar/u/99?size=64'
+    const { container, rerender } = render(
+      <ExistingPrCommentBubble
+        comment={{ ...comment, author: { login: 'reviewer', avatarUrl: firstAvatarUrl } }}
+      />,
+    )
+
+    fireEvent.error(container.querySelector('img.pr-existing-avatar')!)
+    rerender(
+      <ExistingPrCommentBubble
+        comment={{ ...comment, author: { login: 'reviewer', avatarUrl: nextAvatarUrl } }}
+      />,
+    )
+
+    const avatar = container.querySelector('img.pr-existing-avatar')
+    expect(avatar).toHaveAttribute('src', `/api/gh/avatar?url=${encodeURIComponent(nextAvatarUrl)}`)
+    expect(avatar).toHaveAttribute('alt', 'reviewer')
+  })
 })

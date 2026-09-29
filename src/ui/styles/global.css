@@ -13562,6 +13562,13 @@ button.toolbar-last-send-btn:hover {
   border: 1px solid var(--border-weak);
 }
 
+.pr-existing-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
 .pr-existing-bubble-meta {
   display: flex;
   align-items: baseline;

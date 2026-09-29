@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../PrChecksPopover", () => ({
   PrChecksPopover: () => <button type="button">2/2 passed</button>,
 }));
+vi.mock("../../utils/uiState", () => ({ getUiStateItem: () => null, setUiStateItem: vi.fn() }));
 
 import { PrReviewSummaryBanner } from "../PrReviewSummaryBanner";
 
@@ -76,9 +77,25 @@ describe("PrReviewSummaryBanner", () => {
         draftCount={0}
       />,
     );
-    expect(screen.queryByText(/Fixes the race/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Show description" }));
-    expect(screen.getByText(/Fixes the race in the handler/)).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Description" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText(/Fixes the race/)).not.toBeVisible();
+    fireEvent.click(toggle);
+    expect(screen.getByText(/Fixes the race in the handler/)).toBeVisible();
+    fireEvent.click(toggle);
+    expect(screen.getByText(/Fixes the race/)).not.toBeVisible();
+  });
+
+  it("collapses the overview while retaining the title and change totals", () => {
+    render(<PrReviewSummaryBanner session={session} draftCount={0} />);
+    const toggle = screen.getByRole("button", { name: /Overview/ });
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveTextContent("3 files · +21 −8");
+    expect(screen.getByRole("heading", { name: session.title })).toBeVisible();
+    expect(screen.getByText("@octocat")).not.toBeVisible();
+    fireEvent.click(toggle);
+    expect(screen.getByText("@octocat")).toBeVisible();
   });
 
   it("shows omitted-patch completeness when files lack patches", () => {

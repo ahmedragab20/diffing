@@ -230,6 +230,8 @@ interface FileDiffCardProps {
   expectedHeadSha?: string;
   /** Hide editor/revert actions on remote or otherwise read-only review surfaces. */
   allowLocalActions?: boolean;
+  /** Historical patch inspection: no head-scoped comments, links, or context. */
+  readOnlyPatch?: boolean;
   /**
    * Fired by the header click AFTER the local `collapsed` state has been
    * flipped. Used by App.tsx to drive the auto-advance-to-next-file
@@ -310,6 +312,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   onApplyExisting,
   expectedHeadSha,
   allowLocalActions = true,
+  readOnlyPatch = false,
   onCardToggleCollapse,
   canEdit = false,
   editSession = null,
@@ -356,7 +359,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   // In-place editing forces full-file context: the editor's document must be
   // the whole new file so a save never truncates a partial patch.
   const editing = editSession != null;
-  const contextExpanded = editing ? true : localContextExpanded;
+  const contextExpanded = !readOnlyPatch && (editing ? true : localContextExpanded);
   const [revertingHunk, setRevertingHunk] = useState<number | null>(null);
   const [revertError, setRevertError] = useState<string | null>(null);
   const [previewHunkIndex, setPreviewHunkIndex] = useState<number | null>(null);
@@ -462,7 +465,7 @@ export const FileDiffCard = memo(function FileDiffCard({
 
   const isChangedFile =
     fileDiff.type === "change" || fileDiff.type === "rename-changed";
-  const canExpandContext = !collapsed && isChangedFile;
+  const canExpandContext = !readOnlyPatch && !collapsed && isChangedFile;
   const oldFilePath = fileDiff.prevName ?? filePath;
   const {
     loading: contentsLoading,
@@ -1315,8 +1318,8 @@ export const FileDiffCard = memo(function FileDiffCard({
       ...tokenHandlers,
       onPostRender,
       diffStyle: layoutDiffStyle,
-      enableGutterUtility: true,
-      enableLineSelection: true,
+      enableGutterUtility: !readOnlyPatch,
+      enableLineSelection: !readOnlyPatch,
       disableFileHeader: true,
       lineDiffType,
       overflow: lineWrap ? "wrap" : "scroll",
@@ -1328,16 +1331,17 @@ export const FileDiffCard = memo(function FileDiffCard({
       expandUnchanged: expandSearchContext,
       collapsedContextThreshold,
       expansionLineCount,
-      onLineSelectionStart: handleSelectionStart,
-      onLineSelectionChange: handleSelectionChange,
-      onLineSelectionEnd: handleSelectionEnd,
-      onGutterUtilityClick: handleGutterUtilityClick,
-      onLineNumberClick: handleLineNumberClick,
+      onLineSelectionStart: readOnlyPatch ? undefined : handleSelectionStart,
+      onLineSelectionChange: readOnlyPatch ? undefined : handleSelectionChange,
+      onLineSelectionEnd: readOnlyPatch ? undefined : handleSelectionEnd,
+      onGutterUtilityClick: readOnlyPatch ? undefined : handleGutterUtilityClick,
+      onLineNumberClick: readOnlyPatch ? undefined : handleLineNumberClick,
       theme: rendererTheme,
       themeType: shikiConfig.type,
       unsafeCSS,
     }),
     [
+      readOnlyPatch,
       tokenHandlers,
       onPostRender,
       layoutDiffStyle,
@@ -1368,8 +1372,8 @@ export const FileDiffCard = memo(function FileDiffCard({
       ...tokenHandlers,
       onPostRender,
       diffStyle: layoutDiffStyle,
-      enableGutterUtility: true,
-      enableLineSelection: true,
+      enableGutterUtility: !readOnlyPatch,
+      enableLineSelection: !readOnlyPatch,
       disableFileHeader: true, // Disable built-in header to use custom header
       lineDiffType,
       overflow: lineWrap ? "wrap" : "scroll",
@@ -1377,16 +1381,17 @@ export const FileDiffCard = memo(function FileDiffCard({
       disableLineNumbers: !showLineNumbers,
       hunkSeparators,
       lineHoverHighlight,
-      onLineSelectionStart: handleSelectionStart,
-      onLineSelectionChange: handleSelectionChange,
-      onLineSelectionEnd: handleSelectionEnd,
-      onGutterUtilityClick: handleGutterUtilityClick,
-      onLineNumberClick: handleLineNumberClick,
+      onLineSelectionStart: readOnlyPatch ? undefined : handleSelectionStart,
+      onLineSelectionChange: readOnlyPatch ? undefined : handleSelectionChange,
+      onLineSelectionEnd: readOnlyPatch ? undefined : handleSelectionEnd,
+      onGutterUtilityClick: readOnlyPatch ? undefined : handleGutterUtilityClick,
+      onLineNumberClick: readOnlyPatch ? undefined : handleLineNumberClick,
       theme: rendererTheme,
       themeType: shikiConfig.type,
       unsafeCSS,
     }),
     [
+      readOnlyPatch,
       tokenHandlers,
       onPostRender,
       layoutDiffStyle,
@@ -1662,7 +1667,7 @@ export const FileDiffCard = memo(function FileDiffCard({
               </Tooltip>
             </>
           )}
-          <Tooltip content="Comment on entire file" side="bottom">
+          {!readOnlyPatch && <Tooltip content="Comment on entire file" side="bottom">
             <button
               className="file-diff-icon-btn"
               onClick={() => {
@@ -1673,7 +1678,7 @@ export const FileDiffCard = memo(function FileDiffCard({
             >
               <MessageSquare size={13} />
             </button>
-          </Tooltip>
+          </Tooltip>}
           <label
             className={`viewed-label ${viewed ? "viewed-checked" : ""}`}
             title={viewed ? "Mark unviewed · v" : "Mark viewed · v"}
@@ -2231,12 +2236,10 @@ export function buildUnsafeCSS(
     [data-line][data-line-type="addition"],
     [data-line][data-line-type="change-addition"] {
       background-color: var(--gl-added-surface) !important;
-      box-shadow: inset 2px 0 var(--gl-positive) !important;
     }
     [data-line][data-line-type="deletion"],
     [data-line][data-line-type="change-deletion"] {
       background-color: var(--gl-removed-surface) !important;
-      box-shadow: inset 2px 0 var(--gl-negative) !important;
     }
     /* Lift syntax tokens toward --text-primary on changed lines so muted
        theme colours (e.g. rose-pine comments) stay readable on the tinted

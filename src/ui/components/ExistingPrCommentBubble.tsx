@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { MessageCircle, AlertTriangle, CheckCircle2, CornerUpLeft, Pencil, RotateCcw, Trash2 } from 'lucide-react'
+import { MessageCircle, AlertTriangle, CheckCircle2, CornerUpLeft, Pencil, RotateCcw, Trash2, UserRound } from 'lucide-react'
 import type { PrExistingComment, PrExistingReply } from '../../lib/pr-session'
 import { Markdown } from './Markdown'
 import { ConfirmDialog } from '../primitives/ConfirmDialog'
@@ -31,6 +31,8 @@ export function ExistingPrCommentBubble({ comment, lineContent, onReply, onEdit,
   const [busy, setBusy] = useState(false)
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [applyConfirming, setApplyConfirming] = useState(false)
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null)
+  const avatarUrl = comment.author?.avatarUrl
 
   useEffect(() => {
     if (!editing) setEditBody(comment.body)
@@ -91,14 +93,18 @@ export function ExistingPrCommentBubble({ comment, lineContent, onReply, onEdit,
   return (
     <div className={`pr-existing-bubble ${comment.isResolved ? 'is-resolved' : ''}`}>
       <div className="pr-existing-bubble-head">
-        {comment.author ? (
+        {avatarUrl && failedAvatarUrl !== avatarUrl ? (
           <img
             className="pr-existing-avatar"
-            src={comment.author.avatarUrl}
-            alt={comment.author.login}
+            src={`/api/gh/avatar?url=${encodeURIComponent(avatarUrl)}`}
+            alt={comment.author?.login ?? ''}
+            referrerPolicy="no-referrer"
+            onError={() => setFailedAvatarUrl(avatarUrl)}
           />
         ) : (
-          <div className="pr-existing-avatar pr-existing-avatar-fallback" />
+          <span className="pr-existing-avatar pr-existing-avatar-fallback" aria-hidden="true">
+            <UserRound size={13} />
+          </span>
         )}
         <div className="pr-existing-bubble-meta">
           <span className="pr-existing-bubble-author">

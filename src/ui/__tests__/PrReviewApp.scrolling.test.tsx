@@ -178,6 +178,9 @@ vi.mock("../hooks/useViewed", () => ({
 vi.mock("../hooks/useDiff", () => ({
   useDiff: () => ({ patch, loading: false, error: null }),
 }));
+vi.mock("../hooks/usePrCommits", () => ({
+  usePrCommits: () => ({ commits: [], selectedSha: null, selectedCommit: null, select: vi.fn(), reviewedCommits: new Set(), total: 0, complete: true }),
+}));
 vi.mock("../hooks/useApplyFonts", () => ({ useApplyFonts: () => undefined }));
 vi.mock("../hooks/useDiffReviewKeymaps", () => ({
   useDiffReviewKeymaps: () => undefined,

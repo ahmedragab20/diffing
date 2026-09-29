@@ -2306,6 +2306,334 @@ file-tree,
   color: var(--gl-muted);
 }
 
+/* PR review: quiet context disclosures and a single commit navigation bar. */
+.pr-app .pr-overview-banner {
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+}
+
+.pr-overview-heading {
+  padding: 20px 4px 18px;
+}
+
+.pr-overview-eyebrow {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.pr-overview-heading .diff-overview-banner-line {
+  align-items: flex-start;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 10px;
+}
+
+.pr-overview-heading .diff-overview-banner-headline {
+  font-family: var(--font-sans);
+  font-size: 23px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
+}
+
+.pr-overview-icon {
+  flex: none;
+  margin-top: 5px;
+  color: var(--gl-positive);
+}
+
+.pr-review-section {
+  border-bottom: 1px solid var(--gl-rule-subtle);
+}
+
+.pr-section-heading {
+  margin: 0;
+}
+
+.pr-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 4px;
+  border: 0;
+  border-radius: var(--gl-radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  font: 500 12px var(--font-sans);
+  text-align: start;
+  cursor: pointer;
+}
+
+.pr-section-toggle:hover {
+  background: var(--gl-hover);
+}
+.pr-section-toggle > svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+.pr-section-summary {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.pr-section-chevron {
+  transition: transform var(--transition-fast);
+}
+.pr-section-toggle[aria-expanded="true"] .pr-section-chevron {
+  transform: rotate(180deg);
+}
+.pr-section-content {
+  padding: 2px 4px 16px;
+}
+.pr-section-content[hidden] {
+  display: none;
+}
+.pr-section-content > :last-child {
+  margin-bottom: 0;
+}
+.pr-section-content .pr-overview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.pr-section-content .pr-author-actions {
+  margin-top: 14px;
+}
+.pr-section-content .pr-overview-description {
+  margin: 0;
+  max-width: 90ch;
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.pr-section-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.pr-section-content .pr-existing-summary {
+  padding: 8px 0 0;
+}
+.pr-section-content .pr-review-activity,
+.pr-section-content .pr-conversation-timeline {
+  margin-bottom: 8px;
+}
+
+.pr-commit-navigator {
+  margin: 18px 0 14px;
+  border: 1px solid var(--gl-rule-subtle);
+  border-radius: var(--gl-radius-surface);
+  background: var(--gl-surface);
+}
+
+.pr-commit-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+}
+.pr-commit-controls .btn {
+  min-height: 30px;
+}
+.pr-commit-controls .pr-all-changes {
+  flex: none;
+  background: transparent;
+  border-color: transparent;
+}
+.pr-commit-controls .pr-all-changes.is-active {
+  background: var(--gl-selected);
+  border-color: var(--gl-rule);
+  color: var(--text-primary);
+}
+.pr-commit-select-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  max-width: 620px;
+  color: var(--text-secondary);
+}
+.pr-commit-select-wrap > svg {
+  flex: none;
+}
+.pr-commit-select-wrap select {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 24px 4px 6px;
+  border: 1px solid var(--gl-rule-subtle);
+  border-radius: var(--gl-radius-control);
+  font: 12px var(--font-sans);
+  color: var(--text-primary);
+  background: var(--gl-surface);
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.pr-commit-select-wrap select:disabled {
+  cursor: default;
+  color: var(--text-secondary);
+}
+.pr-commit-step {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.pr-commit-step > span {
+  min-width: 40px;
+  text-align: center;
+  font: 11px var(--font-mono);
+  color: var(--text-secondary);
+}
+.pr-commit-step .btn {
+  padding-inline: 6px;
+}
+.pr-commit-progress {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.pr-commit-detail {
+  padding: 14px;
+  border-top: 1px solid var(--gl-rule-subtle);
+}
+.pr-commit-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  font-size: 12px;
+}
+.pr-commit-identity > code {
+  color: var(--gl-accent);
+  font-size: 11px;
+}
+.pr-commit-identity > strong {
+  overflow-wrap: anywhere;
+  font-weight: 550;
+}
+.pr-commit-identity > span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.pr-commit-message {
+  margin: 10px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.pr-commit-message summary {
+  cursor: pointer;
+}
+.pr-commit-message p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.pr-commit-review-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+.pr-commit-review-row p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.pr-commit-review-row p button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--gl-accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.pr-commit-review-row > button {
+  flex: none;
+}
+.pr-commit-review-row .is-reviewed {
+  color: var(--gl-positive);
+}
+.pr-commit-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--gl-rule-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.pr-commit-notice[role="alert"] {
+  color: var(--gl-negative);
+}
+
+@media (max-width: 1000px) {
+  .pr-commit-controls {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .pr-commit-progress {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .pr-overview-heading {
+    padding-top: 14px;
+  }
+  .pr-overview-heading .diff-overview-banner-headline {
+    font-size: 20px;
+  }
+  .pr-section-toggle {
+    min-height: 44px;
+    flex-wrap: wrap;
+  }
+  .pr-section-summary {
+    font-size: 10px;
+  }
+  .pr-section-chevron {
+    margin-left: auto;
+  }
+  .pr-commit-select-wrap {
+    order: 2;
+    flex-basis: 100%;
+    max-width: none;
+  }
+  .pr-commit-step {
+    margin-left: auto;
+  }
+  .pr-commit-progress {
+    order: 3;
+  }
+  .pr-commit-review-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .pr-commit-controls .btn,
+  .pr-commit-select-wrap select {
+    min-height: 36px;
+  }
+}
+
 /* A looping indicator in a background tab burns battery for nobody. Pausing on
    a root attribute covers animations added later without opting each one in. */
 html[data-page-hidden='true'] *,

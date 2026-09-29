@@ -28,6 +28,8 @@ const githubMocks = vi.hoisted(() => ({
     setPrOpenState: vi.fn(),
     mergePullRequest: vi.fn(),
     applyPrSuggestion: vi.fn(),
+    fetchPrCommits: vi.fn(),
+    fetchPrCommitDiff: vi.fn(),
 }));
 
 vi.mock("../lib/github.js", async (importOriginal) => {
@@ -58,6 +60,16 @@ vi.mock("../lib/github-pr-actions.js", async (importOriginal) => {
         setPrOpenStateViaGh: githubMocks.setPrOpenState,
         mergePullRequestViaGh: githubMocks.mergePullRequest,
         applyPrSuggestionViaGh: githubMocks.applyPrSuggestion,
+    };
+});
+
+vi.mock("../lib/github-pr-commits.js", async (importOriginal) => {
+    const actual =
+        await importOriginal<typeof import("../lib/github-pr-commits.js")>();
+    return {
+        ...actual,
+        fetchPrCommits: githubMocks.fetchPrCommits,
+        fetchPrCommitDiff: githubMocks.fetchPrCommitDiff,
     };
 });
 
@@ -226,7 +238,7 @@ const baseSession: PrSession = {
     authSource: "gh",
 };
 
-async function makeApp(prStore: InMemoryPrSessionStore): Promise<Hono> {
+async function makeApp(prStore: InMemoryPrSessionStore, prMode = true): Promise<Hono> {
     const { createApp } = await import("../server.js");
     const { DEFAULTS } = await import("../lib/diff-options.js");
     return createApp(
@@ -235,7 +247,7 @@ async function makeApp(prStore: InMemoryPrSessionStore): Promise<Hono> {
         new MockCommentStore(),
         new MockPlanStore(),
         prStore,
-        true,
+        prMode,
     );
 }
 
@@ -284,6 +296,13 @@ describe("gh-pr endpoints (integration)", () => {
             ok: true,
             sha: "appliedsha",
         });
+        githubMocks.fetchPrCommits.mockResolvedValue({
+            headSha: baseSession.headSha,
+            commits: [],
+            total: 0,
+            complete: true,
+        });
+        githubMocks.fetchPrCommitDiff.mockResolvedValue("diff --git a/x b/x\n");
         prStore = new InMemoryPrSessionStore();
         app = await makeApp(prStore);
     });
@@ -317,6 +336,123 @@ describe("gh-pr endpoints (integration)", () => {
         expect(body.existingComments).toHaveLength(1);
         expect(body.existingComments[0].body).toBe("pre-existing feedback");
         expect(body.existingReviews).toEqual([]);
+    });
+
+    it("commit routes are absent without a session or in local mode", async () => {
+        const noSession = await app.fetch(
+            new Request("http://localhost/api/gh/commits?headSha=head"),
+        );
+        expect(noSession.status).toBe(404);
+        const inactiveStore = new InMemoryPrSessionStore();
+        await inactiveStore.set(baseSession);
+        const local = await makeApp(inactiveStore, false);
+        const localResponse = await local.fetch(
+            new Request("http://localhost/api/gh/commits?headSha=head"),
+        );
+        expect(localResponse.status).toBe(404);
+        expect((await local.fetch(new Request(`http://localhost/api/gh/commits/${"a".repeat(40)}/diff?headSha=head`))).status).toBe(404);
+        expect(githubMocks.fetchPrCommits).not.toHaveBeenCalled();
+    });
+
+    it("requires the expected head SHA and returns the commit list and SHA diff", async () => {
+        const sha = "e".repeat(40);
+        await prStore.set(baseSession);
+        githubMocks.fetchPrCommits.mockResolvedValueOnce({
+            headSha: baseSession.headSha,
+            commits: [{ sha, subject: "one", body: "", author: "octocat", authoredAt: "", parents: [] }],
+            total: 1,
+            complete: true,
+        });
+
+        const missingHead = await app.fetch(
+            new Request("http://localhost/api/gh/commits"),
+        );
+        expect(missingHead.status).toBe(409);
+
+        const commits = await app.fetch(
+            new Request("http://localhost/api/gh/commits?headSha=head"),
+        );
+        expect(commits.status).toBe(200);
+        expect(await commits.json()).toMatchObject({ headSha: "head", total: 1 });
+
+        const diff = await app.fetch(
+            new Request(`http://localhost/api/gh/commits/${sha}/diff?headSha=head`),
+        );
+        expect(diff.status).toBe(200);
+        expect(await diff.json()).toEqual({
+            headSha: "head",
+            sha,
+            patch: "diff --git a/x b/x\n",
+        });
+        expect(githubMocks.fetchPrCommitDiff).toHaveBeenCalledWith(
+            expect.objectContaining({ owner: "acme", repo: "widget", pullNumber: 1234 }),
+            sha,
+        );
+    });
+
+    it("rejects malformed and nonmember commit SHAs", async () => {
+        await prStore.set(baseSession);
+        const malformed = await app.fetch(
+            new Request("http://localhost/api/gh/commits/not-a-sha/diff?headSha=head"),
+        );
+        expect(malformed.status).toBe(400);
+
+        const nonmember = await app.fetch(
+            new Request(`http://localhost/api/gh/commits/${"f".repeat(40)}/diff?headSha=head`),
+        );
+        expect(nonmember.status).toBe(404);
+        expect(githubMocks.fetchPrCommitDiff).not.toHaveBeenCalled();
+    });
+
+    it("returns 502 for a failed fetch and retries after clearing the failed cache", async () => {
+        await prStore.set(baseSession);
+        githubMocks.fetchPrCommits
+            .mockRejectedValueOnce(new Error("GitHub unavailable"))
+            .mockResolvedValueOnce({ headSha: "head", commits: [], total: 0, complete: true });
+
+        const failed = await app.fetch(
+            new Request("http://localhost/api/gh/commits?headSha=head"),
+        );
+        expect(failed.status).toBe(502);
+        const retried = await app.fetch(
+            new Request("http://localhost/api/gh/commits?headSha=head"),
+        );
+        expect(retried.status).toBe(200);
+        expect(githubMocks.fetchPrCommits).toHaveBeenCalledTimes(2);
+    });
+
+    it("returns 409 when the PR session changes during a pending fetch", async () => {
+        await prStore.set(baseSession);
+        let resolveList!: (value: unknown) => void;
+        githubMocks.fetchPrCommits.mockReturnValueOnce(
+            new Promise((resolve) => {
+                resolveList = resolve;
+            }),
+        );
+        const pending = app.fetch(
+            new Request("http://localhost/api/gh/commits?headSha=head"),
+        );
+        await prStore.set({ ...baseSession, headSha: "new-head" });
+        resolveList({ headSha: "head", commits: [], total: 0, complete: true });
+        expect((await pending).status).toBe(409);
+    });
+
+    it("reuses a cached list for one PR head and invalidates it for a new head and PR", async () => {
+        await prStore.set(baseSession);
+        githubMocks.fetchPrCommits.mockImplementation(async (_resolved, headSha: string) => ({
+            headSha,
+            commits: [],
+            total: 0,
+            complete: true,
+        }));
+
+        expect((await app.fetch(new Request("http://localhost/api/gh/commits?headSha=head"))).status).toBe(200);
+        expect((await app.fetch(new Request("http://localhost/api/gh/commits?headSha=head"))).status).toBe(200);
+        expect(githubMocks.fetchPrCommits).toHaveBeenCalledTimes(1);
+
+        await prStore.set({ ...baseSession, owner: "other", pullNumber: 99, headSha: "new-head" });
+        expect((await app.fetch(new Request("http://localhost/api/gh/commits?headSha=new-head"))).status).toBe(200);
+        expect(githubMocks.fetchPrCommits).toHaveBeenCalledTimes(2);
     });
 
     it("GET /api/file-text loads PR base/head content instead of the local checkout", async () => {
@@ -395,7 +531,8 @@ describe("gh-pr endpoints (integration)", () => {
             1, 2, 3,
         ]);
         expect(remoteFetch).toHaveBeenCalledWith(new URL(avatarUrl), {
-            redirect: "error",
+            redirect: "manual",
+            signal: expect.any(AbortSignal),
         });
 
         const forbidden = await app.fetch(
@@ -405,6 +542,21 @@ describe("gh-pr endpoints (integration)", () => {
         );
         expect(forbidden.status).toBe(403);
         expect(remoteFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("GET /api/gh/avatar follows same-origin avatar redirects", async () => {
+        const avatarUrl = "https://avatars.githubusercontent.com/u/1?v=4";
+        await prStore.set({ ...baseSession, author: { login: "octocat", avatarUrl } });
+        const remoteFetch = vi.fn()
+            .mockResolvedValueOnce(new Response(null, { status: 302, headers: { Location: "/u/1?s=64" } }))
+            .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "image/png" } }));
+        vi.stubGlobal("fetch", remoteFetch);
+
+        const res = await app.fetch(new Request(`http://localhost/api/gh/avatar?url=${encodeURIComponent(avatarUrl)}`));
+
+        expect(res.status).toBe(200);
+        expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual([1, 2, 3]);
+        expect(remoteFetch).toHaveBeenLastCalledWith(new URL("https://avatars.githubusercontent.com/u/1?s=64"), expect.anything());
     });
 
     it("GET /api/gh/pr-session/comments returns the in-progress comments", async () => {

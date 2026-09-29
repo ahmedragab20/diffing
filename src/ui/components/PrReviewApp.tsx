@@ -67,6 +67,9 @@ import { PrReviewToolbar } from "./PrReviewToolbar";
 import { PrReviewActivity } from "./PrReviewActivity";
 import { PrConversationInbox } from "./PrConversationInbox";
 import { PrReviewSummaryBanner } from "./PrReviewSummaryBanner";
+import { PrReviewSection } from "./PrReviewSection";
+import { PrCommitNavigator } from "./PrCommitNavigator";
+import { usePrCommits } from "../hooks/usePrCommits";
 import { commentsMissingFromPatch } from "../../lib/pr-conversation-inbox";
 import { buildPrTimeline } from "../../lib/pr-timeline";
 import { PrConversationTimeline } from "./PrConversationTimeline";
@@ -135,11 +138,19 @@ export function PrReviewApp() {
     editComment,
 
   } = usePrComments(sessionLoaded && !!session);
-  const { patch, loading, error } = useDiff(
-    { staged: false, untracked: false },
-    sessionLoaded && !!session,
-  );
-  const { viewedFiles, setViewed } = useViewed();
+  const {
+    patch: fullPatch,
+    loading: fullLoading,
+    error: fullError,
+  } = useDiff({ staged: false, untracked: false }, sessionLoaded && !!session);
+  const fullReview = useViewed();
+  const commitReview = usePrCommits(session);
+  const { selectedSha } = commitReview;
+  const patch = selectedSha ? commitReview.patch : fullPatch;
+  const loading = selectedSha ? commitReview.diffLoading : fullLoading;
+  const error = selectedSha ? commitReview.diffError?.message : fullError;
+  const { viewedFiles, setViewed } = selectedSha ? commitReview : fullReview;
+  const visibleComments = selectedSha ? [] : comments;
 
   const [activeFile, setActiveFile] = useState<string | null>(null);
   /**
@@ -216,7 +227,7 @@ export function PrReviewApp() {
     }
   }, [patch]);
 
-  const existingComments = session?.existingComments;
+  const existingComments = selectedSha ? undefined : session?.existingComments;
   // TanStack structurally shares query data, so unchanged comment objects keep
   // their identity across syncs; reuse per-file arrays built from them too.
   const existingCommentsByFileRef = useRef(
@@ -241,14 +252,20 @@ export function PrReviewApp() {
   const inboxComments = useMemo(
     () =>
       commentsMissingFromPatch(
-        existingComments ?? [],
-        files.map((file) => file.name),
+        session?.existingComments ?? [],
+        // In commit focus all head-anchored threads remain in the disclosure.
+        selectedSha ? [] : files.map((file) => file.name),
       ),
-    [existingComments, files],
+    [session?.existingComments, selectedSha, files],
   );
 
   const timelineItems = useMemo(
-    () => (session ? buildPrTimeline(session) : []),
+    () =>
+      session
+        ? buildPrTimeline(session).filter(
+            (item) => item.kind !== "pr-description" && item.kind !== "review",
+          )
+        : [],
     [session],
   );
   const timelinePageSize = 20;
@@ -259,12 +276,12 @@ export function PrReviewApp() {
 
   const commentCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const comment of comments)
+    for (const comment of visibleComments)
       counts[comment.filePath] = (counts[comment.filePath] ?? 0) + 1;
     for (const comment of existingComments ?? [])
       counts[comment.path] = (counts[comment.path] ?? 0) + 1;
     return counts;
-  }, [comments, existingComments]);
+  }, [comments, selectedSha, existingComments]);
 
   const filteredFiles = useMemo(() => {
     let next = files;
@@ -297,7 +314,7 @@ export function PrReviewApp() {
   const fileAnnotationsRef = useRef(new Map<string, DraftAnnotation[]>());
   const fileAnnotations = useMemo(() => {
     const map = new Map<string, DraftAnnotation[]>();
-    for (const comment of comments) {
+    for (const comment of visibleComments) {
       const list = map.get(comment.filePath) ?? [];
       list.push({
         side: comment.side,
@@ -314,7 +331,7 @@ export function PrReviewApp() {
     );
     fileAnnotationsRef.current = reused;
     return reused;
-  }, [comments]);
+  }, [comments, selectedSha]);
 
   const diffSearchEntries = useDiffSearch(filteredFiles);
   // Find-in-file corpus: changed lines + unchanged context lines.
@@ -341,6 +358,22 @@ export function PrReviewApp() {
     [settings.monoFont],
   );
   const emptyUntracked = useMemo(() => new Set<string>(), []);
+
+  const selectCommit = useCallback(
+    (sha: string | null) => {
+      cancelDiffNavigation();
+      commitReview.select(sha);
+      setActiveFile(null);
+      setAiSelections([]);
+      fileSearch.close();
+    },
+    [commitReview.select, fileSearch.close],
+  );
+
+  useEffect(() => {
+    setActiveFile(null);
+    setAiSelections([]);
+  }, [selectedSha, session?.headSha]);
 
   const handleFileClick = useCallback((filePath: string) => {
     explicitActiveFileRef.current = Date.now();
@@ -646,18 +679,24 @@ export function PrReviewApp() {
     statusMessage: searchStatusMessage,
   } = useSearchSession(searchNavContext, handleFileClick);
 
-  const openPalette = useCallback((scope: Scope) => {
-    // Match TUI: shortcut opens start changed-only (`/` → All, `f`/`gs` scoped).
-    setPalette({ open: true, scope, changedOnly: true });
-  }, []);
+  const openPalette = useCallback(
+    (scope: Scope) => {
+      // Match TUI: shortcut opens start changed-only (`/` → All, `f`/`gs` scoped).
+      // Repository search answers against the PR head, not a historical commit.
+      selectCommit(null);
+      setPalette({ open: true, scope, changedOnly: true });
+    },
+    [selectCommit],
+  );
 
   const togglePalette = useCallback(() => {
+    selectCommit(null);
     setPalette((value) =>
       value.open
         ? { ...value, open: false }
         : { open: true, scope: "all", changedOnly: lastChangedOnlyRef.current },
     );
-  }, []);
+  }, [selectCommit]);
 
   const handleChangedOnlyPreference = useCallback((changedOnly: boolean) => {
     lastChangedOnlyRef.current = changedOnly;
@@ -897,9 +936,10 @@ export function PrReviewApp() {
           settingsProps={settingsProps}
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
-          onOpenSearch={() =>
-            setPalette({ open: true, scope: "all", changedOnly: true })
-          }
+          onOpenSearch={() => {
+            selectCommit(null);
+            setPalette({ open: true, scope: "all", changedOnly: true });
+          }}
           onRefresh={() => refreshPr.mutate()}
           refreshing={refreshPr.isPending}
           onEditComment={(id, body) => updateComment({ id, body })}
@@ -938,7 +978,7 @@ export function PrReviewApp() {
                 onChipFilterChange={setChipFilter}
               />
             </div>
-            {!sidebarCollapsed && comments.length > 0 && (
+            {!sidebarCollapsed && !selectedSha && comments.length > 0 && (
               <>
                 <div
                   className="ct-resize-handle"
@@ -985,66 +1025,122 @@ export function PrReviewApp() {
                 });
               }}
             />
-            <PrReviewActivity
-              reviews={session.existingReviews ?? []}
-              onSubmitPending={async (reviewId, event) => {
-                const res = await fetch(`/api/gh/reviews/${reviewId}/submit`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ event }),
-                });
-                const data = (await res.json()) as { error?: string };
-                if (!res.ok)
-                  throw new Error(data.error || `HTTP ${res.status}`);
-                queryClient.invalidateQueries({ queryKey: ["pr-session"] });
-              }}
-              onDiscardPending={async (reviewId) => {
-                const res = await fetch(`/api/gh/reviews/${reviewId}`, {
-                  method: "DELETE",
-                });
-                const data = (await res.json()) as { error?: string };
-                if (!res.ok)
-                  throw new Error(data.error || `HTTP ${res.status}`);
-                queryClient.invalidateQueries({ queryKey: ["pr-session"] });
-              }}
+            <PrReviewSection
+              title="Comments & activity"
+              icon={<MessageCircle size={14} />}
+              storageKey="diffing-pr-comments-open"
+              summary={
+                [
+                  [session.existingComments?.length ?? 0, "thread"],
+                  [session.existingReviews?.length ?? 0, "review"],
+                  [session.issueComments?.length ?? 0, "comment"],
+                ]
+                  .filter(([count]) => Number(count) > 0)
+                  .map(
+                    ([count, noun]) =>
+                      `${count} ${noun}${count === 1 ? "" : "s"}`,
+                  )
+                  .join(" · ") || "No activity yet"
+              }
+            >
+              <PrReviewActivity
+                reviews={session.existingReviews ?? []}
+                onSubmitPending={async (reviewId, event) => {
+                  const res = await fetch(
+                    `/api/gh/reviews/${reviewId}/submit`,
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ event }),
+                    },
+                  );
+                  const data = (await res.json()) as { error?: string };
+                  if (!res.ok)
+                    throw new Error(data.error || `HTTP ${res.status}`);
+                  queryClient.invalidateQueries({ queryKey: ["pr-session"] });
+                }}
+                onDiscardPending={async (reviewId) => {
+                  const res = await fetch(`/api/gh/reviews/${reviewId}`, {
+                    method: "DELETE",
+                  });
+                  const data = (await res.json()) as { error?: string };
+                  if (!res.ok)
+                    throw new Error(data.error || `HTTP ${res.status}`);
+                  queryClient.invalidateQueries({ queryKey: ["pr-session"] });
+                }}
+              />
+              <PrConversationTimeline
+                items={timelinePage}
+                total={timelineItems.length}
+                cursor={timelineCursor}
+                onPage={setTimelineCursor}
+              />
+              <PrConversationInbox comments={inboxComments} />
+              {(session.existingComments?.length ?? 0) > 0 && (
+                <div className="pr-existing-summary">
+                  <MessageCircle size={13} />
+                  <span>
+                    {session.existingComments.length} existing GitHub
+                    conversation
+                    {session.existingComments.length === 1 ? "" : "s"} included
+                    in this review.
+                  </span>
+                </div>
+              )}
+              {timelineItems.length === 0 &&
+                (session.existingReviews?.length ?? 0) === 0 &&
+                (session.existingComments?.length ?? 0) === 0 && (
+                  <p className="pr-section-empty">
+                    No comments or reviews yet.
+                  </p>
+                )}
+            </PrReviewSection>
+            <PrCommitNavigator
+              review={commitReview}
+              onSelect={selectCommit}
+              fileCount={files.length}
+              prUrl={session.url}
             />
-            <PrConversationTimeline
-              items={timelinePage}
-              total={timelineItems.length}
-              cursor={timelineCursor}
-              onPage={setTimelineCursor}
-            />
-            <PrConversationInbox comments={inboxComments} />
-            {(session.existingComments?.length ?? 0) > 0 && (
-              <div className="pr-existing-summary">
-                <MessageCircle size={13} />
-                <span>
-                  {session.existingComments.length} existing GitHub conversation
-                  {session.existingComments.length === 1 ? "" : "s"} included in
-                  this review.
-                </span>
-              </div>
-            )}
             {(error || sessionError) && (
-              <div className="pr-error">
-                <AlertCircle size={14} /> Failed to load the PR:{" "}
+              <div className="pr-error" role="alert">
+                <AlertCircle size={14} /> Failed to load{" "}
+                {selectedSha ? "commit" : "the PR"}:{" "}
                 {error || sessionError?.message}
+                {selectedSha && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => void commitReview.retryDiff()}
+                  >
+                    Retry diff
+                  </button>
+                )}
               </div>
             )}
             {loading && !patch ? (
-              <div className="pr-app-loading">Loading PR diff…</div>
-            ) : filteredFiles.length === 0 ? (
+              <div className="pr-app-loading" role="status">
+                Loading {selectedSha ? "commit" : "PR"} diff…
+              </div>
+            ) : error ? null : filteredFiles.length === 0 ? (
               <div className="empty-state" role="status">
                 <div className="empty-state-icon">
                   <GitCompare size={24} />
                 </div>
-                <p className="empty-state-title">No matching files</p>
+                <p className="empty-state-title">
+                  {selectedSha && files.length === 0
+                    ? "No file changes in this commit"
+                    : "No matching files"}
+                </p>
                 <p className="empty-state-hint">
-                  Clear the file-tree filters to see the full pull request.
+                  {selectedSha && files.length === 0
+                    ? "Choose another commit or return to all changes."
+                    : "Clear the file-tree filters to see all changed files."}
                 </p>
               </div>
             ) : (
               <PrDiffSurface
+                key={selectedSha ?? "all-changes"}
+                readOnlyPatch={!!selectedSha}
                 commentActions={commentActions}
                 files={filteredFiles}
                 fileAnnotations={fileAnnotations}
@@ -1078,7 +1174,7 @@ export function PrReviewApp() {
           context={{
             ...diffReviewContextForAi(patch, {
               repoName: session.repo,
-              branch: `${session.headRefName} → ${session.baseRefName}`,
+              branch: selectedSha ? `Commit ${selectedSha}` : `${session.headRefName} → ${session.baseRefName}`,
               focusedFilePath: activeFile,
             }),
             selections: aiSelections,
@@ -1157,6 +1253,7 @@ export function PrReviewApp() {
 }
 
 const PrDiffSurface = memo(function PrDiffSurface({
+  readOnlyPatch = false,
   commentActions,
   files,
   fileAnnotations,
@@ -1177,6 +1274,7 @@ const PrDiffSurface = memo(function PrDiffSurface({
   expectedHeadSha,
   onAddSelectionToAsk,
 }: {
+  readOnlyPatch?: boolean;
   commentActions: CommentActions;
   files: FileDiffMetadata[];
   fileAnnotations: Map<
@@ -1260,6 +1358,7 @@ const PrDiffSurface = memo(function PrDiffSurface({
         onApplyExisting={onApplyExisting}
         expectedHeadSha={expectedHeadSha}
         allowLocalActions={false}
+        readOnlyPatch={readOnlyPatch}
         fileSearch={fileSearch}
         onOpenFileSearch={onOpenFileSearch}
         onAddSelectionToAsk={onAddSelectionToAsk}

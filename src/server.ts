@@ -129,6 +129,9 @@ import {
 	findPendingReview,
 	samePrIdentity,
 } from "./lib/pr-session.js";
+import { fetchPrCommits, fetchPrCommitDiff, PrCommitsChangedError } from "./lib/github-pr-commits.js";
+import { fetchPrAvatar } from "./lib/github-avatar.js";
+import type { PrCommitList } from "./lib/pr-commits.js";
 import type {
 	PrSessionStore,
 	PrDecision,
@@ -2635,6 +2638,85 @@ export function createApp(
 	const notInPrMode = (c: any) =>
 		c.json({ error: "Not in PR review mode", prMode: false }, 404);
 
+	// Keep one head-bound list, sharing in-flight requests across browser tabs.
+	let commitListCache:
+		| { key: string; value: Promise<PrCommitList> }
+		| undefined;
+	const prCommits = (session: PrSession) => {
+		const key = JSON.stringify([
+			session.host,
+			session.owner,
+			session.repo,
+			session.pullNumber,
+			session.headSha,
+		]);
+		if (commitListCache?.key === key) return commitListCache.value;
+		const value = fetchPrCommits(resolvedFromSession(session), session.headSha);
+		commitListCache = { key, value };
+		void value.catch(() => {
+			if (commitListCache?.value === value) commitListCache = undefined;
+		});
+		return value;
+	};
+	const isCurrentPr = async (session: PrSession) => {
+		const current = await prStore.get();
+		return (
+			current &&
+			samePrIdentity(current, session) &&
+			current.headSha === session.headSha
+		);
+	};
+
+	app.get("/api/gh/commits", async (c) => {
+		if (!prMode) return notInPrMode(c);
+		const session = await prStore.get();
+		if (!session) return notInPrMode(c);
+		if (c.req.query("headSha") !== session.headSha)
+			return c.json({ error: new PrCommitsChangedError().message }, 409);
+		try {
+			const result = await prCommits(session);
+			if (!(await isCurrentPr(session))) throw new PrCommitsChangedError();
+			return c.json(result);
+		} catch (error) {
+			return c.json(
+				{
+					error:
+						error instanceof Error ? error.message : "Failed to load commits",
+				},
+				error instanceof PrCommitsChangedError ? 409 : 502
+			);
+		}
+	});
+
+	app.get("/api/gh/commits/:sha/diff", async (c) => {
+		if (!prMode) return notInPrMode(c);
+		const session = await prStore.get();
+		if (!session) return notInPrMode(c);
+		const sha = c.req.param("sha");
+		if (!/^[a-f0-9]{40,64}$/i.test(sha))
+			return c.json({ error: "Invalid commit SHA" }, 400);
+		if (c.req.query("headSha") !== session.headSha)
+			return c.json({ error: new PrCommitsChangedError().message }, 409);
+		try {
+			const list = await prCommits(session);
+			if (!list.commits.some((commit) => commit.sha === sha))
+				return c.json({ error: "Commit is not in this pull request" }, 404);
+			const patch = await fetchPrCommitDiff(resolvedFromSession(session), sha);
+			if (!(await isCurrentPr(session))) throw new PrCommitsChangedError();
+			return c.json({ headSha: session.headSha, sha, patch });
+		} catch (error) {
+			return c.json(
+				{
+					error:
+						error instanceof Error
+							? error.message
+							: "Failed to load commit diff",
+				},
+				error instanceof PrCommitsChangedError ? 409 : 502
+			);
+		}
+	});
+
 	app.get("/api/gh/session", async (c) => {
 		// Soft probe for Root.tsx / SPA boot: return 200 + prMode:false instead of
 		// 404 so local review mode doesn't spam the browser console with red XHR.
@@ -2731,7 +2813,7 @@ export function createApp(
 		}
 		let parsed: URL;
 		try {
-			parsed = new URL(url);
+			parsed = new URL(url, session.url);
 		} catch {
 			return c.json({ error: "Invalid avatar URL" }, 400);
 		}
@@ -2739,7 +2821,7 @@ export function createApp(
 			return c.json({ error: "Invalid avatar URL protocol" }, 400);
 		}
 		try {
-			const response = await fetch(parsed, { redirect: "error" });
+			const response = await fetchPrAvatar(parsed, session);
 			if (!response.ok)
 				return c.json(
 					{ error: `Avatar request failed with HTTP ${response.status}` },

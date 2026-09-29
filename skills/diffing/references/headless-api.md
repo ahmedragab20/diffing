@@ -216,6 +216,8 @@ Read identity with `gh_overview`; do not fetch the full UI session to learn the 
 | Method | Route | Purpose/authority |
 | --- | --- | --- |
 | GET | `/api/gh/overview` | Slim identity/counts |
+| GET | `/api/gh/commits` | Oldest-first commit metadata; required `headSha`, capped-list `complete` flag |
+| GET | `/api/gh/commits/:sha/diff` | Commit patch; required `headSha`, validates PR membership, read-only |
 | GET | `/api/gh/threads` | `unresolvedOnly`, `path`, `author`, `cursor`, `limit`, `replyCursor`, `replyLimit`, `bodyMaxChars`, `fullBody`, `format` |
 | GET | `/api/gh/reviews` | `state`, `cursor`, `limit`, `bodyMaxChars`, `fullBody`, `format` |
 | GET | `/api/gh/timeline` | `cursor`, `limit`; discussion/activity |

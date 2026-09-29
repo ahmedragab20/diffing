@@ -78,6 +78,8 @@ interface DiffViewerProps {
   expectedHeadSha?: string;
   /** Whether controls that mutate/open the local working tree are available. */
   allowLocalActions?: boolean;
+  /** Inspect a historical patch without head-scoped comments or file reads. */
+  readOnlyPatch?: boolean;
   /**
    * Fired by `<FileDiffCard>` right after the user toggles the card's
    * collapsed state by clicking the header. The viewer does not care
@@ -182,6 +184,7 @@ export const DiffViewer = memo(function DiffViewer({
   onApplyExisting,
   expectedHeadSha,
   allowLocalActions = true,
+  readOnlyPatch = false,
   onCardToggleCollapse,
   canEdit = false,
   editSessions,
@@ -289,6 +292,7 @@ export const DiffViewer = memo(function DiffViewer({
               onApplyExisting={onApplyExisting}
               expectedHeadSha={expectedHeadSha}
               allowLocalActions={allowLocalActions}
+              readOnlyPatch={readOnlyPatch}
               onCardToggleCollapse={onCardToggleCollapse}
               canEdit={canEdit}
               editSession={editSessions?.get(filePath) ?? null}

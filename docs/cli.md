@@ -887,6 +887,19 @@ density controls, status bar, and the same navigation/comment keymaps. Controls
 that mutate the local working tree (open in editor, revert hunks, send to agent)
 are deliberately absent in remote PR mode.
 
+- Overview, description, and comments/activity collapse independently and
+  remember their open state. The title stays visible, and description/review
+  bodies appear once rather than being repeated in the conversation timeline.
+- The commit selector and previous/next controls show individual commit diffs.
+  Each commit has a local **Mark reviewed** toggle and its own viewed-file
+  progress. **All changes** restores the combined PR diff and its draft threads.
+  Inline comments and full-file context are available in All changes; individual
+  commits show their historical patch without reusing PR-head line anchors.
+  Repository search returns to All changes. Refreshing to a new PR head clears
+  the selected commit; progress for unchanged commit SHAs remains saved.
+- GitHub's PR commit endpoint lists up to 250 commits. Longer histories show
+  the returned count and a link to the full GitHub list. Failed commit reads
+  show an error and retry action without displaying a previous commit's diff.
 - Published GitHub threads render as annotations beneath their current diff
   line. Outdated or missing anchors use the file-level context area.
 - Replies, edits, deletes, resolve, and reopen mutate GitHub and then refresh
@@ -2457,6 +2470,22 @@ mode. Every other response shape below assumes an active PR session.
 
 Agents should prefer the slim endpoints below. The existing `/api/gh/session`
 payload remains unchanged for UI compatibility.
+
+#### `GET /api/gh/commits`
+
+Requires `headSha` matching the active session; a missing or stale head returns
+`409`. Returns `{ headSha, commits, total, complete }` in oldest-first order.
+Each commit has `sha`, `subject`, `body`, `author`, `authoredAt`, and `parents`.
+The head-bound list is cached for the active PR. A GitHub fetch failure returns
+`502` and may be retried. `complete: false` identifies a capped list.
+
+#### `GET /api/gh/commits/:sha/diff`
+
+Requires the same `headSha` guard and a full SHA belonging to the returned PR
+commit list. Returns `{ headSha, sha, patch }`; an empty patch is a valid empty
+commit. Malformed SHAs return `400`, nonmembers `404`, changed sessions `409`,
+and GitHub failures `502`. Both commit endpoints return `404` outside PR mode.
+These read-only endpoints do not change the aggregate diff or comment anchors.
 
 #### `GET /api/gh/overview`
 

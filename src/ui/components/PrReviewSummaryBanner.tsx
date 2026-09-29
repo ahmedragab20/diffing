@@ -1,9 +1,9 @@
-import { useState } from "react";
-import { GitPullRequest } from "lucide-react";
+import { FileText, GitPullRequest, Info } from "lucide-react";
 import type { PrSession } from "../../lib/pr-session";
 import { PrChecksPopover } from "./PrChecksPopover";
 import { Markdown } from "./Markdown";
 import { PrAuthorActions } from "./PrAuthorActions";
+import { PrReviewSection } from "./PrReviewSection";
 
 interface PrReviewSummaryBannerProps {
   session: PrSession;
@@ -17,28 +17,36 @@ export function PrReviewSummaryBanner({
   draftCount,
   onAuthorChanged,
 }: PrReviewSummaryBannerProps) {
-  const [bodyOpen, setBodyOpen] = useState(false);
   return (
     <section
-      className="diff-overview-banner pr-overview-banner"
+      className="pr-overview-banner"
       aria-label={`Pull request #${session.pullNumber}: ${session.title}`}
     >
-      <header className="diff-overview-banner-header">
+      <header className="pr-overview-heading">
+        <span className="pr-overview-eyebrow">
+          Pull request #{session.pullNumber}
+        </span>
         <div className="diff-overview-banner-line">
           <GitPullRequest
-            size={14}
-            className="diff-overview-banner-icon"
+            size={20}
+            className="pr-overview-icon"
             aria-hidden="true"
           />
           <h2 className="diff-overview-banner-headline">{session.title}</h2>
         </div>
-        <div className="diff-overview-banner-meta pr-overview-meta">
+      </header>
+      <PrReviewSection
+        title="Overview"
+        icon={<Info size={14} />}
+        storageKey="diffing-pr-overview-open"
+        defaultOpen
+        summary={`${session.changedFiles} files · +${session.additions} −${session.deletions}`}
+      >
+        <div className="pr-overview-meta">
           <span className="pr-overview-identity">
-            Pull request #{session.pullNumber}
             {session.author?.login ? (
               <>
-                {" "}
-                by <strong>@{session.author.login}</strong>
+                Opened by <strong>@{session.author.login}</strong>
               </>
             ) : null}
           </span>
@@ -90,25 +98,19 @@ export function PrReviewSummaryBanner({
           )}
           <PrChecksPopover headSha={session.headSha} />
         </div>
-      </header>
-      <PrAuthorActions session={session} onChanged={onAuthorChanged} />
+        <PrAuthorActions session={session} onChanged={onAuthorChanged} />
+      </PrReviewSection>
       {session.body?.trim() ? (
-        <div className="pr-overview-body">
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => setBodyOpen((open) => !open)}
-            aria-expanded={bodyOpen}
-          >
-            {bodyOpen ? "Hide description" : "Show description"}
-          </button>
-          {bodyOpen && (
-            <Markdown
-              content={session.body}
-              className="pr-overview-description markdown-body"
-            />
-          )}
-        </div>
+        <PrReviewSection
+          title="Description"
+          icon={<FileText size={14} />}
+          storageKey="diffing-pr-description-open"
+        >
+          <Markdown
+            content={session.body}
+            className="pr-overview-description markdown-body"
+          />
+        </PrReviewSection>
       ) : null}
     </section>
   );
