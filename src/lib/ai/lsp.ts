@@ -17,6 +17,7 @@
  * we tell the server what a file contains; it never tells us to change one.
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { spawn } from "./child-process.js";
 
 export const LSP_LIMITS = Object.freeze({
@@ -386,12 +387,15 @@ export class LspSession {
 		{ resolve: (value: unknown) => void; reject: (error: unknown) => void }
 	>();
 	private nextId = 1;
+	private readonly expired = new Set<number>();
 	private failure: unknown;
 	private closed = false;
 	/** Open documents, by uri, holding the caller's freshness stamp. */
 	private readonly documents = new Map<string, string>();
 	private readonly versions = new Map<string, number>();
 	private diagnosticsListener?: (published: LspDiagnostics) => void;
+
+	get usable(): boolean { return !this.closed && !this.failure; }
 
 	private constructor(private readonly child: ChildProcessWithoutNullStreams) {
 		const fail = () => this.abort(new LspError("unavailable"));
@@ -419,6 +423,7 @@ export class LspSession {
 		try {
 			child = spawn(command, args, {
 				stdio: ["pipe", "pipe", "pipe"],
+				cwd: fileURLToPath(rootUri),
 				env: { ...process.env, NO_COLOR: "1" },
 			}) as ChildProcessWithoutNullStreams;
 		} catch {
@@ -431,6 +436,11 @@ export class LspSession {
 				{
 					processId: process.pid,
 					rootUri,
+					// The TypeScript syntax server can return incomplete imports while
+					// its semantic project is loading. Review queries need full types.
+					initializationOptions: /(?:^|[\\/])typescript-language-server(?:\.exe)?$/i.test(command)
+						? { tsserver: { useSyntaxServer: "never" }, disableAutomaticTypingAcquisition: true }
+						: undefined,
 					// Ask for nothing that could mutate: no edits, no commands.
 					capabilities: {
 						textDocument: {
@@ -455,7 +465,7 @@ export class LspSession {
 							},
 						},
 					},
-					workspaceFolders: null,
+					workspaceFolders: [{ uri: rootUri, name: "review" }],
 				},
 				LSP_LIMITS.startupMs,
 			);
@@ -741,6 +751,9 @@ export class LspSession {
 		return new Promise<unknown>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
+				this.expired.add(id);
+				if (this.expired.size > 1024) this.expired.delete(this.expired.values().next().value!);
+				this.write(encode({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } }));
 				reject(new LspError("timeout"));
 			}, timeoutMs);
 			this.pending.set(id, {
@@ -806,6 +819,7 @@ export class LspSession {
 				continue;
 			}
 			const slot = this.pending.get(message.id as number);
+			if (!slot && this.expired.delete(message.id as number)) continue;
 			if (!slot) return this.abort(new LspError("protocol_error"));
 			this.pending.delete(message.id as number);
 			if (message.error !== undefined) slot.reject(new LspError("protocol_error"));

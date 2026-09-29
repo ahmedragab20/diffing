@@ -84,6 +84,7 @@ import {
 } from "./ai/aiRailToggle";
 import { getPendingDiffSelection } from "./ai/pendingDiffSelection";
 import type { AiDiffSelection } from "../lib/ai/types";
+import type { CodeIntelSource } from "../lib/code-intel-source";
 
 export function App() {
 	const poolManager = useWorkerPool();
@@ -91,6 +92,7 @@ export function App() {
 	const [, startTransition] = useTransition();
 	const {
 		patch,
+		layers,
 		repoName,
 		branch,
 		customMode,
@@ -654,6 +656,19 @@ export function App() {
 			return [];
 		}
 	}, [activePatch, binaryFiles]);
+	const codeIntelSources = useMemo(() => {
+		const sources = new Map<string, CodeIntelSource>();
+		const selected = showMode && commitWalkIndex != null ? commits[commitWalkIndex] : null;
+		if (selected) {
+			for (const file of files) sources.set(file.name, { kind: "commit", revision: selected.sha });
+		} else for (const layer of layers) {
+			if (layer.kind === "mixed") continue;
+			try { for (const part of parsePatchFiles(layer.patch)) for (const file of part.files) {
+    if (!sources.has(file.name)) sources.set(file.name, layer.source ?? { kind: layer.kind, revision: layer.revision });
+			} } catch { /* Malformed optional provenance leaves server defaults in place. */ }
+		}
+		return sources;
+	}, [layers, showMode, commitWalkIndex, commits, files]);
 
 	const commentCounts = useMemo(() => {
 		const counts: Record<string, number> = {};
@@ -1721,6 +1736,7 @@ export function App() {
 								expansionLineCount={settings.expansionLineCount}
 								autoCollapseLineThreshold={settings.autoCollapseLineThreshold}
 								codeIntelEnabled={settings.codeIntel === true}
+								codeIntelSources={codeIntelSources}
 								editPredictionEnabled={settings.editPrediction === true}
 								staged={settings.staged}
 								onApplyEdits={applyServerEdits}

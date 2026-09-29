@@ -60,6 +60,7 @@ const DEFAULTS = {
   aiSettingsExpanded: false,
   aiLanguageServers: {},
   aiEvidenceTools: true,
+  codeIntel: true,
 }
 
 describe('settings', () => {
@@ -76,9 +77,9 @@ describe('settings', () => {
     })
 
     it('merges persisted values with defaults', async () => {
-      mockReadFileSync.mockReturnValue(JSON.stringify({ staged: false, defaultTabSize: 2 }))
+      mockReadFileSync.mockReturnValue(JSON.stringify({ staged: false, defaultTabSize: 2, codeIntel: false }))
       const { loadSettings } = await import('../lib/settings.js')
-      expect(loadSettings()).toEqual({ ...DEFAULTS, staged: false, defaultTabSize: 2 })
+      expect(loadSettings()).toEqual({ ...DEFAULTS, staged: false, defaultTabSize: 2, codeIntel: false })
     })
 
     it('preserves browser setting', async () => {

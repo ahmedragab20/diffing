@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { subscribeLive } from '../live'
+import type { CodeIntelSource } from '../../lib/code-intel-source'
 
 /** Mirrors the result shapes returned by `POST /api/code-intel`. */
 export interface CodeIntelCapabilities {
@@ -64,6 +65,7 @@ type CodeIntelResponse =
 
 /** A position in the rendered diff, plus the element to anchor a popover to. */
 export interface CodeIntelTarget {
+  source?: CodeIntelSource
   path: string
   side: 'additions' | 'deletions'
   /** One-based, as the diff gutter numbers it. */
@@ -110,15 +112,39 @@ let capabilitiesPromise: Promise<CodeIntelCapabilities> | null = null
  * exactly the moment these stop being true.
  */
 const answers = new Map<string, CodeIntelResponse>()
+const documentSyncs = new Map<string, Promise<unknown>>()
+export function trackCodeIntelDocument(path: string, pending: Promise<unknown>): void {
+  documentSyncs.set(path, pending)
+  void pending.then(() => {
+    if (documentSyncs.get(path) === pending) documentSyncs.delete(path)
+  }).catch(() => {})
+}
+
+/** Preserve document notification order, including close after the last edit. */
+export function syncCodeIntelDocument(path: string, send: () => Promise<unknown>): void {
+  const pending = (documentSyncs.get(path) ?? Promise.resolve()).catch(() => {}).then(send)
+  trackCodeIntelDocument(path, pending)
+}
 
 let invalidateAttached = false
+let generation = 0
+const capabilityListeners = new Set<() => void>()
 
 function attachInvalidation() {
   if (invalidateAttached) return
   invalidateAttached = true
-  subscribeLive('change', () => {
+  const invalidate = () => {
+    generation++
     answers.clear()
     capabilitiesPromise = null
+    for (const listener of capabilityListeners) listener()
+  }
+  subscribeLive('change', invalidate)
+  subscribeLive('pr-session', invalidate)
+  subscribeLive('reconnect', invalidate)
+  window.addEventListener('diffing-code-intel-document-change', () => {
+    generation++
+    answers.clear()
   })
 }
 
@@ -139,6 +165,11 @@ async function post(
   body: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<CodeIntelResponse> {
+  const source = body.source as CodeIntelSource | undefined
+  const working = source
+    ? source.kind === 'working' || source.kind === 'untracked' || (source.kind === 'revision' && !source.revision && !body.staged)
+    : !body.staged
+  if (typeof body.path === 'string' && working && body.side === 'additions') await documentSyncs.get(body.path)
   const res = await fetch('/api/code-intel', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -150,7 +181,7 @@ async function post(
 }
 
 function cacheKey(op: string, target: CodeIntelTarget, staged: boolean): string {
-  return `${op}:${staged ? 's' : 'w'}:${target.side}:${target.path}:${target.line}:${target.character}`
+  return JSON.stringify([generation, op, staged, target.source, target.side, target.path, target.line, target.character])
 }
 
 function remember(key: string, value: CodeIntelResponse) {
@@ -174,11 +205,14 @@ export function useCodeIntelCapabilities(): CodeIntelCapabilities | null {
   useEffect(() => {
     attachInvalidation()
     let current = true
-    loadCapabilities().then((value) => {
+    const refresh = () => loadCapabilities().then((value) => {
       if (current) setCapabilities(value)
     })
+    capabilityListeners.add(refresh)
+    void refresh()
     return () => {
       current = false
+      capabilityListeners.delete(refresh)
     }
   }, [])
   return capabilities
@@ -189,6 +223,7 @@ interface UseCodeIntelOptions {
   enabled: boolean
   /** The scope the client is displaying, which the UI can toggle at runtime. */
   staged: boolean
+  source?: CodeIntelSource
   /**
    * True while a file has unsaved edits. The language server reads the working
    * tree, so an answer about a dirty file would describe text the reviewer is
@@ -204,7 +239,14 @@ interface UseCodeIntelOptions {
  * is on, so a review without a configured language server behaves exactly as
  * it did before this hook existed.
  */
-export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) {
+export function useCodeIntel({ enabled, staged, source: sourceInput, isDirty }: UseCodeIntelOptions) {
+  const source = useMemo(() => sourceInput, [
+    sourceInput?.kind,
+    sourceInput?.revision,
+    sourceInput?.parentRevision,
+    sourceInput?.baseRevision,
+    sourceInput?.indexRevision,
+  ])
   const [capabilities, setCapabilities] = useState<CodeIntelCapabilities | null>(null)
   const [hover, setHover] = useState<HoverState | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -226,11 +268,14 @@ export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) 
     }
     attachInvalidation()
     let current = true
-    loadCapabilities().then((value) => {
+    const refresh = () => loadCapabilities().then((value) => {
       if (current) setCapabilities(value)
     })
+    capabilityListeners.add(refresh)
+    void refresh()
     return () => {
       current = false
+      capabilityListeners.delete(refresh)
     }
   }, [enabled])
 
@@ -244,9 +289,10 @@ export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) 
       target: CodeIntelTarget,
       signal?: AbortSignal,
     ): Promise<CodeIntelResponse> => {
-      const key = cacheKey(op, target, staged)
+      const key = cacheKey(op, { ...target, source: target.source ?? source }, staged)
       const cached = answers.get(key)
       if (cached) return cached
+      const requestedGeneration = generation
       const value = await post({
         op,
         path: target.path,
@@ -254,11 +300,12 @@ export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) 
         line: target.line,
         character: target.character,
         staged,
+        source: target.source ?? source,
       }, signal)
-      if (value.available) remember(key, value)
+      if (value.available && requestedGeneration === generation) remember(key, value)
       return value
     },
-    [staged],
+    [staged, source],
   )
 
   const cancel = useCallback(() => {
@@ -298,10 +345,14 @@ export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) 
   /** Called from `onTokenEnter`; debounced so a pointer sweep costs nothing. */
   const hoverToken = useCallback(
     (target: CodeIntelTarget) => {
-      if (!ready) return
+      if (!enabled) return
       if (isDirty?.(target.path)) return
       cancel()
       timer.current = setTimeout(() => {
+        if (!ready) {
+          if (capabilities) setHover({ target, status: 'unavailable', markdown: null, reason: capabilities.unavailable ?? 'not-configured' })
+          return
+        }
         const controller = new AbortController()
         inFlight.current = controller
         setHover({ target, status: 'pending', markdown: null })
@@ -316,6 +367,7 @@ export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) 
                 reason: value.reason,
               })
             if (value.op !== 'hover') return
+            setHover({ target, status: value.hover ? 'ready' : 'pending', markdown: value.hover })
             const extras = await Promise.all([
               post({
                 op: 'signature',
@@ -324,6 +376,7 @@ export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) 
                 line: target.line,
                 character: target.character,
                 staged,
+                source: target.source ?? source,
               }, controller.signal).catch(() => null),
               post({
                 op: 'highlights',
@@ -332,6 +385,7 @@ export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) 
                 line: target.line,
                 character: target.character,
                 staged,
+                source: target.source ?? source,
               }, controller.signal).catch(() => null),
             ])
             if (!live.current || controller.signal.aborted) return
@@ -353,11 +407,11 @@ export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) 
           })
           .catch(() => {
             // An aborted request is the normal way a hover ends.
-            if (live.current && !controller.signal.aborted) setHover(null)
+            if (live.current && !controller.signal.aborted) setHover({ target, status: 'unavailable', markdown: null, reason: 'server-error' })
           })
       }, HOVER_DEBOUNCE_MS)
     },
-    [ask, cancel, isDirty, ready, staged],
+    [ask, cancel, isDirty, ready, staged, enabled, capabilities, source],
   )
 
   /** Called from `onTokenClick`; resolves immediately, no debounce. */
@@ -388,11 +442,12 @@ export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) 
         character,
         newName,
         staged,
+        source,
       })
       if (!value.available) return { reason: value.reason }
       return value.op === 'rename' ? value.edits : { reason: 'server-error' }
     },
-    [ready, staged],
+    [ready, staged, source],
   )
 
   /** The edits that reformat a whole file. */
@@ -411,11 +466,12 @@ export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) 
         tabSize,
         insertSpaces: true,
         staged,
+        source,
       })
       if (!value.available) return { reason: value.reason }
       return value.op === 'format' ? value.edits : { reason: 'server-error' }
     },
-    [ready, staged],
+    [ready, staged, source],
   )
 
   /** Actions offered for a selection, including the ones we cannot apply. */
@@ -437,13 +493,24 @@ export function useCodeIntel({ enabled, staged, isDirty }: UseCodeIntelOptions) 
         endLine,
         endCharacter,
         staged,
+        source,
       })
       return value.available && value.op === 'code-actions' ? value.actions : []
     },
-    [ready, staged],
+    [ready, staged, source],
   )
 
   useEffect(() => cancel, [cancel])
+  useEffect(() => {
+    closeHover()
+    const onDraft = () => closeHover()
+    const unsubscribe = (['change', 'pr-session', 'reconnect'] as const).map((event) => subscribeLive(event, closeHover))
+    window.addEventListener('diffing-code-intel-document-change', onDraft)
+    return () => {
+      window.removeEventListener('diffing-code-intel-document-change', onDraft)
+      for (const stop of unsubscribe) stop()
+    }
+  }, [enabled, staged, source, closeHover])
 
   return useMemo(
     () => ({

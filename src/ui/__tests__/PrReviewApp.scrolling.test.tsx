@@ -309,6 +309,9 @@ vi.mock("../ai/AiAssistantRail", () => ({
 vi.mock("../components/BinaryFileDiff", () => ({
   BinaryFileDiff: () => null,
 }));
+vi.mock("../components/DefinitionPeek", () => ({
+  DefinitionPeek: () => null,
+}));
 
 import { PrReviewApp } from "../components/PrReviewApp";
 

@@ -42,7 +42,7 @@ const defaultSettings = {
   ignoreSpaceChange: false,
   ignoreAllSpace: false,
   editDiagnostics: false,
-  codeIntel: false,
+  codeIntel: true,
   editPrediction: false,
   aiModel: null,
   aiReasoningEffort: null,
@@ -53,6 +53,12 @@ const defaultSettings = {
 }
 
 describe('useSettings', () => {
+  it('preserves an explicit code-intel opt-out', async () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ codeIntel: false }) })
+    const { result } = renderHook(() => useSettings())
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+    expect(result.current.settings.codeIntel).toBe(false)
+  })
   beforeEach(() => {
     mockFetch.mockReset()
   })

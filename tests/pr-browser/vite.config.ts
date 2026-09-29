@@ -11,6 +11,7 @@ export default defineConfig({
       configureServer(server) {
         let uiState: Record<string, unknown> = {};
         let viewed: string[] = [];
+        let localMode = false;
         server.middlewares.use(async (request, response, next) => {
           const url = new URL(request.url ?? "/", "http://localhost");
           if (!url.pathname.startsWith("/api/")) return next();
@@ -30,6 +31,7 @@ export default defineConfig({
           if (url.pathname === "/api/test/reset") {
             uiState = {};
             viewed = [];
+            localMode = Boolean(input.local);
             return send({});
           }
           if (url.pathname === "/api/ui-state") {
@@ -46,8 +48,18 @@ export default defineConfig({
               haptics: false,
               sounds: false,
             });
-          if (url.pathname === "/api/gh/session") return send(session);
-          if (url.pathname === "/api/diff") return send({ patch: fullPatch });
+          if (url.pathname === "/api/gh/session") return send(localMode ? {prMode:false} : session);
+          if (url.pathname === "/api/diff") return send({ patch: fullPatch, prHeadSha: headSha, prMergeBaseSha: session.baseSha, layers: [{kind:"working",patch:fullPatch,source:{kind:"working"}}] });
+          if (url.pathname === "/api/code-intel/capabilities") return send({configured:true,extensions:["ts","tsx"]});
+          if (url.pathname === "/api/code-intel") {
+            if (input.op === "hover") return send({available:true,op:"hover",hover:`Type information (${input.source?.kind ?? "default"} / ${input.side})`});
+            if (input.op === "definition") return send({available:true,op:"definition",locations:[{path:input.path,line:1,character:0,endLine:1,endCharacter:6,inRepository:true}]});
+            return send({available:true,op:input.op,signatures:[],highlights:[]});
+          }
+          if (url.pathname === "/api/code-intel/file") return send({content:"export function review() {\n  return session;\n}\n"});
+          if (url.pathname === "/api/comments" || url.pathname === "/api/plans") return send([]);
+          if (url.pathname === "/api/merge-status") return send({inMerge:false,conflicts:[]});
+          if (url.pathname === "/api/review/status") return send({waiting:false});
           if (url.pathname === "/api/gh/commits")
             return send({ commits, headSha, total: 3, complete: true });
           const match = url.pathname.match(

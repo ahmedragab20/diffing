@@ -57,6 +57,13 @@ export const codeIntelSchema = z.object({
   insertSpaces: z.boolean().optional(),
   /** The scope the client is displaying; defaults to the server's own. */
   staged: z.boolean().optional(),
+  source: z.object({
+    kind: z.enum(["working", "staged", "untracked", "revision", "commit", "pr"]),
+    revision: z.string().regex(/^[a-f0-9]{40,64}$/i).optional(),
+    parentRevision: z.string().regex(/^[a-f0-9]{40,64}$/i).optional(),
+    baseRevision: z.string().regex(/^(?:[a-f0-9]{40,64}|empty)$/i).optional(),
+    indexRevision: sha256.optional(),
+  }).optional(),
 });
 
 // A draft the reviewer is editing, pushed so diagnostics describe what they
@@ -67,9 +74,11 @@ export const codeIntelDocumentSchema = z.discriminatedUnion("op", [
     path: filePath,
     text: z.string(),
     version: z.number().int().positive(),
+    staged: z.boolean().optional(),
   }),
   z.object({ op: z.literal("close"), path: filePath }),
 ]);
+export const codeIntelFileSchema = codeIntelSchema.pick({ path: true, side: true, source: true, staged: true });
 
 export const editPredictSchema = z.object({
   path: filePath,

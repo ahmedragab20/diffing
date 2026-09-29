@@ -14,16 +14,16 @@ export interface FilePreviewState {
  * Reuses the existing `/api/file-text` endpoint (path-traversal guarded server
  * side). Cache entries are scoped to the working tree and repository revision.
  */
-export function useFilePreview(path: string | null) {
+export function useFilePreview(path: string | null, codeIntel?: Pick<import('../lib/definitionPeek').DefinitionPeekRequest, 'source' | 'side' | 'staged'>) {
   const revision = useSearchRevision();
   return useQuery<FilePreviewState>({
-    queryKey: ["file-text", "working-tree", revision, path],
+    queryKey: ["file-text", codeIntel ?? "working-tree", revision, path],
     enabled: !!path,
     staleTime: 0,
     queryFn: async ({ signal }): Promise<FilePreviewState> => {
       const res = await fetch(
-        `/api/file-text?path=${encodeURIComponent(path!)}&version=working`,
-        { signal },
+        codeIntel ? '/api/code-intel/file' : `/api/file-text?path=${encodeURIComponent(path!)}&version=working`,
+        codeIntel ? { signal, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, ...codeIntel }) } : { signal },
       );
       // The endpoint replies 415 for binary files.
       if (res.status === 415)
@@ -33,6 +33,7 @@ export function useFilePreview(path: string | null) {
         content?: string;
         missing?: boolean;
         error?: string;
+        binary?: boolean;
       };
       if (json.error) {
         if (/binary/i.test(json.error))
@@ -40,6 +41,7 @@ export function useFilePreview(path: string | null) {
         throw new Error(json.error);
       }
       if (json.missing) return { content: null, missing: true, binary: false };
+      if (json.binary) return { content: null, missing: false, binary: true };
       return { content: json.content ?? "", missing: false, binary: false };
     },
   });

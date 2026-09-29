@@ -10,6 +10,9 @@
  */
 
 export interface DefinitionPeekRequest {
+  source?: import('../../lib/code-intel-source').CodeIntelSource
+  side?: 'additions' | 'deletions'
+  staged?: boolean
   /** Repository-relative path of the file to show. */
   path: string
   /** One-based line to scroll to and highlight. */

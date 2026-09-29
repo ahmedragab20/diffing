@@ -717,8 +717,7 @@ describe('useEditSessions', () => {
         result.current.exitEdit('a/b.ts')
       })
 
-      const posts = documentPosts()
-      expect(posts).toContainEqual(expect.objectContaining({ op: 'close', path: 'a/b.ts' }))
+      await waitFor(() => expect(documentPosts()).toContainEqual(expect.objectContaining({ op: 'close', path: 'a/b.ts' })))
     })
   })
 })

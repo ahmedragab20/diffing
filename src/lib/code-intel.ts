@@ -44,6 +44,7 @@ const LANGUAGE_IDS: Record<string, string> = {
 	mjs: "javascript",
 	cjs: "javascript",
 	py: "python",
+	pyi: "python",
 	rs: "rust",
 	rb: "ruby",
 	kt: "kotlin",
@@ -85,6 +86,8 @@ export type CodeIntelUnavailable =
 	| "invalid-request"
 	| "file-unreadable"
 	| "file-too-large"
+	| "read-only"
+	| "source-unavailable"
 	| "server-error";
 
 /**
@@ -420,6 +423,8 @@ export async function syncDraft(
 	const uri = pathToFileURL(absolute).href;
 	try {
 		const session = await servers.sessionFor(draft.path);
+		if (session.documentStamp(uri)?.startsWith(DRAFT_PREFIX) && (session.documentVersion(uri) ?? 0) >= draft.version)
+			return { ok: true };
 		session.onDiagnostics((published) => {
 			const markers = markersFromDiagnostics(repositoryRoot, published);
 			if (markers) onDiagnostics(markers);

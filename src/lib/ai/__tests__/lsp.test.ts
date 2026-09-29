@@ -102,6 +102,87 @@ process.stdin.on('data', (chunk) => {
 	);
 }
 
+/** Leaves the first hover pending, then answers it late alongside the next hover. */
+function useLateReplyServer() {
+	const serverScript = `
+let buffer = Buffer.alloc(0);
+let firstHoverId;
+const send = (message) => {
+  const body = JSON.stringify(message);
+  process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body);
+};
+process.stdin.on('data', (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (true) {
+    const split = buffer.indexOf('\\r\\n\\r\\n');
+    if (split === -1) return;
+    const length = Number(/content-length:\\s*(\\d+)/i.exec(buffer.slice(0, split).toString())[1]);
+    const start = split + 4;
+    if (buffer.length < start + length) return;
+    const message = JSON.parse(buffer.slice(start, start + length).toString());
+    buffer = buffer.slice(start + length);
+    if (message.method === 'initialize') {
+      send({ jsonrpc: '2.0', id: message.id, result: { capabilities: {} } });
+    } else if (message.method === 'textDocument/hover' && message.id !== undefined) {
+      if (firstHoverId === undefined) firstHoverId = message.id;
+      else {
+        send({ jsonrpc: '2.0', id: firstHoverId, result: { contents: 'late reply' } });
+        send({ jsonrpc: '2.0', id: message.id, result: { contents: 'fresh markdown' } });
+      }
+    }
+  }
+});
+`;
+	mocks.spawn.mockImplementation(() =>
+		realSpawn(process.execPath, ["-e", serverScript], {
+			stdio: ["pipe", "pipe", "pipe"],
+		}),
+	);
+}
+
+function captureInitializeServer(capture: {
+	command?: string;
+	options?: { cwd?: string };
+	initialize?: { params?: Record<string, unknown> };
+}) {
+	mocks.spawn.mockImplementation((command: string, _args: string[], options: { cwd?: string }) => {
+		const stdin = new PassThrough();
+		const stdout = new PassThrough();
+		const stderr = new PassThrough();
+		const child = new EventEmitter() as EventEmitter & {
+			stdin: PassThrough;
+			stdout: PassThrough;
+			stderr: PassThrough;
+			kill: () => boolean;
+			exitCode: number | null;
+			signalCode: string | null;
+		};
+		Object.assign(child, { stdin, stdout, stderr, exitCode: null, signalCode: null });
+		capture.command = command;
+		capture.options = options;
+		let buffer = Buffer.alloc(0);
+		stdin.on("data", (chunk) => {
+			buffer = Buffer.concat([buffer, Buffer.from(chunk)]);
+			const split = buffer.indexOf("\r\n\r\n");
+			if (split === -1) return;
+			const length = Number(/content-length:\s*(\d+)/i.exec(buffer.subarray(0, split).toString())?.[1]);
+			const start = split + 4;
+			if (!Number.isFinite(length) || buffer.length < start + length) return;
+			const message = JSON.parse(buffer.subarray(start, start + length).toString()) as { method?: string; id?: number; params?: Record<string, unknown> };
+			buffer = buffer.subarray(start + length);
+			if (message.method !== "initialize") return;
+			capture.initialize = { params: message.params };
+			const body = JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+			stdout.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+		});
+		child.kill = () => {
+			setImmediate(() => child.emit("close", null, null));
+			return true;
+		};
+		return child;
+	});
+}
+
 /** Wait for the next published batch, or resolve undefined after 2s. */
 function nextDiagnostics(lsp: LspSession) {
 	return new Promise<unknown>((resolve) => {
@@ -187,6 +268,39 @@ describe("LspFrameDecoder", () => {
 });
 
 describe("LspSession", () => {
+	it("sends TypeScript semantic-server options and the real root workspace", async () => {
+		const rootUri = "file:///workspace/project";
+		const typescript: { command?: string; options?: { cwd?: string }; initialize?: { params?: Record<string, unknown> } } = {};
+		captureInitializeServer(typescript);
+		const tsSession = await LspSession.start("/opt/tools/typescript-language-server.exe", [], rootUri);
+		try {
+			expect(typescript.command).toBe("/opt/tools/typescript-language-server.exe");
+			expect(typescript.options?.cwd).toBe("/workspace/project");
+			expect(typescript.initialize?.params?.initializationOptions).toEqual({
+				tsserver: { useSyntaxServer: "never" },
+				disableAutomaticTypingAcquisition: true,
+			});
+			expect(typescript.initialize?.params?.workspaceFolders).toEqual([
+				{ uri: rootUri, name: "review" },
+			]);
+		} finally {
+			await tsSession.close();
+		}
+
+		const other: { command?: string; options?: { cwd?: string }; initialize?: { params?: Record<string, unknown> } } = {};
+		captureInitializeServer(other);
+		const otherSession = await LspSession.start("pyright-langserver", [], rootUri);
+		try {
+			expect(other.options?.cwd).toBe("/workspace/project");
+			expect(other.initialize?.params?.initializationOptions).toBeUndefined();
+			expect(other.initialize?.params?.workspaceFolders).toEqual([
+				{ uri: rootUri, name: "review" },
+			]);
+		} finally {
+			await otherSession.close();
+		}
+	});
+
 	it("returns one-based definition locations", async () => {
 		const lsp = await session();
 		try {
@@ -302,6 +416,27 @@ describe("LspSession", () => {
 			expect(await lsp.hover("file:///a.ts", 10, 3)).toBe(
 				"**const** x: number",
 			);
+		} finally {
+			await lsp.close();
+		}
+	});
+
+	it("ignores a late timed-out reply before answering the next request", async () => {
+		useLateReplyServer();
+		const lsp = await LspSession.start("synthetic-lsp", [], "file:///repo");
+		const request = (
+			lsp as unknown as {
+				request: (method: string, params: Record<string, unknown>, timeoutMs: number) => Promise<unknown>
+			}
+		).request.bind(lsp);
+		try {
+			await expect(
+				request("textDocument/hover", {
+					textDocument: { uri: "file:///a.ts" },
+					position: { line: 0, character: 0 },
+				}, 10),
+			).rejects.toMatchObject({ code: "timeout" });
+			expect(await lsp.hover("file:///a.ts", 1, 0)).toBe("fresh markdown");
 		} finally {
 			await lsp.close();
 		}

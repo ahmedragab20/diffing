@@ -4,12 +4,15 @@ The review page can act like a small editor: hover a token for its type and
 docs, jump to its declaration, see compiler diagnostics while editing in
 place, and apply a rename, format, or quick fix — without leaving the diff.
 
-Everything is **off by default**. Turn it on under Settings → Editing after
-configuring a language server.
+Code intel is **enabled by default**. Installed language servers on `PATH`
+are detected automatically, including TypeScript/JavaScript, Python, Rust,
+Go, C/C++, JSON, CSS, HTML, YAML, and Lua. Servers start only when requested.
+Turn Code intel off under Settings → Editing to disable hover and navigation.
+Edit diagnostics and AI edit prediction remain off by default.
 
 ## Configure a language server
 
-Nothing is presumed. Add a server per file extension in the settings file
+Override detection or add another server per file extension in the settings file
 (`diffing config` or `~/.config/diffing/settings.json`):
 
 ```jsonc
@@ -25,9 +28,17 @@ Nothing is presumed. Add a server per file extension in the settings file
 is resolved on `PATH` and never run through a shell. A missing binary reports
 the feature unavailable rather than pretending there were no results.
 
-Language servers answer about the **working tree**. Code intel is therefore
-unavailable for pull-request reviews, revision ranges, and the staged-only
-view.
+Hover, declaration lookup, and references support **both sides** of local,
+staged, revision-range, individual-commit, and GitHub PR diffs. Each card carries
+its source identity. Historical and index sources are materialized in isolated
+analysis workspaces; the user's checkout is not changed. PR source archives use
+the existing `gh` authentication and the displayed commit SHA.
+
+Installed third-party dependencies are reused when the captured package and
+lock files match the checkout. Otherwise local symbol information still works,
+but types from missing dependencies may be incomplete. Servers are never
+installed automatically. Missing servers or unavailable sources are explained
+in the hover rather than silently producing an empty result.
 
 ## What you get
 
@@ -43,7 +54,10 @@ actions that only run a language-server command are listed as unavailable.
 
 ## Limits
 
-- One language server per extension, rooted at the repository.
+- Servers are reused per command and source workspace, with bounded idle lifetime.
+- Source workspaces are bounded to 8 cached roots, 30,000 files, and 256 MiB per
+  source. Archive symlinks and submodules are omitted. Expired source snapshots
+  report unavailable; refresh the diff to capture them again.
 - The language server never writes files or runs commands. Edits go through
   the local editor's undo stack.
 - Hover markdown is sanitized like every other repository-derived body.

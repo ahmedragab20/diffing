@@ -87,6 +87,9 @@ import {
   toggleAskAiRail,
 } from "../ai/aiRailToggle";
 import type { AiDiffSelection } from "../../lib/ai/types";
+import type { CodeIntelSource } from "../../lib/code-intel-source";
+import { useCodeIntelCapabilities } from "../hooks/useCodeIntel";
+import { DefinitionPeek } from "./DefinitionPeek";
 
 const EMPTY_TAB_SIZE_MAP: Record<string, number> = {};
 const EMPTY_BINARY_FILES = new Map<string, BinaryFileInfo>();
@@ -119,6 +122,7 @@ export function PrReviewApp() {
   const poolManager = useWorkerPool();
   const queryClient = useQueryClient();
   const { settings, loaded, updateSettings } = useSettings();
+  const codeIntelCapabilities = useCodeIntelCapabilities();
   const [, startTransition] = useTransition();
   const {
     session,
@@ -140,6 +144,8 @@ export function PrReviewApp() {
   } = usePrComments(sessionLoaded && !!session);
   const {
     patch: fullPatch,
+    prHeadSha,
+    prMergeBaseSha,
     loading: fullLoading,
     error: fullError,
     retry: retryFullDiff,
@@ -227,6 +233,10 @@ export function PrReviewApp() {
       return [];
     }
   }, [patch]);
+  const codeIntelSources = useMemo(() => {
+    const source: CodeIntelSource = { kind: "pr", revision: selectedSha ?? prHeadSha, parentRevision: selectedSha ? commitReview.selectedCommit?.parents[0] : prMergeBaseSha };
+    return new Map(files.map((file) => [file.name, source]));
+  }, [files, selectedSha, commitReview.selectedCommit, prHeadSha, prMergeBaseSha]);
 
   const existingComments = selectedSha ? undefined : session?.existingComments;
   // TanStack structurally shares query data, so unchanged comment objects keep
@@ -630,9 +640,10 @@ export function PrReviewApp() {
               ? shikiConfig.themeName
               : "github-light",
         },
+        useTokenTransformer: settings.codeIntel === true,
       })
       .catch(() => {});
-  }, [poolManager, shikiConfig]);
+  }, [poolManager, shikiConfig, settings.codeIntel]);
   useEffect(() => {
     const dark =
       shikiConfig.type === "dark" ? shikiConfig.themeName : "rose-pine";
@@ -873,11 +884,9 @@ export function PrReviewApp() {
     // PR reviews are read-only: editing is a local working-tree feature.
     editDiagnostics: false,
     onEditDiagnosticsChange: () => {},
-    // A language server answers about the working tree, which a PR's new side
-    // is not. The toggle stays visible but says why it cannot be switched on.
-    codeIntel: false,
-    codeIntelUnavailable: "pull-request",
-    onCodeIntelChange: () => {},
+    codeIntel: settings.codeIntel === true,
+    codeIntelUnavailable: codeIntelCapabilities?.unavailable,
+    onCodeIntelChange: (value: boolean) => update({ codeIntel: value }),
     onDiffStyleChange: (value: "split" | "unified") =>
       update({ diffStyle: value }),
     onDefaultTabSizeChange: (value: number) =>
@@ -1143,6 +1152,7 @@ export function PrReviewApp() {
               <PrDiffSurface
                 key={selectedSha ?? "all-changes"}
                 readOnlyPatch={!!selectedSha}
+                codeIntelSources={codeIntelSources}
                 commentActions={commentActions}
                 files={filteredFiles}
                 fileAnnotations={fileAnnotations}
@@ -1167,6 +1177,7 @@ export function PrReviewApp() {
           </main>
         </div>
 
+        <DefinitionPeek diffFileSet={new Set(files.map((file) => file.name))} theme={settings.theme} fontSize={settings.fontSize} monoFontFamily={monoFontFamily} defaultTabSize={settings.defaultTabSize} lineWrap={settings.lineWrap} showLineNumbers={settings.showLineNumbers} />
         <AiAssistantRail
           ref={aiRailRef}
           open={aiRailOpen}
@@ -1255,6 +1266,7 @@ export function PrReviewApp() {
 }
 
 const PrDiffSurface = memo(function PrDiffSurface({
+  codeIntelSources,
   readOnlyPatch = false,
   commentActions,
   files,
@@ -1276,6 +1288,7 @@ const PrDiffSurface = memo(function PrDiffSurface({
   expectedHeadSha,
   onAddSelectionToAsk,
 }: {
+  codeIntelSources: ReadonlyMap<string, CodeIntelSource>;
   readOnlyPatch?: boolean;
   commentActions: CommentActions;
   files: FileDiffMetadata[];
@@ -1329,6 +1342,8 @@ const PrDiffSurface = memo(function PrDiffSurface({
     <div className="pr-diff-surface">
       <CommentActionsProvider actions={commentActions}>
       <DiffViewer
+        codeIntelEnabled={settings.codeIntel === true}
+        codeIntelSources={codeIntelSources}
         files={files}
         diffStyle={settings.diffStyle}
         tabSizeMap={EMPTY_TAB_SIZE_MAP}

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeLanguageServers } from "../settings.js";
+import { detectLanguageServers } from "../ai/language-servers.js";
+import { join } from "node:path";
 
 describe("sanitizeLanguageServers", () => {
   it("keeps a well-formed entry and normalizes the extension", () => {
@@ -45,5 +47,36 @@ describe("sanitizeLanguageServers", () => {
         rs: { command: "" },
       }),
     ).toEqual({ ts: { command: "tsserver", args: [] } });
+  });
+});
+
+describe("detectLanguageServers", () => {
+  const bin = "/fixture/bin";
+  const command = (name: string) => join(bin, name);
+
+  it("maps an installed TypeScript server to every supported JavaScript extension", () => {
+    const result = detectLanguageServers(bin, (candidate) => candidate === command("typescript-language-server"));
+
+    expect(Object.keys(result)).toEqual(["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"]);
+    expect(result.ts).toEqual({ command: command("typescript-language-server"), args: ["--stdio"] });
+    expect(result.tsx).toEqual(result.ts);
+    expect(result.js).toEqual(result.ts);
+    expect(result.jsx).toEqual(result.ts);
+  });
+
+  it("omits absent servers and prefers basedpyright when both Python servers are installed", () => {
+    const installed = new Set([
+      command("typescript-language-server"),
+      command("basedpyright-langserver"),
+      command("pyright-langserver"),
+    ]);
+    const result = detectLanguageServers(bin, (candidate) => installed.has(candidate));
+
+    expect(result.py).toEqual({ command: command("basedpyright-langserver"), args: ["--stdio"] });
+    expect(result.pyi).toEqual(result.py);
+    expect(result.rs).toBeUndefined();
+    expect(result.go).toBeUndefined();
+    expect(result["json"]).toBeUndefined();
+    expect(result.ts?.command).toBe(command("typescript-language-server"));
   });
 });

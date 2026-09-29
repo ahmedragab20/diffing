@@ -25,6 +25,7 @@ vi.mock('../hooks/useDiff', () => ({
     branch: 'main',
     customMode: false,
     showMode: false,
+    layers: [],
     commits: [],
     truncated: 0,
     binaryFiles: [],

@@ -1,13 +1,15 @@
 /**
  * Resolves and reuses language servers for AI symbol lookups.
  *
- * Nothing is presumed: with no configured server for a file's extension the
- * lookup reports itself unavailable rather than guessing at a toolchain. A
+ * With no configured or detected server for a file's extension, the lookup
+ * reports itself unavailable. A
  * server is started at most once per command and reused across lookups, since
  * a cold start costs far more than a query, and it is shut down once idle so a
  * review session does not leave language servers running.
  */
 import { pathToFileURL } from "node:url";
+import { accessSync, constants } from "node:fs";
+import { delimiter, join } from "node:path";
 import { LspError, LspSession } from "./lsp.js";
 import type { AiLanguageServer } from "../settings.js";
 
@@ -15,6 +17,37 @@ export const LANGUAGE_SERVER_LIMITS = Object.freeze({
 	maxServers: 4,
 	idleMs: 5 * 60_000,
 });
+
+/** Only installed PATH binaries are detected; explicit configuration wins. */
+export function detectLanguageServers(
+	path = process.env.PATH ?? "",
+	canRun = (command: string) => {
+		try { accessSync(command, constants.X_OK); return true; } catch { return false; }
+	},
+): Record<string, AiLanguageServer> {
+	const result: Record<string, AiLanguageServer> = {};
+	const candidates: [string[], string, string[]][] = [
+		[["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"], "typescript-language-server", ["--stdio"]],
+		[["py", "pyi"], "basedpyright-langserver", ["--stdio"]],
+		[["py", "pyi"], "pyright-langserver", ["--stdio"]],
+		[["rs"], "rust-analyzer", []],
+		[["go"], "gopls", []],
+		[["c", "h", "cc", "cpp", "cxx", "hpp"], "clangd", []],
+		[["json", "jsonc"], "vscode-json-language-server", ["--stdio"]],
+		[["css", "scss", "less"], "vscode-css-language-server", ["--stdio"]],
+		[["html"], "vscode-html-language-server", ["--stdio"]],
+		[["yaml", "yml"], "yaml-language-server", ["--stdio"]],
+		[["lua"], "lua-language-server", []],
+	];
+	for (const [extensions, name, args] of candidates) {
+		const suffixes = process.platform === "win32" ? [".exe", ""] : [""];
+		const command = path.split(delimiter).filter(Boolean)
+			.flatMap((dir) => suffixes.map((suffix) => join(dir, name + suffix)))
+			.find(canRun);
+		if (command) for (const extension of extensions) result[extension] ??= { command, args };
+	}
+	return result;
+}
 
 function extensionOf(path: string): string {
 	const name = path.slice(path.lastIndexOf("/") + 1);
@@ -52,11 +85,16 @@ export class LanguageServers {
 		if (this.closed) throw new LspError("unavailable");
 		const server = this.config[extensionOf(path)];
 		if (!server) throw new LspError("unavailable");
-		const slot = `${server.command} ${(server.args ?? []).join(" ")}`;
+		const slot = JSON.stringify([server.command, server.args ?? []]);
 		const existing = this.sessions.get(slot);
 		if (existing) {
+			const session = await existing.session;
+			if (!session.usable) {
+				await this.shutdown(slot);
+				return this.sessionFor(path);
+			}
 			this.touch(slot);
-			return existing.session;
+			return session;
 		}
 		if (this.sessions.size >= LANGUAGE_SERVER_LIMITS.maxServers)
 			throw new LspError("resource_limit");

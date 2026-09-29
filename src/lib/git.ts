@@ -100,6 +100,7 @@ export type GitDiffResult = {
 };
 
 export interface DiffLayer {
+  source?: import('./code-intel-source.js').CodeIntelSource;
   kind: "working" | "staged" | "untracked" | "revision" | "commit" | "pr" | "mixed";
   patch: string;
   revision?: string;

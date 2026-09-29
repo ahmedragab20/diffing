@@ -41,7 +41,7 @@ export function DefinitionPeek({
   const [request, setRequest] = useState<DefinitionPeekRequest | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const shikiConfig = SHIKI_THEME_MAP[theme] || SHIKI_THEME_MAP['rose-pine']
-  const { data, isLoading, error } = useFilePreview(request?.path ?? null)
+  const { data, isLoading, error } = useFilePreview(request?.path ?? null, request ? { source: request.source, side: request.side ?? 'additions', staged: request.staged } : undefined)
 
   useEffect(() => subscribeDefinitionPeek(setRequest), [])
 
@@ -92,7 +92,7 @@ export function DefinitionPeek({
             className="definition-peek-jump"
             onClick={() => {
               closeDefinitionPeek()
-              navigateToDiffLine(request.path, request.line, 'additions')
+              navigateToDiffLine(request.path, request.line, request.side ?? 'additions')
             }}
             title="Open this file and line in the diff viewer"
           >
@@ -120,7 +120,7 @@ export function DefinitionPeek({
         ) : data?.binary ? (
           <div className="searchpalette-state">Binary file — no preview</div>
         ) : data?.missing ? (
-          <div className="searchpalette-state">File not present in the working tree</div>
+          <div className="searchpalette-state">File not present at this revision</div>
         ) : data ? (
           <DiffsFile
             file={{ name: request.path, contents: data.content ?? '' }}

@@ -263,9 +263,10 @@ These HTTP surfaces have no general-purpose MCP/CLI mirror. Check authority befo
 | POST | `/api/open-file` | `{filePath, editor?}`; launches trusted external editor |
 | GET | `/api/repo-files` | Repository file list |
 | POST | `/api/search` | `{scope, query, limit?, regex?, changedPaths?}`; surrounding source, not just diff rows |
-| GET | `/api/code-intel/capabilities` | `{configured, extensions, unavailable?}`; says whether this review can answer a lookup at all |
-| POST | `/api/code-intel` | `{op, path, side, line, character, includeDeclaration?, newName?, endLine?, endCharacter?, tabSize?, insertSpaces?, staged?}`; hover, definition, references, rename, format, code-actions, signature, highlights over the working tree; refusals name their reason |
-| POST | `/api/code-intel/document` | `{op: open\|change\|close, path, text?, version?}`; hands an open editor's draft to the language server; diagnostics return on `/api/live` |
+| GET | `/api/code-intel/capabilities` | `{configured, extensions, unavailable?}`; auto-detects installed servers and is available in all ordinary review sources |
+| POST | `/api/code-intel` | `{op, path, side, line, character, includeDeclaration?, newName?, endLine?, endCharacter?, tabSize?, insertSpaces?, staged?, source?: {kind: working\|staged\|untracked\|revision\|commit\|pr, revision?, parentRevision?, baseRevision?, indexRevision?}}`; lookup supports both sides; mutations support working additions only; refusals name their reason |
+| POST | `/api/code-intel/file` | `{path, side, source?, staged?}`; reads the same exact source as lookup and returns `{content}`, `{missing: true}`, or `{binary: true}`; failures return 503 |
+| POST | `/api/code-intel/document` | `{op: open\|change\|close, path, text?, version?, staged?}`; hands an open editor's draft to the language server; diagnostics return on `/api/live` |
 | GET | `/api/search/status` | Search backend status |
 | POST | `/api/search/track` | Search frecency update |
 | GET | `/api/merge-status` | Merge/conflict state |

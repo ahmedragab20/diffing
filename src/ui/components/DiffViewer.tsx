@@ -23,6 +23,7 @@ import type {
 import { FileDiffCard } from "./FileDiffCard";
 import { BinaryFileDiff } from "./BinaryFileDiff";
 import type { FileSearchSession } from "../hooks/useFileSearch";
+import type { CodeIntelSource } from "../../lib/code-intel-source";
 
 interface DiffViewerProps {
   files: FileDiffMetadata[];
@@ -47,6 +48,7 @@ interface DiffViewerProps {
   autoCollapseLineThreshold: number;
   /** Opt-in language-server hover and go-to-declaration in the diff. */
   codeIntelEnabled?: boolean;
+  codeIntelSources?: ReadonlyMap<string, CodeIntelSource>;
   /** The scope being displayed; code intel must answer against it. */
   staged?: boolean;
   /** Opt-in ghost-text edit prediction while editing a file already in the diff. */
@@ -168,6 +170,7 @@ export const DiffViewer = memo(function DiffViewer({
   expansionLineCount,
   autoCollapseLineThreshold,
   codeIntelEnabled,
+  codeIntelSources,
   staged,
   editPredictionEnabled,
   onApplyEdits,
@@ -278,6 +281,7 @@ export const DiffViewer = memo(function DiffViewer({
               expansionLineCount={expansionLineCount}
               autoCollapseLineThreshold={autoCollapseLineThreshold}
               codeIntelEnabled={codeIntelEnabled}
+              codeIntelSource={codeIntelSources?.get(filePath)}
               staged={staged}
               editPredictionEnabled={editPredictionEnabled}
               onApplyEdits={onApplyEdits}

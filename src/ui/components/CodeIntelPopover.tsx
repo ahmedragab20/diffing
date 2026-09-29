@@ -79,9 +79,8 @@ export function CodeIntelPopover({ hover, onHold, onClose }: CodeIntelPopoverPro
       window.removeEventListener('scroll', place, true)
       window.removeEventListener('resize', place)
     }
-  }, [anchor, hover.status, hover.markdown, onClose])
+  }, [anchor, hover.status, hover.markdown, hover.signatures, slow, onClose])
 
-  if (hover.status === 'unavailable') return null
   if (hover.status === 'pending' && !slow) return null
   if (hover.status === 'empty') return null
 
@@ -98,7 +97,9 @@ export function CodeIntelPopover({ hover, onHold, onClose }: CodeIntelPopoverPro
       onMouseEnter={onHold}
       onMouseLeave={onClose}
     >
-      {hover.status === 'pending' ? (
+      {hover.status === 'unavailable' ? (
+        <span className="code-intel-popover-status">Code intel unavailable: {hover.reason}. Check that a language server is installed for this file.</span>
+      ) : hover.status === 'pending' ? (
         <span className="code-intel-popover-status">Starting language server…</span>
       ) : (
         <>

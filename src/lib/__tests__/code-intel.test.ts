@@ -28,6 +28,7 @@ import {
 const ROOT = mkdtempSync(join(tmpdir(), "code-intel-"));
 mkdirSync(join(ROOT, "src"), { recursive: true });
 writeFileSync(join(ROOT, "src/a.ts"), "export const a = 1;\n");
+writeFileSync(join(ROOT, "src/a.pyi"), "value: int\n");
 
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
@@ -121,6 +122,18 @@ function request(overrides: Partial<CodeIntelRequest> = {}): CodeIntelRequest {
 beforeEach(() => mocks.spawn.mockReset());
 
 describe("codeIntel", () => {
+	it("opens Python stub files with the Python language id", async () => {
+		useServer(JSON.stringify({ contents: "value: int" }));
+		const servers = new LanguageServers({ pyi: { command: "synthetic-lsp", args: [] } }, ROOT);
+		try {
+			const session = await servers.sessionFor("src/a.pyi");
+			const opened = vi.spyOn(session, "openDocument");
+			const result = await codeIntel(servers, ROOT, clean, request({ path: "src/a.pyi", line: 1, character: 0 }));
+			expect(result).toEqual({ available: true, op: "hover", hover: "value: int" });
+			expect(opened.mock.calls[0][1]).toBe("python");
+		} finally { await servers.close(); }
+	});
+
 	it("refuses when no language server is configured", async () => {
 		const servers = new LanguageServers({}, ROOT);
 		const result = await codeIntel(servers, ROOT, clean, request());

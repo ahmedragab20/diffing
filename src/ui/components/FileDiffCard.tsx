@@ -27,6 +27,7 @@ import { decideCodeIntelApply } from "../lib/codeIntelApply";
 import { createEditPredictProvider } from "../lib/editPredictProvider";
 import { InputDialog } from "../primitives/InputDialog";
 import { CodeIntelPopover } from "./CodeIntelPopover";
+import type { CodeIntelSource } from "../../lib/code-intel-source";
 import type {
   DiffLineAnnotation,
   DiffTokenEventBaseProps,
@@ -267,6 +268,7 @@ interface FileDiffCardProps {
   onOpenFileSearch?: (filePath: string) => void;
   /** The `codeIntel` setting; false keeps token listeners off the renderer. */
   codeIntelEnabled?: boolean;
+  codeIntelSource?: CodeIntelSource;
   /** The scope being displayed, which code intel must answer against. */
   staged?: boolean;
   /**
@@ -324,7 +326,8 @@ export const FileDiffCard = memo(function FileDiffCard({
   onEditExit,
   fileSearch,
   onOpenFileSearch,
-  codeIntelEnabled = false,
+  codeIntelEnabled = true,
+  codeIntelSource,
   staged = false,
   onApplyEdits,
   editPredictionEnabled = false,
@@ -804,6 +807,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   const codeIntel = useCodeIntel({
     enabled: codeIntelEnabled,
     staged,
+    source: codeIntelSource,
   });
 
   const toTarget = useCallback(
@@ -814,14 +818,15 @@ export const FileDiffCard = memo(function FileDiffCard({
       tokenElement: HTMLElement;
       side: AnnotationSide;
     }): CodeIntelTarget => ({
-      path: filePath,
+      path: props.side === "deletions" ? fileDiff.prevName ?? filePath : filePath,
+      source: codeIntelSource,
       side: props.side === "deletions" ? "deletions" : "additions",
       line: props.lineNumber,
       character: props.lineCharStart,
       tokenText: props.tokenText,
       anchor: props.tokenElement,
     }),
-    [filePath],
+    [filePath, fileDiff.prevName, codeIntelSource],
   );
 
   const {
@@ -958,6 +963,9 @@ export const FileDiffCard = memo(function FileDiffCard({
         const first = locations?.find((location) => location.inRepository);
         if (!first) return;
         openDefinitionPeek({
+          source: target.source,
+          side: target.side,
+          staged,
           path: first.path,
           line: first.line,
           symbol: target.tokenText,
@@ -971,6 +979,7 @@ export const FileDiffCard = memo(function FileDiffCard({
     closeHover,
     resolveDefinition,
     toTarget,
+    staged,
   ]);
 
   /**

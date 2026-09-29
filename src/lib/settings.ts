@@ -30,6 +30,8 @@ export interface AiLanguageServer {
 }
 
 export interface Settings {
+	/** Language-server hover and navigation, enabled unless explicitly disabled. */
+	codeIntel: boolean;
 	/** Interactive mode used when no explicit output-mode flag is provided. */
 	defaultMode: DefaultMode;
 	staged: boolean;
@@ -130,6 +132,7 @@ export interface SavedReply {
 }
 
 const DEFAULTS: Settings = {
+	codeIntel: true,
 	defaultMode: "web",
 	staged: true,
 	untracked: true,

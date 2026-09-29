@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { subscribeLive } from '../live'
 import type { DiffOverview } from '../../lib/diff-overview'
+import type { DiffLayer } from '../../lib/git'
 
 export interface BinaryFileInfo {
   path: string
@@ -23,6 +24,9 @@ export interface CommitInfo {
 }
 
 interface DiffData {
+  layers?: DiffLayer[]
+  prHeadSha?: string
+  prMergeBaseSha?: string
   patch: string
   repoName: string
   branch: string
@@ -127,6 +131,9 @@ export function useDiff(options: DiffOptions, enabled = true) {
     hasData: data !== null,
     retry,
     patch: data?.patch ?? null,
+    layers: data?.layers ?? EMPTY_ARRAY as DiffLayer[],
+    prHeadSha: data?.prHeadSha,
+    prMergeBaseSha: data?.prMergeBaseSha,
     repoName: data?.repoName ?? '',
     branch: data?.branch ?? '',
     customMode: data?.customMode ?? false,

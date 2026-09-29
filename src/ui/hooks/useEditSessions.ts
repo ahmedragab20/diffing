@@ -31,6 +31,7 @@ import { computeEditMarkers, type EditMarker } from "../lib/editMarkers";
 import { mergeMarkers } from "../lib/mergeMarkers";
 import { subscribeLive } from "../live";
 import type { PublishedMarkers } from "../../lib/code-intel.js";
+import { syncCodeIntelDocument } from "./useCodeIntel";
 import type { ReviewComment } from "../../lib/types";
 import type { PrExistingComment } from "../../lib/pr-session";
 
@@ -176,9 +177,10 @@ export function useEditSessions({
     const session = sessionsRef.current.get(path);
     if (!session) return;
     const version = ++versionRef.current;
+    window.dispatchEvent(new CustomEvent("diffing-code-intel-document-change", { detail: { path, version } }));
     serverMarkersRef.current.delete(path);
     pushedRef.current.set(path, { text: session.draft, version });
-    void fetch("/api/code-intel/document", {
+    syncCodeIntelDocument(path, () => fetch("/api/code-intel/document", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -187,18 +189,18 @@ export function useEditSessions({
         text: session.draft,
         version,
       }),
-      // A draft the server never receives just means no server markers.
-    }).catch(() => {});
+    }).then((response) => { if (!response.ok) throw new Error("Draft sync failed"); return response.json(); }).then((value) => { if (!value.ok) throw new Error("Draft sync failed"); }));
   }, []);
 
   const dropDraft = useCallback((path: string) => {
+    window.dispatchEvent(new CustomEvent("diffing-code-intel-document-change", { detail: { path } }));
     serverMarkersRef.current.delete(path);
     if (!pushedRef.current.delete(path)) return;
-    void fetch("/api/code-intel/document", {
+    syncCodeIntelDocument(path, () => fetch("/api/code-intel/document", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ op: "close", path }),
-    }).catch(() => {});
+    }).then((response) => { if (!response.ok) throw new Error("Draft close failed"); }));
   }, []);
 
   useEffect(
@@ -226,7 +228,6 @@ export function useEditSessions({
         path,
         setTimeout(() => {
           markerTimersRef.current.delete(path);
-          pushDraft(path);
           refreshMarkers(path);
         }, 300),
       );
@@ -289,9 +290,11 @@ export function useEditSessions({
       });
       sessionsRef.current = next;
       setSessions(next);
+      pushDraft(path);
+      refreshMarkers(path);
       scheduleMarkers(path);
     },
-    [scheduleMarkers],
+    [scheduleMarkers, pushDraft, refreshMarkers],
   );
 
   const handleEditAttach = useCallback(

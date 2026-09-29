@@ -13,6 +13,7 @@ import {
 	editSaveSchema,
 	codeIntelSchema,
 	codeIntelDocumentSchema,
+	codeIntelFileSchema,
 	editPredictSchema,
 	MAX_FILE_REQUEST_BYTES,
 } from "./lib/file-schema.js";
@@ -197,7 +198,8 @@ import { AiRequestError, readAiRunRequest } from "./lib/ai/request.js";
 import { streamAiRun } from "./lib/ai/run-stream.js";
 import { AiSnapshotError } from "./lib/ai/snapshots.js";
 import { SnapshotStore } from "./lib/ai/snapshot-store.js";
-import { LanguageServers } from "./lib/ai/language-servers.js";
+import { detectLanguageServers } from "./lib/ai/language-servers.js";
+import { CodeIntelWorkspaces } from "./lib/code-intel-workspaces.js";
 import { AiStorage } from "./lib/ai/storage.js";
 import { NotebookStore } from "./lib/ai/notebook-store.js";
 import type { Decision, NotebookEntryInput } from "./lib/ai/notebook.js";
@@ -206,7 +208,6 @@ import { sourceDiscussion } from "./lib/ai/discussion.js";
 import { lookupSymbols, type SymbolKind } from "./lib/ai/symbols.js";
 import {
 	closeDraft,
-	codeIntel,
 	codeIntelCapabilities,
 	syncDraft,
 } from "./lib/code-intel.js";
@@ -380,6 +381,8 @@ async function readCommentJson(c: Context): Promise<unknown> {
 		throw error;
 	}
 }
+
+const codeIntelCleanup = new WeakMap<Hono, () => Promise<void>>();
 
 export function createApp(
 	clientDir: string,
@@ -619,12 +622,21 @@ export function createApp(
 				},
 			}
 		: undefined;
-	// No language server is presumed; symbol lookup stays unavailable until one
-	// is configured in settings.
-	const languageServers = new LanguageServers(
-		loadSettings().aiLanguageServers ?? {},
-		getRepoRoot(),
-	);
+	// Detect installed servers once; explicit per-extension settings take precedence.
+	const detectedServers = detectLanguageServers();
+	let languageServerConfig = { ...detectedServers, ...loadSettings().aiLanguageServers };
+	let codeIntelWorkspaces = new CodeIntelWorkspaces(repoRoot, getProjectStorageDir(), languageServerConfig);
+	let languageServers = codeIntelWorkspaces.servers;
+	const refreshLanguageServers = () => {
+		const config = { ...detectedServers, ...loadSettings().aiLanguageServers };
+		if (JSON.stringify(config) === JSON.stringify(languageServerConfig)) return;
+		languageServerConfig = config;
+		const previous = codeIntelWorkspaces;
+		codeIntelWorkspaces = new CodeIntelWorkspaces(repoRoot, getProjectStorageDir(), config);
+		languageServers = codeIntelWorkspaces.servers;
+		void previous.close();
+	};
+	codeIntelCleanup.set(app, () => codeIntelWorkspaces.close());
 	const aiConversations = aiConversationStore ?? new FileAiConversationStore();
 
 	// Watch the project storage dir so any write — whether from this server's own
@@ -813,6 +825,7 @@ export function createApp(
 					prAuthor: prSession.author,
 					prHeadSha: prSession.headSha,
 					prBaseSha: prSession.baseSha,
+					prMergeBaseSha: prSession.mergeBaseSha || prSession.baseSha,
 					overview: prOverview,
 					diffCompleteness: prSession.diffCompleteness,
 				});
@@ -824,9 +837,14 @@ export function createApp(
 			: { ...diffOpts, staged, includeUntracked: untracked };
 
 		const result = await executeDiffWithMeta(optsForDiff);
+		const layers = await Promise.all((result.layers ?? []).map(async (layer) => ({
+			...layer,
+			source: layer.kind === "mixed" || layer.kind === "pr" ? undefined : await codeIntelWorkspaces.captureSource(optsForDiff, { kind: layer.kind, revision: layer.revision }).catch(() => undefined),
+		})));
 
 		return c.json({
 			patch: result.patch,
+			layers,
 			repoName: result.repoName,
 			branch: result.branch,
 			customMode,
@@ -1694,40 +1712,35 @@ export function createApp(
 	 * Code intel for the review UI: hover, definition and references over the
 	 * same language-server pool the AI path uses.
 	 *
-	 * A language server answers about the working tree, so `code-intel.ts`
-	 * decides whether this review is one it can answer for at all. Every
-	 * refusal names its reason; the client never has to infer "no server" from
-	 * an empty result.
+	 * Queries use the displayed side's source workspace. Refusals name their
+	 * reason so unavailable servers never masquerade as an empty result.
 	 */
-	app.get("/api/code-intel/capabilities", (c) =>
-		c.json(
-			codeIntelCapabilities(languageServers, {
-				customMode,
-				prMode,
-				staged: diffOpts.staged,
-			}),
-		),
-	);
+	app.get("/api/code-intel/capabilities", (c) => {
+		refreshLanguageServers();
+		return c.json(codeIntelCapabilities(languageServers, { customMode: false, prMode: false, staged: false }));
+	});
 
 	app.post("/api/code-intel", async (c) => {
 		const parsed = codeIntelSchema.safeParse(await readCommentJson(c));
 		if (!parsed.success)
 			return c.json({ error: "Invalid code-intel request" }, 400);
-		const { staged, ...request } = parsed.data;
+		refreshLanguageServers();
+		const { staged, source, ...request } = parsed.data;
 		return c.json(
-			await codeIntel(
-				languageServers,
-				repoRoot,
-				{
-					customMode,
-					prMode,
-					// The UI can toggle staged after startup, so it states the scope
-					// it is displaying; the startup default stands when it does not.
-					staged: staged ?? diffOpts.staged,
-				},
-				request,
-			),
+			await codeIntelWorkspaces.lookup({ ...diffOpts, staged: staged ?? diffOpts.staged }, request, source, prMode ? (await prStore.get()) ?? undefined : undefined),
 		);
+	});
+	app.post("/api/code-intel/file", async (c) => {
+		const parsed = codeIntelFileSchema.safeParse(await readCommentJson(c));
+		if (!parsed.success) return c.json({ error: "Invalid source preview request" }, 400);
+		refreshLanguageServers();
+		const { path, side, source, staged } = parsed.data;
+		try {
+			const bytes = await codeIntelWorkspaces.readSource({ ...diffOpts, staged: staged ?? diffOpts.staged }, path, side, source, prMode ? (await prStore.get()) ?? undefined : undefined);
+			if (!bytes) return c.json({ missing: true });
+			if (bytes.includes(0)) return c.json({ binary: true });
+			return c.json({ content: bytes.toString("utf8") });
+		} catch { return c.json({ error: "The displayed revision could not be read." }, 503); }
 	});
 
 	/**
@@ -1741,6 +1754,7 @@ export function createApp(
 		if (!parsed.success)
 			return c.json({ error: "Invalid code-intel document request" }, 400);
 		const body = parsed.data;
+		refreshLanguageServers();
 		if (body.op === "close") {
 			await closeDraft(languageServers, repoRoot, body.path);
 			return c.json({ ok: true });
@@ -1748,7 +1762,7 @@ export function createApp(
 		const result = await syncDraft(
 			languageServers,
 			repoRoot,
-			{ customMode, prMode, staged: diffOpts.staged },
+			{ customMode, prMode, staged: body.staged ?? false },
 			body,
 			(published) =>
 				broadcast("code-intel-diagnostics", JSON.stringify(published)),
@@ -2293,6 +2307,10 @@ export function createApp(
 	app.put("/api/settings", async (c) => {
 		const body = await c.req.json();
 		const settings = saveSettings(body);
+		if ("aiLanguageServers" in body || "languageServers" in body) {
+			refreshLanguageServers();
+			broadcast("change", Date.now().toString());
+		}
 		// Live-apply whitespace flags into the running diff options so the next
 		// /api/diff (and SSE change) reflects them without a process restart.
 		let whitespaceChanged = false;
@@ -5706,7 +5724,7 @@ export async function startServer(options: {
 						new Promise<void>((resolveClose, rejectClose) => {
 							nodeServer.close((error) => {
 								if (error) rejectClose(error);
-								else resolveClose();
+								else void (codeIntelCleanup.get(app)?.() ?? Promise.resolve()).then(resolveClose, rejectClose);
 							});
 							const closeAllConnections = (
 								nodeServer as { closeAllConnections?: () => void }
