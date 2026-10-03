@@ -1,3 +1,9 @@
+## 0.21.10
+
+### Patch Changes
+
+- 01c1f1e: Open pull requests that exceed GitHub's 20,000-line diff cap
+
 ## 0.21.9
 
 ### Patch Changes
