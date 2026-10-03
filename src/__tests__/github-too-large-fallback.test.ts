@@ -172,6 +172,29 @@ describe("isPrDiffTooLargeError", () => {
     ).toBe(true);
   });
 
+  it("returns true for the 20,000-line unified-diff refusal", () => {
+    expect(
+      isPrDiffTooLargeError({
+        stderr:
+          "could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000) (https://api.github.com/repos/Moasherat/survey-web-v2/pulls/405)\nPullRequest.diff too_large",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when stderr mentions PullRequest.diff too_large", () => {
+    expect(
+      isPrDiffTooLargeError({ stderr: "PullRequest.diff too_large" }),
+    ).toBe(true);
+  });
+
+  it("returns true when stderr mentions only the line cap", () => {
+    expect(
+      isPrDiffTooLargeError({
+        stderr: "exceeded the maximum number of lines (20000)",
+      }),
+    ).toBe(true);
+  });
+
   it("returns false for a plain HTTP 404 error", () => {
     expect(
       isPrDiffTooLargeError({
@@ -239,37 +262,49 @@ describe("fetchPrDiffViaFilesApi", () => {
   });
 });
 
-describe("fetchPrMetadataViaGh fallback (integration)", () => {
+function metadataFallbackStub(diffStderr: string): string {
+  return [
+    "#!/usr/bin/env node",
+    "const args = process.argv.slice(2)",
+    "require('node:fs').appendFileSync(process.env.GH_CALL_LOG, JSON.stringify(args) + '\\n')",
+    "const joined = args.join(' ')",
+    "if (joined.includes('pr view')) {",
+    `  process.stdout.write(${JSON.stringify(JSON.stringify(META_PAYLOAD))})`,
+    "  process.exit(0)",
+    "}",
+    "if (joined.includes('pr diff')) {",
+    `  process.stderr.write(${JSON.stringify(diffStderr)})`,
+    "  process.exit(1)",
+    "}",
+    "if (joined.includes('pulls/42/reviews')) {",
+    "  process.stdout.write(JSON.stringify([]))",
+    "  process.exit(0)",
+    "}",
+    "if (joined.includes('pulls/42/comments?per_page=100')) {",
+    "  process.stdout.write(JSON.stringify([]))",
+    "  process.exit(0)",
+    "}",
+    "if (joined.includes('pulls/42/files?per_page=100')) {",
+    `  process.stdout.write(${JSON.stringify(JSON.stringify(FILES_PAYLOAD))})`,
+    "  process.exit(0)",
+    "}",
+    "process.stderr.write('unexpected gh call: ' + joined)",
+    "process.exit(1)",
+  ].join("\n");
+}
+
+describe.each([
+  [
+    "file cap",
+    "could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of files (300). Consider using 'List pull requests files' API or locally cloning the repository instead.\nPullRequest.diff too large",
+  ],
+  [
+    "line cap",
+    "could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000) (https://api.github.com/repos/acme/widget/pulls/42)\nPullRequest.diff too_large",
+  ],
+])("fetchPrMetadataViaGh fallback (%s)", (_label, diffStderr) => {
   beforeEach(async () => {
-    const stub = [
-      "#!/usr/bin/env node",
-      "const args = process.argv.slice(2)",
-      "require('node:fs').appendFileSync(process.env.GH_CALL_LOG, JSON.stringify(args) + '\\n')",
-      "const joined = args.join(' ')",
-      "if (joined.includes('pr view')) {",
-      `  process.stdout.write(${JSON.stringify(JSON.stringify(META_PAYLOAD))})`,
-      "  process.exit(0)",
-      "}",
-      "if (joined.includes('pr diff')) {",
-      `  process.stderr.write(${JSON.stringify("could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of files (300). Consider using 'List pull requests files' API or locally cloning the repository instead.\nPullRequest.diff too large")})`,
-      "  process.exit(1)",
-      "}",
-      "if (joined.includes('pulls/42/reviews')) {",
-      "  process.stdout.write(JSON.stringify([]))",
-      "  process.exit(0)",
-      "}",
-      "if (joined.includes('pulls/42/comments?per_page=100')) {",
-      "  process.stdout.write(JSON.stringify([]))",
-      "  process.exit(0)",
-      "}",
-      "if (joined.includes('pulls/42/files?per_page=100')) {",
-      `  process.stdout.write(${JSON.stringify(JSON.stringify(FILES_PAYLOAD))})`,
-      "  process.exit(0)",
-      "}",
-      "process.stderr.write('unexpected gh call: ' + joined)",
-      "process.exit(1)",
-    ].join("\n");
-    await installGhStub(stub);
+    await installGhStub(metadataFallbackStub(diffStderr));
   });
 
   it("resolves instead of throwing when the diff is too large", async () => {

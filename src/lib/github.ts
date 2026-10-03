@@ -519,17 +519,18 @@ export async function detectCwdRepo(): Promise<DetectedRepo | null> {
 
 /**
  * True only when a `gh pr diff` failure is GitHub's "diff too large" refusal
- * (HTTP 406 / `PullRequest.diff too large` / "exceeded the maximum number of
- * files (300)"). Every other failure (auth, 404, network) returns false so
- * the caller's fail-hard semantics stay intact for them.
+ * (HTTP 406). GitHub uses that status for both caps on the unified diff:
+ * about 300 files (`PullRequest.diff too large`) and 20,000 lines
+ * (`PullRequest.diff too_large`). Every other failure (auth, 404, network)
+ * returns false so the caller's fail-hard semantics stay intact for them.
  */
 export function isPrDiffTooLargeError(err: unknown): boolean {
   if (!err) return false;
   const e = err as { stderr?: string; message?: string };
   const text = `${e.stderr ?? ""} ${e.message ?? ""}`;
   return (
-    /PullRequest\.diff too large/i.test(text) ||
-    /exceeded the maximum number of files/i.test(text)
+    /PullRequest\.diff too[_ ]large/i.test(text) ||
+    /exceeded the maximum number of (?:files|lines)/i.test(text)
   );
 }
 
@@ -578,12 +579,13 @@ function assembleFileDiffBlock(file: any): string | null {
 }
 
 /**
- * Fallback diff source for PRs above GitHub's 300-file cap: paginate the
- * "List pull request files" REST endpoint via `gh api --paginate` (the same
- * transport `fetchExistingReviewsViaGh` / `fetchExistingCommentsViaGh` use)
- * and concatenate a unified diff from each item's `patch`. Effective cap is
- * ~30,000 files (100/page × 300 pages). Throws on transport failure so the
- * caller can surface it; a per-file `patch == null` is not fatal.
+ * Fallback diff source when GitHub refuses the unified diff (about 300 files
+ * or 20,000 lines): paginate the "List pull request files" REST endpoint via
+ * `gh api --paginate` (the same transport `fetchExistingReviewsViaGh` /
+ * `fetchExistingCommentsViaGh` use) and concatenate a unified diff from each
+ * item's `patch`. Effective cap is ~30,000 files (100/page × 300 pages).
+ * Throws on transport failure so the caller can surface it; a per-file
+ * `patch == null` is not fatal.
  */
 export async function fetchPrDiffViaFilesApi(resolved: ResolvedPr): Promise<{
   diff: string;
@@ -684,11 +686,12 @@ export async function fetchPrMetadataViaGh(
     diff = stdout;
   } catch (err: any) {
     if (isPrDiffTooLargeError(err)) {
-      // GitHub refuses the unified-diff endpoint above 300 files (HTTP 406 /
-      // `PullRequest.diff too large`). Fall back to paginating the "List
-      // pull request files" API and synthesizing the diff per file using
-      // the same envelope `lib/git.ts` emits. Only this signature triggers
-      // the fallback; every other failure re-throws to keep fail-hard intact.
+      // GitHub refuses the unified-diff endpoint above ~300 files or ~20,000
+      // lines (HTTP 406 / `PullRequest.diff too large` or `too_large`). Fall
+      // back to paginating the "List pull request files" API and synthesizing
+      // the diff per file using the same envelope `lib/git.ts` emits. Only
+      // this signature triggers the fallback; every other failure re-throws
+      // to keep fail-hard intact.
       const synthesized = await fetchPrDiffViaFilesApi(resolved);
       diff = synthesized.diff;
       diffCompleteness = {
