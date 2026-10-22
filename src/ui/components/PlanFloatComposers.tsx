@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { GripVertical, Minus, Maximize2, X, MessageSquarePlus } from 'lucide-react'
 import { CommentForm } from './CommentForm'
@@ -43,12 +43,25 @@ export interface FloatComposerDraft {
 }
 
 export const PANEL_DEFAULT_W = 400
-export const PANEL_DEFAULT_H = 420
+export const PANEL_DEFAULT_H = 440
 const PANEL_MIN_W = 300
 const PANEL_MIN_H = 240
 const WINDOW_PAD = 12
 
 export type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+
+/**
+ * Lowest y a panel may reach. The vim status bar floats over the bottom-right
+ * corner; panels that would sit under it stop above it instead so the form's
+ * Submit row is never covered.
+ */
+function panelBottomLimit(left: number, width: number): number {
+  const limit = window.innerHeight - WINDOW_PAD
+  const bar = document.querySelector('.vim-status-bar')?.getBoundingClientRect()
+  if (!bar || bar.height === 0) return limit
+  const overlapsX = left < bar.right && left + width > bar.left
+  return overlapsX ? Math.min(limit, bar.top - 8) : limit
+}
 
 export function clampPanelRect(
   left: number,
@@ -57,28 +70,23 @@ export function clampPanelRect(
   height: number,
 ): { left: number; top: number; width: number; height: number } {
   const maxW = Math.max(PANEL_MIN_W, window.innerWidth - WINDOW_PAD * 2)
-  const maxH = Math.max(PANEL_MIN_H, window.innerHeight - WINDOW_PAD * 2)
   let w = Math.min(Math.max(PANEL_MIN_W, width), maxW)
-  let h = Math.min(Math.max(PANEL_MIN_H, height), maxH)
   let l = left
-  let t = top
   // Keep fully inside the viewport.
   if (l + w > window.innerWidth - WINDOW_PAD) l = window.innerWidth - WINDOW_PAD - w
-  if (t + h > window.innerHeight - WINDOW_PAD) t = window.innerHeight - WINDOW_PAD - h
   if (l < WINDOW_PAD) l = WINDOW_PAD
-  if (t < WINDOW_PAD) t = WINDOW_PAD
-  // If still overflowing (tiny window), shrink to fit from top-left.
   w = Math.min(w, window.innerWidth - WINDOW_PAD - l)
-  h = Math.min(h, window.innerHeight - WINDOW_PAD - t)
   w = Math.max(PANEL_MIN_W, w)
+  const bottom = panelBottomLimit(l, w)
+  const maxH = Math.max(PANEL_MIN_H, bottom - WINDOW_PAD)
+  let h = Math.min(Math.max(PANEL_MIN_H, height), maxH)
+  let t = top
+  if (t + h > bottom) t = bottom - h
+  if (t < WINDOW_PAD) t = WINDOW_PAD
+  // If still overflowing (tiny window), shrink to fit from the top.
+  h = Math.min(h, bottom - t)
   h = Math.max(PANEL_MIN_H, h)
   return { left: l, top: t, width: w, height: h }
-}
-
-/** Back-compat helper used by PlanReview when placing a new panel. */
-export function clampToWindow(left: number, top: number, w = PANEL_DEFAULT_W, h = PANEL_DEFAULT_H) {
-  const r = clampPanelRect(left, top, w, h)
-  return { left: r.left, top: r.top }
 }
 
 export function clientRectsToPage(range: Range): PageRect[] {
@@ -92,6 +100,39 @@ export function clientRectsToPage(range: Range): PageRect[] {
       width: r.width,
       height: r.height,
     }))
+}
+
+const OVERLAY_SELECTOR = ['.ui-select-popup', '.ui-popover', '[role="listbox"]', '[role="menu"]', '.confirm-dialog']
+  // Base UI keeps a closing popup mounted for its exit animation.
+  .map((sel) => `${sel}:not([data-ending-style])`)
+  .join(', ')
+
+/** Base UI overlays only mount while open. */
+export function isOverlayOpen(): boolean {
+  return !!document.querySelector(OVERLAY_SELECTOR)
+}
+
+/** Context lines shown expanded; longer spans start collapsed. */
+const SOURCE_INLINE_MAX_LINES = 6
+
+/**
+ * Agent source context. Long spans start collapsed so the textarea stays in
+ * view instead of being pushed below a 40-line `<pre>`.
+ */
+function SourceContext({ text }: { text: string }) {
+  const lineCount = text.split('\n').length
+  const pre = (
+    <pre className="plan-comment-source" aria-label="Source context for agent">
+      {text}
+    </pre>
+  )
+  if (lineCount <= SOURCE_INLINE_MAX_LINES) return pre
+  return (
+    <details className="plan-comment-source-details">
+      <summary>Source context · {lineCount} lines</summary>
+      {pre}
+    </details>
+  )
 }
 
 function draftKey(planId: string, id: string) {
@@ -111,7 +152,7 @@ interface PlanFloatComposersProps {
     draft: FloatComposerDraft,
     body: string,
     severity?: CommentSeverity,
-  ) => void
+  ) => void | Promise<unknown>
   /** Plan source body — enables bidirectional line-range adjust in the form. */
   planBody?: string
   /** Agent context builder for the adjusted span (exact ± neighbors). */
@@ -137,7 +178,7 @@ interface PlanFloatComposersProps {
  * - Esc closes topmost (with confirm)
  * - bidirectional line-range steppers (when planBody is provided)
  */
-export function PlanFloatComposers({
+export const PlanFloatComposers = memo(function PlanFloatComposers({
   planId,
   composers,
   onChange,
@@ -253,8 +294,13 @@ export function PlanFloatComposers({
         origLeft: c.panelPos.left,
         origTop: c.panelPos.top,
       }
-      const onMove = (ev: MouseEvent) => {
-        if (!dragRef.current || dragRef.current.id !== id) return
+      // One state update per frame, not per mousemove.
+      let raf = 0
+      let last: MouseEvent | null = null
+      const apply = () => {
+        raf = 0
+        const ev = last
+        if (!ev || !dragRef.current || dragRef.current.id !== id) return
         const left = dragRef.current.origLeft + (ev.clientX - dragRef.current.startX)
         const top = dragRef.current.origTop + (ev.clientY - dragRef.current.startY)
         onChange((prev) =>
@@ -270,7 +316,13 @@ export function PlanFloatComposers({
           }),
         )
       }
+      const onMove = (ev: MouseEvent) => {
+        last = ev
+        if (!raf) raf = requestAnimationFrame(apply)
+      }
       const onUp = () => {
+        if (raf) cancelAnimationFrame(raf)
+        apply()
         dragRef.current = null
         window.removeEventListener('mousemove', onMove)
         window.removeEventListener('mouseup', onUp)
@@ -298,9 +350,13 @@ export function PlanFloatComposers({
         origW: size.width,
         origH: size.height,
       }
-      const onMove = (ev: MouseEvent) => {
+      let raf = 0
+      let last: MouseEvent | null = null
+      const apply = () => {
+        raf = 0
+        const ev = last
         const st = resizeRef.current
-        if (!st || st.id !== id) return
+        if (!ev || !st || st.id !== id) return
         const dx = ev.clientX - st.startX
         const dy = ev.clientY - st.startY
         let left = st.origLeft
@@ -342,7 +398,13 @@ export function PlanFloatComposers({
           ),
         )
       }
+      const onMove = (ev: MouseEvent) => {
+        last = ev
+        if (!raf) raf = requestAnimationFrame(apply)
+      }
       const onUp = () => {
+        if (raf) cancelAnimationFrame(raf)
+        apply()
         resizeRef.current = null
         window.removeEventListener('mousemove', onMove)
         window.removeEventListener('mouseup', onUp)
@@ -357,6 +419,10 @@ export function PlanFloatComposers({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      // An open overlay (severity select, submit popover, menu) owns Escape;
+      // this capture listener would otherwise close the composer behind it.
+      // Check presence, not focus: Safari doesn't focus a clicked trigger.
+      if (isOverlayOpen()) return
       const open = [...composers].reverse().find((c) => !c.minimized)
       if (!open) return
       e.preventDefault()
@@ -523,9 +589,7 @@ export function PlanFloatComposers({
                     “{c.selectedQuote.trim()}”
                   </blockquote>
                 ) : null}
-                <pre className="plan-comment-source" aria-label="Source context for agent">
-                  {c.sourceContext || c.exactLines || '(no source lines)'}
-                </pre>
+                <SourceContext text={c.sourceContext || c.exactLines || '(no source lines)'} />
               </div>
               <div className="plan-selection-comment-form">
                 <CommentForm
@@ -568,8 +632,10 @@ export function PlanFloatComposers({
                       ? (delta) => applyRangeAdjust(c, 'end', delta)
                       : undefined
                   }
-                  onSubmit={(body, severity) => {
-                    onSubmit(c, body, severity)
+                  onSubmit={async (body, severity) => {
+                    // Close only after the save lands; on failure the form
+                    // keeps the text and shows the error.
+                    await onSubmit(c, body, severity)
                     clearDraft(draftKey(planId, c.id))
                     onChange((prev) => prev.filter((x) => x.id !== c.id))
                   }}
@@ -637,4 +703,4 @@ export function PlanFloatComposers({
   )
 
   return createPortal(layer, document.body)
-}
+})

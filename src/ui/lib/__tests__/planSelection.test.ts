@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
 import {
+  locateRenderedTextInSource,
   mapSelectionToLines,
   measureQuoteInRoot,
   normalizePlanText,
@@ -213,5 +214,56 @@ Specific line content here
     const range = makeRange(anchor.firstChild!, 0, para.firstChild!, para.textContent!.length)
     const sel = resolvePlanSelectionLines(body, '#Title', range)
     expect(sel).toEqual({ text: 'Title', startLine: 3, endLine: 3 })
+  })
+
+  it('maps a selection across inline code onto its own line, not the whole section', () => {
+    const body = [
+      '# Plan',
+      '',
+      '## Design',
+      '',
+      '1. **Versioned migrations**',
+      '   - `src/migrations/platform/` and `src/migrations/tenant/` hold numbered, additive steps.',
+      '   - Each database has a `schema_migrations` table.',
+      '2. **Platform database**',
+      '',
+    ].join('\n')
+    document.body.innerHTML = `
+      <div class="plan-rendered">
+        <div class="plan-read-segment" data-plan-source-start="3" data-plan-source-end="9">
+          <h2><a class="md-heading-anchor">#</a>Design</h2>
+          <ol><li><strong>Versioned migrations</strong><ul>
+            <li id="target"><code>src/migrations/platform/</code> and <code>src/migrations/tenant/</code> hold numbered, additive steps.</li>
+          </ul></li></ol>
+        </div>
+      </div>
+    `
+    const li = document.getElementById('target')!
+    const range = makeRange(li.firstChild!.firstChild!, 0, li.lastChild!, ' hold numbered'.length)
+    const text = 'src/migrations/platform/ and src/migrations/tenant/ hold numbered'
+    expect(resolvePlanSelectionLines(body, text, range)).toEqual({ text, startLine: 6, endLine: 6 })
+  })
+})
+
+describe('locateRenderedTextInSource', () => {
+  it('strips links, emphasis and list markers', () => {
+    const source = ['- see [the docs](https://x.test) for **more**', '- other'].join('\n')
+    expect(locateRenderedTextInSource(source, 'the docs for more')).toEqual({ startLine: 1, endLine: 1 })
+  })
+
+  it('spans multiple source lines for a multi-paragraph selection', () => {
+    const source = ['First `para` here.', '', 'Second para *ends*.'].join('\n')
+    expect(locateRenderedTextInSource(source, 'para here.\n\nSecond para')).toEqual({ startLine: 1, endLine: 3 })
+  })
+
+  it('picks the occurrence nearest the rendered offset', () => {
+    const source = ['same words', 'filler line', 'same words'].join('\n')
+    expect(locateRenderedTextInSource(source, 'same words', 0)).toEqual({ startLine: 1, endLine: 1 })
+    expect(locateRenderedTextInSource(source, 'same words', 19)).toEqual({ startLine: 3, endLine: 3 })
+  })
+
+  it('pins both ends when the selection includes rendered-only chrome', () => {
+    const source = ['Run this:', '', '```bash', 'pnpm install', '```', '', 'Then continue onwards.'].join('\n')
+    expect(locateRenderedTextInSource(source, 'Run this:\nbashCopy\npnpm install\nThen continue onwards.')).toEqual({ startLine: 1, endLine: 7 })
   })
 })

@@ -31,7 +31,19 @@ export function buildPlanOutline(body: string): PlanOutlineItem[] {
   const items: PlanOutlineItem[] = []
   const used = new Map<string, number>()
 
+  // `# comment` lines inside fenced code are code, not headings — treating them
+  // as sections would split the fence across Read segments.
+  let fence: string | null = null
+
   for (let i = 0; i < lines.length; i++) {
+    const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(lines[i])
+    if (fenceMatch) {
+      const marker = fenceMatch[1]
+      if (fence === null) fence = marker
+      else if (marker[0] === fence[0] && marker.length >= fence.length) fence = null
+      continue
+    }
+    if (fence !== null) continue
     const m = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(lines[i])
     if (!m) continue
     const level = m[1].length

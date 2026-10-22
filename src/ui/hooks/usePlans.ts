@@ -12,6 +12,16 @@ async function fetchPlans(): Promise<Plan[]> {
   return Array.isArray(data) ? data : []
 }
 
+/** Parse a plan mutation response, surfacing server errors instead of caching them as a plan. */
+async function planFromResponse(res: Response, fallback: string): Promise<Plan> {
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const error = (data as { error?: unknown }).error
+    throw new Error(typeof error === 'string' ? error : `${fallback} (${res.status})`)
+  }
+  return data as Plan
+}
+
 interface PlanAgentStatus {
   round: number
   waiters: number
@@ -143,6 +153,28 @@ export function usePlans() {
     if (latest) setAgentActivity(latest)
   }, [plans, isLoading])
 
+  const mutations = usePlanMutations()
+
+  return {
+    plans,
+    getPlan: useCallback((id: string) => plans.find((p) => p.id === id) ?? null, [plans]),
+    agentWaiting: agentStatus.waiters > 0,
+    agentActivity,
+    clearAgentActivity: useCallback(() => setAgentActivity(null), []),
+    isLoading,
+    ...mutations,
+  }
+}
+
+/**
+ * Plan comment/reply/decision/edit mutations without the list query, live
+ * subscriptions or status polling — for components that only write (the
+ * active plan view), so they don't open a second SSE + status fetch.
+ * Every mutation writes the server's returned plan back into the cache.
+ */
+export function usePlanMutations() {
+  const queryClient = useQueryClient()
+
   const writePlan = useCallback(
     (plan: Plan) => {
       queryClient.setQueryData<Plan[]>(PLANS_KEY, (prev = []) =>
@@ -159,7 +191,7 @@ export function usePlans() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(rest),
       })
-      return res.json() as Promise<Plan>
+      return planFromResponse(res, 'Failed to add comment')
     },
     onSuccess: writePlan,
   })
@@ -171,7 +203,7 @@ export function usePlans() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ body, status }),
       })
-      return res.json() as Promise<Plan>
+      return planFromResponse(res, 'Failed to update comment')
     },
     onSuccess: writePlan,
   })
@@ -179,7 +211,7 @@ export function usePlans() {
   const removeCommentMutation = useMutation({
     mutationFn: async ({ planId, commentId }: { planId: string; commentId: string }) => {
       const res = await fetch(`/api/plans/${planId}/comments/${commentId}`, { method: 'DELETE' })
-      return res.json() as Promise<Plan>
+      return planFromResponse(res, 'Failed to delete comment')
     },
     onSuccess: writePlan,
   })
@@ -191,7 +223,7 @@ export function usePlans() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ body, role: 'user' }),
       })
-      return res.json() as Promise<Plan>
+      return planFromResponse(res, 'Failed to add reply')
     },
     onSuccess: writePlan,
   })
@@ -203,7 +235,7 @@ export function usePlans() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ body }),
       })
-      return res.json() as Promise<Plan>
+      return planFromResponse(res, 'Failed to update reply')
     },
     onSuccess: writePlan,
   })
@@ -211,7 +243,7 @@ export function usePlans() {
   const removeReplyMutation = useMutation({
     mutationFn: async ({ planId, commentId, replyId }: { planId: string; commentId: string; replyId: string }) => {
       const res = await fetch(`/api/plans/${planId}/comments/${commentId}/replies/${replyId}`, { method: 'DELETE' })
-      return res.json() as Promise<Plan>
+      return planFromResponse(res, 'Failed to delete reply')
     },
     onSuccess: writePlan,
   })
@@ -312,12 +344,11 @@ export function usePlans() {
   })
 
   return {
-    plans,
-    getPlan: useCallback((id: string) => plans.find((p) => p.id === id) ?? null, [plans]),
-    addPlanComment: useCallback((p: AddCommentParams) => addCommentMutation.mutate(p), [addCommentMutation.mutate]),
+    /** Resolves once saved; rejects with the server error so composers can keep the draft. */
+    addPlanComment: useCallback((p: AddCommentParams) => addCommentMutation.mutateAsync(p), [addCommentMutation.mutateAsync]),
     editPlanComment: useCallback(
-      (planId: string, commentId: string, body: string) => editCommentMutation.mutate({ planId, commentId, body }),
-      [editCommentMutation.mutate],
+      (planId: string, commentId: string, body: string) => editCommentMutation.mutateAsync({ planId, commentId, body }),
+      [editCommentMutation.mutateAsync],
     ),
     resolvePlanComment: useCallback(
       (planId: string, commentId: string) => editCommentMutation.mutate({ planId, commentId, status: 'resolved' }),
@@ -332,12 +363,12 @@ export function usePlans() {
       [removeCommentMutation.mutate],
     ),
     addPlanReply: useCallback(
-      (planId: string, commentId: string, body: string) => addReplyMutation.mutate({ planId, commentId, body }),
-      [addReplyMutation.mutate],
+      (planId: string, commentId: string, body: string) => addReplyMutation.mutateAsync({ planId, commentId, body }),
+      [addReplyMutation.mutateAsync],
     ),
     editPlanReply: useCallback(
-      (planId: string, commentId: string, replyId: string, body: string) => editReplyMutation.mutate({ planId, commentId, replyId, body }),
-      [editReplyMutation.mutate],
+      (planId: string, commentId: string, replyId: string, body: string) => editReplyMutation.mutateAsync({ planId, commentId, replyId, body }),
+      [editReplyMutation.mutateAsync],
     ),
     removePlanReply: useCallback(
       (planId: string, commentId: string, replyId: string) => removeReplyMutation.mutate({ planId, commentId, replyId }),
@@ -362,10 +393,6 @@ export function usePlans() {
       [decisionMutation.mutateAsync],
     ),
     submitting: decisionMutation.isPending,
-    agentWaiting: agentStatus.waiters > 0,
-    agentActivity,
-    clearAgentActivity: useCallback(() => setAgentActivity(null), []),
-    isLoading,
   }
 }
 

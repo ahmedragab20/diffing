@@ -29,4 +29,12 @@ intro
   it('returns empty for body without headings', () => {
     expect(buildPlanOutline('just prose\n')).toEqual([])
   })
+
+  it('ignores # lines inside fenced code blocks', () => {
+    const body = ['# Setup', '', '```bash', '# install deps', 'pnpm i', '```', '', '~~~', '## not a heading', '~~~', '## Next'].join('\n')
+    expect(buildPlanOutline(body).map((i) => [i.text, i.line])).toEqual([
+      ['Setup', 1],
+      ['Next', 11],
+    ])
+  })
 })

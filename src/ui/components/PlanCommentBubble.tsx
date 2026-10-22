@@ -20,9 +20,10 @@ interface PlanCommentBubbleProps {
   onResolve: () => void
   onUnresolve: () => void
   onDelete: () => void
-  onEdit: (body: string) => void
-  onReply: (body: string) => void
-  onEditReply: (replyId: string, body: string) => void
+  /** May return a promise: the form stays open (showing the error) until it resolves. */
+  onEdit: (body: string) => void | Promise<unknown>
+  onReply: (body: string) => void | Promise<unknown>
+  onEditReply: (replyId: string, body: string) => void | Promise<unknown>
   onDeleteReply: (replyId: string) => void
 }
 
@@ -320,8 +321,8 @@ export function PlanCommentBubble({
                     ? `Selected: “${comment.selectedQuote}”\nSource:\n${comment.lineContent}`
                     : comment.lineContent
                 }
-                onSubmit={(newBody) => {
-                  onEdit(newBody)
+                onSubmit={async (newBody) => {
+                  await onEdit(newBody)
                   setIsEditing(false)
                 }}
                 onCancel={() => setIsEditing(false)}
@@ -418,8 +419,8 @@ export function PlanCommentBubble({
                       <CommentForm
                         draftKey={`plan-reply-edit:${comment.id}:${reply.id}`}
                         initialBody={reply.body}
-                        onSubmit={(body) => {
-                          onEditReply(reply.id, body)
+                        onSubmit={async (body) => {
+                          await onEditReply(reply.id, body)
                           setEditingReplyId(null)
                         }}
                         onCancel={() => setEditingReplyId(null)}
@@ -462,8 +463,8 @@ export function PlanCommentBubble({
           <div className="comment-reply-composer">
             <CommentForm
               draftKey={`plan-reply:${comment.id}`}
-              onSubmit={(body) => {
-                onReply(body)
+              onSubmit={async (body) => {
+                await onReply(body)
                 setIsReplying(false)
               }}
               onCancel={() => setIsReplying(false)}

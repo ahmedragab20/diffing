@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import type { PlanComment } from '../../lib/plan-types'
 import type { PlanOutlineItem } from '../lib/planOutline'
 import { buildPlanReadSegments } from '../lib/planReadSegments'
@@ -12,9 +12,9 @@ interface PlanReadInlineCommentsProps {
   onResolve: (id: string) => void
   onUnresolve: (id: string) => void
   onDelete: (id: string) => void
-  onEdit: (id: string, body: string) => void
-  onReply: (id: string, body: string) => void
-  onEditReply: (commentId: string, replyId: string, body: string) => void
+  onEdit: (id: string, body: string) => void | Promise<unknown>
+  onReply: (id: string, body: string) => void | Promise<unknown>
+  onEditReply: (commentId: string, replyId: string, body: string) => void | Promise<unknown>
   onDeleteReply: (commentId: string, replyId: string) => void
 }
 
@@ -23,7 +23,7 @@ interface PlanReadInlineCommentsProps {
  * each outline section. Avoids DOM injection into react-markdown (which was
  * wiped on every mode switch / re-render).
  */
-export function PlanReadInlineComments({
+export const PlanReadInlineComments = memo(function PlanReadInlineComments({
   body,
   outline,
   comments,
@@ -121,4 +121,4 @@ export function PlanReadInlineComments({
       ))}
     </>
   )
-}
+})

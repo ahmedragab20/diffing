@@ -206,6 +206,22 @@ export function HapticsProvider({
     [],
   )
 
+  // Without navigator.vibrate (all of Safari) web-haptics fakes a tap by
+  // clicking a hidden <label>/switch it appends to <body>. Popovers read that
+  // synthetic click as an outside press and close mid-interaction, so stop it
+  // at window capture, before any document listener. The switch still toggles
+  // (default action), so iOS still gets its haptic.
+  useEffect(() => {
+    const swallowHapticClick = (e: MouseEvent) => {
+      const target = e.target as Element | null
+      if (target?.closest?.('label[for^="web-haptics-"], input[id^="web-haptics-"]')) {
+        e.stopImmediatePropagation()
+      }
+    }
+    window.addEventListener('click', swallowHapticClick, true)
+    return () => window.removeEventListener('click', swallowHapticClick, true)
+  }, [])
+
   // Delegated listener — every interactive element gets a tap + sound on click
   useEffect(() => {
     if (!enabled && !soundsEnabled) return

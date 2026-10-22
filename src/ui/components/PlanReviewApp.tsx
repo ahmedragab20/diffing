@@ -722,7 +722,9 @@ export function PlanReviewApp() {
             {activePlan && (
               <SubmitPlanReviewPopover
                 openCommentCount={openCommentCount}
-                onSubmit={(verdict, comment) => submitDecision(activePlan.id, verdict, comment)}
+                onSubmit={(verdict, comment, mode) =>
+                  submitDecision(activePlan.id, verdict, comment, mode)
+                }
                 submitting={submitting}
                 agentWaiting={agentWaiting}
                 currentDecision={activePlan.decision}

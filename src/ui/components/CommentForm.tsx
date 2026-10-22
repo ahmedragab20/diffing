@@ -608,26 +608,24 @@ export function CommentForm({
                   <Sparkles size={12} />{" "}
                   {body.trim() ? "Improve writing" : "Draft comment"}
                 </button>
-                {body.trim() && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-sm comment-form-suggest-btn"
-                      disabled={aiRunning}
-                      onClick={() => void runAiEdit("shorten-comment")}
-                    >
-                      Shorter
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm comment-form-suggest-btn"
-                      disabled={aiRunning}
-                      onClick={() => void runAiEdit("make-specific")}
-                    >
-                      More specific
-                    </button>
-                  </>
-                )}
+                {/* Always mounted (disabled while empty) so the row never
+                    re-wraps — and shoves the textarea — on the first keystroke. */}
+                <button
+                  type="button"
+                  className="btn btn-sm comment-form-suggest-btn"
+                  disabled={aiRunning || !body.trim()}
+                  onClick={() => void runAiEdit("shorten-comment")}
+                >
+                  Shorter
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm comment-form-suggest-btn"
+                  disabled={aiRunning || !body.trim()}
+                  onClick={() => void runAiEdit("make-specific")}
+                >
+                  More specific
+                </button>
                 {lineContent && (
                   <button
                     type="button"
@@ -718,16 +716,15 @@ export function CommentForm({
                 )}
               </div>
             )}
-            {body.trim() && (
-              <button
-                type="button"
-                className="btn btn-sm comment-form-suggest-btn"
-                onClick={saveCurrentAsReply}
-                title="Save current body as a reusable template"
-              >
-                Save template
-              </button>
-            )}
+            <button
+              type="button"
+              className="btn btn-sm comment-form-suggest-btn"
+              onClick={saveCurrentAsReply}
+              disabled={!body.trim()}
+              title="Save current body as a reusable template"
+            >
+              Save template
+            </button>
             {lineContent ? (
               <button
                 type="button"

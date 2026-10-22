@@ -184,6 +184,101 @@ function planSegmentForNode(node: Node | null): HTMLElement | null {
   return parent ? (parent.closest('.plan-read-segment') as HTMLElement | null) : null
 }
 
+/**
+ * Characters that never survive (or never matter) between markdown source and
+ * rendered text: whitespace, inline-syntax markers (`*_~`), table pipes, the
+ * heading-anchor `#` glyph, and escapes. Dropped on both sides before matching.
+ */
+const MATCH_KEY_STRIP = /[\s`*_~|#\\​]/g
+
+function matchKey(value: string): string {
+  return value.replace(MATCH_KEY_STRIP, '')
+}
+
+/** Source line → the text react-markdown renders for it (block syntax removed). */
+function renderedTextOfSourceLine(line: string): string {
+  if (/^\s*(```|~~~)/.test(line)) return ''
+  // Table delimiter rows and thematic breaks render no text.
+  if (/^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line)) return ''
+  if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) return ''
+  return line
+    .replace(/^\s{0,3}#{1,6}\s+/, '')
+    .replace(/^\s*(>\s?)+/, '')
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/<((?:https?|mailto|file):[^>\s]+)>/g, '$1')
+    .replace(/<\/?[A-Za-z][^>]*>/g, '')
+}
+
+/**
+ * Locate rendered `selectedText` inside a markdown `source` slice and return the
+ * 1-based (slice-relative) line span. Inline markdown (`code`, **bold**,
+ * [links](…)), list markers and whitespace differ between the rendered DOM and
+ * the source, so both sides are reduced to a match key with a per-character
+ * line map. When the text occurs more than once, the occurrence nearest to
+ * `expectedOffset` (the selection's key offset within the rendered slice) wins.
+ */
+export function locateRenderedTextInSource(
+  source: string,
+  selectedText: string,
+  expectedOffset?: number,
+): { startLine: number; endLine: number } | null {
+  const needle = matchKey(selectedText.replace(/ /g, ' '))
+  if (!needle) return null
+
+  let stream = ''
+  const lineOf: number[] = []
+  source
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .forEach((line, i) => {
+      const key = matchKey(renderedTextOfSourceLine(line))
+      stream += key
+      for (let k = 0; k < key.length; k++) lineOf.push(i + 1)
+    })
+
+  const span = (start: number, end: number) => ({ startLine: lineOf[start]!, endLine: lineOf[end - 1]! })
+
+  const occurrences: number[] = []
+  for (let at = stream.indexOf(needle); at !== -1; at = stream.indexOf(needle, at + 1)) {
+    occurrences.push(at)
+  }
+  if (occurrences.length > 0) {
+    let best = occurrences[0]!
+    if (expectedOffset != null) {
+      for (const at of occurrences) {
+        if (Math.abs(at - expectedOffset) < Math.abs(best - expectedOffset)) best = at
+      }
+    }
+    return span(best, best + needle.length)
+  }
+
+  // The selection may include rendered-only chrome (code-block labels, list
+  // numbers): pin each end separately on a short prefix / suffix.
+  const edges = [16, 10, 6].filter((n) => n < needle.length)
+  const startEdge = edges.find((n) => stream.includes(needle.slice(0, n)))
+  if (startEdge == null) return null
+  const startAt = stream.indexOf(needle.slice(0, startEdge))
+  for (const n of edges) {
+    const endAt = stream.indexOf(needle.slice(-n), startAt)
+    if (endAt !== -1) return span(startAt, endAt + n)
+  }
+  return span(startAt, startAt + startEdge)
+}
+
+/** Key-length of rendered text between the start of `container` and the range start. */
+function renderedOffsetBefore(container: HTMLElement, range: Range): number | undefined {
+  try {
+    const before = document.createRange()
+    before.setStart(container, 0)
+    before.setEnd(range.startContainer, range.startOffset)
+    return matchKey(before.toString()).length
+  } catch {
+    return undefined
+  }
+}
+
 function lineAttr(el: HTMLElement | null, attr: 'planSourceStart' | 'planSourceEnd'): number | null {
   if (!el) return null
   const raw = (el.dataset as DOMStringMap)[attr]
@@ -233,6 +328,15 @@ export function resolvePlanSelectionLines(
 
   if (segStart != null && segEnd != null) {
     const slice = extractPlanLines(body, segStart, segEnd)
+    const expectedOffset = startSeg ? renderedOffsetBefore(startSeg, range) : undefined
+    const located = locateRenderedTextInSource(slice, raw, expectedOffset)
+    if (located) {
+      return {
+        text: candidates[0] ?? raw,
+        startLine: segStart + located.startLine - 1,
+        endLine: segStart + located.endLine - 1,
+      }
+    }
     for (const needle of candidates) {
       const local = mapSelectionToLines(slice, needle)
       if (local) {

@@ -40,6 +40,7 @@ vi.mock('lucide-react', () => {
 const mockUsePlans = vi.fn()
 vi.mock('../hooks/usePlans', () => ({
   usePlans: () => mockUsePlans(),
+  usePlanMutations: () => mockUsePlans(),
 }))
 
 // Replace the Base UI Select with a plain <select> so the version-switcher

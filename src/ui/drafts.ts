@@ -12,7 +12,13 @@ function makeKey(...parts: string[]): string {
   return PREFIX + parts.join(':')
 }
 
+const debounceTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+/** Latest body per key while its debounced write is still pending. */
+const pendingBodies: Record<string, string> = {}
+
 export function getDraft(...parts: string[]): string | null {
+  const key = makeKey(...parts)
+  if (key in pendingBodies) return pendingBodies[key] || null
   try {
     const raw = getUiStateItem(makeKey(...parts))
     if (!raw) return null
@@ -27,19 +33,24 @@ export function getDraft(...parts: string[]): string | null {
   }
 }
 
-const debounceTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+function cancelPending(key: string): void {
+  if (debounceTimers[key]) clearTimeout(debounceTimers[key])
+  delete debounceTimers[key]
+  delete pendingBodies[key]
+}
 
 export function setDraft(body: string, ...parts: string[]): void {
   const key = makeKey(...parts)
   if (debounceTimers[key]) clearTimeout(debounceTimers[key])
+  pendingBodies[key] = body
   debounceTimers[key] = setTimeout(() => {
     saveDraftNow(body, ...parts)
-    delete debounceTimers[key]
   }, 500)
 }
 
 export function saveDraftNow(body: string, ...parts: string[]): void {
   const key = makeKey(...parts)
+  cancelPending(key)
   try {
     if (body.trim()) {
       setUiStateItem(key, JSON.stringify({ body, timestamp: Date.now() }))
@@ -52,8 +63,11 @@ export function saveDraftNow(body: string, ...parts: string[]): void {
 }
 
 export function clearDraft(...parts: string[]): void {
+  const key = makeKey(...parts)
+  // A pending debounced write would otherwise resurrect the cleared draft.
+  cancelPending(key)
   try {
-    removeUiStateItem(makeKey(...parts))
+    removeUiStateItem(key)
   } catch {
     /* ignore */
   }

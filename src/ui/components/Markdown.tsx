@@ -1,4 +1,4 @@
-import { isValidElement, useState, useCallback, useMemo, type ReactNode } from 'react'
+import { isValidElement, memo, useState, useCallback, type ReactNode } from 'react'
 import ReactMarkdown, { defaultUrlTransform, type Components, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -40,6 +40,7 @@ const SANITIZE_SCHEMA = {
 // from throwing on those non-languages.
 const REHYPE_PLUGINS: Options['rehypePlugins'] = [
   [rehypeSanitize, SANITIZE_SCHEMA],
+  rehypeHeadingIds,
   [rehypeHighlight, { ignoreMissing: true, plainText: ['mermaid', 'suggestion'] }],
 ]
 
@@ -82,6 +83,41 @@ function slugifyHeading(text: string): string {
     .slice(0, 80) || 'section'
 }
 
+interface HastNode {
+  type: string
+  tagName?: string
+  value?: string
+  properties?: Record<string, unknown>
+  children?: HastNode[]
+}
+
+function hastText(node: HastNode): string {
+  if (node.type === 'text') return node.value ?? ''
+  return (node.children ?? []).map(hastText).join('')
+}
+
+/**
+ * Heading ids (slug + collision suffix) assigned once per parse, so they are
+ * identical on every render. Runs after sanitize, which would otherwise
+ * clobber them with a `user-content-` prefix.
+ */
+function rehypeHeadingIds() {
+  return (tree: HastNode) => {
+    const used = new Map<string, number>()
+    const visit = (node: HastNode) => {
+      if (node.type === 'element' && /^h[1-6]$/.test(node.tagName ?? '')) {
+        let id = slugifyHeading(hastText(node))
+        const n = used.get(id) ?? 0
+        used.set(id, n + 1)
+        if (n > 0) id = `${id}-${n + 1}`
+        node.properties = { ...node.properties, id }
+      }
+      node.children?.forEach(visit)
+    }
+    visit(tree)
+  }
+}
+
 function CodeBlock({
   language,
   codeText,
@@ -117,61 +153,52 @@ function CodeBlock({
   )
 }
 
-function makeComponents(headingIds: Map<string, number>): Components {
-  return {
-    pre({ children }) {
-      const codeClass = isValidElement(children)
-        ? (children.props as { className?: string }).className
-        : undefined
-      const lang = languageOf(codeClass)
-      if (lang === 'mermaid') {
-        return <MermaidDiagram chart={textContent(children).replace(/\n$/, '')} />
-      }
-      if (lang === 'suggestion') return null
-      const codeText = textContent(children).replace(/\n$/, '')
+const COMPONENTS: Components = {
+  pre({ children }) {
+    const codeClass = isValidElement(children)
+      ? (children.props as { className?: string }).className
+      : undefined
+    const lang = languageOf(codeClass)
+    if (lang === 'mermaid') {
+      return <MermaidDiagram chart={textContent(children).replace(/\n$/, '')} />
+    }
+    if (lang === 'suggestion') return null
+    const codeText = textContent(children).replace(/\n$/, '')
+    return (
+      <CodeBlock language={lang} codeText={codeText}>
+        {children}
+      </CodeBlock>
+    )
+  },
+  a({ href, children }) {
+    if (typeof href === 'string' && href.startsWith('file-mention://')) {
+      const path = href.slice('file-mention://'.length)
       return (
-        <CodeBlock language={lang} codeText={codeText}>
+        <span className="mention-file" title={path}>
           {children}
-        </CodeBlock>
+        </span>
       )
-    },
-    a({ href, children }) {
-      if (typeof href === 'string' && href.startsWith('file-mention://')) {
-        const path = href.slice('file-mention://'.length)
-        return (
-          <span className="mention-file" title={path}>
-            {children}
-          </span>
-        )
-      }
-      const external = typeof href === 'string' && /^https?:\/\//.test(href)
-      return (
-        <a href={href} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>
-          {children}
-        </a>
-      )
-    },
-    h1: heading('h1', headingIds),
-    h2: heading('h2', headingIds),
-    h3: heading('h3', headingIds),
-    h4: heading('h4', headingIds),
-    h5: heading('h5', headingIds),
-    h6: heading('h6', headingIds),
-  }
+    }
+    const external = typeof href === 'string' && /^https?:\/\//.test(href)
+    return (
+      <a href={href} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>
+        {children}
+      </a>
+    )
+  },
+  h1: heading('h1'),
+  h2: heading('h2'),
+  h3: heading('h3'),
+  h4: heading('h4'),
+  h5: heading('h5'),
+  h6: heading('h6'),
 }
 
-function heading(
-  Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6',
-  used: Map<string, number>,
-): Components['h1'] {
-  return function Heading({ children, ...props }) {
+function heading(Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'): Components['h1'] {
+  return function Heading({ children, node: _node, id, ...props }) {
     const text = textContent(children)
-    let id = slugifyHeading(text)
-    const n = used.get(id) ?? 0
-    used.set(id, n + 1)
-    if (n > 0) id = `${id}-${n + 1}`
     return (
-      <Tag id={id} className="md-heading" {...props}>
+      <Tag {...props} id={id} className="md-heading">
         <a href={`#${id}`} className="md-heading-anchor" aria-label={`Link to ${text}`}>
           #
         </a>
@@ -196,26 +223,21 @@ export interface MarkdownProps {
  *
  * Plan-viewer extras: per-code-block Copy, heading ids + `#` anchors for TOC.
  */
-export function Markdown({ content, className }: MarkdownProps) {
-  // Stable component identities across parent re-renders (e.g. plan selection
-  // popup). Recreate only when `content` changes so heading-id collisions stay
-  // correct for that body. Without this, react-markdown remounts custom nodes
-  // like MermaidDiagram and diagrams flicker empty → re-rendered SVG.
-  const components = useMemo(() => {
-    const headingIds = new Map<string, number>()
-    return makeComponents(headingIds)
-  }, [content])
-
+// Memoized: parsing + highlighting is the most expensive render on the plan
+// page, and parents re-render on every selection / drag / keystroke. Module-level
+// components keep identities stable so custom nodes like MermaidDiagram never
+// remount (which flickered diagrams empty → re-rendered SVG).
+export const Markdown = memo(function Markdown({ content, className }: MarkdownProps) {
   return (
     <div className={className}>
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={REHYPE_PLUGINS}
         urlTransform={urlTransform}
-        components={components}
+        components={COMPONENTS}
       >
         {content}
       </ReactMarkdown>
     </div>
   )
-}
+})

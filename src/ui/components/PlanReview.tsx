@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { scrollBehavior } from "../lib/motion.js";
 import { File as DiffsFile } from '@pierre/diffs/react'
-import type { LineAnnotation, SelectedLineRange } from '@pierre/diffs'
+import type { FileOptions, LineAnnotation, SelectedLineRange } from '@pierre/diffs'
 import {
   Bot,
   MessageSquarePlus,
@@ -32,7 +32,7 @@ import { sectionTitleForLine, extractPlanLines } from '../../lib/plan-format'
 import { SHIKI_THEME_MAP, timeAgo } from '../utils'
 import { Markdown } from './Markdown'
 import type { LineHoverHighlight } from '../hooks/useSettings'
-import { usePlans } from '../hooks/usePlans'
+import { usePlanMutations } from '../hooks/usePlans'
 import { CommentForm } from './CommentForm'
 import { PlanCommentBubble } from './PlanCommentBubble'
 import { PlanReadInlineComments } from './PlanReadInlineComments'
@@ -64,7 +64,8 @@ import { PLAN_UI, readBoolUi, readSplitRatioUi, clampSplitRatio, readDefaultComm
 import { usePlanCommentsSheet } from '../hooks/usePlanLayoutMedia'
 import {
   PlanFloatComposers,
-  clampToWindow,
+  clampPanelRect,
+  isOverlayOpen,
   clientRectsToPage,
   PANEL_DEFAULT_W,
   PANEL_DEFAULT_H,
@@ -84,6 +85,7 @@ export { PLAN_UI } from '../lib/planUiState'
 type PlanSaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 
 const AUTOSAVE_MS = 700
+const EMPTY_COMMENTS: PlanComment[] = []
 
 interface PlanReviewProps {
   plan: Plan
@@ -193,7 +195,7 @@ export function PlanReview({
     updatePlan,
     submitPlanVersion,
     submittingPlanVersion,
-  } = usePlans()
+  } = usePlanMutations()
 
   /** Source-mode only pending annotation form. */
   const [pending, setPending] = useState<PendingComment | null>(null)
@@ -482,12 +484,17 @@ export function PlanReview({
 
   // Comments are filtered to those anchored to the version being viewed. A
   // comment's `createdAtPlanVersion` is set at write time by the server.
-  const allComments = plan.comments ?? []
-  const visibleComments = isHistorical
-    ? allComments.filter((c) => c.createdAtPlanVersion === viewingVersion)
-    : allComments
-  const comments = visibleComments
-  const lineComments = comments.filter((c) => c.lineNumber > 0)
+  const allComments = plan.comments ?? EMPTY_COMMENTS
+  // Memoized so the Read body (memo) and float layout epoch only change
+  // when comments actually do.
+  const comments = useMemo(
+    () =>
+      isHistorical
+        ? allComments.filter((c) => c.createdAtPlanVersion === viewingVersion)
+        : allComments,
+    [allComments, isHistorical, viewingVersion],
+  )
+  const lineComments = useMemo(() => comments.filter((c) => c.lineNumber > 0), [comments])
   const generalComments = comments.filter((c) => c.lineNumber === 0)
   const openCount = comments.filter((c) => c.status === 'open').length
   const totalCommentCount = allComments.length
@@ -524,7 +531,7 @@ export function PlanReview({
   ) => {
     const start = p.startLineNumber ?? p.lineNumber
     const exactLines = lineRange(p.startLineNumber, p.lineNumber)
-    addPlanComment({
+    return addPlanComment({
       planId: plan.id,
       lineNumber: p.lineNumber,
       startLineNumber: p.startLineNumber,
@@ -533,8 +540,7 @@ export function PlanReview({
       body,
       severity: severity && severity !== 'none' ? severity : undefined,
       createdAtPlanVersion: viewingVersion,
-    })
-    clearSourcePending()
+    }).then(() => clearSourcePending())
   }
 
   /**
@@ -565,7 +571,7 @@ export function PlanReview({
       severity?: import('../../lib/types').CommentSeverity,
     ) => {
       const start = draft.startLineNumber ?? draft.lineNumber
-      addPlanComment({
+      return addPlanComment({
         planId: plan.id,
         lineNumber: draft.lineNumber,
         startLineNumber: draft.startLineNumber,
@@ -578,6 +584,32 @@ export function PlanReview({
       })
     },
     [addPlanComment, plan.id, displayBody, viewingVersion],
+  )
+
+  // Stable handlers let the memoized Read body skip re-rendering (and
+  // re-parsing markdown) on selection-chip and composer state changes.
+  const readCommentHandlers = useMemo(
+    () => ({
+      onResolve: (id: string) => resolvePlanComment(plan.id, id),
+      onUnresolve: (id: string) => unresolvePlanComment(plan.id, id),
+      onDelete: (id: string) => removePlanComment(plan.id, id),
+      onEdit: (id: string, body: string) => editPlanComment(plan.id, id, body),
+      onReply: (id: string, body: string) => addPlanReply(plan.id, id, body),
+      onEditReply: (commentId: string, replyId: string, body: string) =>
+        editPlanReply(plan.id, commentId, replyId, body),
+      onDeleteReply: (commentId: string, replyId: string) =>
+        removePlanReply(plan.id, commentId, replyId),
+    }),
+    [
+      plan.id,
+      resolvePlanComment,
+      unresolvePlanComment,
+      removePlanComment,
+      editPlanComment,
+      addPlanReply,
+      editPlanReply,
+      removePlanReply,
+    ],
   )
 
   const annotations: LineAnnotation<PlanAnnotationMeta>[] = useMemo(() => {
@@ -593,6 +625,55 @@ export function PlanReview({
     }
     return list
   }, [lineComments, pending])
+
+  // Pierre shallow-compares options and fully re-renders the file when they
+  // differ, so keep this stable across selection-chip / composer renders.
+  const sourceFileOptions = useMemo<FileOptions<PlanAnnotationMeta, undefined>>(
+    () => ({
+      disableFileHeader: true,
+      enableGutterUtility: true,
+      enableLineSelection: true,
+      overflow: lineWrap ? 'wrap' : 'scroll',
+      disableLineNumbers: !showLineNumbers,
+      lineHoverHighlight,
+      onLineSelectionStart: () => {
+        // Drop open draft; stop controlling selectedLines so pierre owns the drag.
+        setLiveSelectionCount(0)
+        setPending(null)
+        setSelectedRange(null)
+        planDraftSessionRef.current = null
+      },
+      onLineSelectionChange: (range) => {
+        setLiveSelectionCount(range ? Math.abs(range.end - range.start) + 1 : 0)
+      },
+      onLineSelectionEnd: (range) => {
+        setLiveSelectionCount(0)
+        if (range) {
+          // Normalize reverse drags (start > end) via shared helper.
+          const p = pendingFromSelection(range)
+          openSourcePending({
+            lineNumber: p.lineNumber,
+            startLineNumber: p.startLineNumber,
+          })
+        }
+      },
+      // Pierre built-in gutter + only — cannot combine with renderGutterUtility.
+      onGutterUtilityClick: (range) => {
+        const p = pendingFromSelection(range)
+        openSourcePending({
+          lineNumber: p.lineNumber,
+          startLineNumber: p.startLineNumber,
+        })
+      },
+      theme: {
+        dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
+        light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
+      },
+      themeType: shikiConfig.type,
+      unsafeCSS,
+    }),
+    [lineWrap, showLineNumbers, lineHoverHighlight, shikiConfig, unsafeCSS, openSourcePending],
+  )
 
   const renderAnnotation = (annotation: LineAnnotation<PlanAnnotationMeta>) => {
     const meta = annotation.metadata
@@ -1224,14 +1305,26 @@ export function PlanReview({
       const x = Math.min(Math.max(72, midX), window.innerWidth - 72)
       const y = placement === 'below' ? bottomRect.bottom + gap : topRect.top - gap
 
-      setSelectionPopup({
+      const next = {
         x,
         y,
         placement,
         startLine: mapped.startLine,
         endLine: mapped.endLine,
         text: mapped.text,
-      })
+      }
+      // Same chip → keep the old object so PlanReview doesn't re-render.
+      setSelectionPopup((prev) =>
+        prev &&
+        prev.x === next.x &&
+        prev.y === next.y &&
+        prev.placement === next.placement &&
+        prev.startLine === next.startLine &&
+        prev.endLine === next.endLine &&
+        prev.text === next.text
+          ? prev
+          : next,
+      )
     },
     [displayBody, isHistorical, editMode],
   )
@@ -1242,6 +1335,12 @@ export function PlanReview({
     if (isHistorical || editMode || !showRendered) return
 
     let selTimer: ReturnType<typeof setTimeout> | 0 = 0
+    // While the mouse is held the selection changes every frame; mouseup
+    // runs one full sync, so skip selectionchange work until then.
+    let pointerDown = false
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 0) pointerDown = true
+    }
     const schedule = (mode: 'update' | 'sync') => {
       if (selTimer) clearTimeout(selTimer)
       selTimer = setTimeout(() => {
@@ -1250,6 +1349,7 @@ export function PlanReview({
     }
 
     const onMouseUp = (e: MouseEvent) => {
+      pointerDown = false
       const t = e.target as HTMLElement | null
       // Keep chip alive when pressing Add comment or interacting with floats.
       if (
@@ -1269,14 +1369,17 @@ export function PlanReview({
     const onSelectionChange = () => {
       // Only open/refresh — never clear here. Clearing on collapse would
       // remove the chip mid-click when the browser drops the selection.
+      if (pointerDown) return
       schedule('update')
     }
 
+    document.addEventListener('mousedown', onMouseDown, true)
     document.addEventListener('mouseup', onMouseUp, true)
     document.addEventListener('keyup', onKeyUp, true)
     document.addEventListener('selectionchange', onSelectionChange)
     return () => {
       if (selTimer) clearTimeout(selTimer)
+      document.removeEventListener('mousedown', onMouseDown, true)
       document.removeEventListener('mouseup', onMouseUp, true)
       document.removeEventListener('keyup', onKeyUp, true)
       document.removeEventListener('selectionchange', onSelectionChange)
@@ -1297,7 +1400,7 @@ export function PlanReview({
         : selectionPopup.y - PANEL_DEFAULT_H - 8
     // Cascade new panels so multiple don't stack exactly.
     const cascade = floatComposers.length * 28
-    const pos = clampToWindow(
+    const rect = clampPanelRect(
       preferredLeft + cascade,
       preferredTop + cascade,
       PANEL_DEFAULT_W,
@@ -1315,8 +1418,8 @@ export function PlanReview({
       exactLines: exact,
       sourceContext: buildAgentLineContent(start, end),
       sectionTitle: sectionTitleForLine(displayBody, start),
-      panelPos: pos,
-      panelSize: { width: PANEL_DEFAULT_W, height: PANEL_DEFAULT_H },
+      panelPos: { left: rect.left, top: rect.top },
+      panelSize: { width: rect.width, height: rect.height },
       minimized: false,
       highlightRects,
     }
@@ -1333,6 +1436,8 @@ export function PlanReview({
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (discardEditsOpen || saveAsVersionOpen) return // Modal owns Escape
+      // So does any open popover / select / menu (e.g. Submit review).
+      if (isOverlayOpen()) return
       if (selectionPopup) {
         e.preventDefault()
         setSelectionPopup(null)
@@ -1460,49 +1565,7 @@ export function PlanReview({
           contents: displayBody,
           lang: 'markdown',
         }}
-        options={{
-          disableFileHeader: true,
-          enableGutterUtility: true,
-          enableLineSelection: true,
-          overflow: lineWrap ? 'wrap' : 'scroll',
-          disableLineNumbers: !showLineNumbers,
-          lineHoverHighlight,
-          onLineSelectionStart: () => {
-            // Drop open draft; stop controlling selectedLines so pierre owns the drag.
-            setLiveSelectionCount(0)
-            setPending(null)
-            setSelectedRange(null)
-            planDraftSessionRef.current = null
-          },
-          onLineSelectionChange: (range) => {
-            setLiveSelectionCount(range ? Math.abs(range.end - range.start) + 1 : 0)
-          },
-          onLineSelectionEnd: (range) => {
-            setLiveSelectionCount(0)
-            if (range) {
-              // Normalize reverse drags (start > end) via shared helper.
-              const p = pendingFromSelection(range)
-              openSourcePending({
-                lineNumber: p.lineNumber,
-                startLineNumber: p.startLineNumber,
-              })
-            }
-          },
-          // Pierre built-in gutter + only — cannot combine with renderGutterUtility.
-          onGutterUtilityClick: (range) => {
-            const p = pendingFromSelection(range)
-            openSourcePending({
-              lineNumber: p.lineNumber,
-              startLineNumber: p.startLineNumber,
-            })
-          },
-          theme: {
-            dark: shikiConfig.type === 'dark' ? shikiConfig.themeName : 'rose-pine',
-            light: shikiConfig.type === 'light' ? shikiConfig.themeName : 'github-light',
-          },
-          themeType: shikiConfig.type,
-          unsafeCSS,
-        }}
+        options={sourceFileOptions}
         selectedLines={pending ? selectedRange : undefined}
         lineAnnotations={annotations}
         renderAnnotation={renderAnnotation}
@@ -1553,15 +1616,7 @@ export function PlanReview({
           body={displayBody}
           outline={outline}
           comments={lineComments}
-          onResolve={(id) => resolvePlanComment(plan.id, id)}
-          onUnresolve={(id) => unresolvePlanComment(plan.id, id)}
-          onDelete={(id) => removePlanComment(plan.id, id)}
-          onEdit={(id, body) => editPlanComment(plan.id, id, body)}
-          onReply={(id, body) => addPlanReply(plan.id, id, body)}
-          onEditReply={(commentId, replyId, body) =>
-            editPlanReply(plan.id, commentId, replyId, body)
-          }
-          onDeleteReply={(commentId, replyId) => removePlanReply(plan.id, commentId, replyId)}
+          {...readCommentHandlers}
         />
       </div>
     </div>

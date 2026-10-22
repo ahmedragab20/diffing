@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
 	Check,
 	MessageSquareWarning,
@@ -95,6 +95,8 @@ export function SubmitPlanReviewPopover({
 	const [open, setOpen] = useState(false);
 	const [verdict, setVerdict] = useState<Verdict | null>(null);
 	const [comment, setComment] = useState("");
+	/** Open on the verdict choice, not the panel's left resize handle. */
+	const verdictFocusRef = useRef<HTMLButtonElement>(null);
 	const {
 		popoverStyle,
 		activePreset,
@@ -126,6 +128,7 @@ export function SubmitPlanReviewPopover({
 			onOpenChange={(next, details) => handleOpenChange(next, details, setOpen)}
 			ariaLabel="Submit review"
 			className="submit-plan-review-popover"
+			initialFocus={verdictFocusRef}
 			trigger={
 				<button
 					className="btn btn-primary btn-sm send-review-btn"
@@ -218,12 +221,14 @@ export function SubmitPlanReviewPopover({
 						role="radiogroup"
 						aria-label="Verdict"
 					>
-						{OPTIONS.map((opt) => {
+						{OPTIONS.map((opt, index) => {
 							const Icon = opt.icon;
 							const selected = verdict === opt.value;
+							const focusTarget = verdict ? selected : index === 0;
 							return (
 								<button
 									key={opt.value}
+									ref={focusTarget ? verdictFocusRef : undefined}
 									type="button"
 									role="radio"
 									aria-checked={selected}
