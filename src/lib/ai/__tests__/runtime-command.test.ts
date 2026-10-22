@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { RuntimeAdapter } from "../adapters.js";
 import type { AiRunEvent, AiRunRequest } from "../types.js";
@@ -14,11 +17,16 @@ const request: AiRunRequest = {
 };
 function adapter(body: string, exit = 0) {
 	const script = `process.stdin.resume(); process.stdin.on('end',()=>{${body};process.exitCode=${exit};});`;
+	// A single argv entry above Linux MAX_ARG_STRLEN (128KiB) fails with E2BIG
+	// before the fixture can print. The oversized-output case exceeds that, so
+	// the fixture runs from a file instead of node -e.
+	const file = join(mkdtempSync(join(tmpdir(), "diffing-runtime-")), "fixture.cjs");
+	writeFileSync(file, script);
 	return new RuntimeAdapter({
 		id: "claude",
 		label: "fixture",
 		bin: process.execPath,
-		args: () => ["-e", script],
+		args: () => [file],
 		versionArgs: [],
 		statusArgs: [],
 		routes: ["subscription"],
