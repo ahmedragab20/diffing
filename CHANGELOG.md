@@ -1,3 +1,9 @@
+## 0.21.12
+
+### Patch Changes
+
+- 12845c8: Keep live HTML edits as unpublished drafts
+
 ## 0.21.11
 
 ### Patch Changes
