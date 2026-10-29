@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Mockup, MockupSummary } from "../../../lib/mockup-types";
@@ -731,6 +731,28 @@ describe("MockupReviewApp", () => {
       const frame = document.querySelector(".mockup-frame") as HTMLElement;
       expect(frame.style.height).toBe("812px");
     });
+
+    // A follow-up that only echoes the iframe's inner height must not shrink it.
+    const frame = document.querySelector(".mockup-frame") as HTMLElement;
+    Object.defineProperty(frame, "clientHeight", {
+      configurable: true,
+      value: 812,
+    });
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            type: "diffing-mockup",
+            event: "height",
+            nonce: "nonce-1",
+            viewport: "desktop",
+            height: 811,
+          },
+          source: window,
+        }),
+      );
+    });
+    expect(frame.style.height).toBe("812px");
   });
 
   it("opens the shortcuts guide with cmd+? and toggles zen from the keymap", async () => {

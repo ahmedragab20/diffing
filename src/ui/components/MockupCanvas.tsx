@@ -1,6 +1,5 @@
 import type { CommentSeverity } from "../../lib/types";
 import type { MockupComment } from "../../lib/mockup-types";
-import type { AiMockupContext } from "../../lib/ai/types";
 import { commentViewport } from "../../lib/mockup-types";
 import { MockupComposer } from "./MockupComposer";
 import { MockupFloatCard } from "./MockupFloatCard";
@@ -66,9 +65,6 @@ export interface MockupCanvasProps {
     onThreadEditReply: (replyId: string, body: string) => void;
     onThreadDeleteReply: (replyId: string) => void;
     onThreadApplySuggestion?: () => void | Promise<void>;
-    aiContext?: AiMockupContext | null;
-    onRewriteRegion?: () => void;
-    rewriting?: boolean;
 }
 
 function CanvasPin({
@@ -141,9 +137,6 @@ export function MockupCanvas({
     onThreadEditReply,
     onThreadDeleteReply,
     onThreadApplySuggestion,
-    aiContext,
-    onRewriteRegion,
-    rewriting = false,
 }: MockupCanvasProps) {
     const pinnedComments = comments.filter((c) => !staleIds?.has(c.id));
     return (
@@ -235,7 +228,6 @@ export function MockupCanvas({
                         onEditReply={onThreadEditReply}
                         onDeleteReply={onThreadDeleteReply}
                         onApplySuggestion={onThreadApplySuggestion}
-                        aiContext={aiContext}
                     />
                 </MockupFloatCard>
             )}
@@ -246,11 +238,6 @@ export function MockupCanvas({
                     draftKey={composerDraftKey}
                     onSubmit={onPostComment}
                     onCancel={onCancelPending}
-                    aiContext={aiContext}
-                    onRewriteRegion={
-                        pending.target ? onRewriteRegion : undefined
-                    }
-                    rewriting={rewriting}
                 />
             )}
         </div>

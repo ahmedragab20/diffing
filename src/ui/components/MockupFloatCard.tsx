@@ -112,8 +112,11 @@ export function MockupFloatCard({
 				sizeRef.current.width,
 				sizeRef.current.height,
 			);
-			setSize({ width: next.width, height: next.height });
-			setPos({ left: next.left, top: next.top });
+			setPos((prev) =>
+				prev && prev.left === next.left && prev.top === next.top
+					? prev
+					: { left: next.left, top: next.top },
+			);
 		};
 		window.addEventListener("resize", onResize);
 		return () => window.removeEventListener("resize", onResize);
@@ -291,7 +294,10 @@ export function MockupFloatCard({
 				title="Drag to move"
 			>
 				<GripVertical size={14} aria-hidden="true" />
-				<span className="plan-selection-comment-meta mockup-float-title">
+				<span
+					className="plan-selection-comment-meta mockup-float-title"
+					title={titleText}
+				>
 					{title}
 				</span>
 				<button

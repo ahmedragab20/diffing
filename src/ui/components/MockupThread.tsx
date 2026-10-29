@@ -11,7 +11,7 @@ import {
   User,
 } from "lucide-react";
 import type { MockupComment } from "../../lib/mockup-types";
-import type { AiMockupContext } from "../../lib/ai/types";
+
 import { extractSuggestion } from "../../lib/mockup-suggestion";
 import { timeAgo } from "../utils";
 import { Markdown } from "./Markdown";
@@ -56,7 +56,6 @@ export interface MockupThreadProps {
   onEditReply: (replyId: string, body: string) => void;
   onDeleteReply: (replyId: string) => void;
   onApplySuggestion?: () => void | Promise<void>;
-  aiContext?: AiMockupContext | null;
 }
 
 /**
@@ -78,18 +77,7 @@ export function MockupThread({
   onEditReply,
   onDeleteReply,
   onApplySuggestion,
-  aiContext,
 }: MockupThreadProps) {
-  const threadAiContext = aiContext
-    ? {
-        ...aiContext,
-        kind: "mockup-thread" as const,
-        commentBody: comment.body,
-        replies: comment.replies?.map((reply) => reply.body),
-        selectedHtml: comment.html ?? comment.snapshot,
-        region: comment.target,
-      }
-    : undefined;
   const threadSnippet = comment.html ?? comment.snapshot;
   const isResolved = comment.status === "resolved";
   const [collapsed, setCollapsed] = useState(isResolved);
@@ -275,8 +263,6 @@ export function MockupThread({
                 draftKey={`mockup-edit:${comment.id}`}
                 initialBody={comment.body}
                 lineContent={threadSnippet}
-                aiSurface={threadAiContext ? "mockup" : undefined}
-                aiContext={threadAiContext}
                 onSubmit={(newBody) => {
                   onEdit(newBody);
                   setIsEditing(false);
@@ -426,8 +412,6 @@ export function MockupThread({
                         initialBody={reply.body}
                         lineContent={threadSnippet}
                         showSeverity={false}
-                        aiSurface={threadAiContext ? "mockup" : undefined}
-                        aiContext={threadAiContext}
                         onSubmit={(body) => {
                           onEditReply(reply.id, body);
                           setEditingReplyId(null);
@@ -483,8 +467,6 @@ export function MockupThread({
               draftKey={`mockup-reply:${comment.id}`}
               lineContent={threadSnippet}
               showSeverity={false}
-              aiSurface={threadAiContext ? "mockup" : undefined}
-              aiContext={threadAiContext}
               onSubmit={(body) => {
                 onReply(body);
                 setIsReplying(false);

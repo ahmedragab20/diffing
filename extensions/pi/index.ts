@@ -1156,7 +1156,7 @@ export default function (pi: ExtensionAPI) {
 		name: "diffing_mockup_screen",
 		label: "Diffing Mockup Screen",
 		description:
-			"One-screen revision of an HTML mockup. action=upsert adds/replaces a screen (html or file), remove deletes a screen, patch replaces the first exact occurrence of text with replacement, replace-region replaces the inner HTML of the first [data-diffing=region] element (prefer this when the comment has a data-diffing target). Every success bumps the mockup version; pass expectedVersion to guard racing edits (409 version-mismatch, nothing applied). For multi-screen revisions, resubmit via diffing_mockup_submit with the same mockupId.",
+			"One-screen revision of an HTML mockup. action=upsert adds/replaces a screen (html or file), remove deletes a screen, patch replaces the first exact occurrence of text with replacement, replace-region replaces the inner HTML of the first [data-diffing=region] element (section comments). A block comment uses patch on its stored HTML, and only when that string is unique. A pin does not change markup. Every success bumps the mockup version; pass expectedVersion to guard racing edits (409 version-mismatch, nothing applied). For multi-screen revisions, resubmit via diffing_mockup_submit with the same mockupId.",
 		parameters: Type.Object({
 			action: stringEnum(
 				["upsert", "remove", "patch", "replace-region"] as const,

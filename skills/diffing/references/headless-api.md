@@ -159,7 +159,7 @@ Plan comment creation/edit/delete and reply edit/delete are HTTP-only; agents no
 | GET | `/api/mockups` | Compact summaries; `include=comments` or `include=full` only when needed |
 | POST | `/api/mockups` | `{title?, html? or screens?, id?, source?, model?, mode?, designSystemId?, planId?}`; submission/version bump |
 | GET | `/api/mockups/:id` | Full current record, including HTML |
-| PUT | `/api/mockups/:id` | Same-record metadata/content update; prefer guarded screen revisions |
+| PUT | `/api/mockups/:id` | Metadata only (`title`, `source`, `model`). `html` or `screens` is rejected |
 | DELETE | `/api/mockups/:id` | Delete artifact |
 | GET | `/api/mockups/:id/versions` | Version metadata |
 | GET | `/api/mockups/:id/versions/:n` | Historical record |
@@ -168,6 +168,8 @@ Plan comment creation/edit/delete and reply edit/delete are HTTP-only; agents no
 | PUT | `/api/mockups/:id/screens/:screenId` | `{html, label?, expectedVersion?}`; upsert/version bump |
 | PATCH | `/api/mockups/:id/screens/:screenId` | `{expectedText, replacement, expectedVersion?}` or `{region, replacement, expectedVersion?}` |
 | DELETE | `/api/mockups/:id/screens/:screenId` | Query `expectedVersion`; refuses removal of last screen |
+| PUT | `/api/mockups/:id/screens/:screenId/draft` | `{html, baseVersion}`; unpublished live edit, no version bump |
+| DELETE | `/api/mockups/:id/screens/:screenId/draft` | Drop one screen's draft; idempotent when none is stored |
 | POST | `/api/mockups/:id/threads/batch` | `{operations:[{op, commentId, replyId?, body?, role?, model?}]}`; atomic validation/application, no version bump |
 | POST | `/api/mockups/:id/comments` | `{kind, screenId, body, viewport, ...anchor}`; version/screen/viewport scoped |
 | PUT | `/api/mockups/:id/comments/:commentId` | Body/status update |
@@ -175,13 +177,13 @@ Plan comment creation/edit/delete and reply edit/delete are HTTP-only; agents no
 | POST | `/api/mockups/:id/comments/:commentId/replies` | `{body, role?, model?}` |
 | PUT | `/api/mockups/:id/comments/:commentId/replies/:replyId` | `{body}` |
 | DELETE | `/api/mockups/:id/comments/:commentId/replies/:replyId` | Delete reply |
-| POST | `/api/mockups/:id/comments/:commentId/apply-suggestion` | `{expectedVersion?}`; revises screen, does not resolve thread |
+| POST | `/api/mockups/:id/comments/:commentId/apply-suggestion` | `{expectedVersion?}`; section replaces its region, block replaces unique stored HTML, pins do not apply; thread stays open |
 | GET | `/api/mockups/:id/handoff` | Compact implementation handoff |
 | POST | `/api/mockups/:id/decision` | **Human verdict**, not agent approval |
 | GET | `/api/mockup-review/await` | `sinceRound?`, `timeoutMs?`; validate artifact ID/version |
 | GET | `/api/mockup-review/status` | Session-global review state |
 
-MCP `inspect_mockup` uses `screenId`/`commentId`; HTTP uses query `screen`/`id`. MCP and HTTP patch both use **`expectedText`**; CLI uses **`--text`**. Region replacement changes the inner HTML of the first matching `data-diffing` region. Inspect `occurrences` if a target is duplicated.
+MCP `inspect_mockup` uses `screenId`/`commentId`; HTTP uses query `screen`/`id`. MCP and HTTP patch both use **`expectedText`**; CLI uses **`--text`**. Region replacement changes the inner HTML of the first matching `data-diffing` region. Exact-text patch replaces the first match. `occurrences` is how many matches were found; `replaced` is 1 on success. A block suggestion that matches more than once returns 409 `ambiguous-anchor` and does not write. A published screen change returns the decision to pending. Draft saves do not.
 
 ```js
 const revised = await api('/api/mockups/MOCKUP_ID/screens/main', {

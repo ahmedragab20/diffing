@@ -4,6 +4,8 @@ import {
   injectMockupProbe,
   buildMockupProbeScript,
   MOCKUP_PROBE_FLAG,
+  mockupFrameHeight,
+  nextMockupContentHeight,
 } from "../mockup-document.js";
 
 describe("injectMockupProbe", () => {
@@ -45,11 +47,33 @@ describe("injectMockupProbe", () => {
   });
 });
 
+describe("mockup frame height", () => {
+  it("keeps a short document at the stage height", () => {
+    expect(mockupFrameHeight(420, 800, 2)).toBe(800);
+  });
+
+  it("grows a tall document by the frame border", () => {
+    expect(mockupFrameHeight(2000, 800, 2)).toBe(2002);
+  });
+
+  it("drops a probe height that only echoes the iframe viewport", () => {
+    expect(nextMockupContentHeight(900, 898, 898)).toBe(900);
+    expect(nextMockupContentHeight(900, 1400, 898)).toBe(1400);
+    expect(nextMockupContentHeight(null, 640, 0)).toBe(640);
+  });
+});
+
 describe("buildMockupProbeScript", () => {
   it("defaults to an empty nonce and the desktop viewport", () => {
     const script = buildMockupProbeScript();
     expect(script).toContain('const NONCE = "";');
     expect(script).toContain('const VIEWPORT = "desktop";');
+  });
+
+  it("measures content height instead of the iframe viewport", () => {
+    const script = buildMockupProbeScript();
+    expect(script).toContain("cs.position === 'fixed'");
+    expect(script).not.toContain("document.documentElement.scrollHeight");
   });
 
   it("embeds the served document nonce and viewport so every event echoes them", () => {

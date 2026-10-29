@@ -1,6 +1,6 @@
 import type { DesignSystem } from "./design-system-types.js";
 import { tokensToCss } from "./design-system-types.js";
-import type { Mockup } from "./mockup-types.js";
+import type { Mockup, MockupComment } from "./mockup-types.js";
 
 export interface MockupHandoff {
 	mockupId: string;
@@ -22,6 +22,13 @@ export interface MockupHandoff {
 		intent: string;
 	}>;
 	openNits: Array<{ id: string; screenId: string; body: string }>;
+	/** Every open thread, including blocking comments and questions. */
+	openComments: Array<{
+		id: string;
+		screenId: string;
+		body: string;
+		severity?: MockupComment["severity"];
+	}>;
 	guidance: string;
 }
 
@@ -35,11 +42,16 @@ export function buildMockupHandoff(
 		if (!component.id) continue;
 		if (blob.includes(`data-diffing="${component.id}"`)) used.add(component.id);
 	}
-	const openNits = (mockup.comments ?? [])
-		.filter(
-			(c) => c.status === "open" && (c.severity == null || c.severity === "nit"),
-		)
+	const open = (mockup.comments ?? []).filter((c) => c.status === "open");
+	const openNits = open
+		.filter((c) => c.severity == null || c.severity === "nit")
 		.map((c) => ({ id: c.id, screenId: c.screenId, body: c.body }));
+	const openComments = open.map((c) => ({
+		id: c.id,
+		screenId: c.screenId,
+		body: c.body,
+		...(c.severity ? { severity: c.severity } : {}),
+	}));
 	return {
 		mockupId: mockup.id,
 		title: mockup.title,
@@ -60,6 +72,7 @@ export function buildMockupHandoff(
 			intent: s.stateOf ? `${s.label} (state of ${s.stateOf})` : s.label,
 		})),
 		openNits,
+		openComments,
 		guidance:
 			"This is a mockup. Match feel (type, color, density, chrome) — not class names or a pixel grid.",
 	};
@@ -72,6 +85,17 @@ export function formatMockupHandoffXml(handoff: MockupHandoff): string {
 				`    <screen id="${escape(s.id)}" label="${escape(s.label)}"${s.stateOf ? ` state-of="${escape(s.stateOf)}"` : ""}${s.flow ? ` flow="${escape(s.flow)}"` : ""}>${escape(s.intent)}</screen>`,
 		)
 		.join("\n");
+	const comments =
+		handoff.openComments.length === 0
+			? ""
+			: `    <open-comments>\n${handoff.openComments
+					.map((n) => {
+						const severity = n.severity
+							? ` severity="${escape(n.severity)}"`
+							: "";
+						return `      <comment id="${escape(n.id)}" screen="${escape(n.screenId)}"${severity}>${escape(n.body)}</comment>`;
+					})
+					.join("\n")}\n    </open-comments>\n`;
 	const nits =
 		handoff.openNits.length === 0
 			? ""
@@ -87,7 +111,7 @@ export function formatMockupHandoffXml(handoff: MockupHandoff): string {
     <screens>
 ${screens}
     </screens>
-${nits}  </mockup>
+${comments}${nits}  </mockup>
 </mockup-handoff>`;
 }
 

@@ -224,7 +224,7 @@ export function useMockups(activeId: string | null) {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(rest),
 			});
-			if (!res.ok) throw new Error("Failed to add comment");
+			if (!res.ok) throw new Error(await readApiError(res, "Failed to add comment"));
 			return res.json() as Promise<Mockup>;
 		},
 		onSuccess: writeMockup,
@@ -373,20 +373,47 @@ export function useMockups(activeId: string | null) {
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: MOCKUPS_KEY }),
 	});
 
-	const saveScreens = useMutation({
+	const saveDraft = useMutation({
 		mutationFn: async ({
 			mockupId,
-			screens,
+			screenId,
+			html,
+			baseVersion,
 		}: {
 			mockupId: string;
-			screens: Array<{ id: string; html: string; label?: string }>;
+			screenId: string;
+			html: string;
+			baseVersion: number;
 		}) => {
-			const res = await fetch(`/api/mockups/${mockupId}`, {
-				method: "PUT",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ screens }),
-			});
-			if (!res.ok) throw new Error(await readApiError(res, "Failed to save"));
+			const res = await fetch(
+				`/api/mockups/${mockupId}/screens/${encodeURIComponent(screenId)}/draft`,
+				{
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ html, baseVersion }),
+				},
+			);
+			if (!res.ok) throw new Error(await readApiError(res, "Failed to save draft"));
+			return res.json() as Promise<Mockup>;
+		},
+		onSuccess: writeMockup,
+	});
+
+	const clearDraft = useMutation({
+		mutationFn: async ({
+			mockupId,
+			screenId,
+		}: {
+			mockupId: string;
+			screenId: string;
+		}) => {
+			const res = await fetch(
+				`/api/mockups/${mockupId}/screens/${encodeURIComponent(screenId)}/draft`,
+				{ method: "DELETE" },
+			);
+			if (!res.ok) {
+				throw new Error(await readApiError(res, "Failed to discard draft"));
+			}
 			return res.json() as Promise<Mockup>;
 		},
 		onSuccess: writeMockup,
@@ -476,7 +503,8 @@ export function useMockups(activeId: string | null) {
 		removeReply: removeReply.mutateAsync,
 		submitDecision: submitDecision.mutateAsync,
 		submitting: submitDecision.isPending,
-		saveScreens: saveScreens.mutateAsync,
+		saveDraft: saveDraft.mutateAsync,
+		clearDraft: clearDraft.mutateAsync,
 		bumpScreen: bumpScreen.mutateAsync,
 		applySuggestion: applySuggestion.mutateAsync,
 		removeMockup: removeMockup.mutate,

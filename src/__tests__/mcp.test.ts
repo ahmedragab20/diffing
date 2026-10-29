@@ -1769,6 +1769,7 @@ describe('diffing MCP', () => {
         mockupId: 'm1',
         version: 5,
         occurrences: 1,
+        replaced: 1,
       })
       expect(calls[2]).toMatchObject({ method: 'PATCH' })
       expect(JSON.parse(calls[2].body!)).toEqual({
@@ -1792,6 +1793,7 @@ describe('diffing MCP', () => {
         mockupId: 'm1',
         version: 5,
         occurrences: 1,
+        replaced: 1,
       })
       expect(JSON.parse(calls[3].body!)).toEqual({
         region: 'hero',

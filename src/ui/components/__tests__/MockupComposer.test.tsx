@@ -135,7 +135,7 @@ describe("MockupComposer — focus on open", () => {
     });
   });
 
-  it("shows AI chips only when context is passed and does not run until click", async () => {
+  it("does not show rewrite or AI actions on the comment card", async () => {
     const frameRef = createRef<HTMLDivElement>();
     render(
       <QueryClientProvider client={queryClient}>
@@ -146,26 +146,16 @@ describe("MockupComposer — focus on open", () => {
             draftKey="mockup:m1:main:desktop:section:hero"
             onSubmit={vi.fn()}
             onCancel={vi.fn()}
-            aiContext={{
-              kind: "mockup",
-              mockupId: "m1",
-              title: "Landing",
-              version: 2,
-              screenId: "main",
-              html: "<h1>Hi</h1>",
-            }}
-            onRewriteRegion={vi.fn()}
           />
         </div>
       </QueryClientProvider>,
     );
 
+    await screen.findByRole("dialog");
     expect(
-      await screen.findByRole("button", { name: /Draft comment/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Rewrite region" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: /Draft comment|Improve writing|Shorter|More specific|Generate suggestion|Rewrite region/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Suggest change" })).toBeInTheDocument();
     expect(mockRun).not.toHaveBeenCalled();
   });
 

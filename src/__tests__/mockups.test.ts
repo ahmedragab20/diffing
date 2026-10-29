@@ -342,6 +342,115 @@ describe('InMemoryMockupStore one-screen ops', () => {
     expect(after?.version).toBe(1)
     expect(after?.screens[0].html).toContain('<h1>Hi</h1>')
   })
+
+  it('unique patch writes one match and leaves an ambiguous anchor untouched', async () => {
+    const mockup = await store.upsert({
+      title: 'M',
+      screens: [
+        {
+          id: 'main',
+          label: 'Main',
+          html: '<button>Go</button><button>Go</button>',
+        },
+      ],
+    })
+    const ambiguous = await store.patchScreen(
+      mockup.id,
+      'main',
+      { expectedText: '<button>Go</button>', replacement: '<button>Stop</button>' },
+      { unique: true },
+    )
+    expect(ambiguous.mockup).toBeNull()
+    expect(ambiguous.code).toBe('ambiguous-anchor')
+    expect(ambiguous.error).toBe('Anchor text matched 2 places')
+    const untouched = await store.get(mockup.id)
+    expect(untouched?.version).toBe(1)
+    expect(untouched?.screens[0].html).toBe(
+      '<button>Go</button><button>Go</button>',
+    )
+
+    const once = await store.patchScreen(
+      mockup.id,
+      'main',
+      { expectedText: '<button>Go</button><button>Go</button>', replacement: '<button>Stop</button>' },
+      { unique: true },
+    )
+    expect(once.occurrences).toBe(1)
+    expect(once.mockup?.screens[0].html).toBe('<button>Stop</button>')
+    expect(once.code).toBeUndefined()
+  })
+
+  it('saves and clears a draft without publishing or resetting a decision', async () => {
+    const mockup = await store.upsert({ title: 'M', screens: screens() })
+    await store.setDecision(mockup.id, 'approved', 'ship it')
+    const saved = await store.saveDraft(mockup.id, 'main', {
+      html: '<h1>Draft</h1>',
+      baseVersion: 1,
+    })
+    expect(saved.mockup?.version).toBe(1)
+    expect(saved.mockup?.decision).toBe('approved')
+    expect(saved.mockup?.screens[0].html).toBe('<h1>Hi</h1>')
+    expect(saved.mockup?.drafts).toEqual([
+      expect.objectContaining({
+        screenId: 'main',
+        html: '<h1>Draft</h1>',
+        baseVersion: 1,
+      }),
+    ])
+
+    const cleared = await store.saveDraft(mockup.id, 'main', {
+      html: '<h1>Hi</h1>',
+      baseVersion: 1,
+    })
+    expect(cleared.mockup?.drafts).toBeUndefined()
+    expect(cleared.mockup?.version).toBe(1)
+
+    await store.saveDraft(mockup.id, 'main', {
+      html: '<h1>Draft</h1>',
+      baseVersion: 1,
+    })
+    const dropped = await store.clearDraft(mockup.id, 'main')
+    expect(dropped.mockup?.drafts).toBeUndefined()
+    expect((await store.clearDraft(mockup.id, 'main')).mockup?.version).toBe(1)
+
+    const missing = await store.saveDraft(mockup.id, 'nope', {
+      html: '<p>x</p>',
+      baseVersion: 1,
+    })
+    expect(missing.error).toBe('Screen nope not found')
+    const badBase = await store.saveDraft(mockup.id, 'main', {
+      html: '<p>x</p>',
+      baseVersion: 9,
+    })
+    expect(badBase.error).toBe('Draft baseVersion must be from 1 to 1')
+  })
+
+  it('publishing a screen returns an approved mockup to pending and keeps the draft', async () => {
+    const mockup = await store.upsert({ title: 'M', screens: screens() })
+    await store.setDecision(mockup.id, 'approved', 'ship it')
+    await store.saveDraft(mockup.id, 'main', {
+      html: '<h1>Draft</h1>',
+      baseVersion: 1,
+    })
+    const published = await store.upsertScreen(mockup.id, {
+      id: 'main',
+      html: '<h1>Live</h1>',
+    })
+    expect(published.mockup?.version).toBe(2)
+    expect(published.mockup?.decision).toBe('pending')
+    expect(published.mockup?.decisionComment).toBeUndefined()
+    expect(published.mockup?.screens[0].html).toBe('<h1>Live</h1>')
+    expect(published.mockup?.drafts?.[0]).toMatchObject({
+      html: '<h1>Draft</h1>',
+      baseVersion: 1,
+    })
+
+    await store.setDecision(mockup.id, 'approved')
+    const titled = await store.update(mockup.id, { title: 'Renamed' })
+    expect(titled?.title).toBe('Renamed')
+    expect(titled?.decision).toBe('approved')
+    expect(titled?.version).toBe(2)
+  })
 })
 
 describe('InMemoryMockupStore atomic thread batch', () => {
@@ -577,5 +686,24 @@ describe('FileMockupStore source mirror', () => {
     expect(readFileSync(join(mirror, 'main.html'), 'utf-8')).toBe(
       '<h1>Bye</h1>',
     )
+  })
+
+  it('keeps both comments when two adds run at the same time', async () => {
+    const { mkdtempSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const { FileMockupStore } = await import('../lib/mockups.js')
+    const dir = mkdtempSync(join(tmpdir(), 'diffing-mockups-'))
+    const store = new FileMockupStore(dir)
+    const mockup = await store.upsert({
+      title: 'M',
+      screens: [{ id: 'main', label: 'Main', html: '<h1>Hi</h1>' }],
+    })
+    await Promise.all([
+      store.addComment(mockup.id, comment('c1')),
+      store.addComment(mockup.id, comment('c2')),
+    ])
+    const saved = await store.get(mockup.id)
+    expect(saved?.comments.map((item) => item.id).sort()).toEqual(['c1', 'c2'])
   })
 })

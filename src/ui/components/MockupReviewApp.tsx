@@ -25,9 +25,14 @@ import type { CommentSeverity } from "../../lib/types";
 import type {
 	MockupAnchorKind,
 	MockupComment,
+	MockupDraft,
 	MockupViewport,
 } from "../../lib/mockup-types";
 import { commentViewport } from "../../lib/mockup-types";
+import {
+	mockupFrameHeight,
+	nextMockupContentHeight,
+} from "../../lib/mockup-document";
 import { useRoutePath, navigate } from "../router";
 import { timeAgo } from "../utils";
 import { useMockups } from "../hooks/useMockups";
@@ -140,7 +145,8 @@ export function MockupReviewApp() {
 		removeReply,
 		submitDecision,
 		submitting,
-		saveScreens,
+		saveDraft,
+		clearDraft,
 		bumpScreen,
 		applySuggestion,
 		removeMockup,
@@ -168,8 +174,7 @@ export function MockupReviewApp() {
 	const aiRailRef = useRef<AiAssistantRailHandle>(null);
 	const aiPreviousFocusRef = useRef<HTMLElement | null>(null);
 	const [generateOpen, setGenerateOpen] = useState(false);
-	const [rewriteOpen, setRewriteOpen] = useState(false);
-	const [aiBusy, setAiBusy] = useState<"generate" | "rewrite" | null>(null);
+	const [aiBusy, setAiBusy] = useState<"generate" | null>(null);
 	const [aiActionError, setAiActionError] = useState<string | null>(null);
 	const [newMockupOpen, setNewMockupOpen] = useState(false);
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -236,6 +241,10 @@ export function MockupReviewApp() {
 	const [editing, setEditing] = useState(false);
 	const [editHtml, setEditHtml] = useState("");
 	const [editBaseline, setEditBaseline] = useState("");
+	/** Published version this edit is based on. Save-as-new-version uses the live version. */
+	const [editBaseVersion, setEditBaseVersion] = useState(0);
+	/** Draft whose base is older than the published screen. Not loaded until restored. */
+	const [staleDraft, setStaleDraft] = useState<MockupDraft | null>(null);
 	const [editError, setEditError] = useState<string | null>(null);
 	const [editSaveState, setEditSaveState] = useState<
 		"idle" | "saving" | "saved" | "error"
@@ -243,9 +252,14 @@ export function MockupReviewApp() {
 	const [discardOpen, setDiscardOpen] = useState(false);
 	const [srcdoc, setSrcdoc] = useState("");
 	const [compareSrcdoc, setCompareSrcdoc] = useState("");
-	/** Full height of the served mockup document (probe-reported) — the frame
-	 *  sizes to it so tall pages scroll instead of being clipped. */
-	const [docHeight, setDocHeight] = useState<number | null>(null);
+	/** Content height from the probe. The frame is at least the stage tall. */
+	const [contentHeight, setContentHeight] = useState<number | null>(null);
+	const [stageFloor, setStageFloor] = useState(0);
+	const [frameBorder, setFrameBorder] = useState(0);
+	const frameHeight =
+		contentHeight == null
+			? null
+			: mockupFrameHeight(contentHeight, stageFloor, frameBorder);
 	const [hover, setHover] = useState<ProbeHit | null>(null);
 	const [pending, setPending] = useState<ProbeHit | null>(null);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -275,6 +289,11 @@ export function MockupReviewApp() {
 	 * (older screen/version/viewport or a different mockup) are ignored.
 	 */
 	const docNonceRef = useRef<{ nonce: string; docKey: string } | null>(null);
+	/** Nonce of the document that produced the open composer, not a later refetch. */
+	const pendingNonceRef = useRef<string | null>(null);
+	/** Bumped on discard/publish so an in-flight draft write cannot land afterwards. */
+	const editEpoch = useRef(0);
+	const draftChain = useRef<Promise<void>>(Promise.resolve());
 	/** Comment id to select once the scope settles (prior-version history jump). */
 	const pendingSelectRef = useRef<string | null>(null);
 
@@ -460,18 +479,30 @@ export function MockupReviewApp() {
 	);
 	const editDirty = editing && editHtml !== editBaseline;
 	const beginEdit = useCallback(() => {
-		if (historical || !currentScreenId) return;
+		if (historical || !currentScreenId || !active) return;
 		const screen = screens.find((s) => s.id === currentScreenId);
-		const html = screen?.html ?? "";
-		setEditHtml(html);
-		setEditBaseline(html);
+		const published = screen?.html ?? "";
+		const draft = active.drafts?.find((item) => item.screenId === currentScreenId);
+		setEditBaseline(published);
+		setEditBaseVersion(active.version);
 		setEditError(null);
 		setEditSaveState("idle");
+		if (draft && draft.baseVersion === active.version) {
+			setEditHtml(draft.html);
+			setStaleDraft(null);
+		} else if (draft) {
+			setEditHtml(published);
+			setStaleDraft(draft);
+		} else {
+			setEditHtml(published);
+			setStaleDraft(null);
+		}
 		setEditing(true);
-	}, [historical, currentScreenId, screens]);
+	}, [historical, currentScreenId, screens, active]);
 	const endEdit = useCallback(() => {
 		setEditing(false);
 		setDiscardOpen(false);
+		setStaleDraft(null);
 		setEditError(null);
 		setEditSaveState("idle");
 	}, []);
@@ -522,75 +553,46 @@ export function MockupReviewApp() {
 		viewportLabel,
 		viewingVersion,
 	]);
-	const applyHtmlToEditor = useCallback((html: string, baseline: string) => {
-		setEditHtml(html);
-		setEditBaseline(baseline);
-		setEditing(true);
-		setEditError(null);
-		setEditSaveState("idle");
-	}, []);
-	const runMockupAi = useCallback(
-		async (action: "generate-screen" | "rewrite-region") => {
-			if (!ai || !mockupAiContext || !active || !currentScreenId) return;
-			setAiActionError(null);
-			setAiBusy(action === "generate-screen" ? "generate" : "rewrite");
-			try {
-				const regionHtml = pending?.html ?? pending?.snapshot;
-				const result = await ai.run({
-					surface: "mockup",
-					action,
-					context:
-						action === "rewrite-region"
-							? {
-									...mockupAiContext,
-									kind: "mockup-region",
-									selectedHtml: regionHtml,
-									region: pending?.target,
-								}
-							: mockupAiContext,
-					prompt:
-						action === "generate-screen"
-							? `Draft the "${currentScreen?.label ?? currentScreenId}" screen for ${active.title}.`
-							: `Rewrite the ${pending?.target ?? "selected"} region.`,
-				});
-				const html = extractMockupHtml(result.text);
-				const baseline = currentScreen?.html ?? "";
-				if (action === "rewrite-region") {
-					const base = editing ? editHtml : baseline;
-					const patched =
-						regionHtml && base.includes(regionHtml)
-							? base.replace(regionHtml, html)
-							: html;
-					applyHtmlToEditor(patched, baseline);
-					setToast(
-						regionHtml && base.includes(regionHtml)
-							? "Rewrite in the editor — save when you want it"
-							: "Could not patch the region in place — review the HTML before saving",
-					);
-				} else {
-					applyHtmlToEditor(html, baseline);
-					setToast("Draft in the editor — save when you want it");
-				}
-				setGenerateOpen(false);
-				setRewriteOpen(false);
-			} catch (err) {
-				setAiActionError(err instanceof Error ? err.message : String(err));
-			} finally {
-				setAiBusy(null);
-			}
+	const applyHtmlToEditor = useCallback(
+		(html: string, baseline: string) => {
+			setEditHtml(html);
+			setEditBaseline(baseline);
+			setEditBaseVersion(active?.version ?? 1);
+			setStaleDraft(null);
+			setEditing(true);
+			setEditError(null);
+			setEditSaveState("idle");
 		},
-		[
-			ai,
-			applyHtmlToEditor,
-			active,
-			currentScreen,
-			currentScreenId,
-			editHtml,
-			editing,
-			mockupAiContext,
-			pending,
-		],
+		[active?.version],
 	);
+	const runMockupAi = useCallback(async () => {
+		if (!ai || !mockupAiContext || !active || !currentScreenId) return;
+		setAiActionError(null);
+		setAiBusy("generate");
+		try {
+			const result = await ai.run({
+				surface: "mockup",
+				action: "generate-screen",
+				context: mockupAiContext,
+				prompt: `Draft the "${currentScreen?.label ?? currentScreenId}" screen for ${active.title}.`,
+			});
+			const html = extractMockupHtml(result.text);
+			applyHtmlToEditor(html, currentScreen?.html ?? "");
+			setToast("Draft in the editor — save when you want it");
+			setGenerateOpen(false);
+		} catch (err) {
+			setAiActionError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setAiBusy(null);
+		}
+	}, [
+		ai,
+		applyHtmlToEditor,
+		active,
+		currentScreen,
+		currentScreenId,
+		mockupAiContext,
+	]);
 	const decision = active ? DECISION_META[active.decision] : null;
 	const DecisionIcon = decision?.icon ?? DECISION_META.pending.icon;
 
@@ -690,6 +692,7 @@ export function MockupReviewApp() {
 		const themeQs = `&theme=${theme}`;
 		let cancelled = false;
 		setProbeReady(false);
+		setContentHeight(null);
 		fetch(
 			`/api/mockups/${active.id}/screens/${currentScreenId}/document?version=${version}&viewport=${viewportLabel}${mode}${themeQs}`,
 		)
@@ -744,6 +747,29 @@ export function MockupReviewApp() {
 		};
 	}, [active?.id, currentScreenId, compareVersion, viewportLabel, theme]);
 
+	// The stage is the scrollport. Its height is the shortest the frame may be,
+	// so a probe that echoes the iframe viewport cannot walk the frame down.
+	useEffect(() => {
+		const frame = frameRef.current;
+		const stage = frame?.parentElement;
+		if (!stage || !frame) return;
+		const measure = () => {
+			const style = getComputedStyle(stage);
+			const pad =
+				(Number.parseFloat(style.paddingTop) || 0) +
+				(Number.parseFloat(style.paddingBottom) || 0);
+			const floor = Math.max(0, Math.round(stage.clientHeight - pad));
+			setStageFloor((prev) => (prev === floor ? prev : floor));
+			const border = Math.max(0, frame.offsetHeight - frame.clientHeight);
+			setFrameBorder((prev) => (prev === border ? prev : border));
+		};
+		measure();
+		if (typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(measure);
+		observer.observe(stage);
+		return () => observer.disconnect();
+	}, [active?.id, srcdoc, zen]);
+
 	// Scope change (mockup / screen / version / viewport) clears transient UI state.
 	useEffect(() => {
 		setHover(null);
@@ -794,6 +820,76 @@ export function MockupReviewApp() {
 			previousFocusRef: aiPreviousFocusRef,
 		});
 	}, []);
+
+	const enqueueDraftWrite = useCallback((work: () => Promise<void>) => {
+		const epoch = editEpoch.current;
+		const run = draftChain.current.then(async () => {
+			if (editEpoch.current !== epoch) return;
+			await work();
+		});
+		draftChain.current = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
+	}, []);
+
+	const planDraftWrite = useCallback((): "clear" | "save" | "noop" => {
+		if (!active || !currentScreenId || !editBaseVersion) return "noop";
+		const published =
+			active.screens.find((screen) => screen.id === currentScreenId)?.html ?? "";
+		const draft = active.drafts?.find((item) => item.screenId === currentScreenId);
+		if (editHtml === published) {
+			// Keep an older draft on screen until Restore or Discard.
+			if (!draft || staleDraft) return "noop";
+			return "clear";
+		}
+		if (
+			draft &&
+			draft.html === editHtml &&
+			draft.baseVersion === editBaseVersion
+		) {
+			return "noop";
+		}
+		return "save";
+	}, [active, currentScreenId, editBaseVersion, editHtml, staleDraft]);
+
+	const persistDraft = useCallback(async () => {
+		const plan = planDraftWrite();
+		if (plan === "noop" || !active || !currentScreenId) return "noop" as const;
+		if (plan === "clear") {
+			await clearDraft({ mockupId: active.id, screenId: currentScreenId });
+			return "cleared" as const;
+		}
+		await saveDraft({
+			mockupId: active.id,
+			screenId: currentScreenId,
+			html: editHtml,
+			baseVersion: editBaseVersion,
+		});
+		return "saved" as const;
+	}, [
+		planDraftWrite,
+		active,
+		currentScreenId,
+		clearDraft,
+		saveDraft,
+		editHtml,
+		editBaseVersion,
+	]);
+
+	const finishEdit = useCallback(async () => {
+		try {
+			await enqueueDraftWrite(async () => {
+				await persistDraft();
+			});
+		} catch (err) {
+			setEditSaveState("error");
+			setEditError(err instanceof Error ? err.message : "Failed to save draft");
+			return;
+		}
+		endEdit();
+	}, [enqueueDraftWrite, persistDraft, endEdit]);
 
 	useEffect(() => {
 		let keyBuffer = "";
@@ -923,12 +1019,8 @@ export function MockupReviewApp() {
 			else if (e.key === "3" && !historical) setTool("point");
 			else if (e.key === "c") setCommentsRailOpen((v) => !v);
 			else if (e.key === "e" && !historical && active && currentScreenId) {
-				if (editing) {
-					if (editDirty) setDiscardOpen(true);
-					else endEdit();
-				} else {
-					beginEdit();
-				}
+				if (editing) void finishEdit();
+				else beginEdit();
 			} else if (e.key === "v") setViewOnly((v) => !v);
 			else if (e.key === "z") setZen((v) => !v);
 			else if (e.key === "[" || e.key === "]") {
@@ -941,8 +1033,7 @@ export function MockupReviewApp() {
 				setScreenId(screens[next].id);
 			} else if (e.key === "Escape") {
 				if (editing) {
-					if (editDirty) setDiscardOpen(true);
-					else endEdit();
+					void finishEdit();
 					return;
 				}
 				if (zen) {
@@ -968,40 +1059,38 @@ export function MockupReviewApp() {
 		active,
 		mockups,
 		editing,
-		editDirty,
 		beginEdit,
-		endEdit,
+		finishEdit,
 		toggleAiAssistant,
 		openAiNewConversation,
 	]);
 
 	useEffect(() => {
-		if (!editing || historical || !active || !currentScreenId) return;
-		const persisted =
-			active.screens.find((s) => s.id === currentScreenId)?.html ?? "";
-		if (editHtml === persisted) return;
+		if (!editing || historical || planDraftWrite() === "noop") return;
+		const epoch = editEpoch.current;
 		const handle = window.setTimeout(() => {
-			void (async () => {
+			if (editEpoch.current !== epoch) return;
+			void enqueueDraftWrite(async () => {
 				setEditSaveState("saving");
 				try {
-					await saveScreens({
-						mockupId: active.id,
-						screens: active.screens.map((s) =>
-							s.id === currentScreenId
-								? { id: s.id, html: editHtml, label: s.label }
-								: { id: s.id, html: s.html, label: s.label },
-						),
-					});
-					setEditSaveState("saved");
+					const outcome = await persistDraft();
+					if (outcome === "noop") return;
+					setEditSaveState(outcome === "cleared" ? "idle" : "saved");
 					setEditError(null);
 				} catch (err) {
 					setEditSaveState("error");
-					setEditError(err instanceof Error ? err.message : "Failed to save");
+					setEditError(err instanceof Error ? err.message : "Failed to save draft");
 				}
-			})();
+			});
 		}, 600);
 		return () => window.clearTimeout(handle);
-	}, [editing, historical, active, currentScreenId, editHtml, saveScreens]);
+	}, [
+		editing,
+		historical,
+		planDraftWrite,
+		persistDraft,
+		enqueueDraftWrite,
+	]);
 
 	const sendAnchorCheck = useCallback(() => {
 		const anchors = comments
@@ -1020,6 +1109,13 @@ export function MockupReviewApp() {
 			active && currentScreenId
 				? `${active.id}:${currentScreenId}:${viewingVersion}:${viewportLabel}`
 				: null;
+		const noteContentHeight = (reported: unknown) => {
+			if (typeof reported !== "number") return;
+			const inner = frameRef.current?.clientHeight ?? 0;
+			setContentHeight((prev) =>
+				nextMockupContentHeight(prev, reported, inner),
+			);
+		};
 		const onMsg = (ev: MessageEvent) => {
 			const d = ev.data;
 			if (!d || d.type !== "diffing-mockup") return;
@@ -1035,13 +1131,13 @@ export function MockupReviewApp() {
 				return;
 			if (d.event === "ready") {
 				setSections(d.sections ?? []);
-				if (typeof d.height === "number" && d.height > 0) setDocHeight(d.height);
+				noteContentHeight(d.height);
 				setProbeReady(true);
 				sendAnchorCheck();
 				return;
 			}
 			if (d.event === "height") {
-				if (typeof d.height === "number" && d.height > 0) setDocHeight(d.height);
+				noteContentHeight(d.height);
 				return;
 			}
 			if (d.event === "anchors") {
@@ -1073,6 +1169,9 @@ export function MockupReviewApp() {
 				}
 				// Canvas click always starts a new comment. Opening an existing
 				// thread is only via the pin (or the rail), never via the region.
+				// Stamp the nonce from this document, not a refetch that lands later.
+				pendingNonceRef.current =
+					typeof d.nonce === "string" ? d.nonce : served.nonce;
 				setSelectedId(null);
 				setPending(d as ProbeHit);
 			}
@@ -1107,29 +1206,34 @@ export function MockupReviewApp() {
 
 	const postComment = async (body: string, severity?: CommentSeverity) => {
 		if (!active || !pending || !currentScreenId) return;
-		await addComment({
-			mockupId: active.id,
-			screenId: currentScreenId,
-			kind: pending.kind,
-			body,
-			target: pending.target,
-			selector: pending.selector,
-			html: pending.html,
-			contextHtml: pending.contextHtml,
-			x: pending.x,
-			y: pending.y,
-			sectionX: pending.sectionX,
-			sectionY: pending.sectionY,
-			snapshot: pending.snapshot,
-			rect: pending.rect,
-			severity,
-			createdAtMockupVersion: active.version,
-			nonce: docNonceRef.current?.nonce,
-			viewport: viewportLabel,
-			theme,
-			fingerprint: pending.fingerprint,
-		});
-		setPending(null);
+		try {
+			await addComment({
+				mockupId: active.id,
+				screenId: currentScreenId,
+				kind: pending.kind,
+				body,
+				target: pending.target,
+				selector: pending.selector,
+				html: pending.html,
+				contextHtml: pending.contextHtml,
+				x: pending.x,
+				y: pending.y,
+				sectionX: pending.sectionX,
+				sectionY: pending.sectionY,
+				snapshot: pending.snapshot,
+				rect: pending.rect,
+				severity,
+				createdAtMockupVersion: active.version,
+				nonce: pendingNonceRef.current ?? undefined,
+				viewport: viewportLabel,
+				theme,
+				fingerprint: pending.fingerprint,
+			});
+			pendingNonceRef.current = null;
+			setPending(null);
+		} catch (err) {
+			setToast(err instanceof Error ? err.message : "Failed to add comment");
+		}
 	};
 
 	const withSelected = (
@@ -1604,12 +1708,8 @@ export function MockupReviewApp() {
 													className={`plan-icon-btn ${editing ? "is-active" : ""}`}
 													disabled={historical || !currentScreenId}
 													onClick={() => {
-														if (editing) {
-															if (editDirty) setDiscardOpen(true);
-															else endEdit();
-														} else {
-															beginEdit();
-														}
+														if (editing) void finishEdit();
+														else beginEdit();
 													}}
 													title="Edit fragment (e)"
 													aria-label="Edit screen HTML"
@@ -1643,7 +1743,8 @@ export function MockupReviewApp() {
 								</header>
 								{historical && (
 									<div className="plan-review-historical-banner">
-										Viewing v{viewVersion} — comments stay on v{active.version}
+										Viewing v{viewVersion}. Pins are from this version. New
+										comments need v{active.version}.
 									</div>
 								)}
 								{editing && currentScreenId && (
@@ -1662,12 +1763,15 @@ export function MockupReviewApp() {
 										<div className="mockup-live-edit-actions">
 											<span className="mockup-live-edit-status" role="status">
 												{editSaveState === "saving"
-													? "Saving…"
+													? "Saving draft…"
 													: editSaveState === "saved"
-														? "Saved"
+														? "Draft saved"
 														: editSaveState === "error"
 															? (editError ?? "Save failed")
-															: "Autosave on"}
+															: "Draft autosave on"}
+												{editBaseVersion > 0 &&
+													editBaseVersion !== active.version &&
+													` Published screen is v${active.version}. This draft is based on v${editBaseVersion}.`}
 											</span>
 											<button
 												type="button"
@@ -1675,17 +1779,30 @@ export function MockupReviewApp() {
 												onClick={async () => {
 													setEditSaveState("saving");
 													try {
-														await bumpScreen({
+														const published = await bumpScreen({
 															mockupId: active.id,
 															screenId: currentScreenId,
 															html: editHtml,
 															expectedVersion: active.version,
 														});
-														setEditBaseline(editHtml);
-														setEditSaveState("saved");
-														setEditError(null);
+														editEpoch.current += 1;
+														await draftChain.current;
+														try {
+															await clearDraft({
+																mockupId: active.id,
+																screenId: currentScreenId,
+															});
+															setToast("Saved as new version");
+														} catch (err) {
+															const message =
+																err instanceof Error
+																	? err.message
+																	: "Failed to discard draft";
+															setToast(
+																`Saved as v${published.version}. Draft is still there: ${message}`,
+															);
+														}
 														endEdit();
-														setToast("Saved as new version");
 													} catch (err) {
 														setEditSaveState("error");
 														setEditError(
@@ -1698,6 +1815,21 @@ export function MockupReviewApp() {
 											>
 												Save as new version
 											</button>
+											{staleDraft && (
+												<button
+													type="button"
+													className="btn btn-sm"
+													onClick={() => {
+														setEditHtml(staleDraft.html);
+														setEditBaseVersion(staleDraft.baseVersion);
+														setStaleDraft(null);
+														setEditSaveState("idle");
+														setEditError(null);
+													}}
+												>
+													Restore draft from v{staleDraft.baseVersion}
+												</button>
+											)}
 											{editDirty && (
 												<button
 													type="button"
@@ -1710,10 +1842,7 @@ export function MockupReviewApp() {
 											<button
 												type="button"
 												className="btn btn-sm"
-												onClick={() => {
-													if (editDirty) setDiscardOpen(true);
-													else endEdit();
-												}}
+												onClick={() => void finishEdit()}
 											>
 												Done
 											</button>
@@ -1736,7 +1865,7 @@ export function MockupReviewApp() {
 											title={active.title}
 											srcdoc={srcdoc}
 											viewport={viewport}
-											frameHeight={docHeight}
+											frameHeight={frameHeight}
 											viewOnly={viewOnly}
 											zen={zen}
 											staleIds={staleIds}
@@ -1830,16 +1959,6 @@ export function MockupReviewApp() {
 													expectedVersion: active.version,
 												});
 											}}
-											aiContext={mockupAiContext}
-											onRewriteRegion={
-												aiReady && pending?.target
-													? () => {
-															setAiActionError(null);
-															setRewriteOpen(true);
-														}
-													: undefined
-											}
-											rewriting={aiBusy === "rewrite"}
 										/>
 										{aiReady &&
 											!historical &&
@@ -1889,7 +2008,7 @@ export function MockupReviewApp() {
 													className="mockup-compare-frame-wrap"
 													style={{
 														width: Math.min(viewport, 1600),
-														height: docHeight ? `${docHeight}px` : "100%",
+														height: frameHeight ? `${frameHeight}px` : "100%",
 													}}
 												>
 													<iframe
@@ -1989,30 +2108,24 @@ export function MockupReviewApp() {
 				)}
 				<ConfirmDialog
 					open={discardOpen}
-					title="Discard edits?"
-					description="Restore this screen to when you started editing. Autosaved changes on this version will be overwritten."
+					title="Discard draft?"
+					description="Drop the unpublished draft for this screen. The published version stays as it is."
 					confirmLabel="Discard"
 					variant="danger"
 					onConfirm={async () => {
-						if (!active || !currentScreenId) {
-							endEdit();
-							return;
-						}
+						editEpoch.current += 1;
+						endEdit();
+						if (!active || !currentScreenId) return;
 						try {
-							await saveScreens({
+							await draftChain.current;
+							await clearDraft({
 								mockupId: active.id,
-								screens: active.screens.map((s) =>
-									s.id === currentScreenId
-										? { id: s.id, html: editBaseline, label: s.label }
-										: { id: s.id, html: s.html, label: s.label },
-								),
+								screenId: currentScreenId,
 							});
-							setEditHtml(editBaseline);
-							endEdit();
 						} catch (err) {
-							setEditSaveState("error");
-							setEditError(err instanceof Error ? err.message : "Failed to discard");
-							setDiscardOpen(false);
+							setToast(
+								err instanceof Error ? err.message : "Failed to discard draft",
+							);
 						}
 					}}
 					onCancel={() => setDiscardOpen(false)}
@@ -2027,28 +2140,10 @@ export function MockupReviewApp() {
 					icon={<Sparkles size={16} />}
 					busy={aiBusy === "generate"}
 					error={aiActionError}
-					onConfirm={() => void runMockupAi("generate-screen")}
+					onConfirm={() => void runMockupAi()}
 					onCancel={() => {
 						if (aiBusy) return;
 						setGenerateOpen(false);
-						setAiActionError(null);
-					}}
-				/>
-				<ConfirmDialog
-					open={rewriteOpen}
-					title="Rewrite this region?"
-					description="Replacement HTML lands in the editor. You apply or discard it."
-					detail={pending?.target ? `Region: ${pending.target}` : undefined}
-					confirmLabel="Rewrite"
-					busyLabel="Rewriting…"
-					variant="primary"
-					icon={<Sparkles size={16} />}
-					busy={aiBusy === "rewrite"}
-					error={aiActionError}
-					onConfirm={() => void runMockupAi("rewrite-region")}
-					onCancel={() => {
-						if (aiBusy) return;
-						setRewriteOpen(false);
 						setAiActionError(null);
 					}}
 				/>

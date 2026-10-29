@@ -1,11 +1,14 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
 import { readFile, writeFile, mkdir, rm, unlink } from "node:fs/promises";
 import { getRepoRoot, getProjectStorageDir } from "./git.js";
+import { writeJsonAtomically } from "./json-atomic.js";
 import type { CommentReply } from "./types.js";
 import type {
 	Mockup,
 	MockupComment,
 	MockupDecision,
+	MockupDraft,
 	MockupScreen,
 	MockupScreenInput,
 	MockupVersion,
@@ -44,8 +47,10 @@ export interface MockupUpsertInput {
 export interface MockupScreenOpResult {
 	mockup: Mockup | null;
 	error?: string;
+	/** Machine-readable failure. `ambiguous-anchor` means the text matched more than once and nothing was written. */
+	code?: "ambiguous-anchor";
 	versionMismatch?: { expectedVersion: number; currentVersion: number };
-	/** patchScreen only: how many times expectedText matched before patching. */
+	/** How many times the target matched before the edit. Only the first match is written. */
 	occurrences?: number;
 }
 
@@ -84,7 +89,6 @@ export interface MockupStore {
 		id: string,
 		fields: {
 			title?: string;
-			screens?: MockupScreen[];
 			source?: string;
 			model?: string;
 		},
@@ -150,8 +154,20 @@ export interface MockupStore {
 		id: string,
 		screenId: string,
 		patch: { expectedText: string; replacement: string },
-		opts?: { expectedVersion?: number },
+		opts?: { expectedVersion?: number; unique?: boolean },
 	): Promise<MockupScreenOpResult>;
+	/**
+	 * Store an unpublished screen draft. Does not change published HTML,
+	 * version, or decision. A draft whose HTML matches the current screen at
+	 * `baseVersion === mockup.version` is dropped.
+	 */
+	saveDraft(
+		id: string,
+		screenId: string,
+		draft: { html: string; baseVersion: number },
+	): Promise<MockupScreenOpResult>;
+	/** Drop one screen's draft. Idempotent when no draft is stored. */
+	clearDraft(id: string, screenId: string): Promise<MockupScreenOpResult>;
 
 	/**
 	 * Replace the inner HTML of the first `[data-diffing="<region>"]` element
@@ -355,6 +371,10 @@ function versionMismatch(
 function bumpMockupVersion(mockup: Mockup, now: number): void {
 	mockup.version += 1;
 	mockup.updatedAt = now;
+	// The previous verdict described the previous HTML.
+	mockup.decision = "pending";
+	mockup.decisionComment = undefined;
+	mockup.decidedAt = undefined;
 	if (!mockup.versions) mockup.versions = [];
 	mockup.versions.push({
 		version: mockup.version,
@@ -394,15 +414,68 @@ function applyScreenUpsert(
 function applyScreenPatch(
 	screen: MockupScreen,
 	patch: { expectedText: string; replacement: string },
-): number {
-	const idx = screen.html.indexOf(patch.expectedText);
-	if (idx === -1) return 0;
+	unique = false,
+): number | { ambiguous: number } {
 	const count = screen.html.split(patch.expectedText).length - 1;
+	if (count === 0) return 0;
+	if (unique && count !== 1) return { ambiguous: count };
+	const idx = screen.html.indexOf(patch.expectedText);
 	screen.html =
 		screen.html.slice(0, idx) +
 		patch.replacement +
 		screen.html.slice(idx + patch.expectedText.length);
 	return count;
+}
+
+function applyDraftSave(
+	mockup: Mockup,
+	screenId: string,
+	html: string,
+	baseVersion: number,
+	now: number,
+): string | null {
+	if (!mockup.screens.some((screen) => screen.id === screenId)) {
+		return `Screen ${screenId} not found`;
+	}
+	if (
+		!Number.isInteger(baseVersion) ||
+		baseVersion < 1 ||
+		baseVersion > mockup.version
+	) {
+		return `Draft baseVersion must be from 1 to ${mockup.version}`;
+	}
+	const published = mockup.screens.find((screen) => screen.id === screenId)!;
+	if (!mockup.drafts) mockup.drafts = [];
+	const idx = mockup.drafts.findIndex((draft) => draft.screenId === screenId);
+	if (html === published.html && baseVersion === mockup.version) {
+		if (idx !== -1) mockup.drafts.splice(idx, 1);
+		if (mockup.drafts.length === 0) delete mockup.drafts;
+		return null;
+	}
+	const draft: MockupDraft = { screenId, html, baseVersion, updatedAt: now };
+	if (idx === -1) mockup.drafts.push(draft);
+	else mockup.drafts[idx] = draft;
+	mockup.updatedAt = now;
+	return null;
+}
+
+function applyDraftClear(mockup: Mockup, screenId: string): void {
+	if (!mockup.drafts) return;
+	mockup.drafts = mockup.drafts.filter((draft) => draft.screenId !== screenId);
+	if (mockup.drafts.length === 0) delete mockup.drafts;
+}
+
+function readPatch(
+	applied: number | { ambiguous: number },
+): { occurrences: number } | { error: string; code?: "ambiguous-anchor" } {
+	if (typeof applied === "object") {
+		return {
+			error: `Anchor text matched ${applied.ambiguous} places`,
+			code: "ambiguous-anchor",
+		};
+	}
+	if (applied === 0) return { error: "Exact text not found" };
+	return { occurrences: applied };
 }
 
 function applyScreenRegion(
@@ -644,7 +717,6 @@ export class InMemoryMockupStore implements MockupStore {
 		id: string,
 		fields: {
 			title?: string;
-			screens?: MockupScreen[];
 			source?: string;
 			model?: string;
 		},
@@ -652,8 +724,6 @@ export class InMemoryMockupStore implements MockupStore {
 		const mockup = this.mockups.find((m) => m.id === id);
 		if (!mockup) return null;
 		if (fields.title !== undefined) mockup.title = fields.title;
-		if (fields.screens !== undefined)
-			mockup.screens = snapshotScreens(fields.screens);
 		if (fields.source !== undefined) mockup.source = fields.source;
 		if (fields.model !== undefined) mockup.model = fields.model;
 		mockup.updatedAt = Date.now();
@@ -809,7 +879,7 @@ export class InMemoryMockupStore implements MockupStore {
 		id: string,
 		screenId: string,
 		patch: { expectedText: string; replacement: string },
-		opts?: { expectedVersion?: number },
+		opts?: { expectedVersion?: number; unique?: boolean },
 	): Promise<MockupScreenOpResult> {
 		const mockup = this.mockups.find((m) => m.id === id);
 		if (!mockup) return { mockup: null, error: "Mockup not found" };
@@ -823,10 +893,45 @@ export class InMemoryMockupStore implements MockupStore {
 		if (patch.replacement === undefined) {
 			return { mockup: null, error: "replacement is required" };
 		}
-		const occurrences = applyScreenPatch(screen, patch);
-		if (occurrences === 0) return { mockup: null, error: "Exact text not found" };
+		const applied = readPatch(
+			applyScreenPatch(screen, patch, opts?.unique === true),
+		);
+		if ("error" in applied) {
+			return { mockup: null, error: applied.error, code: applied.code };
+		}
 		bumpMockupVersion(mockup, Date.now());
-		return { mockup, occurrences };
+		return { mockup, occurrences: applied.occurrences };
+	}
+
+	async saveDraft(
+		id: string,
+		screenId: string,
+		draft: { html: string; baseVersion: number },
+	): Promise<MockupScreenOpResult> {
+		const mockup = this.mockups.find((m) => m.id === id);
+		if (!mockup) return { mockup: null, error: "Mockup not found" };
+		const error = applyDraftSave(
+			mockup,
+			screenId,
+			draft.html,
+			draft.baseVersion,
+			Date.now(),
+		);
+		if (error) return { mockup: null, error };
+		return { mockup };
+	}
+
+	async clearDraft(
+		id: string,
+		screenId: string,
+	): Promise<MockupScreenOpResult> {
+		const mockup = this.mockups.find((m) => m.id === id);
+		if (!mockup) return { mockup: null, error: "Mockup not found" };
+		if (!mockup.screens.some((screen) => screen.id === screenId)) {
+			return { mockup: null, error: `Screen ${screenId} not found` };
+		}
+		applyDraftClear(mockup, screenId);
+		return { mockup };
 	}
 
 	async replaceRegion(
@@ -864,10 +969,60 @@ export class InMemoryMockupStore implements MockupStore {
 export class FileMockupStore implements MockupStore {
 	private dirPath: string;
 	private filePath: string;
+	private readonly lockContext = new AsyncLocalStorage<true>();
+	private mutationQueue: Promise<unknown> = Promise.resolve();
 
 	constructor(storageDir?: string) {
 		this.dirPath = storageDir ?? getProjectStorageDir();
 		this.filePath = join(this.dirPath, "mockups.json");
+		const guarded = [
+			"getAll",
+			"get",
+			"getVersion",
+			"upsert",
+			"update",
+			"remove",
+			"setDecision",
+			"addComment",
+			"updateComment",
+			"removeComment",
+			"addReply",
+			"removeReply",
+			"updateReply",
+			"upsertScreen",
+			"removeScreen",
+			"patchScreen",
+			"replaceRegion",
+			"applyThreadBatch",
+			"saveDraft",
+			"clearDraft",
+		] as const;
+		const prototype = FileMockupStore.prototype as unknown as Record<
+			string,
+			(...args: never[]) => Promise<unknown>
+		>;
+		const instance = this as unknown as Record<
+			string,
+			(...args: unknown[]) => Promise<unknown>
+		>;
+		for (const name of guarded) {
+			const original = prototype[name];
+			instance[name] = (...args) =>
+				this.enqueue(() => original.apply(this, args as never[]));
+		}
+	}
+
+	/** One read-modify-write at a time. Calls from inside the lock run inline. */
+	private enqueue<T>(work: () => Promise<T>): Promise<T> {
+		if (this.lockContext.getStore()) return work();
+		const run = this.mutationQueue.then(() =>
+			this.lockContext.run(true, work),
+		);
+		this.mutationQueue = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
 	}
 
 	async getAll(): Promise<Mockup[]> {
@@ -906,18 +1061,14 @@ export class FileMockupStore implements MockupStore {
 	}
 
 	private async save(mockups: Mockup[]): Promise<void> {
+		await mkdir(this.dirPath, { recursive: true });
 		try {
-			await mkdir(this.dirPath, { recursive: true });
-			try {
-				const repoRoot = getRepoRoot();
-				await writeFile(join(this.dirPath, "repo_path.txt"), repoRoot, "utf-8");
-			} catch {
-				// Ignore if outside git repo or in mock sandboxes
-			}
-			await writeFile(this.filePath, JSON.stringify(mockups, null, 2), "utf-8");
-		} catch (err) {
-			console.error("Failed to save mockups to file:", err);
+			const repoRoot = getRepoRoot();
+			await writeFile(join(this.dirPath, "repo_path.txt"), repoRoot, "utf-8");
+		} catch {
+			// Ignore if outside git repo or in mock sandboxes
 		}
+		writeJsonAtomically(this.filePath, mockups);
 	}
 
 	private async writeSourceMirror(mockup: Mockup): Promise<void> {
@@ -946,7 +1097,6 @@ export class FileMockupStore implements MockupStore {
 		id: string,
 		fields: {
 			title?: string;
-			screens?: MockupScreen[];
 			source?: string;
 			model?: string;
 		},
@@ -955,14 +1105,11 @@ export class FileMockupStore implements MockupStore {
 		const mockup = mockups.find((m) => m.id === id);
 		if (!mockup) return null;
 		if (fields.title !== undefined) mockup.title = fields.title;
-		if (fields.screens !== undefined)
-			mockup.screens = snapshotScreens(fields.screens);
 		if (fields.source !== undefined) mockup.source = fields.source;
 		if (fields.model !== undefined) mockup.model = fields.model;
 		mockup.updatedAt = Date.now();
 		syncCurrentVersion(mockup);
 		backfillMockup(mockup);
-		if (fields.screens !== undefined) await this.writeSourceMirror(mockup);
 		await this.save(mockups);
 		return mockup;
 	}
@@ -1153,7 +1300,7 @@ export class FileMockupStore implements MockupStore {
 		id: string,
 		screenId: string,
 		patch: { expectedText: string; replacement: string },
-		opts?: { expectedVersion?: number },
+		opts?: { expectedVersion?: number; unique?: boolean },
 	): Promise<MockupScreenOpResult> {
 		const mockups = await this.getAll();
 		const mockup = mockups.find((m) => m.id === id);
@@ -1168,12 +1315,16 @@ export class FileMockupStore implements MockupStore {
 		if (patch.replacement === undefined) {
 			return { mockup: null, error: "replacement is required" };
 		}
-		const occurrences = applyScreenPatch(screen, patch);
-		if (occurrences === 0) return { mockup: null, error: "Exact text not found" };
+		const applied = readPatch(
+			applyScreenPatch(screen, patch, opts?.unique === true),
+		);
+		if ("error" in applied) {
+			return { mockup: null, error: applied.error, code: applied.code };
+		}
 		bumpMockupVersion(mockup, Date.now());
 		await this.writeSourceMirror(mockup);
 		await this.save(mockups);
-		return { mockup, occurrences };
+		return { mockup, occurrences: applied.occurrences };
 	}
 
 	async replaceRegion(
@@ -1210,6 +1361,41 @@ export class FileMockupStore implements MockupStore {
 		const results = applyThreadOps(mockup, ops, Date.now());
 		await this.save(mockups);
 		return { mockup, results };
+	}
+
+	async saveDraft(
+		id: string,
+		screenId: string,
+		draft: { html: string; baseVersion: number },
+	): Promise<MockupScreenOpResult> {
+		const mockups = await this.getAll();
+		const mockup = mockups.find((m) => m.id === id);
+		if (!mockup) return { mockup: null, error: "Mockup not found" };
+		const error = applyDraftSave(
+			mockup,
+			screenId,
+			draft.html,
+			draft.baseVersion,
+			Date.now(),
+		);
+		if (error) return { mockup: null, error };
+		await this.save(mockups);
+		return { mockup };
+	}
+
+	async clearDraft(
+		id: string,
+		screenId: string,
+	): Promise<MockupScreenOpResult> {
+		const mockups = await this.getAll();
+		const mockup = mockups.find((m) => m.id === id);
+		if (!mockup) return { mockup: null, error: "Mockup not found" };
+		if (!mockup.screens.some((screen) => screen.id === screenId)) {
+			return { mockup: null, error: `Screen ${screenId} not found` };
+		}
+		applyDraftClear(mockup, screenId);
+		await this.save(mockups);
+		return { mockup };
 	}
 }
 

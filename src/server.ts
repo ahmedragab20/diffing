@@ -79,7 +79,10 @@ import {
 	buildMockupHandoff,
 	formatMockupHandoffXml,
 } from "./lib/mockup-handoff.js";
-import { extractSuggestion } from "./lib/mockup-suggestion.js";
+import {
+	extractSuggestion,
+	planSuggestionEdit,
+} from "./lib/mockup-suggestion.js";
 import {
 	normalizeMockupViewport,
 	isMockupViewport,
@@ -576,15 +579,33 @@ export function createApp(
 		nonce: string,
 		mockupId: string,
 		screenId: string,
-	): string | null => {
+	):
+		| {
+				error: string;
+		  }
+		| {
+				error?: undefined;
+				entry: {
+					mockupId: string;
+					screenId: string;
+					version: number;
+					viewport: MockupViewport;
+				};
+		  } => {
 		const entry = mockupNonces.get(nonce);
 		if (!entry || entry.expiresAt < Date.now()) {
-			return "Stale mockup document (nonce expired or unknown) — reload the screen and retry.";
+			return {
+				error:
+					"Stale mockup document (nonce expired or unknown) — reload the screen and retry.",
+			};
 		}
 		if (entry.mockupId !== mockupId || entry.screenId !== screenId) {
-			return "Mockup nonce does not match this mockup/screen — reload the screen and retry.";
+			return {
+				error:
+					"Mockup nonce does not match this mockup/screen — reload the screen and retry.",
+			};
 		}
-		return null;
+		return { entry };
 	};
 
 	let repoRoot: string;
@@ -4899,6 +4920,9 @@ export function createApp(
 				409,
 			);
 		}
+		if (result.code === "ambiguous-anchor") {
+			return c.json({ error: result.error, code: "ambiguous-anchor" }, 409);
+		}
 		if (result.error === "Exact text not found") {
 			return c.json({ error: result.error, code: "exact-text-not-found" }, 409);
 		}
@@ -4973,7 +4997,11 @@ export function createApp(
 			);
 			if (!result.mockup) return screenOpError(c, result);
 			return c.json(
-				{ mockup: result.mockup, occurrences: result.occurrences },
+				{
+					mockup: result.mockup,
+					occurrences: result.occurrences,
+					replaced: 1,
+				},
 				200,
 			);
 		}
@@ -4993,7 +5021,11 @@ export function createApp(
 		);
 		if (!result.mockup) return screenOpError(c, result);
 		return c.json(
-			{ mockup: result.mockup, occurrences: result.occurrences },
+			{
+				mockup: result.mockup,
+				occurrences: result.occurrences,
+				replaced: 1,
+			},
 			200,
 		);
 	});
@@ -5017,6 +5049,45 @@ export function createApp(
 	// ── Atomic thread batch ──────────────────────────────────────────────────
 	// reply / edit / delete / resolve / unresolve, all validated before any is
 	// applied (all-or-nothing). Thread ops never bump the mockup version.
+	app.put("/api/mockups/:id/screens/:screenId/draft", async (c) => {
+		const mockupId = c.req.param("id");
+		const screenId = c.req.param("screenId");
+		if (!MOCKUP_SCREEN_ID_RE.test(screenId)) {
+			return c.json({ error: `Invalid screen id "${screenId}"` }, 400);
+		}
+		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+		if (typeof body.html !== "string") {
+			return c.json({ error: "html is required" }, 400);
+		}
+		if (Buffer.byteLength(body.html, "utf8") > MOCKUP_MAX_SCREEN_BYTES) {
+			return c.json(
+				{ error: `Each screen must be ≤ ${MOCKUP_MAX_SCREEN_BYTES} bytes` },
+				400,
+			);
+		}
+		const baseVersion = Number(body.baseVersion);
+		if (!Number.isInteger(baseVersion)) {
+			return c.json({ error: "baseVersion is required" }, 400);
+		}
+		const result = await mockups.saveDraft(mockupId, screenId, {
+			html: body.html,
+			baseVersion,
+		});
+		if (!result.mockup) return screenOpError(c, result);
+		return c.json(result.mockup);
+	});
+
+	app.delete("/api/mockups/:id/screens/:screenId/draft", async (c) => {
+		const mockupId = c.req.param("id");
+		const screenId = c.req.param("screenId");
+		if (!MOCKUP_SCREEN_ID_RE.test(screenId)) {
+			return c.json({ error: `Invalid screen id "${screenId}"` }, 400);
+		}
+		const result = await mockups.clearDraft(mockupId, screenId);
+		if (!result.mockup) return screenOpError(c, result);
+		return c.json(result.mockup);
+	});
+
 	app.post("/api/mockups/:id/threads/batch", async (c) => {
 		const mockupId = c.req.param("id");
 		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
@@ -5099,15 +5170,17 @@ export function createApp(
 	app.put("/api/mockups/:id", async (c) => {
 		const id = c.req.param("id");
 		const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
-		let screens;
 		if (body.html !== undefined || body.screens !== undefined) {
-			const normalized = screensFromSubmitBody(body);
-			if (!normalized.ok) return c.json({ error: normalized.error }, 400);
-			screens = normalized.screens;
+			return c.json(
+				{
+					error:
+						"Screen HTML is not saved on this route. Publish with PUT /api/mockups/:id/screens/:screenId, or keep a live edit on PUT /api/mockups/:id/screens/:screenId/draft.",
+				},
+				400,
+			);
 		}
 		const updated = await mockups.update(id, {
 			title: typeof body.title === "string" ? body.title : undefined,
-			screens,
 			source: typeof body.source === "string" ? body.source : undefined,
 			model: typeof body.model === "string" ? body.model : undefined,
 		});
@@ -5145,24 +5218,22 @@ export function createApp(
 			const expectedVersion = Number.isFinite(reqBody.expectedVersion)
 				? Number(reqBody.expectedVersion)
 				: mockup.version;
-			let result;
-			if (comment.target) {
-				result = await mockups.replaceRegion(
-					mockup.id,
-					comment.screenId,
-					{ region: comment.target, replacement: suggestion },
-					{ expectedVersion },
-				);
-			} else if (comment.html) {
-				result = await mockups.patchScreen(
-					mockup.id,
-					comment.screenId,
-					{ expectedText: comment.html, replacement: suggestion },
-					{ expectedVersion },
-				);
-			} else {
-				return c.json({ error: "Comment has no target or html to replace" }, 400);
-			}
+			const plan = planSuggestionEdit(comment);
+			if (!plan.ok) return c.json({ error: plan.error }, plan.status);
+			const result =
+				plan.op === "region"
+					? await mockups.replaceRegion(
+							mockup.id,
+							comment.screenId,
+							{ region: plan.region, replacement: suggestion },
+							{ expectedVersion },
+						)
+					: await mockups.patchScreen(
+							mockup.id,
+							comment.screenId,
+							{ expectedText: plan.expectedText, replacement: suggestion },
+							{ expectedVersion, unique: true },
+						);
 			if (!result.mockup) return screenOpError(c, result);
 			return c.json(result.mockup);
 		},
@@ -5188,12 +5259,31 @@ export function createApp(
 			return c.json({ error: "Unknown screenId" }, 400);
 		}
 		// Optional source-window validation: when the client echoes the per-
-		// document nonce back, it must match a document this server issued for
-		// this exact mockup + screen.
+		// document nonce back, the comment is stamped with that document's
+		// version and viewport, not whatever the mockup has moved on to.
+		let nonceEntry:
+			| {
+					version: number;
+					viewport: MockupViewport;
+			  }
+			| undefined;
 		if (typeof body.nonce === "string" && body.nonce) {
-			const nonceError = validateMockupNonce(body.nonce, mockupId, screenId);
-			if (nonceError) {
-				return c.json({ error: nonceError, code: "invalid-nonce" }, 409);
+			const checked = validateMockupNonce(body.nonce, mockupId, screenId);
+			if (!("entry" in checked)) {
+				return c.json({ error: checked.error, code: "invalid-nonce" }, 409);
+			}
+			nonceEntry = checked.entry;
+			if (
+				body.viewport !== undefined &&
+				body.viewport !== checked.entry.viewport
+			) {
+				return c.json(
+					{
+						error: "viewport does not match the served mockup document",
+						code: "invalid-nonce",
+					},
+					409,
+				);
 			}
 		}
 		if (typeof body.body !== "string" || !body.body.trim()) {
@@ -5222,7 +5312,9 @@ export function createApp(
 		) {
 			return c.json({ error: "point comments require x and y" }, 400);
 		}
-		const viewport = normalizeMockupViewport(body.viewport);
+		const viewport = nonceEntry
+			? nonceEntry.viewport
+			: normalizeMockupViewport(body.viewport);
 		const theme: MockupTheme = body.theme === "dark" ? "dark" : "light";
 		const severityRaw = body.severity;
 		const severity =
@@ -5268,7 +5360,7 @@ export function createApp(
 			body: String(body.body),
 			status: "open" as const,
 			createdAt: Date.now(),
-			createdAtMockupVersion: mockup.version,
+			createdAtMockupVersion: nonceEntry?.version ?? mockup.version,
 			viewport,
 			theme,
 			replies: [],

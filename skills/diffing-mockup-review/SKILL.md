@@ -96,7 +96,7 @@ diffing mockup screen replace-region MOCKUP_ID imports-empty --region imports-em
 
 `op:'patch'` takes `expectedText` plus `replacement` in MCP/HTTP, `--text`/`--replacement` in the CLI. `upsert` adds or replaces one screen; `remove` keeps the last screen in place. Every successful screen operation already creates the next version, so it needs no resubmission. A 409 means reread the current version and target, then reconcile.
 
-`apply_mockup_suggestion({commentId:'COMMENT_ID',expectedVersion:3})` / `diffing mockup apply-suggestion COMMENT_ID --expected-version 3` revises the screen and leaves the thread open. Check the revised result, then reply and resolve yourself.
+`apply_mockup_suggestion({commentId:'COMMENT_ID',expectedVersion:3})` / `diffing mockup apply-suggestion COMMENT_ID --expected-version 3` revises the screen and leaves the thread open. A section comment replaces its `data-diffing` region. A block comment replaces its stored HTML only when that string occurs once. A pin does not change markup. Check the revised result, then reply and resolve yourself.
 
 ### 5. Synchronize feedback
 

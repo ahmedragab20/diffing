@@ -2843,7 +2843,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 		{
 			title: "Apply a mockup suggestion",
 			description:
-				"Apply the first ```suggestion fence in a mockup comment to that comment's screen. Uses replace-region when the comment has a data-diffing target, otherwise exact-text patch. Pass expectedVersion to abort with 409 on conflict.",
+				"Apply the first ```suggestion fence in a mockup comment. A section comment replaces that data-diffing region's inner HTML. A block comment replaces its stored element HTML when that string is still unique. A pin comment does not change markup. Pass expectedVersion to abort with 409 on conflict.",
 			inputSchema: {
 				commentId: z.string().min(1),
 				expectedVersion: z.number().int().positive().optional(),
@@ -2939,6 +2939,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 				version: z.number(),
 				screenIds: z.array(z.string()),
 				occurrences: z.number().optional(),
+				replaced: z.number().optional(),
 			},
 			annotations: MUTATING,
 		},
@@ -3005,12 +3006,13 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 					body: JSON.stringify({ region, replacement, expectedVersion }),
 				});
 				return textResult(
-					`Replaced region "${region}" on ${screenId} (${data.occurrences} match(es)) → v${data.mockup.version}`,
+					`Replaced the first "${region}" region on ${screenId} (${data.occurrences} match(es)) → v${data.mockup.version}`,
 					{
 						mockupId,
 						version: data.mockup.version,
 						screenIds: data.mockup.screens.map((s) => s.id),
 						occurrences: data.occurrences,
+						replaced: 1,
 					},
 				);
 			}
@@ -3028,12 +3030,13 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 				body: JSON.stringify({ expectedText, replacement, expectedVersion }),
 			});
 			return textResult(
-				`Patched ${screenId} on ${mockupId} (${data.occurrences} exact match(es)) → v${data.mockup.version}`,
+				`Patched the first match on ${screenId} (${data.occurrences} exact match(es)) → v${data.mockup.version}`,
 				{
 					mockupId,
 					version: data.mockup.version,
 					screenIds: data.mockup.screens.map((s) => s.id),
 					occurrences: data.occurrences,
+					replaced: 1,
 				},
 			);
 		},
@@ -3201,7 +3204,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 		{
 			title: "Get mockup implementation handoff",
 			description:
-				"Compact handoff after a mockup is approved: tokens, screens with intent, components used, leftover nits. Prefer this over dumping every screen's HTML.",
+				"Compact handoff after a mockup is approved: tokens, screens with intent, components used, every open comment, and the nit subset. Prefer this over dumping every screen's HTML.",
 			inputSchema: { mockupId: z.string().min(1) },
 			outputSchema: {
 				xml: z.string().optional(),

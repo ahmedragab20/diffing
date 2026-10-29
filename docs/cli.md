@@ -822,11 +822,15 @@ selection probe is injected on serve (the stored source is never mutated):
 - **Submit review** — Approve / Request changes / Reject / Comment only, same
   verdicts as plans; the popover reports scoped open count vs total and
   releases `mockup await`. A `comment-only` submit marks mode in the handoff.
-- **Live HTML edit** — `e` opens a line-numbered editor. Autosave updates the
-  current version in place; **Save as new version** bumps. Discard / Esc roll
-  back. The pencil is disabled on historical versions.
+- **Live HTML edit** — `e` opens a line-numbered editor. Autosave writes an
+  unpublished draft and does not change the published screen. **Save as new
+  version** publishes and returns the decision to pending. Discard drops the
+  draft. The pencil is disabled on historical versions.
 - **Apply suggestion** — a ` ```suggestion ` fence in a thread shows **Apply**
-  (version-guarded; 409 on conflict). Same action as `mockup apply-suggestion`.
+  (version-guarded; 409 on conflict). A section comment replaces its
+  `data-diffing` region. A block comment replaces its stored HTML only when
+  that string is unique. A pin does not change markup. Same action as
+  `mockup apply-suggestion`.
 - **Ask AI (opt-in)** — toolbar model picker + **Ask AI**. The rail starts
   **closed**. Comment chips, Generate this screen (blank screen, confirm first),
   Rewrite region (tagged hit, confirm first), and Attach preview run only when

@@ -14696,23 +14696,115 @@ body:has(.vim-status-bar) .plan-float-tray {
 .mockup-float-body .comment-canvas-footer {
   padding: 10px 14px;
 }
+.mockup-float-card .mockup-float-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .mockup-composer-form {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  overflow: clip;
+  gap: 10px;
+}
+/* The card title already names the anchor. Keep the form from scrolling
+   so typing does not yank the buttons. */
+.mockup-float-card:has(.mockup-composer-form) .mockup-float-body {
+  overflow: clip;
+  display: flex;
+  flex-direction: column;
 }
 .mockup-composer-form .comment-form {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: auto;
+  gap: 10px;
+  overflow: clip;
   border: 0;
   border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.mockup-composer-form .comment-form-line-label {
+  display: none;
+}
+.mockup-composer-form .comment-form-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border-bottom: 1px solid var(--border-weak);
+}
+.mockup-composer-form .comment-form-tab-btn {
+  margin: 0;
+  padding: 6px 0 8px;
+  text-align: center;
+}
+.mockup-composer-form .comment-form-tab-btn-active {
+  margin-bottom: 0;
+}
+.mockup-composer-form .comment-form-suggest-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  justify-content: stretch;
+  align-items: stretch;
+  gap: 6px;
+  margin: 0;
+}
+.mockup-composer-form .comment-form-suggest-btn {
+  width: 100%;
+  height: 28px !important;
+  margin: 0;
+  justify-content: center;
+}
+.mockup-composer-form .comment-form-ai-actions .ai-comment-btn {
+  min-width: 0;
+  width: 100%;
+}
+.mockup-composer-form .comment-form-tabs,
+.mockup-composer-form .comment-form-suggest-row,
+.mockup-composer-form .comment-form-actions {
+  flex-shrink: 0;
+}
+.mockup-composer-form .comment-form > div:has(.comment-form-editor) {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mockup-composer-form .comment-form-editor {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
 }
 .mockup-composer-form .comment-form textarea {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
   resize: none;
+  field-sizing: fixed;
+}
+.mockup-composer-form .comment-form-actions {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-weak);
+}
+.mockup-composer-form .comment-form-actions-right {
+  flex-shrink: 0;
 }
 
 /* Comments rail (right) — persisted, resizable; bottom sheet on narrow widths */
@@ -15154,11 +15246,6 @@ body:has(.vim-status-bar) .plan-float-tray {
   margin: 0;
   color: var(--text-muted);
   font-size: 13px;
-}
-.mockup-composer-ai-row {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
 }
 .mockup-compare-pane-old {
   overflow: auto;

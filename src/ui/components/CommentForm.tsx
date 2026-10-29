@@ -245,6 +245,24 @@ export function CommentForm({
   const mention = useFileMention(body, setBody);
   const ai = useOptionalAi();
 
+  const focusField = (el: HTMLElement | null) => {
+    if (!el) return;
+    const chain: HTMLElement[] = [];
+    let node = el.parentElement;
+    while (node) {
+      chain.push(node);
+      node = node.parentElement;
+    }
+    const tops = chain.map((item) => item.scrollTop);
+    const x = window.scrollX;
+    const y = window.scrollY;
+    el.focus({ preventScroll: true });
+    chain.forEach((item, index) => {
+      if (item.scrollTop !== tops[index]) item.scrollTop = tops[index];
+    });
+    if (window.scrollX !== x || window.scrollY !== y) window.scrollTo(x, y);
+  };
+
   const runAiEdit = async (action: AiAction) => {
     if (!ai || !aiSurface || !aiContext) return;
     setAiRunning(true);
@@ -259,9 +277,7 @@ export function CommentForm({
       });
       setBody(result.text);
       setActiveTab("write");
-      requestAnimationFrame(() =>
-        textareaRef.current?.focus({ preventScroll: true }),
-      );
+      requestAnimationFrame(() => focusField(textareaRef.current));
     } catch (error) {
       setAiUndoBody(null);
       setAiError(error instanceof Error ? error.message : String(error));
@@ -276,9 +292,7 @@ export function CommentForm({
     );
     setShowSavedReplies(false);
     setActiveTab("write");
-    requestAnimationFrame(() =>
-      textareaRef.current?.focus({ preventScroll: true }),
-    );
+    requestAnimationFrame(() => focusField(textareaRef.current));
   };
 
   const saveCurrentAsReply = () => {
@@ -298,26 +312,22 @@ export function CommentForm({
   };
 
   useEffect(() => {
-    if (activeTab === "write") {
-      textareaRef.current?.focus({ preventScroll: true });
-    } else {
-      previewRef.current?.focus({ preventScroll: true });
-    }
+    if (activeTab === "write") focusField(textareaRef.current);
+    else focusField(previewRef.current);
   }, [activeTab]);
 
-  // Focus-on-open for floating popups. Runs after paint and retries once so a
-  // slow iframe refocus cannot steal the field.
+  // Focus-on-open for floating popups. One pass after paint. A second pass
+  // only if the iframe stole focus, and it restores any scroll it caused.
   useEffect(() => {
     if (!autoFocus) return;
     let cancelled = false;
     const raf = requestAnimationFrame(() => {
-      if (cancelled) return;
-      textareaRef.current?.focus({ preventScroll: true });
+      if (!cancelled) focusField(textareaRef.current);
     });
     const retry = setTimeout(() => {
       if (cancelled) return;
       if (document.activeElement !== textareaRef.current) {
-        textareaRef.current?.focus({ preventScroll: true });
+        focusField(textareaRef.current);
       }
     }, 200);
     return () => {
@@ -371,9 +381,7 @@ export function CommentForm({
       return `${prev.trimEnd()}\n\n${fence}`;
     });
     setActiveTab("write");
-    requestAnimationFrame(() =>
-      textareaRef.current?.focus({ preventScroll: true }),
-    );
+    requestAnimationFrame(() => focusField(textareaRef.current));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

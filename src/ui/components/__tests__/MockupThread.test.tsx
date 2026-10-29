@@ -173,21 +173,12 @@ describe("MockupThread", () => {
     );
   });
 
-  it("passes mockup AI context into the reply composer without running inference", () => {
-    renderThread(comment(), {
-      aiContext: {
-        kind: "mockup",
-        mockupId: "m1",
-        title: "Landing",
-        version: 2,
-        screenId: "main",
-        html: "<h1>Hi</h1>",
-      },
-    });
+  it("opens a reply composer without AI actions", () => {
+    renderThread(comment());
     fireEvent.click(screen.getByRole("button", { name: "Reply..." }));
     const form = screen.getByTestId("mockup-comment-form");
-    expect(form).toHaveAttribute("data-ai-surface", "mockup");
-    expect(form).toHaveAttribute("data-ai-kind", "mockup-thread");
+    expect(form).toHaveAttribute("data-ai-surface", "");
+    expect(form).toHaveAttribute("data-ai-kind", "");
   });
 
   it("edits and deletes replies, with agent model chips", () => {

@@ -182,5 +182,12 @@ describe("handoff + suggestion", () => {
       ],
     } as never);
     expect(handoff.openNits.map((n) => n.id)).toEqual(["c2", "c3"]);
+    expect(handoff.openComments.map((n) => n.id)).toEqual(["c1", "c2", "c3"]);
+    const xml = formatMockupHandoffXml(handoff);
+    expect(xml).toContain('<open-comments>');
+    expect(xml).toContain('severity="blocking"');
+    expect(xml).toContain("must fix");
+    expect(xml).toContain("<open-nits>");
+    expect(xml).not.toContain(">done</");
   });
 });

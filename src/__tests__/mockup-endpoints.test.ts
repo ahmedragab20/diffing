@@ -1174,4 +1174,268 @@ describe("mockup endpoints", () => {
     expect(next.screens[0].html).toContain("<h1>New</h1>");
     expect(next.screens[0].html).not.toContain("<h1>Old</h1>");
   });
+
+  it("comment nonce stamps the served document version and viewport", async () => {
+    const mockup = await createMockup();
+    const doc = await app.fetch(
+      new Request(
+        `http://localhost/api/mockups/${mockup.id}/screens/main/document`,
+      ),
+    );
+    const nonce = doc.headers.get("X-Diffing-Mockup-Nonce");
+    expect(nonce).toBeTruthy();
+    await postMockup(app, {
+      id: mockup.id,
+      title: mockup.title,
+      html: "<h1>v2</h1>",
+    });
+    const stamped = await postComment(mockup.id, {
+      nonce,
+      createdAtMockupVersion: 99,
+    });
+    expect(stamped.status).toBe(201);
+    const stampedBody = (await stamped.json()) as {
+      comments: Array<{ createdAtMockupVersion: number }>;
+    };
+    expect(stampedBody.comments[0].createdAtMockupVersion).toBe(1);
+
+    const mismatch = await postComment(mockup.id, {
+      nonce,
+      viewport: "mobile",
+    });
+    expect(mismatch.status).toBe(409);
+    expect(await mismatch.json()).toMatchObject({
+      code: "invalid-nonce",
+      error: expect.stringContaining("viewport"),
+    });
+  });
+
+  it("PUT /api/mockups/:id rejects screen HTML and leaves screens unchanged", async () => {
+    const mockup = await createMockup();
+    for (const body of [
+      { screens: [{ id: "main", html: "<p>nope</p>" }] },
+      { html: "<p>nope</p>" },
+    ]) {
+      const res = await app.fetch(
+        new Request(`http://localhost/api/mockups/${mockup.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      expect(res.status).toBe(400);
+    }
+    const fetched = (await (
+      await app.fetch(new Request(`http://localhost/api/mockups/${mockup.id}`))
+    ).json()) as { version: number; screens: Array<{ html: string }> };
+    expect(fetched.version).toBe(1);
+    expect(fetched.screens[0].html).toBe("<h1>Hi</h1>");
+  });
+
+  it("draft save does not publish, and identical HTML clears the draft", async () => {
+    const mockup = await createMockup();
+    const draftUrl = `http://localhost/api/mockups/${mockup.id}/screens/main/draft`;
+    const savedRes = await app.fetch(
+      new Request(draftUrl, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ html: "<p>draft</p>", baseVersion: 1 }),
+      }),
+    );
+    expect(savedRes.status).toBe(200);
+    const saved = (await savedRes.json()) as {
+      version: number;
+      screens: Array<{ html: string }>;
+      drafts?: Array<{ html: string; baseVersion: number }>;
+    };
+    expect(saved.version).toBe(1);
+    expect(saved.screens[0].html).toBe("<h1>Hi</h1>");
+    expect(saved.drafts).toEqual([
+      expect.objectContaining({ html: "<p>draft</p>", baseVersion: 1 }),
+    ]);
+
+    const clearedRes = await app.fetch(
+      new Request(draftUrl, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ html: "<h1>Hi</h1>", baseVersion: 1 }),
+      }),
+    );
+    expect(clearedRes.status).toBe(200);
+    const cleared = (await clearedRes.json()) as {
+      version: number;
+      drafts?: unknown;
+    };
+    expect(cleared.version).toBe(1);
+    expect(cleared.drafts).toBeUndefined();
+
+    const missing = await app.fetch(
+      new Request(
+        `http://localhost/api/mockups/${mockup.id}/screens/nope/draft`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ html: "<p>x</p>", baseVersion: 1 }),
+        },
+      ),
+    );
+    expect(missing.status).toBe(404);
+  });
+
+  it("publishing a screen returns an approved mockup to pending", async () => {
+    const mockup = await createMockup();
+    const decision = await app.fetch(
+      new Request(`http://localhost/api/mockups/${mockup.id}/decision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: "approved" }),
+      }),
+    );
+    expect(decision.status).toBe(200);
+    const published = await app.fetch(
+      new Request(`http://localhost/api/mockups/${mockup.id}/screens/main`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          html: "<h1>Next</h1>",
+          expectedVersion: mockup.version,
+        }),
+      }),
+    );
+    expect(published.status).toBe(200);
+    const body = (await published.json()) as {
+      version: number;
+      decision: string;
+      screens: Array<{ html: string }>;
+    };
+    expect(body.version).toBe(2);
+    expect(body.decision).toBe("pending");
+    expect(body.screens[0].html).toBe("<h1>Next</h1>");
+  });
+
+  it("apply-suggestion follows the anchor kind", async () => {
+    const created = await postMockup(app, {
+      title: "S",
+      screens: [
+        {
+          id: "main",
+          html: '<section data-diffing="hero"><button>Go</button><p>Keep</p></section>',
+        },
+      ],
+    });
+    const mockup = (await created.json()) as { id: string; version: number };
+
+    async function apply(commentId: string) {
+      return app.fetch(
+        new Request(
+          `http://localhost/api/mockups/${mockup.id}/comments/${commentId}/apply-suggestion`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ expectedVersion: mockup.version }),
+          },
+        ),
+      );
+    }
+
+    const block = await postComment(mockup.id, {
+      kind: "block",
+      target: "hero",
+      selector: "button",
+      html: "<button>Go</button>",
+      body: "swap\n```suggestion\n<button>Stop</button>\n```",
+    });
+    const blockId = ((await block.json()) as { comments: Array<{ id: string }> })
+      .comments[0].id;
+    const applied = await apply(blockId);
+    expect(applied.status).toBe(200);
+    const next = (await applied.json()) as {
+      version: number;
+      screens: Array<{ html: string }>;
+    };
+    expect(next.version).toBe(2);
+    expect(next.screens[0].html).toBe(
+      '<section data-diffing="hero"><button>Stop</button><p>Keep</p></section>',
+    );
+
+    const point = await postComment(mockup.id, {
+      kind: "point",
+      x: 10,
+      y: 20,
+      selector: undefined,
+      body: "pin\n```suggestion\n<p>No</p>\n```",
+    });
+    const pointId = (
+      (await point.json()) as { comments: Array<{ id: string; kind: string }> }
+    ).comments.find((comment) => comment.kind === "point")!.id;
+    const pointRes = await apply(pointId);
+    expect(pointRes.status).toBe(400);
+    expect(await pointRes.json()).toMatchObject({
+      error: expect.stringContaining("Pin"),
+    });
+
+    const duplicated = await postMockup(app, {
+      id: mockup.id,
+      title: "S",
+      html: "<button>Go</button><button>Go</button>",
+    });
+    const duplicatedMockup = (await duplicated.json()) as { version: number };
+    const dupComment = await postComment(mockup.id, {
+      kind: "block",
+      selector: "button",
+      html: "<button>Go</button>",
+      body: "swap\n```suggestion\n<button>Stop</button>\n```",
+    });
+    const dupId = (
+      (await dupComment.json()) as {
+        comments: Array<{ id: string; html?: string }>;
+      }
+    ).comments.find((comment) => comment.html === "<button>Go</button>")!.id;
+    const dupRes = await app.fetch(
+      new Request(
+        `http://localhost/api/mockups/${mockup.id}/comments/${dupId}/apply-suggestion`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expectedVersion: duplicatedMockup.version }),
+        },
+      ),
+    );
+    expect(dupRes.status).toBe(409);
+    expect(await dupRes.json()).toMatchObject({ code: "ambiguous-anchor" });
+    const unchanged = (await (
+      await app.fetch(new Request(`http://localhost/api/mockups/${mockup.id}`))
+    ).json()) as { screens: Array<{ html: string }> };
+    expect(unchanged.screens[0].html).toBe(
+      "<button>Go</button><button>Go</button>",
+    );
+
+    const clippedHtml = `${"a".repeat(2000)}\u2026`;
+    const clipped = await postComment(mockup.id, {
+      kind: "block",
+      selector: "button",
+      html: clippedHtml,
+      body: "swap\n```suggestion\n<b>x</b>\n```",
+    });
+    const clippedId = (
+      (await clipped.json()) as { comments: Array<{ id: string; html?: string }> }
+    ).comments.find((comment) => comment.html === clippedHtml)!.id;
+    const current = (await (
+      await app.fetch(new Request(`http://localhost/api/mockups/${mockup.id}`))
+    ).json()) as { version: number };
+    const clippedRes = await app.fetch(
+      new Request(
+        `http://localhost/api/mockups/${mockup.id}/comments/${clippedId}/apply-suggestion`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expectedVersion: current.version }),
+        },
+      ),
+    );
+    expect(clippedRes.status).toBe(400);
+    expect(await clippedRes.json()).toMatchObject({
+      error: expect.stringContaining("truncated"),
+    });
+  });
 });

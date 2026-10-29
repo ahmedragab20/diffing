@@ -67,6 +67,18 @@ export interface MockupScreen {
 	flow?: string;
 }
 
+/**
+ * Unpublished editor buffer for one screen. Never copied onto `screens` or
+ * into a version snapshot. `baseVersion` is the published version the draft
+ * was typed against.
+ */
+export interface MockupDraft {
+	screenId: string;
+	html: string;
+	baseVersion: number;
+	updatedAt: number;
+}
+
 export interface MockupScreenInput {
 	id?: string;
 	label?: string;
@@ -158,6 +170,8 @@ export interface Mockup {
 	mode?: MockupRenderMode;
 	planId?: string;
 	flows?: MockupFlow[];
+	/** Live-edit buffers. Absent when every screen matches its published HTML. */
+	drafts?: MockupDraft[];
 }
 
 /** Metadata-only list representation. Screen and version HTML stay out of list/SSE refetches. */

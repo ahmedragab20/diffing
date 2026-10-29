@@ -173,15 +173,16 @@ Comment scope = **version + screen + viewport** (`desktop|tablet|mobile`); `view
 | `GET` | `/api/mockups[?include=comments\|full]` | Compact summaries by default; `include=comments` adds threads (single-op lookup helpers); `include=full` returns raw records (compatibility) |
 | `POST` | `/api/mockups` | Submit (`html` or `screens[]`; `id` resubmits → version++) |
 | `GET` | `/api/mockups/:id` | One mockup (screens + comments) |
-| `PUT` / `DELETE` | `/api/mockups/:id` | Update / delete |
+| `PUT` / `DELETE` | `/api/mockups/:id` | Metadata update (`title`, `source`, `model`) / delete. `html` or `screens` on PUT is rejected |
 | `GET` | `/api/mockups/:id/versions` · `/versions/:n` | Version metadata / historical body |
 | `GET` | `/api/mockups/:id/inspect?view&status&screen&viewport&version&id&cursor&limit&context` | Bounded reads — `view=summary\|comments\|comment\|screen`, `context=none\|anchor\|source` (default `anchor`), bodies truncate at 400 chars, `nextCursor` pagination |
 | `GET` | `/api/mockups/:id/screens/:screenId/document?version&viewport` | Served screen (injected probe; nonce echoed back on comment posts) |
-| `PUT` | `/api/mockups/:id/screens/:screenId` | One-screen upsert (`html`, optional `label`, `expectedVersion`) |
-| `PATCH` | `/api/mockups/:id/screens/:screenId` | Exact-text patch (`expectedText`, `replacement`) or region replace (`region`, `replacement`); `expectedVersion` optional; 0 matches → 409 `exact-text-not-found` / `region-not-found` |
+| `PUT` | `/api/mockups/:id/screens/:screenId` | One-screen upsert (`html`, optional `label`, `expectedVersion`). Publishing returns the decision to pending |
+| `PUT` / `DELETE` | `/api/mockups/:id/screens/:screenId/draft` | Unpublished live edit (`html`, `baseVersion`) / drop that draft. No version bump |
+| `PATCH` | `/api/mockups/:id/screens/:screenId` | Exact-text patch (`expectedText`, `replacement`) or region replace (`region`, `replacement`); `expectedVersion` optional; 0 matches → 409 `exact-text-not-found` / `region-not-found`. `occurrences` is the match count; `replaced` is 1 |
 | `DELETE` | `/api/mockups/:id/screens/:screenId[?expectedVersion]` | One-screen remove (refuses last screen) |
 | `POST` | `/api/mockups/:id/threads/batch` | **Atomic** thread batch `{ operations: [{ op: reply\|edit\|delete\|resolve\|unresolve, commentId, replyId?, body?, role?, model? }] }` — all validated before any applies; thread ops never bump the version |
-| `POST` | `/api/mockups/:id/comments` | Create comment (`kind`, `screenId`, `body`, `viewport`, anchor fields, optional `nonce`) |
+| `POST` | `/api/mockups/:id/comments` | Create comment (`kind`, `screenId`, `body`, `viewport`, anchor fields, optional `nonce`). A nonce stamps that document's version and viewport. Apply replaces a section region, or a block's stored HTML when it is unique; a pin does not change markup |
 | `PUT` / `DELETE` | `/api/mockups/:id/comments/:commentId` | Edit body/status / delete |
 | `POST` / `PUT` / `DELETE` | `/api/mockups/:id/comments/:commentId/replies[/:replyId]` | Reply / edit / delete reply |
 | `POST` | `/api/mockups/:id/decision` | Submit review (`decision`, optional `decisionComment`, `mode`, focused `screen`/`viewport`); releases waiters |

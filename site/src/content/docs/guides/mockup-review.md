@@ -90,7 +90,7 @@ The default `<mockup-review>` is **compact and open-only**: open comments on the
 | History | Header version switcher; read-only historical versions (comments disabled); rail shows an explicit prior-version unresolved group that jumps to that version |
 | Threads | Collapsible cards, replies, edit/delete, resolve |
 | Submit review | Approve / Request changes / Reject / Comment only; popover reports scoped vs total open counts; releases `mockup await` |
-| Live edit | `e` opens a line-numbered HTML editor; autosave current version; Save as new version bumps; pencil disabled on historical versions |
+| Live edit | `e` opens a line-numbered HTML editor. Autosave writes an unpublished draft. Save as new version publishes and returns the decision to pending. Discard drops the draft. The pencil is disabled on historical versions |
 | Apply suggestion | Thread **Apply** for ` ```suggestion ` fences (409 on version conflict) |
 | Ask AI | Opt-in only. Rail starts closed. Comment chips, Generate this screen, Rewrite region, and Attach preview run on click. Opening the page never starts inference. `--model` on CLI is provenance. |
 
